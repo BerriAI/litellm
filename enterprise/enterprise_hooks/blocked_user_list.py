@@ -7,7 +7,7 @@
 ## This accepts a list of user id's for whom calls will be rejected
 
 
-from typing import Literal, Optional
+from typing import Final, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -24,6 +24,7 @@ from litellm.proxy.utils import PrismaClient
 
 class ENTERPRISE_BlockedUserList(CustomLogger):
     enforces_request_content: bool = True
+    blocked_user_list: list[str] | None
     # Class variables or attributes
     def __init__(self, prisma_client: Optional[PrismaClient]):
         self.prisma_client = prisma_client

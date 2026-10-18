@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
+    end_user_block_cache_key,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
 )
@@ -134,6 +135,8 @@ if TYPE_CHECKING:
             data: Mapping[str, Mapping[str, object]],
         ) -> _RowT_co: ...
 
+        async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
         async def delete_many(self, where: Mapping[str, object]) -> int: ...
 
 
@@ -164,7 +167,11 @@ async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
 
 def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
     """The per-id entries plus the registry, which any restriction change can move ids in or out of."""
-    return (*(end_user_cache_key(user_id) for user_id in user_ids), end_user_restricted_registry_cache_key())
+    return (
+        *(end_user_cache_key(user_id) for user_id in user_ids),
+        end_user_restricted_registry_cache_key(),
+        *(end_user_block_cache_key(user_id) for user_id in user_ids),
+    )
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -217,7 +224,7 @@ def _configured_blocked_user_hook() -> _BlockedUserHook:
     dependencies=[Depends(user_api_key_auth)],
     response_model=BlockUsersResponse,
 )
-async def block_user(data: BlockUsers):
+async def block_user(data: BlockUsers) -> BlockUsersResponse:
     """
     [BETA] Reject calls with this end-user id
 
@@ -238,25 +245,26 @@ async def block_user(data: BlockUsers):
 
     _configured_blocked_user_hook()
     try:
-        records: Final = []
-        if prisma_client is not None:
-            for id in data.user_ids:
-                record = await _typed_table(EndUserRepository(prisma_client)).upsert(
-                    where={"user_id": id},
-                    data={
-                        "create": {"user_id": id, "blocked": True},
-                        "update": {"blocked": True},
-                    },
-                )
-                records.append(record)
-            await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
-        else:
+        if prisma_client is None:
             raise HTTPException(
                 status_code=500,
                 detail={"error": "Postgres DB Not connected"},
             )
-
-        return {"blocked_users": records}
+        table: Final = _typed_table(EndUserRepository(prisma_client))
+        records: Final = [
+            _to_customer_response(
+                await table.upsert(
+                    where={"user_id": user_id},
+                    data={
+                        "create": {"user_id": user_id, "blocked": True},
+                        "update": {"blocked": True},
+                    },
+                )
+            )
+            for user_id in data.user_ids
+        ]
+        await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
+        return BlockUsersResponse.model_validate({"blocked_users": records})
     except Exception as e:
         verbose_proxy_logger.error("An error occurred - %s", e)
         raise HTTPException(status_code=500, detail={"error": str(e)})
@@ -274,7 +282,7 @@ async def block_user(data: BlockUsers):
     dependencies=[Depends(user_api_key_auth)],
     response_model=UnblockUsersResponse,
 )
-async def unblock_user(data: BlockUsers):
+async def unblock_user(data: BlockUsers) -> UnblockUsersResponse:
     """
     [BETA] Unblock calls with this user id
 

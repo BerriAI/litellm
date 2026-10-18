@@ -610,19 +610,19 @@ def test_block_customer_success_serializes_through_response_model(
     response_model=BlockUsersResponse, a shape mismatch would raise a 500
     ResponseValidationError, so a clean 200 proves the model matches runtime output.
     """
-    blocked_row = LiteLLM_EndUserTable(user_id="blocked-1", blocked=True)
+    blocked_row: Final = PrismaEndUserRow(user_id="blocked-1", blocked=True, spend=0, models=[])
     mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(return_value=blocked_row)
 
-    response = client.post(
+    response: Final = client.post(
         "/customer/block",
         json={"user_ids": ["blocked-1"]},
         headers={"Authorization": "Bearer test-key"},
     )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["blocked_users"][0]["user_id"] == "blocked-1"
-    assert body["blocked_users"][0]["blocked"] is True
+    body: Final = BlockUsersResponse.model_validate(response.json())
+    assert body.blocked_users[0].user_id == blocked_row.user_id
+    assert body.blocked_users[0].blocked is True
 
 
 def test_delete_customer_success_serializes_through_response_model(mock_prisma_client, mock_user_api_key_auth):
@@ -973,9 +973,7 @@ def test_customer_new_forwards_models_to_db(mock_prisma_client, mock_user_api_ke
 
 
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
-def test_customer_new_rejects_a_duration_that_never_advances(
-    mock_prisma_client, mock_user_api_key_auth, bad_duration
-):
+def test_customer_new_rejects_a_duration_that_never_advances(mock_prisma_client, mock_user_api_key_auth, bad_duration):
     """A zero-length window resets to "now", leaving the customer's budget row
     permanently due for the reset job to re-read every tick."""
     mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
@@ -1167,8 +1165,8 @@ def test_customer_new_invalidates_end_user_and_registry_caches(mock_prisma_clien
         )
 
     assert response.status_code == 200, response.text
-    assert recording_cache.deleted == ["end_user_id:c1", "end_user_restricted_registry"]
-    assert _published_keys(mock_publish) == ["end_user_id:c1", "end_user_restricted_registry"]
+    assert recording_cache.deleted == ["end_user_id:c1", "end_user_restricted_registry", "litellm:end_user_id:c1"]
+    assert _published_keys(mock_publish) == ["end_user_id:c1", "end_user_restricted_registry", "litellm:end_user_id:c1"]
 
 
 def test_customer_update_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
@@ -1186,8 +1184,8 @@ def test_customer_update_invalidates_end_user_and_registry_caches(mock_prisma_cl
         )
 
     assert response.status_code == 200, response.text
-    assert recording_cache.deleted == ["end_user_id:c1", "end_user_restricted_registry"]
-    assert _published_keys(mock_publish) == ["end_user_id:c1", "end_user_restricted_registry"]
+    assert recording_cache.deleted == ["end_user_id:c1", "end_user_restricted_registry", "litellm:end_user_id:c1"]
+    assert _published_keys(mock_publish) == ["end_user_id:c1", "end_user_restricted_registry", "litellm:end_user_id:c1"]
 
 
 def test_customer_block_invalidates_end_user_and_registry_caches(
@@ -1210,11 +1208,15 @@ def test_customer_block_invalidates_end_user_and_registry_caches(
         "end_user_id:c1",
         "end_user_id:c2",
         "end_user_restricted_registry",
+        "litellm:end_user_id:c1",
+        "litellm:end_user_id:c2",
     ]
     assert _published_keys(mock_publish) == [
         "end_user_id:c1",
         "end_user_id:c2",
         "end_user_restricted_registry",
+        "litellm:end_user_id:c1",
+        "litellm:end_user_id:c2",
     ]
 
 
@@ -1740,11 +1742,15 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
         "end_user_id:c1",
         "end_user_id:c2",
         "end_user_restricted_registry",
+        "litellm:end_user_id:c1",
+        "litellm:end_user_id:c2",
     ]
     assert _published_keys(mock_publish) == [
         "end_user_id:c1",
         "end_user_id:c2",
         "end_user_restricted_registry",
+        "litellm:end_user_id:c1",
+        "litellm:end_user_id:c2",
     ]
 
 
