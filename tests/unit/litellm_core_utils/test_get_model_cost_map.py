@@ -5,10 +5,8 @@ count actual model entries, not reserved meta keys) and the extraction of the
 """
 
 import asyncio, importlib, importlib.resources as importlib_get_model, json, litellm
-import ctypes
 import logging
 import os
-import signal
 import sys
 import threading
 import time
@@ -1334,6 +1332,86 @@ def test_a_router_built_before_the_remote_map_lands_serves_a_bare_model_only_the
     assert litellm.get_model_info("claude-remote-only-test")["litellm_provider"] == "anthropic"
 
 
+def _bundled_chat_model_of(provider: str) -> str:
+    return min(
+        key
+        for key, entry in _load_root_cost_map().items()
+        if entry.get("litellm_provider") == provider and entry.get("mode") == "chat"
+    )
+
+
+def _remote_map_editing(model: str, fields: dict) -> bytes:
+    remote_map = _load_root_cost_map()
+    remote_map[model] = {**remote_map[model], **fields}
+    return json.dumps(remote_map).encode()
+
+
+def _land_remote_map(monkeypatch, body: bytes) -> None:
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, retry_started, release = _rate_limited_then_held_client(body)
+    try:
+        monkeypatch.setattr(
+            litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client, sleep=lambda _: None)
+        )
+        assert retry_started.wait(timeout=10)
+    finally:
+        _finish_fetch(release)
+
+
+@pytest.mark.parametrize(
+    "remote_fields, provider_after",
+    (
+        ({"litellm_provider": "text-completion-openai"}, "text-completion-openai"),
+        ({"input_cost_per_token": 1.0}, "openai"),
+    ),
+    ids=("moved", "repriced"),
+)
+def test_a_bare_model_the_remote_map_edits_resolves_to_the_remote_provider(
+    isolated_litellm_cost_state, monkeypatch, remote_fields, provider_after
+):
+    import litellm
+
+    model = _bundled_chat_model_of("openai")
+    assert litellm.get_llm_provider(model)[1] == "openai"
+
+    _land_remote_map(monkeypatch, _remote_map_editing(model, remote_fields))
+
+    assert litellm.get_llm_provider(model)[1] == provider_after
+
+
+def test_an_azure_ai_deployment_of_a_model_the_remote_map_drops_stays_on_azure_ai(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+
+    model = _bundled_chat_model_of("openai")
+    deployment = f"azure_ai/{model}"
+    api_base = "https://example.invalid"
+    assert litellm.get_llm_provider(deployment, api_base=api_base)[1] == "azure"
+    remote_map = _load_root_cost_map()
+    del remote_map[model]
+
+    _land_remote_map(monkeypatch, json.dumps(remote_map).encode())
+
+    assert litellm.get_llm_provider(deployment, api_base=api_base)[1] == "azure_ai"
+
+
+def test_a_model_the_remote_map_moves_to_another_provider_leaves_the_old_provider_wildcard_list(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+
+    model = _bundled_chat_model_of("azure")
+    assert model in litellm.models_by_provider["azure"]
+
+    _land_remote_map(monkeypatch, _remote_map_editing(model, {"litellm_provider": "openai"}))
+
+    assert model not in litellm.models_by_provider["azure"]
+    assert model in litellm.models_by_provider["openai"]
+
+
 def test_a_partial_edit_made_before_the_remote_map_lands_keeps_only_the_fields_it_changed(
     isolated_litellm_cost_state, monkeypatch
 ):
@@ -1759,66 +1837,6 @@ def test_models_listed_while_the_remote_map_is_in_flight_include_a_model_only_th
 
     assert waits.waited.is_set()
     assert "claude-remote-only-test" in valid_models
-
-
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
-def test_a_process_forked_while_the_remote_map_is_in_flight_inherits_it_once_adopted(
-    isolated_litellm_cost_state, monkeypatch, release_when_a_lookup_waits
-):
-    from litellm.litellm_core_utils import get_model_cost_map as module
-
-    client, started, release = _held_client(httpx.Response(200, content=_remote_map_with("claude-remote-only-test")))
-    release_when_a_lookup_waits(release)
-    try:
-        monkeypatch.setattr(litellm, "model_cost", module.load_model_cost_map_at_import(url=_URL, client=client))
-        assert started.wait(timeout=10)
-        child = os.fork()
-        if child == 0:
-            inherited = "claude-remote-only-test" in litellm.model_cost and module._PendingImportFetch.fetch is None
-            os._exit(0 if inherited else 1)
-        _, wait_status = os.waitpid(child, 0)
-    finally:
-        _finish_fetch(release)
-
-    assert os.waitstatus_to_exitcode(wait_status) == 0
-
-
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
-def test_a_process_forked_without_the_fork_hooks_while_the_remote_map_is_in_flight_prices_from_it(
-    isolated_litellm_cost_state, monkeypatch
-):
-    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
-
-    body, remote_price = _remote_map_repricing_gpt_4o()
-    first_request_started = threading.Event()
-    release = threading.Event()
-    served = []
-
-    def handler(request):
-        served.append(request)
-        if len(served) == 1:
-            first_request_started.set()
-            release.wait(timeout=10)
-        return httpx.Response(200, content=body)
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    try:
-        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
-        assert first_request_started.wait(timeout=10)
-        child = ctypes.PyDLL(None).fork()
-        if child == 0:
-            signal.signal(signal.SIGALRM, signal.SIG_DFL)
-            signal.alarm(10)
-            try:
-                cost = litellm.cost_per_token(model="gpt-4o", prompt_tokens=1000, completion_tokens=0)[0]
-                os._exit(0 if cost == pytest.approx(1000 * remote_price) else 1)
-            finally:
-                os._exit(2)
-        _, wait_status = os.waitpid(child, 0)
-    finally:
-        _finish_fetch(release)
-
-    assert os.waitstatus_to_exitcode(wait_status) == 0
 
 
 def test_import_load_with_the_local_env_override_starts_no_fetch(monkeypatch):

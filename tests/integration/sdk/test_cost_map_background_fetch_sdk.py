@@ -49,6 +49,17 @@ _SCRIPT: Final = textwrap.dedent(
             join_fetch()
             os._exit(0 if model in litellm.model_cost else 1)
         print(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]), flush=True)
+    elif variant == "raw_fork":
+        import ctypes, signal
+        pid = ctypes.PyDLL(None).fork()
+        if pid == 0:
+            signal.alarm(60)
+            try:
+                print(litellm.cost_per_token(model="gpt-4o", prompt_tokens=1000, completion_tokens=0)[0], flush=True)
+                os._exit(0)
+            finally:
+                os._exit(1)
+        print(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]), flush=True)
     elif variant == "forks_during_retry_wait":
         while get_model_cost_map_source_info()["fallback_reason"] == "Remote fetch in progress":
             time.sleep(0.01)
@@ -67,9 +78,23 @@ _SCRIPT: Final = textwrap.dedent(
 )
 
 
+def _bundled_map() -> dict:
+    return json.loads(files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text())
+
+
+def _remote_gpt_4o_input_cost() -> float:
+    return 3 * _bundled_map()["gpt-4o"]["input_cost_per_token"]
+
+
 def _remote_map() -> bytes:
-    bundled: Final = json.loads(files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text())
-    return json.dumps({**bundled, _REMOTE_ONLY_MODEL: {"litellm_provider": "openai", "mode": "chat"}}).encode()
+    bundled: Final = _bundled_map()
+    return json.dumps(
+        {
+            **bundled,
+            "gpt-4o": {**bundled["gpt-4o"], "input_cost_per_token": _remote_gpt_4o_input_cost()},
+            _REMOTE_ONLY_MODEL: {"litellm_provider": "openai", "mode": "chat"},
+        }
+    ).encode()
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +183,17 @@ def test_a_worker_forked_while_the_remote_map_is_in_flight_fetches_it_itself(
 
     assert child.after_import == "local Remote fetch in progress False"
     assert child.rest == ("0",)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_a_worker_forked_without_the_fork_hooks_while_the_remote_map_is_in_flight_prices_from_it(
+    cost_map_host: _CostMapHost, tmp_path: Path
+) -> None:
+    child: Final = _run_child(cost_map_host, "raw_fork", tmp_path, answer_after_import=False)
+
+    assert child.after_import == "local Remote fetch in progress False"
+    assert float(child.rest[0]) == pytest.approx(1000 * _remote_gpt_4o_input_cost())
+    assert child.rest[1:] == ("0",)
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")

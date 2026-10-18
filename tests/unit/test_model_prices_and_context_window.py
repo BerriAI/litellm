@@ -697,7 +697,7 @@ def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
 def test_every_cost_map_provider_is_registered(path: Path):
     assert unregistered_providers(json.loads(path.read_text())) == [], (
         f"{path.name} carries a litellm_provider whose models a `<provider>/*` grant does not list. A new provider "
-        "needs a `<provider>_models` set in litellm/__init__.py, filled in _populate_provider_model_sets and listed "
+        "needs a `<provider>_models` set in litellm/__init__.py, returned by _provider_model_set and listed "
         "in _build_models_by_provider. A new `<provider>-<family>` label needs its rows added to a set that "
         "`models_by_provider[<provider>]` includes"
     )

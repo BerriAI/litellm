@@ -844,6 +844,11 @@ def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object])
         if entry_id not in reshaped and isinstance(live := shared_once[entry_id][0], MutableMapping)
     )
     replaced: Final = {key: reshaped[id(value)] for key, value in tuple(fetch.bundled.items()) if id(value) in reshaped}
+    moved: Final = tuple(
+        (key, MappingProxyType(dict(value)), changed[id(value)])
+        for key, value in tuple(fetch.bundled.items())
+        if id(value) in changed and _is_cost_entry(value)
+    )
     kept_for_remote: Final = {
         id(entry): reshaped.get(entry_id, current) for entry_id, (current, _, entry) in shared_once.items()
     }
@@ -862,6 +867,10 @@ def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object])
         for key in fetch.loaded.keys() - finalized.keys()
         if _untouched_since_import(fetch.bundled.get(key), fetch.loaded[key], parsed.get(key, _NO_FIELDS))
     )
+    regrouped: Final = (
+        *moved,
+        *((key, entry, _NO_FIELDS) for key in dropped if _is_cost_entry(entry := fetch.bundled.get(key))),
+    )
     for live_entry, entry in updated_in_place:
         live_entry.update(entry)
     fetch.bundled.update({**replaced, **added, **added_since_import})
@@ -873,6 +882,7 @@ def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object])
     _record_remote_adoption()
     utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
     litellm.add_known_models_to_model_list()
+    litellm.drop_stale_known_models(regrouped)
     utils.reapply_runtime_model_cost_registrations()
     _PendingImportFetch.adoptions += 1
 
