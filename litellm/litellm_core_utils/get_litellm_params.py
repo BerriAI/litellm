@@ -142,9 +142,9 @@ def get_base_model_from_litellm_call_metadata(
     if metadata is None:
         return None
     model_info: Final = metadata.get("model_info")
-    if not isinstance(model_info, Mapping):
+    if not model_info:
         return None
-    base_model: Final = cast(  # cast-ok: isinstance narrows model_info to a Mapping of unknown key type
+    base_model: Final = cast(  # cast-ok: model metadata is caller-provided and preserves its mapping shape
         Mapping[str, object], model_info
     ).get("base_model")
     return base_model if isinstance(base_model, str) else None

@@ -6,9 +6,12 @@ Ensures backward compatibility after sparse kwargs extraction optimization.
 
 from typing import Final
 
+import httpx
 import pytest
+from openai import OpenAI
 from pydantic import ValidationError
 
+import litellm
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
@@ -81,6 +84,33 @@ class TestGetBaseModelFromLitellmCallMetadata:
     )
     def test_ignores_a_non_string_base_model(self, model_info: object):
         assert get_base_model_from_litellm_call_metadata({"model_info": model_info}) is None
+
+
+@pytest.mark.parametrize("model_info", ["malformed", ["malformed"], 123])
+def test_a_call_with_a_non_object_model_info_fails_before_reaching_the_provider(model_info: object) -> None:
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: the transport records each outbound request
+
+    def record(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(500)
+
+    client: Final = OpenAI(
+        api_key="sk-test",
+        base_url="https://api.openai.test/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(record)),
+        max_retries=0,
+    )
+
+    with pytest.raises(AttributeError):
+        litellm.completion(
+            model="openai/gpt-5.4-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"model_info": model_info},
+            client=client,
+            num_retries=0,
+        )
+
+    assert sent == []
 
 
 class TestGetLitellmParamsKwargsExtraction:
