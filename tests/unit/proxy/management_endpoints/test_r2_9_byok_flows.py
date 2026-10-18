@@ -50,7 +50,9 @@ async def test_team_admin_bring_your_own_key_move_allowed():
     with (
         patch.object(mme, "effective_server_owned_wif_fields", AsyncMock(return_value=())),
     ):
-        await ModelManagementAuthChecks._reject_non_admin_wif_write(
+        # The observable on a BYOK move is that the server-owned-credential
+        # guard raised nothing for this caller.
+        no_raise = await ModelManagementAuthChecks._reject_non_admin_wif_write(
             model_params=model_params,
             incoming_params=incoming.model_dump(exclude_none=True),
             user_api_key_dict=UserAPIKeyAuth(
@@ -60,6 +62,7 @@ async def test_team_admin_bring_your_own_key_move_allowed():
             ),
             prisma_client=AsyncMock(),
         )
+    assert no_raise is None
 
 
 @pytest.mark.asyncio
