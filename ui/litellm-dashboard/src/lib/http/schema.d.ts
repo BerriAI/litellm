@@ -49118,6 +49118,8 @@ export interface components {
             /** Team Max Budget */
             team_max_budget?: number | null;
             team_member?: components["schemas"]["Member"] | null;
+            /** Team Member Budget */
+            team_member_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Spend */

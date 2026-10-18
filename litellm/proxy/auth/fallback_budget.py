@@ -130,7 +130,7 @@ async def is_token_within_budget_for_model(
     if is_model_cost_zero(model=model, llm_router=llm_router):
         return True
 
-    # Gating check: team member overall budget within their team. 
+    # Gating check: team member overall budget within their team.
     # Prevents zero-cost models with paid fallbacks from exceeding the member's team budget cap.
     team_member_budget: Final = valid_token.team_member_budget
     if (
