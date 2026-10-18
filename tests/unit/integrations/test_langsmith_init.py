@@ -423,9 +423,11 @@ class TestLangsmithRedactUserApiKeyInfo:
         assert "user_api_key_user_id" not in extra["metadata"]
         assert extra["metadata"]["session_id"] == "sess-1"
 
-    def test_requester_metadata_populated_into_extra_metadata_for_filtering(self, reset_redact_flag):
+    def test_requester_metadata_populated_into_extra_metadata_for_filtering(
+        self, reset_redact_flag, monkeypatch: pytest.MonkeyPatch
+    ):
         """Caller-supplied requester_metadata is mirrored into extra.metadata for LangSmith trace filtering (#47018)."""
-        litellm.redact_user_api_key_info = True
+        monkeypatch.setattr(litellm, "redact_user_api_key_info", True)
         logger = self._logger()
         metadata = {
             "model": "gpt-4.1-mini",
