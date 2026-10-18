@@ -1170,6 +1170,8 @@ async def test_initialize_scheduled_jobs_recovers_from_transient_read_error(monk
     """
     import types
 
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
     monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
     from litellm.proxy.proxy_server import ProxyStartupEvent
@@ -1187,23 +1189,29 @@ async def test_initialize_scheduled_jobs_recovers_from_transient_read_error(monk
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = _mock_scheduled_proxy_config()
 
-    with (
-        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
-        patch("litellm.proxy.proxy_server.store_model_in_db", False),
-    ):
-        await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings={},
-            prisma_client=mock_prisma_client,
-            proxy_budget_rescheduler_min_time=1,
-            proxy_budget_rescheduler_max_time=2,
-            proxy_batch_write_at=5,
-            proxy_logging_obj=mock_proxy_logging,
-        )
+    scheduler = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
 
-    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
-    assert find_first.await_count == 2
-    mock_proxy_config.add_deployment.assert_awaited()
-    mock_proxy_config.init_mcp_servers_from_db.assert_not_called()
+        assert scheduler.get_job("add_deployment_job") is not None
+        mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+        assert find_first.await_count == 2
+        mock_proxy_config.add_deployment.assert_awaited()
+        mock_proxy_config.init_mcp_servers_from_db.assert_not_called()
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -1216,6 +1224,8 @@ async def test_initialize_scheduled_jobs_normalizes_string_general_settings(monk
     rows and the proxy comes up as if model storage were off.
     """
     import types
+
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
@@ -1234,23 +1244,29 @@ async def test_initialize_scheduled_jobs_normalizes_string_general_settings(monk
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = _mock_scheduled_proxy_config()
 
-    with (
-        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
-        patch("litellm.proxy.proxy_server.store_model_in_db", False),
-    ):
-        await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings={},
-            prisma_client=mock_prisma_client,
-            proxy_budget_rescheduler_min_time=1,
-            proxy_budget_rescheduler_max_time=2,
-            proxy_batch_write_at=5,
-            proxy_logging_obj=mock_proxy_logging,
-        )
+    scheduler = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
 
-    assert find_first.await_count == 1
-    mock_prisma_client.attempt_db_reconnect.assert_not_awaited()
-    mock_proxy_config.add_deployment.assert_awaited()
-    mock_proxy_config.init_mcp_servers_from_db.assert_not_called()
+        assert scheduler.get_job("add_deployment_job") is not None
+        assert find_first.await_count == 1
+        mock_prisma_client.attempt_db_reconnect.assert_not_awaited()
+        mock_proxy_config.add_deployment.assert_awaited()
+        mock_proxy_config.init_mcp_servers_from_db.assert_not_called()
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -1260,6 +1276,8 @@ async def test_initialize_scheduled_jobs_ignores_malformed_string_general_settin
     as empty, leaving store_model_in_db off, instead of failing the lookup.
     """
     import types
+
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
@@ -1278,26 +1296,32 @@ async def test_initialize_scheduled_jobs_ignores_malformed_string_general_settin
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = _mock_scheduled_proxy_config()
 
-    with (
-        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
-        patch("litellm.proxy.proxy_server.store_model_in_db", False),
-        patch("litellm.proxy.proxy_server.verbose_proxy_logger") as mock_logger,
-    ):
-        await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings={},
-            prisma_client=mock_prisma_client,
-            proxy_budget_rescheduler_min_time=1,
-            proxy_budget_rescheduler_max_time=2,
-            proxy_batch_write_at=5,
-            proxy_logging_obj=mock_proxy_logging,
-        )
+    scheduler = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger") as mock_logger,
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
 
-    assert find_first.await_count == 1
-    assert not any(
-        "Failed to check DB for store_model_in_db" in str(call.args[0]) for call in mock_logger.debug.call_args_list
-    )
-    mock_proxy_config.add_deployment.assert_not_called()
-    mock_proxy_config.init_mcp_servers_from_db.assert_awaited_once()
+        assert scheduler.get_job("add_deployment_job") is None
+        assert find_first.await_count == 1
+        assert not any(
+            "Failed to check DB for store_model_in_db" in str(call.args[0]) for call in mock_logger.debug.call_args_list
+        )
+        mock_proxy_config.add_deployment.assert_not_called()
+        mock_proxy_config.init_mcp_servers_from_db.assert_awaited_once()
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
