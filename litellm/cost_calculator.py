@@ -25,6 +25,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
+from litellm.litellm_core_utils.get_model_cost_map import wait_for_pending_import_model_cost_map
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -459,6 +460,7 @@ def cost_per_token(
 
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
+    wait_for_pending_import_model_cost_map()
 
     ## RECONSTRUCT USAGE BLOCK ##
     if usage_object is not None:
@@ -1459,6 +1461,7 @@ def completion_cost(
     Raises if no candidate model name resolves to pricing. Register the model via `litellm.register_model`
     or add it to model_prices_and_context_window.json.
     """
+    wait_for_pending_import_model_cost_map()
     try:
         call_type = infer_call_type(call_type, completion_response) or "completion"
 

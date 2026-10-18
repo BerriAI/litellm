@@ -93,6 +93,7 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     AliasedCostEntry,
     import_model_cost_map_generation,
     wait_for_import_model_cost_map,
+    wait_for_pending_import_model_cost_map,
 )
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
@@ -8206,7 +8207,7 @@ def get_valid_models(
     Returns:
         A list of valid LLMs
     """
-
+    wait_for_pending_import_model_cost_map()
     try:
         ################################
         # init litellm_params
