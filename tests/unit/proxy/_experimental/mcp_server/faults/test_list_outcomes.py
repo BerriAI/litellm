@@ -145,12 +145,12 @@ async def test_cancelled_fetch_propagates_instead_of_masquerading_as_a_healthy_e
     client = MagicMock()
     started = asyncio.Event()
 
-    async def list_tools(raise_on_error: bool = False) -> list[object]:
+    async def list_tools_result(raise_on_error: bool = False) -> list[object]:
         started.set()
         await asyncio.Event().wait()
         return []
 
-    client.list_tools = list_tools
+    client.list_tools_result = list_tools_result
     listing = asyncio.create_task(manager._fetch_tools_with_timeout(client, "cancelled_srv"))
     await started.wait()
     listing.cancel(cancel_message)
@@ -172,7 +172,7 @@ async def test_client_side_cancelled_error_is_a_classified_fault_not_a_cancellat
 
     manager = MCPServerManager()
     client = MagicMock()
-    client.list_tools = AsyncMock(side_effect=asyncio.CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE))
+    client.list_tools_result = AsyncMock(side_effect=asyncio.CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE))
 
     with pytest.raises(MCPServerListError) as exc_info:
         await manager._fetch_tools_with_timeout(client, "slow_teardown_srv")
