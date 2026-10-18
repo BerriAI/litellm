@@ -605,6 +605,24 @@ def test_flush_deferred_async_logging_swallows_closure_errors():
     assert logging_obj.enqueue_deferred_logging is None
 
 
+def test_deferred_success_that_fails_to_start_runs_the_held_sync_hooks() -> None:
+    from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_now
+
+    ran: Final[list[str]] = []
+    hook_pairing: Final = HookPairing(run_held_hook_now)
+    with hook_pairing.sync_run():
+        hook_pairing.hold(object(), lambda: ran.append("sync_success"))
+
+    def no_running_loop() -> None:
+        raise RuntimeError("no running event loop")
+
+    logging_obj: Final = MagicMock(enqueue_deferred_logging=no_running_loop, async_success_hook_pairing=hook_pairing)
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logging_obj=logging_obj, exception_raised=False)
+
+    assert ran == ["sync_success"]
+
+
 class _BothSuccessHooksRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

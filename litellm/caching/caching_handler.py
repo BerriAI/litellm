@@ -833,12 +833,14 @@ class LLMCachingHandler:
 
         hook_pairing: Final = HookPairing(run_held_hook_in_executor)
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=logging_obj.async_success_handler(
-                result=cached_result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                hook_pairing=hook_pairing,
+            async_coroutine=hook_pairing.async_run(
+                logging_obj.async_success_handler(
+                    result=cached_result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    hook_pairing=hook_pairing,
+                )
             )
         )
 

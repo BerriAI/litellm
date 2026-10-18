@@ -3886,6 +3886,7 @@ class ProxyBaseLLMRequestProcessing:
             _enqueue_fn()
         except Exception as e:
             verbose_proxy_logger.exception("Error firing deferred logging: %s", e)
+            _run_sync_success_hooks_held_for(logging_obj)
 
     def _arm_deferred_stream_dispatch(
         self,

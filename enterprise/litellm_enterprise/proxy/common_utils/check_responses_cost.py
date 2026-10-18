@@ -118,8 +118,10 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> Bi
     end_time: Final = datetime.now()
     hook_pairing: Final = HookPairing(run_held_hook_in_executor)
     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-        async_coroutine=logging_obj.async_success_handler(
-            result=unpriced, start_time=logging_obj.start_time, end_time=end_time, hook_pairing=hook_pairing
+        async_coroutine=hook_pairing.async_run(
+            logging_obj.async_success_handler(
+                result=unpriced, start_time=logging_obj.start_time, end_time=end_time, hook_pairing=hook_pairing
+            )
         )
     )
     logging_obj.handle_sync_success_callbacks_for_async_calls(

@@ -59,6 +59,20 @@ def test_held_sync_hook_waits_for_every_open_sync_run_after_the_async_run_ends()
     assert ran == ["ran"]
 
 
+def test_async_run_discarded_before_it_starts_still_runs_the_held_hook() -> None:
+    ran: Final[list[str]] = []
+    pairing: Final = HookPairing(run_held_hook_now)
+
+    async def never_started() -> None:
+        ran.append("async run")
+
+    with pairing.sync_run():
+        pairing.hold(_Logger(), lambda: ran.append("ran"))
+    pairing.async_run(never_started()).close()
+
+    assert ran == ["ran"]
+
+
 def test_async_run_reaching_one_logger_leaves_another_loggers_held_hook_to_run() -> None:
     ran: Final[list[str]] = []
     reached: Final = _Logger()

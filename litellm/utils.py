@@ -1458,10 +1458,11 @@ async def _client_async_logging_helper(
         ################################################
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
+        async_run: Final = logging_obj.async_success_handler(
+            result=result, start_time=start_time, end_time=end_time, hook_pairing=hook_pairing
+        )
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=logging_obj.async_success_handler(
-                result=result, start_time=start_time, end_time=end_time, hook_pairing=hook_pairing
-            )
+            async_coroutine=async_run if hook_pairing is None else hook_pairing.async_run(async_run)
         )
 
 

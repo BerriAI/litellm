@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
 from types import MappingProxyType, ModuleType
@@ -7939,6 +7939,26 @@ async def test_async_success_cut_off_by_the_logging_worker_before_reaching_the_l
         "aspeech", recorder, async_success_listed=True, async_failure_listed=True
     )
     logging_obj.dynamic_async_success_callbacks = [_StalledAsyncLogger(), recorder]
+
+    await _dispatch_async_success(logging_obj, ModelResponse())
+
+    assert recorder.hooks == ["sync_success"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_global_callbacks", "inline_logging_executors")
+async def test_async_success_the_logging_queue_drops_before_it_starts_still_gives_the_logger_its_sync_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def drop(async_coroutine: Coroutine[object, object, None]) -> None:
+        async_coroutine.close()
+
+    monkeypatch.setattr(litellm, "success_callback", [_legacy_success_callback])
+    monkeypatch.setattr(GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue", drop)
+    recorder: Final = _AsyncHookRecorder()
+    logging_obj: Final = _hook_count_logging_obj(
+        "aspeech", recorder, async_success_listed=True, async_failure_listed=True
+    )
 
     await _dispatch_async_success(logging_obj, ModelResponse())
 

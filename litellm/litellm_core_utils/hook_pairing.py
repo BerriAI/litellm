@@ -5,7 +5,8 @@ import contextlib
 import contextvars
 import functools
 import threading
-from collections.abc import Callable, Generator, Mapping
+import weakref
+from collections.abc import Callable, Coroutine, Generator, Mapping
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -67,6 +68,12 @@ class HookPairing:
                 unreached: Final = self._take_unreached()
             for sync_hook in unreached:
                 sync_hook()
+
+    def async_run(self, coroutine: Coroutine[object, object, None]) -> Coroutine[object, object, None]:
+        """Returns the async run's ``coroutine``, set to end the async run once it is discarded, so held hooks still run
+        when a full or stopping logging queue drops it before it starts."""
+        weakref.finalize(coroutine, self.end_async_run)
+        return coroutine
 
     def end_async_run(self) -> None:
         with self._lock:

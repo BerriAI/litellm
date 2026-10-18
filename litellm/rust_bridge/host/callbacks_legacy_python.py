@@ -304,7 +304,9 @@ def failure_handler(
     if asynchronous:
         if not is_internal_call():
             unbind_budget_reservation_from_callbacks(logger.litellm_params)
-        return logger.async_failure_handler(error, trace, start, end, hook_pairing=_FAILURE_PAIRINGS.pop(logger, None))
+        hook_pairing: Final = _FAILURE_PAIRINGS.pop(logger, None)
+        async_run: Final = logger.async_failure_handler(error, trace, start, end, hook_pairing=hook_pairing)
+        return async_run if hook_pairing is None else hook_pairing.async_run(async_run)
     if logger in _ASYNC_CALLS:
         _FAILURE_PAIRINGS[logger] = HookPairing(run_held_hook_in_executor)
     logger.failure_handler(error, trace, start, end, hook_pairing=_FAILURE_PAIRINGS.get(logger))
@@ -327,8 +329,9 @@ def submit_success(logger: LoggingSurface, response: object, start: datetime.dat
 def async_success_handler(
     logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
 ) -> Coroutine[object, object, None]:
-    return logger.async_success_handler(
-        response, start, end, cache_hit=_cache_hit(logger), hook_pairing=_success_pairing(logger)
+    hook_pairing: Final = _success_pairing(logger)
+    return hook_pairing.async_run(
+        logger.async_success_handler(response, start, end, cache_hit=_cache_hit(logger), hook_pairing=hook_pairing)
     )
 
 
