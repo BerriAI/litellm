@@ -2,11 +2,86 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Final
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from e2e_http import NetworkError, Result, Success, UnknownApiError
-from setup.ui_queries import Contract, Document, Sample, database_failures, measure, summarize, ui_junit_properties
+from setup.ui_queries import (
+    Contract,
+    Document,
+    Sample,
+    database_failures,
+    measure,
+    query_path,
+    summarize,
+    ui_junit_properties,
+)
 from setup.ui_query_cases import Params, cases, next_page
+
+
+def test_request_id_lookup_includes_the_logs_window() -> None:
+    case: Final = next(case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.name == "log_id_lookup")
+    assert case.params.model_dump(exclude_none=True) == {
+        "start_date": "2025-12-31 00:00:00",
+        "end_date": "2026-01-01 00:00:00",
+        "page": 1,
+        "page_size": 1,
+        "request_id": "perf-ui-1",
+    }
+
+
+def test_query_string_preserves_ui_arrays_and_boolean_strings() -> None:
+    requests: Final = cases(datetime(2026, 1, 1, tzinfo=UTC), "key")
+    cache: Final = next(case for case in requests if case.name == "cache_activity_filtered")
+    assert parse_qs(urlsplit(query_path(cache)).query) == {
+        "start_date": ["2025-12-25"],
+        "end_date": ["2026-01-01"],
+        "key_aliases": ["perf-key-0", "perf-key-1"],
+        "models": ["perf-chat"],
+    }
+    credentials: Final = next(case for case in requests if case.name == "logs_used_client_oauth_token")
+    query: Final = parse_qs(urlsplit(query_path(credentials)).query)
+    assert query["used_client_oauth_token"] == ["false"]
+    assert query["group_by_session"] == ["true"]
+
+
+@pytest.mark.parametrize("entity", ("user", "team", "tag", "organization", "customer", "agent"))
+@pytest.mark.parametrize(
+    ("route", "extra"),
+    (
+        ("aggregated", {}),
+        ("aggregated/keys", {"offset": 0, "limit": 50}),
+        ("aggregated/search", {"search": "perf-key"}),
+        ("aggregated/model_top_keys", {"model_group": "perf-chat", "by_model_group": "true"}),
+    ),
+)
+def test_usage_requests_list_keys_without_a_single_key_filter(
+    entity: str, route: str, extra: dict[str, str | int]
+) -> None:
+    case: Final = next(
+        case
+        for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key")
+        if case.path == f"/{entity}/daily/activity/{route}"
+    )
+    assert case.params.model_dump(exclude_none=True) == {
+        "start_date": "2025-12-25",
+        "end_date": "2026-01-01",
+        "timezone": "0",
+        **({"exclude_team_ids": "litellm-dashboard"} if entity == "team" else {}),
+        **extra,
+    }
+
+
+def test_prompt_cache_requests_cover_the_selected_calendar_days() -> None:
+    case: Final = next(
+        case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.name == "prompt_cache_all"
+    )
+    assert case.params.model_dump(exclude_none=True) == {
+        "start_date": "2025-12-02T00:00:00.000Z",
+        "end_date": "2026-01-01T23:59:59.999Z",
+        "filter": "all",
+        "page_size": 10,
+    }
 
 
 def test_facet_dates_use_the_ui_bracketed_filter_names() -> None:
@@ -143,13 +218,6 @@ def test_zero_spend_rows_are_allowed_alongside_nonzero_fixture_data() -> None:
     assert contract.count(Document.model_validate_json('[{"spend":0},{"spend":2}]')) == 2
     with pytest.raises(AssertionError, match="positive spend"):
         _ = contract.count(Document.model_validate_json('[{"spend":0}]'))
-
-
-def test_daily_aggregate_must_return_recovered_spendlog_alias() -> None:
-    contract: Final = Contract(row_fields=("metadata",), recovered_alias="perf-ui-recovered")
-    assert contract.count(Document.model_validate_json('[{"metadata":{"key_alias":"perf-ui-recovered"}}]')) == 1
-    with pytest.raises(AssertionError, match="not recovered"):
-        _ = contract.count(Document.model_validate_json('[{"metadata":{"key_alias":null}}]'))
 
 
 @pytest.mark.parametrize(

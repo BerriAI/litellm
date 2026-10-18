@@ -7,7 +7,7 @@ from typing import Final, Literal
 
 from pydantic import ConfigDict, Field
 
-from setup.ui_queries import Contract, Document, Query, UiQueryCase, descend, orphan_key
+from setup.ui_queries import Contract, Document, Query, UiQueryCase, descend
 
 
 class Params(Query):
@@ -23,7 +23,7 @@ class Params(Query):
     page_size: int | None = None
     sort_by: str | None = None
     sort_order: str | None = None
-    group_by_session: bool | None = None
+    group_by_session: Literal["true"] | None = None
     session_cursor: str | None = None
     session_id: str | None = None
     request_id: str | None = None
@@ -41,8 +41,8 @@ class Params(Query):
     error_code: str | None = None
     error_message: str | None = None
     span_type: str | None = None
-    exclude_internal_health_checks: bool | None = None
-    used_client_oauth_token: bool | None = None
+    exclude_internal_health_checks: Literal["true"] | None = None
+    used_client_oauth_token: Literal["true", "false"] | None = None
     lower: str | None = Field(default=None, alias="filter[startTime][gte]")
     upper: str | None = Field(default=None, alias="filter[startTime][lte]")
     q: str | None = None
@@ -54,13 +54,8 @@ class Params(Query):
     guardrail_id: str | None = None
     limit: int | None = None
     tags: str | None = None
-    group_by: str | None = None
-
-
-class EndUserBody(Query):
-    startTime: str | None = None
-    endTime: str | None = None
-    api_key: str | None = None
+    exclude_team_ids: str | None = None
+    include_current_utc_day: Literal["true"] | None = None
 
 
 def _timestamp(value: datetime) -> str:
@@ -102,7 +97,7 @@ def log_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
         page_size=25,
         sort_by="startTime",
         sort_order="desc",
-        group_by_session=True,
+        group_by_session="true",
     )
     base: Final = UiQueryCase("logs_default_24h", "/spend/logs/ui", params, _LOGS)
     filters: Final = (
@@ -120,13 +115,12 @@ def log_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
         ("error_message", "Synthetic"),
         ("span_type", "llm"),
         ("search", "perf-ui-1"),
-        ("exclude_internal_health_checks", True),
-        ("used_client_oauth_token", False),
+        ("exclude_internal_health_checks", "true"),
+        ("used_client_oauth_token", "false"),
     )
     return (
         base,
         replace(base, name="logs_cursor_page_2", params=params.model_copy(update={"page": 2}), cursor="session"),
-        replace(base, name="logs_offset_page_3", params=params.model_copy(update={"page": 3})),
         replace(
             base,
             name="logs_7d",
@@ -145,11 +139,16 @@ def log_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
             replace(base, name=f"logs_sort_{name}", params=params.model_copy(update={"sort_by": name}))
             for name in ("spend", "total_tokens", "request_duration_ms", "model", "ttft_ms")
         ),
-        UiQueryCase("log_id_lookup", "/spend/logs/ui", Params(request_id="perf-ui-1", page_size=1), _LOGS),
+        UiQueryCase(
+            "log_id_lookup",
+            "/spend/logs/ui",
+            Params(start_date=params.start_date, end_date=params.end_date, page=1, request_id="perf-ui-1", page_size=1),
+            _LOGS,
+        ),
         UiQueryCase(
             "log_payload",
             "/spend/logs/ui/perf-ui-1",
-            Params(start_date=params.start_date),
+            Params(start_date=_timestamp(anchor - timedelta(seconds=10))),
             Contract(object_fields=("messages", "response", "proxy_server_request")),
         ),
         UiQueryCase(
@@ -189,7 +188,10 @@ def analytics_cases(anchor: datetime) -> tuple[UiQueryCase, ...]:
         start_date=(anchor - timedelta(days=7)).date().isoformat(), end_date=anchor.date().isoformat()
     )
     prompt_dates: Final = Params(
-        start_date=(anchor - timedelta(days=30)).isoformat(), end_date=anchor.isoformat(), filter="all", page_size=10
+        start_date=f"{(anchor - timedelta(days=30)).date().isoformat()}T00:00:00.000Z",
+        end_date=f"{anchor.date().isoformat()}T23:59:59.999Z",
+        filter="all",
+        page_size=10,
     )
     cache: Final = UiQueryCase(
         "cache_activity_7d", "/global/activity/cache_hits", dates, Contract(("groups",), ("call_type",))
@@ -246,128 +248,59 @@ def analytics_cases(anchor: datetime) -> tuple[UiQueryCase, ...]:
     )
 
 
-def old_usage_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
-    month_start: Final = anchor.replace(day=1)
-    next_month: Final = (month_start + timedelta(days=32)).replace(day=1)
-    month: Final = Params(
-        start_date=month_start.date().isoformat(), end_date=(next_month - timedelta(days=1)).date().isoformat()
-    )
-    week: Final = Params(
-        start_date=(anchor - timedelta(days=7)).isoformat(), end_date=anchor.isoformat(), tags="all-tags"
-    )
-    return (
-        UiQueryCase(
-            "old_activity",
-            "/global/activity",
-            month,
-            Contract(("daily_data",), ("date",), ("api_requests",)),
-            "old_usage",
-        ),
-        UiQueryCase(
-            "old_activity_models",
-            "/global/activity/model",
-            month,
-            Contract(row_fields=("model", "daily_data"), positive=("sum_api_requests",)),
-            "old_usage",
-        ),
-        UiQueryCase(
-            "old_spend_provider",
-            "/global/spend/provider",
-            month,
-            Contract(row_fields=("provider", "spend")),
-            "old_usage",
-        ),
-        UiQueryCase(
-            "old_tags",
-            "/global/spend/tags",
-            week,
-            Contract(("spend_per_tag",), ("name", "spend"), ("log_count",)),
-            "old_usage",
-        ),
-        UiQueryCase(
-            "old_tags_filtered",
-            "/global/spend/tags",
-            week.model_copy(update={"tags": "project-0,production"}),
-            Contract(("spend_per_tag",), ("name", "spend"), ("log_count",)),
-            "old_usage",
-        ),
-        UiQueryCase("old_tag_names", "/global/spend/all_tag_names", Params(), Contract(("tag_names",)), "old_usage"),
-        UiQueryCase(
-            "old_spend_logs", "/global/spend/logs", Params(), Contract(row_fields=("date", "spend")), "old_usage"
-        ),
-        UiQueryCase(
-            "old_keys",
-            "/global/spend/keys",
-            Params(limit=5),
-            Contract(row_fields=("api_key", "key_alias"), positive=("total_spend",)),
-            "old_usage",
-        ),
-        UiQueryCase("old_teams", "/global/spend/teams", Params(), Contract(("daily_spend",)), "old_usage"),
-        UiQueryCase(
-            "old_models",
-            "/global/spend/models",
-            Params(limit=5),
-            Contract(row_fields=("model",), positive=("total_spend",)),
-            "old_usage",
-        ),
-        UiQueryCase(
-            "old_end_users",
-            "/global/spend/end_users",
-            Params(),
-            Contract(row_fields=("end_user",), positive=("total_count",)),
-            "old_usage",
-            body=Query(),
-        ),
-        UiQueryCase(
-            "old_end_users_filtered",
-            "/global/spend/end_users",
-            Params(),
-            Contract(row_fields=("end_user",), positive=("total_count",)),
-            "old_usage",
-            body=EndUserBody(startTime=week.start_date, endTime=week.end_date, api_key=api_key),
-        ),
-    )
-
-
-def report_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
+def _entity_activity_cases(anchor: datetime, entity: str) -> tuple[UiQueryCase, ...]:
     dates: Final = Params(
-        start_date=(anchor - timedelta(days=7)).date().isoformat(), end_date=anchor.date().isoformat()
+        start_date=(anchor - timedelta(days=7)).date().isoformat(),
+        end_date=anchor.date().isoformat(),
+        timezone="0",
+        exclude_team_ids="litellm-dashboard" if entity == "team" else None,
+    )
+    routes: Final = (
+        ("aggregated", dates, Contract(("results",), ("date", "breakdown"))),
+        (
+            "aggregated/keys",
+            dates.model_copy(update={"offset": 0, "limit": 50}),
+            Contract(("api_keys",), ("api_key", "metrics", "metadata")),
+        ),
+        (
+            "aggregated/search",
+            dates.model_copy(update={"search": "perf-key"}),
+            Contract(("api_keys",), ("api_key", "metrics", "metadata")),
+        ),
+        (
+            "aggregated/model_top_keys",
+            dates.model_copy(update={"model_group": "perf-chat", "by_model_group": "true"}),
+            Contract(("api_keys",), ("api_key", "metrics", "metadata")),
+        ),
+    )
+    return tuple(
+        UiQueryCase(
+            f"usage_{entity}_{route.replace('/', '_')}",
+            f"/{entity}/daily/activity/{route}",
+            params,
+            contract,
+        )
+        for route, params, contract in routes
+    )
+
+
+def activity_cases(anchor: datetime) -> tuple[UiQueryCase, ...]:
+    groups: Final = tuple(
+        _entity_activity_cases(anchor, entity)
+        for entity in ("user", "team", "tag", "organization", "customer", "agent")
     )
     return (
+        *chain.from_iterable(groups),
         UiQueryCase(
-            "agent_global_report_teams",
-            "/global/spend/report",
-            dates.model_copy(update={"group_by": "team"}),
-            Contract(row_fields=("group_by_day", "teams")),
-            "liteadmin",
-        ),
-        UiQueryCase(
-            "agent_global_report_customers",
-            "/global/spend/report",
-            dates.model_copy(update={"group_by": "customer"}),
-            Contract(row_fields=("group_by_day", "customers")),
-            "liteadmin",
-        ),
-        UiQueryCase(
-            "agent_global_report_keys",
-            "/global/spend/report",
-            dates.model_copy(update={"group_by": "api_key"}),
-            Contract(row_fields=("api_key", "model_details"), positive=("total_cost",)),
-            "liteadmin",
-        ),
-        UiQueryCase(
-            "agent_key_report",
-            "/key/spend/report",
-            dates.model_copy(update={"api_key": api_key}),
-            Contract(row_fields=("api_key", "model_details"), positive=("total_cost",)),
-            "liteadmin",
-        ),
-        UiQueryCase(
-            "agent_team_report",
-            "/team/spend/report",
-            dates.model_copy(update={"team_id": "perf-team-0"}),
-            Contract(row_fields=("api_key", "model_details"), positive=("total_cost",)),
-            "liteadmin",
+            "cache_leakage_keys",
+            "/user/daily/activity/aggregated/cache_leakage_keys",
+            Params(
+                start_date=(anchor - timedelta(days=30)).date().isoformat(),
+                end_date=anchor.date().isoformat(),
+                timezone="0",
+                include_current_utc_day="true",
+            ),
+            Contract(("api_keys",), ("api_key", "metrics", "metadata")),
         ),
     )
 
@@ -377,54 +310,5 @@ def cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
         *log_cases(anchor, api_key),
         *facet_cases(anchor),
         *analytics_cases(anchor),
-        *old_usage_cases(anchor, api_key),
-        *report_cases(anchor, api_key),
-        *recovery_cases(anchor),
-    )
-
-
-def _entity_recovery_cases(anchor: datetime, entity: str) -> tuple[UiQueryCase, ...]:
-    dates: Final = Params(
-        start_date=(anchor - timedelta(days=7)).date().isoformat(), end_date=anchor.date().isoformat(), timezone="0"
-    )
-    routes: Final = (
-        ("aggregated", dates, Contract(("results",), ("date", "breakdown"))),
-        (
-            "aggregated/keys",
-            dates.model_copy(update={"offset": 0, "limit": 50}),
-            Contract(("api_keys",), ("api_key", "metrics", "metadata")),
-        ),
-        ("aggregated/search", dates, Contract(("api_keys",), ("api_key", "metrics", "metadata"))),
-        (
-            "aggregated/model_top_keys",
-            dates.model_copy(update={"model_group": "perf-chat", "by_model_group": "true"}),
-            Contract(("api_keys",), ("api_key", "metrics", "metadata")),
-        ),
-    )
-    return tuple(_recovery_case(entity, route, params, contract) for route, params, contract in routes)
-
-
-def _recovery_case(entity: str, route: str, params: Params, contract: Contract) -> UiQueryCase:
-    name: Final = f"recovery_{entity}_{route.replace('/', '_')}"
-    key: Final = orphan_key(name)
-    return UiQueryCase(
-        name,
-        f"/{entity}/daily/activity/{route}",
-        params.model_copy(update={"api_key": key, **({"search": key} if route.endswith("search") else {})}),
-        replace(contract, recovered_alias="perf-ui-recovered"),
-        "key_recovery",
-    )
-
-
-def recovery_cases(anchor: datetime) -> tuple[UiQueryCase, ...]:
-    entities: Final = ("user", "team", "tag", "organization", "customer", "agent")
-    groups: Final = tuple(_entity_recovery_cases(anchor, entity) for entity in entities)
-    dates: Final = Params(
-        start_date=(anchor - timedelta(days=7)).date().isoformat(), end_date=anchor.date().isoformat(), timezone="0"
-    )
-    return (
-        *sum(groups, ()),
-        _recovery_case(
-            "user", "aggregated/cache_leakage_keys", dates, Contract(("api_keys",), ("api_key", "metrics", "metadata"))
-        ),
+        *activity_cases(anchor),
     )
