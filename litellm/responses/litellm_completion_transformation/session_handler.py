@@ -104,6 +104,15 @@ def _replay_start(
     )
 
 
+def _holds_compaction_point(
+    spend_logs: Sequence["SpendLogsPayload"], proxy_server_requests: Sequence[Mapping[str, object] | None]
+) -> bool:
+    return any(
+        _compaction_point(index, spend_log, proxy_server_request) is not None
+        for index, (spend_log, proxy_server_request) in enumerate(zip(spend_logs, proxy_server_requests, strict=True))
+    )
+
+
 def _referenced_request_ids(previous_response_id: str, client_response_ids: tuple[str, ...]) -> tuple[str, ...]:
     decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
     response_id: Final = decoded_response_id.get("response_id", previous_response_id)
@@ -197,12 +206,15 @@ class ResponsesSessionHandler:
             all_spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
         )
         start: Final = _replay_start(all_spend_logs[:replayable_turns], proxy_server_requests[:replayable_turns])
+        replayed_turns: Final = (
+            replayable_turns if _holds_compaction_point(all_spend_logs, proxy_server_requests) else len(all_spend_logs)
+        )
         earlier_instructions: Final = _instruction_items_before(proxy_server_requests, start)
         replayed_history: Final = ResponsesSessionHandler._history_of_turns(
-            all_spend_logs[start.index :],
+            all_spend_logs[start.index : replayed_turns],
             [
                 _replayed_request(index, proxy_server_requests[index], start, earlier_instructions)
-                for index in range(start.index, len(all_spend_logs))
+                for index in range(start.index, replayed_turns)
             ],
             item_cache_control,
         )

@@ -1119,6 +1119,26 @@ async def test_a_turn_after_a_compaction_item_keeps_the_stored_call_its_tool_out
     assert ("user", "Weather in Paris?") not in map(_role_and_content, session["messages"])
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spend_logs", "previous_response_id", "replayed_roles"),
+    [
+        ((_WEATHER_CALL_TURN, _compacted_weather_answer("resp_first_send")), "resp_weather", ["user", "assistant"]),
+        (
+            (_WEATHER_CALL_TURN, _compacted_weather_answer("resp_first_send"), _compacted_weather_answer("resp_retry")),
+            "resp_first_send",
+            ["user", "assistant", "tool", "assistant"],
+        ),
+    ],
+)
+async def test_a_compacted_session_replays_no_turn_sent_after_the_referenced_response(
+    spend_logs: tuple[dict[str, object], ...], previous_response_id: str, replayed_roles: list[str]
+):
+    session: Final = await _history_from_stored_turns(spend_logs, previous_response_id)
+
+    assert [_role_and_content(message)[0] for message in session["messages"]] == replayed_roles
+
+
 class _SqliteBackedPrismaDB:
     def __init__(self, rows: list[tuple[str, str, str, str, str | None, str | None]]) -> None:
         self._connection = sqlite3.connect(":memory:")
