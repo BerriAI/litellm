@@ -7407,3 +7407,41 @@ class TestOpentelemetryUnitTests:
 
         # Assert: error.message should be set from error_str using ErrorAttributes constant
         mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
+
+
+@pytest.mark.parametrize("capture_mode", ["false", "EVENT_ONLY", "SPAN_ONLY", "SPAN_AND_EVENT"])
+@pytest.mark.parametrize("setting_source", ["config", "environment"])
+def test_guardrail_snapshot_respects_span_content_capture(
+    capture_mode: str, setting_source: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_mode)
+    span_exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    logger: Final = OpenTelemetry(
+        tracer_provider=provider,
+        config=OpenTelemetryConfig(capture_message_content=capture_mode if setting_source == "config" else None),
+    )
+    response: Final = {
+        "tokens_saved": 42,
+        "compressed_messages": [{"role": "user", "content": "Private compressed canary"}],
+    }
+    try:
+        logger._create_guardrail_span(
+            kwargs={
+                "standard_logging_object": {
+                    "guardrail_information": [{"guardrail_name": "headroom", "guardrail_response": response}]
+                }
+            },
+            context=None,
+        )
+        (span,) = span_exporter.get_finished_spans()
+        assert span.attributes is not None
+        serialized: Final = span.attributes["guardrail_response"]
+        assert isinstance(serialized, str)
+        actual: Final = json.loads(serialized)
+        assert actual["tokens_saved"] == response["tokens_saved"]
+        assert ("Private compressed canary" in serialized) is (capture_mode in ("SPAN_ONLY", "SPAN_AND_EVENT"))
+        assert response["compressed_messages"] == [{"role": "user", "content": "Private compressed canary"}]
+    finally:
+        provider.shutdown()

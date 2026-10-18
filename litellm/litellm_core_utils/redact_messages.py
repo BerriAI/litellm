@@ -209,14 +209,22 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
 _GUARDRAIL_ENTRIES_ADAPTER: Final = TypeAdapter(list[object])
 
 
+def redacted_guardrail_response(value: object) -> object:
+    response: Final = _as_mapping(value)
+    if response is None or "compressed_messages" not in response:
+        return value
+    return {**response, "compressed_messages": REDACTED_BY_LITELLM}
+
+
 def _redacted_guardrail_entry(value: object) -> object:
     entry: Final = _as_mapping(value)
     if entry is None:
         return value
-    response: Final = _as_mapping(entry.get("guardrail_response"))
-    if response is None or "compressed_messages" not in response:
+    response: Final = entry.get("guardrail_response")
+    redacted_response: Final = redacted_guardrail_response(response)
+    if response is redacted_response:
         return value
-    return {**entry, "guardrail_response": {**response, "compressed_messages": REDACTED_BY_LITELLM}}
+    return {**entry, "guardrail_response": redacted_response}
 
 
 def redacted_guardrail_information(value: object) -> object:
