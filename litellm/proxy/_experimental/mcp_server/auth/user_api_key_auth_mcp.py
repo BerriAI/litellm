@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from types import MappingProxyType
+from types import EllipsisType, MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import HTTPException
@@ -464,6 +464,7 @@ def _admission_failure_fallback(
 class MCPServerAccess:
     server_ids: tuple[str, ...]
     scope: Literal["unscoped", "scoped", "unresolved"] = "unscoped"
+    end_user_denies_mcp: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1830,7 +1831,21 @@ class MCPRequestHandler:
         Returns:
             List[str]: List of allowed MCP servers by server id
         """
-        from litellm.proxy.proxy_server import general_settings
+        from litellm.proxy.proxy_server import general_settings, prisma_client
+
+        try:
+            end_user_permission: Final = (
+                await MCPRequestHandler._get_end_user_object_permission(user_api_key_auth, prisma_client)
+                if user_api_key_auth and user_api_key_auth.end_user_id and prisma_client is not None
+                else None
+            )
+        except UnloadableEntitlementError as error:
+            verbose_logger.warning("Denying MCP access, customer entitlement unreadable: %s", error)
+            return MCPServerAccess(server_ids=(), scope="scoped", end_user_denies_mcp=True)
+        if end_user_permission is not None and SpecialMCPServerNames.no_mcp_servers.value in (
+            end_user_permission.mcp_servers or []
+        ):
+            return MCPServerAccess(server_ids=(), scope="scoped", end_user_denies_mcp=True)
 
         if managed_agent_policy(user_api_key_auth) is not None:
             from litellm.proxy._experimental.mcp_server.auth.managed_agent_access import managed_agent_servers
@@ -1911,7 +1926,7 @@ class MCPRequestHandler:
             #########################################################
             if user_api_key_auth and user_api_key_auth.end_user_id:
                 allowed_mcp_servers_for_end_user: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_end_user(
-                    user_api_key_auth
+                    user_api_key_auth, object_permission=end_user_permission
                 )
 
                 # If end_user has explicit MCP server permissions, apply intersection
@@ -3428,6 +3443,8 @@ class MCPRequestHandler:
     @staticmethod
     async def _get_allowed_mcp_servers_for_end_user(
         user_api_key_auth: UserAPIKeyAuth | None = None,
+        *,
+        object_permission: LiteLLM_ObjectPermissionTable | None | EllipsisType = ...,
     ) -> list[str]:
         """
         Get allowed MCP servers for an end user.
@@ -3445,9 +3462,19 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        object_permission = await MCPRequestHandler._get_end_user_object_permission(user_api_key_auth, prisma_client)
-        if object_permission is None:
+        permission: Final = (
+            await MCPRequestHandler._get_end_user_object_permission(user_api_key_auth, prisma_client)
+            if object_permission is ...
+            else object_permission
+        )
+        if permission is None:
             return []
+        if SpecialMCPServerNames.no_mcp_servers.value in (permission.mcp_servers or []):
+            return [SpecialMCPServerNames.no_mcp_servers.value]
+
+        toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
+            permission, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
+        )
 
         try:
             # Permission entries may be server_ids OR names/aliases — expand to ids.
@@ -3455,25 +3482,30 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permission.mcp_servers or [])
+            direct_mcp_servers: Final = global_mcp_server_manager.expand_permission_list(
+                permission.mcp_servers or []
+            )
 
             # Get MCP servers from access groups
             access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
-                object_permission.mcp_access_groups or [],
+                permission.mcp_access_groups or [],
                 requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
 
             # servers referenced in tool permissions should also be accessible
             tool_perm_servers: Final = list(
-                global_mcp_server_manager.expand_tool_permissions(object_permission.mcp_tool_permissions).keys()
+                global_mcp_server_manager.expand_tool_permissions(permission.mcp_tool_permissions).keys()
             )
 
-            # Combine all lists
-            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers
-            return list(MCPRequestHandler._server_grants_with_group_scope(set(all_servers), object_permission))
+            all_servers: Final = frozenset(
+                (*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants)
+            )
+            return list(MCPRequestHandler._server_grants_with_group_scope(all_servers, permission))
         except Exception as e:
-            verbose_logger.warning("Failed to get allowed MCP servers for end_user: %s", e)
-            return []
+            raise UnloadableEntitlementError(
+                f"end user {user_api_key_auth.end_user_id!r} has an object permission "
+                "whose MCP servers could not be read"
+            ) from e
 
     @staticmethod
     async def _get_user_object_permission(
