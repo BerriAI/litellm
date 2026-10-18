@@ -318,6 +318,24 @@ def test_llm_call_span_carries_the_request_user_as_user_id(metadata, expected):
     assert span.attributes.get(User.ID) == expected
 
 
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"user_api_key_end_user_id": "end-1"}, None),
+        ({"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}, "caller-1"),
+    ],
+    ids=["end-user-withheld", "caller-trace-user-still-sent"],
+)
+def test_llm_call_span_withholds_an_end_user_the_metadata_allowlist_drops(metadata, expected):
+    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", baggage_metadata_keys=["user_api_key_org_id"])
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
+    _emit_llm(logger, {**_kwargs(), "litellm_params": {"metadata": metadata}})
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes.get(User.ID) == expected
+    assert "end-1" not in {str(value) for value in span.attributes.values()}
+
+
 def test_streaming_span_carries_time_to_first_chunk():
     logger, exporter = _logger()
     kwargs = {

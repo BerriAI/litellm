@@ -503,7 +503,7 @@ class LLMCallSpanData:
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,
             request_purpose=request_purpose,
-            trace=trace or TraceControls(),
+            trace=(trace or TraceControls()).released(metadata_keys),
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
             routing_attributes=routing_decision_attributes(decision),

@@ -31,7 +31,11 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()
         if root is not None and root.is_recording():
-            controls: Final = request_trace_controls(kwargs) if self._started(root) else caller_trace_controls(kwargs)
+            controls: Final = (
+                request_trace_controls(kwargs).released(self.config.baggage_metadata_keys)
+                if self._started(root)
+                else caller_trace_controls(kwargs)
+            )
             root.set_attributes(LangfuseMapper.trace_attributes(controls))
         super().log_pre_api_call(model, messages, kwargs)
 

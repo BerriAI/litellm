@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from _openinference_support import _chat_plain_response, _rig, _spans
+from _openinference_support import Rig, _chat_plain_response, _rig, _spans
 from integration._support.client import Gateway, eventually
 from integration._support.wire import Reply, Request, Wire
 from pydantic import JsonValue
@@ -14,6 +14,7 @@ from pydantic import JsonValue
 _OPENINFERENCE_CALLBACKS: Final = ("arize", "arize_phoenix", "weave_otel")
 _GENAI_CALLBACKS: Final = ("otel", "langfuse_otel", "langtrace", "signoz", "levo", "newrelic", "agentops")
 _UNUSED_ENDPOINT: Final[dict[str, JsonValue]] = {"otel": {"exporter": "http/protobuf", "endpoint": "unused"}}
+_METADATA_ALLOWLIST: Final = "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"
 
 
 def _settings(callback: str) -> Mapping[str, JsonValue] | None:
@@ -64,6 +65,17 @@ def _model_call_spans(destination: Wire, markers: tuple[str, ...]) -> Mapping[st
     return eventually(by_marker, lambda found: all(found.values()), seconds=30)
 
 
+def _chat(rig: Rig, marker: str, key: str, headers: Mapping[str, str], extra: Mapping[str, JsonValue]) -> None:
+    response: Final = rig.proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": rig.model, "messages": [{"role": "user", "content": marker}], "cache": {"no-cache": True}, **extra},
+        key=key,
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+
 @pytest.mark.parametrize("callback", (*_OPENINFERENCE_CALLBACKS, *_GENAI_CALLBACKS))
 def test_otel_v2_callback_sends_the_request_user_as_user_id(callback: str, gateway: Gateway, tmp_path: Path) -> None:
     run: Final = uuid.uuid4().hex
@@ -78,7 +90,8 @@ def test_otel_v2_callback_sends_the_request_user_as_user_id(callback: str, gatew
             callbacks=(callback,),
             callback_settings=_settings(callback),
             environment=_environment(callback),
-            remove_environment=_removed_environment(callback),
+            remove_environment=(*_removed_environment(callback), _METADATA_ALLOWLIST),
+            disabled_environment=(_METADATA_ALLOWLIST,),
         ) as rig,
         rig.proxy.scenario() as scenario,
     ):
@@ -90,21 +103,41 @@ def test_otel_v2_callback_sends_the_request_user_as_user_id(callback: str, gatew
             (markers[2], owned_key, {}, {}),
         )
         for marker, key, headers, extra in sent:
-            response = rig.proxy.request(
-                "POST",
-                "/v1/chat/completions",
-                {
-                    "model": rig.model,
-                    "messages": [{"role": "user", "content": marker}],
-                    "cache": {"no-cache": True},
-                    **extra,
-                },
-                key=key,
-                headers=headers,
-            )
-            assert response.status_code == 200, response.text
+            _chat(rig, marker, key, headers, extra)
         spans: Final = _model_call_spans(rig.destination, markers)
     users: Final = {marker: {attributes.get("user.id") for attributes in spans[marker]} for marker in markers}
     assert users == {markers[0]: {end_user}, markers[1]: {caller}, markers[2]: {None}}, spans
     sessions: Final = {attributes.get("session.id") for attributes in itertools.chain.from_iterable(spans.values())}
     assert end_user not in sessions, spans
+
+
+@pytest.mark.parametrize("callback", ("arize", "otel", "langfuse_otel"))
+def test_otel_v2_callback_withholds_an_end_user_the_metadata_allowlist_drops(
+    callback: str, gateway: Gateway, tmp_path: Path
+) -> None:
+    run: Final = uuid.uuid4().hex
+    end_user: Final = f"end-user-{run}"
+    caller: Final = f"caller-{run}"
+    markers: Final = (f"end-{run}", f"caller-{run}-marker")
+    with (
+        _rig(
+            gateway,
+            tmp_path,
+            _upstream,
+            callbacks=(callback,),
+            callback_settings=_settings(callback),
+            environment={**_environment(callback), _METADATA_ALLOWLIST: "user_api_key_org_id"},
+        ) as rig,
+        rig.proxy.scenario() as scenario,
+    ):
+        service_key: Final = scenario.key()
+        _chat(rig, markers[0], service_key, {"x-litellm-end-user-id": end_user}, {})
+        _chat(
+            rig, markers[1], service_key, {"x-litellm-end-user-id": end_user}, {"metadata": {"trace_user_id": caller}}
+        )
+        spans: Final = _model_call_spans(rig.destination, markers)
+    users: Final = {marker: {attributes.get("user.id") for attributes in spans[marker]} for marker in markers}
+    assert users == {markers[0]: {None}, markers[1]: {caller}}, spans
+    model_call_spans: Final = tuple(itertools.chain.from_iterable(spans.values()))
+    values: Final = tuple(itertools.chain.from_iterable(span.values() for span in model_call_spans))
+    assert not [value for value in values if end_user in str(value)], spans

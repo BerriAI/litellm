@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
 from typing import Final
 
@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping
 
 LANGFUSE_HEADER_PREFIX: Final = "langfuse_"
+END_USER_METADATA_KEY: Final = "user_api_key_end_user_id"
 _ITEMS: Final = TypeAdapter(tuple[object, ...])
 
 
@@ -26,6 +27,14 @@ class TraceControls:
     user_id: str | None = None
     session_id: str | None = None
     tags: tuple[str, ...] = ()
+    user_id_is_end_user: bool = False
+
+    def released(self, metadata_keys: Collection[str]) -> TraceControls:
+        """These controls minus an end-user ``user_id`` when the operator's ``baggage_metadata_keys`` keeps the
+        end-user id in the proxy. A caller's own ``trace_user_id`` is always kept."""
+        if self.user_id_is_end_user and END_USER_METADATA_KEY not in metadata_keys:
+            return replace(self, user_id=None, user_id_is_end_user=False)
+        return self
 
 
 def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
@@ -58,10 +67,10 @@ def request_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
     if request is None:
         return controls
     end_user: Final = next(
-        (value for body in _metadata_bodies(request) if (value := as_str(body.get("user_api_key_end_user_id")))),
+        (value for body in _metadata_bodies(request) if (value := as_str(body.get(END_USER_METADATA_KEY)))),
         None,
     )
-    return replace(controls, user_id=end_user)
+    return replace(controls, user_id=end_user, user_id_is_end_user=end_user is not None)
 
 
 def _metadata_bodies(request: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:

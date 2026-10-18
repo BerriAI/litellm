@@ -1358,8 +1358,11 @@ def test_caller_trace_controls_carry_user_session_and_tags(request_data, expecte
 @pytest.mark.parametrize(
     ("request_data", "expected"),
     [
-        ({"metadata": {"user_api_key_end_user_id": "end-1"}}, TraceControls(user_id="end-1")),
-        ({"litellm_metadata": {"user_api_key_end_user_id": "end-2"}}, TraceControls(user_id="end-2")),
+        ({"metadata": {"user_api_key_end_user_id": "end-1"}}, TraceControls(user_id="end-1", user_id_is_end_user=True)),
+        (
+            {"litellm_metadata": {"user_api_key_end_user_id": "end-2"}},
+            TraceControls(user_id="end-2", user_id_is_end_user=True),
+        ),
         (
             {"metadata": {"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}},
             TraceControls(user_id="caller-1"),
@@ -1373,7 +1376,7 @@ def test_caller_trace_controls_carry_user_session_and_tags(request_data, expecte
         ),
         (
             {"metadata": {"user_api_key_end_user_id": "end-1", "session_id": "s-1"}},
-            TraceControls(user_id="end-1", session_id="s-1"),
+            TraceControls(user_id="end-1", session_id="s-1", user_id_is_end_user=True),
         ),
         ({"metadata": {"user_api_key_user_id": "internal-1"}}, TraceControls()),
         ({}, TraceControls()),
@@ -1551,6 +1554,22 @@ def test_llm_span_stamps_user_id_only_when_the_request_names_a_user():
 
     without: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload())
     assert User.ID not in GenAIMapper().map(without)
+
+
+@pytest.mark.parametrize(
+    ("trace", "metadata_keys", "expected"),
+    [
+        (TraceControls(user_id="end-1", user_id_is_end_user=True), ("user_api_key_end_user_id",), "end-1"),
+        (TraceControls(user_id="end-1", user_id_is_end_user=True), ("user_api_key_org_id",), None),
+        (TraceControls(user_id="caller-1"), ("user_api_key_org_id",), "caller-1"),
+    ],
+    ids=["end-user-allowlisted", "end-user-withheld", "caller-trace-user-always-sent"],
+)
+def test_llm_span_sends_the_end_user_only_when_the_metadata_allowlist_releases_it(trace, metadata_keys, expected):
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(), trace=trace, metadata_keys=metadata_keys
+    )
+    assert GenAIMapper().map(data).get(User.ID) == expected
 
 
 @pytest.mark.parametrize("callback_name", ["otel", *sorted(PRESET_BY_CALLBACK)])

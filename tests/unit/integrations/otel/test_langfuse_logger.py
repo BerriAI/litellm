@@ -467,6 +467,31 @@ def test_a_callers_trace_user_id_still_wins_over_the_proxy_end_user():
 
 
 @pytest.mark.parametrize(
+    ("metadata", "expected_user"),
+    [
+        ({"user_api_key_end_user_id": "end-1"}, None),
+        ({"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}, "caller-1"),
+    ],
+    ids=["end-user-withheld", "caller-trace-user-still-sent"],
+)
+def test_an_end_user_the_metadata_allowlist_drops_stays_off_the_root_and_the_generation(metadata, expected_user):
+    cfg: Final = OpenTelemetryV2Config(
+        exporter="in_memory", mapper_names=["genai", "langfuse"], baggage_metadata_keys=["user_api_key_org_id"]
+    )
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = build_otel_v2_logger(
+        config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter)
+    )
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger, exporter, {"metadata": metadata, "proxy_server_request": {"headers": {}}}
+    )
+
+    assert root_attrs.get("user.id") == expected_user
+    assert generation_attrs.get("user.id") == expected_user
+
+
+@pytest.mark.parametrize(
     ("metadata", "expected_root_user"),
     [
         ({"user_api_key_end_user_id": "end-1"}, None),
