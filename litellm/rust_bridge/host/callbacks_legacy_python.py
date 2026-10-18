@@ -123,6 +123,8 @@ def finalize(
 
 
 class LoggingSurface(Protocol):
+    async_success_hook_pairing: HookPairing | None
+
     @property
     def model_call_details(self) -> Mapping[str, object]: ...
 
@@ -272,7 +274,7 @@ def defers_async_logging(logger: LoggingSurface) -> bool:
 
 
 def defer_success(logger: LoggingSurface, pending: object) -> None:
-    _success_pairing(logger)
+    logger.async_success_hook_pairing = _success_pairing(logger)  # rebind-ok: the proxy ends it on a drop
     setattr(logger, "_native_pending_logging", pending)
 
 

@@ -4,8 +4,10 @@ When an async-only logger listed before it stalls past the logging worker's per-
 the async success handler off before it reaches the logger, and the logger gets its sync success hook instead.
 
 When a post-call guardrail blocks the response, the proxy drops the async success logging it parked for the
-guardrails, so the blocked response is logged once, as a failure, and never as a success. Speech and transcription
-responses never reach post-call guardrails, and image generation logs its success before they run, so neither parks.
+guardrails and logs the block as a failure. The logger gets one failure hook, plus, on the surfaces outside the
+async flag list, the sync success hook it got before the sync run held it back for the dropped async success. Speech
+and transcription responses never reach post-call guardrails, and image generation logs its success before they run,
+so neither parks.
 
 A legacy sync callback is configured, because that is what makes the sync handler run for an async call."""
 
@@ -104,13 +106,16 @@ def test_logger_the_async_success_never_reaches_behind_a_stalled_logger_gets_its
 
 
 @pytest.mark.parametrize("surface", _PARKED_FOR_POST_CALL_GUARDRAILS)
-def test_response_a_post_call_guardrail_blocks_is_logged_once_as_a_failure(post_call_block: _Rig, surface: str) -> None:
+def test_response_a_post_call_guardrail_blocks_gives_the_logger_one_failure_hook(
+    post_call_block: _Rig, surface: str
+) -> None:
     call_id: Final = str(uuid.uuid4())
+    expected: Final = ["async_failure"] if surface in IN_THE_ASYNC_FLAG_LIST else ["async_failure", "sync_success"]
     response: Final = send(post_call_block.proxy, surface, "success", call_id)
     assert response.status_code == 400, response.text
     held(
         lambda: probe_hooks(post_call_block.records, surface, post_call_block.records.for_call(call_id)),
-        lambda hooks: hooks == ["async_failure"],
+        lambda hooks: hooks == expected,
         holding=3,
         seconds=20,
     )

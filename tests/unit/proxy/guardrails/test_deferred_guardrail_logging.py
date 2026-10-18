@@ -605,6 +605,77 @@ def test_flush_deferred_async_logging_swallows_closure_errors():
     assert logging_obj.enqueue_deferred_logging is None
 
 
+class _BothSuccessHooksRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hooks: list[str] = []
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.hooks.append("sync_success")
+
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.hooks.append("async_success")
+
+
+class _InlineExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
+        fn(*args, **kwargs)
+
+
+def _legacy_success_callback(*_: object) -> None:
+    pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("exception_raised", "expected"), [(True, ["sync_success"]), (False, ["async_success"])])
+async def test_success_the_proxy_drops_for_a_blocked_response_still_gives_a_both_hooks_logger_one_hook(
+    monkeypatch: pytest.MonkeyPatch, exception_raised: bool, expected: list[str]
+) -> None:
+    from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.types.utils import ModelResponse
+
+    monkeypatch.setattr(litellm_logging, "executor", _InlineExecutor())
+    monkeypatch.setattr(thread_pool_executor, "executor", _InlineExecutor())
+    for name in ("callbacks", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "success_callback", [_legacy_success_callback])
+    recorder: Final = _BothSuccessHooksRecorder()
+    now: Final = datetime.now()
+    logging_obj: Final = Logging(
+        model="gpt-image-1",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="aimage_edit",
+        start_time=now,
+        litellm_call_id="deferred-blocked-image-edit",
+        function_id="deferred-blocked-image-edit",
+        dynamic_success_callbacks=[recorder],
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    logging_obj.defer_async_logging = True
+
+    _dispatch_success_logging(
+        logging_obj=logging_obj,
+        result=ModelResponse(),
+        start_time=now,
+        end_time=now,
+        is_completion_with_fallbacks=False,
+        is_litellm_internal_call=False,
+    )
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logging_obj,
+        exception_raised=exception_raised,
+    )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert recorder.hooks == expected
+
+
 # ---------------------------------------------------------------------------
 # 5. Streaming: closure defers logging at stream end
 # ---------------------------------------------------------------------------

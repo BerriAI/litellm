@@ -273,6 +273,38 @@ async def test_success_of_an_async_call_keeps_the_sync_hook_only_when_no_async_s
     assert hooks.hooks == expected
 
 
+class _Pending:
+    def __init__(self) -> None:
+        self.released: list[bool] = []
+
+    def release(self, success: bool) -> None:
+        self.released.append(success)
+
+
+@pytest.mark.parametrize(("exception_raised", "expected"), [(True, ["sync_success"]), (False, [])])
+def test_success_the_proxy_drops_for_a_blocked_ocr_response_gives_the_logger_its_sync_hook(
+    monkeypatch: pytest.MonkeyPatch, exception_raised: bool, expected: list[str]
+) -> None:
+    from litellm.litellm_core_utils import thread_pool_executor
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    monkeypatch.setattr(litellm_logging, "executor", _InlineExecutor())
+    monkeypatch.setattr(thread_pool_executor, "executor", _InlineExecutor())
+    monkeypatch.setattr(litellm, "success_callback", [_legacy_success_callback])
+    hooks: Final = _Hooks()
+    now: Final = datetime.datetime.now()
+    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_hooks(hooks)}
+    logger: Final = setup("aocr", (), kwargs, now, asynchronous=True).logger
+    pending: Final = _Pending()
+    legacy.defer_success(logger, pending)
+    legacy.sync_success_for_async_call(logger, ModelResponse(), now, now)
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logging_obj=logger, exception_raised=exception_raised)
+
+    assert pending.released == [not exception_raised]
+    assert hooks.hooks == expected
+
+
 def test_success_of_a_later_call_on_the_same_logger_does_not_reuse_the_earlier_async_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

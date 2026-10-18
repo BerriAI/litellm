@@ -10,7 +10,6 @@ from typing import Final
 
 import httpx
 import yaml
-
 from integration._support.client import Gateway, held
 from integration._support.wire import Reply, Request, Wire
 

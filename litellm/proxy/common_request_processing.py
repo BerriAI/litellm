@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
+from litellm.litellm_core_utils.hook_pairing import HookPairing
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
@@ -1932,6 +1933,13 @@ async def _team_member_within_fallback_model_budget(
 
 def _content_text(fields: Mapping[str, object]) -> str:
     return str(fields.get("content", ""))
+
+
+def _run_sync_success_hooks_held_for(logging_obj: object) -> None:
+    """Ends the pairing of the async success the proxy just dropped, so the sync success hooks held back for it run."""
+    hook_pairing: Final = getattr(logging_obj, "async_success_hook_pairing", None)
+    if isinstance(hook_pairing, HookPairing):
+        hook_pairing.end()
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -3850,7 +3858,8 @@ class ProxyBaseLLMRequestProcessing:
         firing the closure — the exception propagates to post_call_failure_hook
         which writes its own failure spend log via async_failure_handler.
         Firing both produced a duplicate (Success + Failure) entry per request,
-        with the Success row exposing the blocked LLM response.
+        with the Success row exposing the blocked LLM response. Sync success
+        hooks the paired sync run held back for the dropped success still run.
 
         For streaming early-returns the closure is never stored (wrapper_async
         returns before the deferred block in litellm/utils.py), so this is a
@@ -3864,11 +3873,14 @@ class ProxyBaseLLMRequestProcessing:
             if pending is not None:
                 logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
                 pending.release(not exception_raised)
+                if exception_raised:
+                    _run_sync_success_hooks_held_for(logging_obj)
         _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
         logging_obj.enqueue_deferred_logging = None
         if exception_raised:
+            _run_sync_success_hooks_held_for(logging_obj)
             return
         try:
             _enqueue_fn()
