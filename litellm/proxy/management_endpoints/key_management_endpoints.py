@@ -934,7 +934,7 @@ def _strip_non_admin_changed_by_metadata(
     audit rows, so a self-granted flag lets any key holder forge the primary
     audit attribution field. Silently stripped for non-admin writes.
     """
-    metadata = data.metadata
+    metadata: Final = data.metadata
     if not isinstance(metadata, dict):
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
@@ -3342,9 +3342,7 @@ async def _validate_end_user_budget_id_change(
         raise HTTPException(status_code=400, detail=missing_detail)
 
 
-_TEMP_BUDGET_METADATA_KEYS: Final[frozenset[str]] = frozenset(
-    {"temp_budget_increase", "temp_budget_expiry"}
-)
+_TEMP_BUDGET_METADATA_KEYS: Final[frozenset[str]] = frozenset({"temp_budget_increase", "temp_budget_expiry"})
 
 
 def _key_request_changes_budget(
@@ -3359,13 +3357,11 @@ def _key_request_changes_budget(
     in. /key/update and /key/regenerate treat all of these as admin-only
     changes for non-admin callers.
     """
-    changed_max_budget: Final = (
-        data.max_budget is not None
-        and data.max_budget != getattr(existing_key_row, "max_budget", None)
+    changed_max_budget: Final = data.max_budget is not None and data.max_budget != getattr(
+        existing_key_row, "max_budget", None
     )
-    changed_budget_duration: Final = (
-        data.budget_duration is not None
-        and data.budget_duration != getattr(existing_key_row, "budget_duration", None)
+    changed_budget_duration: Final = data.budget_duration is not None and data.budget_duration != getattr(
+        existing_key_row, "budget_duration", None
     )
     return (
         changed_max_budget
@@ -3565,9 +3561,7 @@ async def _validate_update_key_data(
     #   through the non-admin path would let a key owner / team member
     #   overwrite the live counter below real usage and silently weaken
     #   enforcement.
-    _is_budget_change: Final = _key_request_changes_budget(
-        data=data, existing_key_row=existing_key_row
-    )
+    _is_budget_change: Final = _key_request_changes_budget(data=data, existing_key_row=existing_key_row)
 
     _existing_metadata: Final = getattr(existing_key_row, "metadata", None)
     _existing_throttle: Final = (
@@ -6036,9 +6030,7 @@ async def _execute_virtual_key_regeneration(
             user_api_key_dict.user_role is not None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not _regenerate_is_proxy_admin and _key_request_changes_budget(
-            data=data, existing_key_row=key_in_db
-        ):
+        if not _regenerate_is_proxy_admin and _key_request_changes_budget(data=data, existing_key_row=key_in_db):
             await _check_key_admin_access(
                 user_api_key_dict=user_api_key_dict,
                 hashed_token=hashed_api_key,
@@ -8157,10 +8149,7 @@ async def _can_user_query_key_info(
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
         or user_api_key_dict.api_key == key
-        or (
-            key_info.user_id is not None
-            and key_info.user_id == user_api_key_dict.user_id
-        )
+        or (key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id)
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,
             existing_key_row=key_info,
