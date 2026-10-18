@@ -36,7 +36,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _redact_prompt_leaks_in_error_string,
     sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
-    _sanitize_request_body_for_spend_logs_payload,
+    sanitize_request_body_for_spend_logs_payload,
     _scrub_raw_model_from_error_information,
     configured_spend_logs_metadata_fields,
     get_logging_payload,
@@ -595,11 +595,11 @@ def test_get_logging_payload_maps_responses_api_cache_write_tokens_from_usage_ob
     assert additional_usage_values["cache_creation_input_tokens"] == 800
 
 
-def test_sanitize_request_body_for_spend_logs_payload_basic():
+def testsanitize_request_body_for_spend_logs_payload_basic():
     request_body = {
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
-    assert _sanitize_request_body_for_spend_logs_payload(request_body) == request_body
+    assert sanitize_request_body_for_spend_logs_payload(request_body) == request_body
 
 
 def test_large_request_no_truncation_threshold():
@@ -624,7 +624,7 @@ def test_large_request_no_truncation_threshold():
         "model": "gpt-5.5",
     }
 
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
 
     # Verify the content was truncated
     truncated_content = sanitized["messages"][0]["content"]
@@ -658,7 +658,7 @@ def test_small_request_no_truncation():
         "model": "gpt-5.5",
     }
 
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
 
     # Verify the content was NOT truncated
     assert sanitized["messages"][0]["content"] == small_content
@@ -687,7 +687,7 @@ def test_configurable_string_length_env_var(monkeypatch):
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
     )
     from litellm.proxy.spend_tracking.spend_tracking_utils import (
-        _sanitize_request_body_for_spend_logs_payload,
+        sanitize_request_body_for_spend_logs_payload,
     )
 
     # Verify the constant was set to the env var value
@@ -701,7 +701,7 @@ def test_configurable_string_length_env_var(monkeypatch):
         "model": "gpt-5.5",
     }
 
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
 
     # Verify truncation occurred with 35% beginning and 65% end preserved
     truncated_content = sanitized["messages"][0]["content"]
@@ -735,7 +735,7 @@ def test_truncation_preserves_beginning_and_end():
         "model": "gpt-5.5",
     }
 
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
     truncated_content = sanitized["messages"][0]["content"]
 
     # Calculate expected splits (35% beginning, 65% end)
@@ -761,13 +761,13 @@ def test_truncation_preserves_beginning_and_end():
     assert str(expected_skipped) in truncated_content
 
 
-def test_sanitize_request_body_for_spend_logs_payload_long_string():
+def testsanitize_request_body_for_spend_logs_payload_long_string():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB (2048)
     long_string = "a" * 3000  # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
     request_body = {"text": long_string, "normal_text": "short text"}
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
 
     # Calculate expected lengths: 35% start + 65% end + truncation message
     start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
@@ -787,13 +787,13 @@ def test_sanitize_request_body_for_spend_logs_payload_long_string():
     assert sanitized["normal_text"] == "short text"
 
 
-def test_sanitize_request_body_for_spend_logs_payload_nested_dict():
+def testsanitize_request_body_for_spend_logs_payload_nested_dict():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
     long_string = "a" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
     request_body = {"outer": {"inner": {"text": long_string, "normal": "short"}}}
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
 
     # Calculate expected lengths based on actual MAX_STRING_LENGTH_PROMPT_IN_DB
     start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
@@ -810,13 +810,13 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_dict():
     assert sanitized["outer"]["inner"]["normal"] == "short"
 
 
-def test_sanitize_request_body_for_spend_logs_payload_nested_list():
+def testsanitize_request_body_for_spend_logs_payload_nested_list():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
     long_string = "a" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
     request_body = {"items": [{"text": long_string}, {"text": "short"}, [{"text": long_string}]]}
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
 
     # Calculate expected lengths based on actual MAX_STRING_LENGTH_PROMPT_IN_DB
     start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
@@ -834,19 +834,19 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_list():
     assert len(sanitized["items"][2][0]["text"]) == expected_length
 
 
-def test_sanitize_request_body_for_spend_logs_payload_non_string_values():
+def testsanitize_request_body_for_spend_logs_payload_non_string_values():
     request_body = {"number": 42, "boolean": True, "none": None, "float": 3.14}
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
     assert sanitized == request_body
 
 
-def test_sanitize_request_body_for_spend_logs_payload_empty():
+def testsanitize_request_body_for_spend_logs_payload_empty():
     request_body: dict[str, Any] = {}
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
     assert sanitized == request_body
 
 
-def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
+def testsanitize_request_body_for_spend_logs_payload_mixed_types():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
@@ -856,7 +856,7 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
         "number": 42,
         "nested": {"list": ["short", long_string], "dict": {"value": long_string}},
     }
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
 
     # Calculate expected lengths based on actual MAX_STRING_LENGTH_PROMPT_IN_DB
     start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
@@ -876,7 +876,7 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
     assert len(sanitized["nested"]["dict"]["value"]) == expected_length
 
 
-def test_sanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
+def testsanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
@@ -887,18 +887,18 @@ def test_sanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
     # Simulate config-loaded env var being set after module import.
     monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", str(override_max))
 
-    sanitized = _sanitize_request_body_for_spend_logs_payload({"text": test_string})
+    sanitized = sanitize_request_body_for_spend_logs_payload({"text": test_string})
     assert sanitized["text"] == test_string
 
 
-def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
+def testsanitize_request_body_for_spend_logs_payload_circular_reference():
     # Create a circular reference
     a: dict[str, Any] = {}
     b: dict[str, Any] = {"a": a}
     a["b"] = b
 
     # Test that it handles circular reference without infinite recursion
-    sanitized = _sanitize_request_body_for_spend_logs_payload(a)
+    sanitized = sanitize_request_body_for_spend_logs_payload(a)
     assert sanitized == {"b": {"a": {}}}  # Should return empty dict for circular reference
 
 
@@ -1111,7 +1111,7 @@ def test_truncation_includes_db_safeguard_note():
 
     large_error = "Error: " + "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 1000)
     request_body = {"error_trace": large_error}
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
 
     truncated = sanitized["error_trace"]
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated
@@ -2916,7 +2916,7 @@ class TestIsMasterKey:
 def test_sanitize_request_body_strips_secret_fields():
     """
     secret_fields contains raw HTTP headers (including Authorization Bearer
-    tokens). _sanitize_request_body_for_spend_logs_payload must strip it so
+    tokens). sanitize_request_body_for_spend_logs_payload must strip it so
     that sensitive credentials are never persisted in the spend-logs DB.
     """
     request_body = {
@@ -2930,7 +2930,7 @@ def test_sanitize_request_body_strips_secret_fields():
             }
         },
     }
-    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
 
     assert "secret_fields" not in sanitized, "secret_fields must be stripped from the sanitized request body"
     assert sanitized["model"] == "gpt-4"
@@ -3034,7 +3034,7 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
 def test_sanitize_response_redacts_credential_named_fields() -> None:
     response: Final = {"access_token": "canary-oauth-token", "usage": {"prompt_tokens": 1}}
 
-    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {
+    assert sanitize_request_body_for_spend_logs_payload({"response": response}) == {
         "response": {"access_token": REDACTED_BY_LITELM_STRING, "usage": {"prompt_tokens": 1}}
     }
 
@@ -3058,7 +3058,7 @@ def test_sanitize_response_keeps_logprob_tokens() -> None:
         ],
     }
 
-    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {
+    assert sanitize_request_body_for_spend_logs_payload({"response": response}) == {
         "response": {
             "system_fingerprint": REDACTED_BY_LITELM_STRING,
             "choices": [
@@ -3125,7 +3125,7 @@ def test_sanitize_request_body_keeps_key_named_tool_payload_fields() -> None:
         ],
     }
 
-    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+    assert sanitize_request_body_for_spend_logs_payload(request_body) == {
         "model": "anthropic/claude",
         "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
         "prompt_cache_key": REDACTED_BY_LITELM_STRING,
@@ -3183,7 +3183,7 @@ def test_sanitize_request_body_masks_credentials_beside_tool_blocks() -> None:
         ]
     }
 
-    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+    assert sanitize_request_body_for_spend_logs_payload(request_body) == {
         "messages": [
             {
                 "role": "assistant",

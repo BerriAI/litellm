@@ -2222,7 +2222,7 @@ class ProxyLogging:
         if custom_logger and prompt_spec is not None:
             response_state: Final = TypeAdapter(Mapping[str, object]).validate_python(data).get("secret_fields")
             if isinstance(response_state, dict):
-                response_state["_headroom_prompt_export_allowed"] = (
+                response_state["_headroom_prompt_logging_allowed"] = (
                     user_api_key_dict is not None and user_api_key_has_admin_view(user_api_key_dict)
                 )
             is_responses_call: Final = call_type == "aresponses"

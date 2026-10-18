@@ -1537,19 +1537,19 @@ def test_bypass_header_case_insensitive():
 
     for header_value in ("true", "True", "TRUE"):
         data = {"proxy_server_request": {"headers": {"x-headroom-bypass": header_value}}}
-        assert guardrail._request_header_enabled(data, "x-headroom-bypass") is True
+        assert guardrail._should_bypass(data) is True
 
     data = {"proxy_server_request": {"headers": {"x-headroom-bypass": "false"}}}
-    assert guardrail._request_header_enabled(data, "x-headroom-bypass") is False
+    assert guardrail._should_bypass(data) is False
 
     data = {"proxy_server_request": {"headers": {}}}
-    assert guardrail._request_header_enabled(data, "x-headroom-bypass") is False
+    assert guardrail._should_bypass(data) is False
 
     data = {}
-    assert guardrail._request_header_enabled(data, "x-headroom-bypass") is False
+    assert guardrail._should_bypass(data) is False
 
     invalid_headers: Final = {"proxy_server_request": {"headers": None}}
-    assert guardrail._request_header_enabled(invalid_headers, "x-headroom-bypass") is False
+    assert guardrail._should_bypass(invalid_headers) is False
 
 
 @pytest.mark.asyncio
@@ -3082,58 +3082,13 @@ def test_unusable_timeout_falls_back_to_the_default(configured: float):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("opt_in", ["true", "TRUE", "false", None])
-async def test_compressed_prompt_response_header_requires_request_opt_in(
-    respx_mock: respx.MockRouter, opt_in: str | None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import base64
-
-    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-    from litellm.litellm_core_utils.redact_messages import perform_redaction
-    from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
-    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
-
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
-    compressed: Final = [{"role": "user", "content": "Résumé 日本語\nsummary"}]
-    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(
-        200, json={"messages": compressed, "tokens_before": 1000, "tokens_after": 10}
-    )
-    request_data: Final = {
-        "secret_fields": {"raw_headers": {"x-preserved": "kept"}},
-        "proxy_server_request": {"headers": {} if opt_in is None else {"x-litellm-return-compressed-prompt": opt_in}},
-    }
-    result: Final = await guardrail.apply_guardrail(
-        inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
-        request_data=request_data,
-        input_type="request",
-    )
-    headers: Final = get_logging_caching_headers(request_data) or {}
-    assert request_data["secret_fields"]["raw_headers"] == {"x-preserved": "kept"}
-    assert route.call_count == 1
-    assert result["structured_messages"] == [ORIGINAL_MESSAGES[0], compressed[0], *ORIGINAL_MESSAGES[2:]]
-    if opt_in is not None and opt_in.lower() == "true":
-        assert json.loads(base64.b64decode(headers["x-litellm-compressed-prompt"])) == result["structured_messages"]
-        refresh_proxy_server_request_body_snapshot(request_data)
-        logged: Final = {"litellm_params": get_litellm_params(**request_data)}
-        assert headers["x-litellm-compressed-prompt"] not in json.dumps(logged)
-        perform_redaction(logged, result=None)
-        assert headers["x-litellm-compressed-prompt"] not in json.dumps(logged)
-        assert get_logging_caching_headers(request_data) == headers
-    else:
-        assert "x-litellm-compressed-prompt" not in headers
-    assert "x-litellm-compressed-prompt-omitted" not in headers
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY]
 )
 @pytest.mark.parametrize("managed", [True, False])
-async def test_compressed_prompt_respects_managed_template_visibility(
+async def test_compressed_prompt_log_respects_managed_template_visibility(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, role: LitellmUserRoles, managed: bool
 ) -> None:
-    import base64
     from datetime import datetime
 
     from litellm.caching.caching import DualCache
@@ -3145,6 +3100,10 @@ async def test_compressed_prompt_respects_managed_template_visibility(
     from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
     monkeypatch.setattr(litellm, "callbacks", [])
     registry: Final = prompt_registry.InMemoryPromptRegistry()
     monkeypatch.setattr(prompt_registry, "IN_MEMORY_PROMPT_REGISTRY", registry)
@@ -3191,75 +3150,118 @@ async def test_compressed_prompt_respects_managed_template_visibility(
     assert "A" * 5000 not in json.dumps(result["messages"])
     assert ("Private system canary" in json.dumps(result["messages"])) is managed
     headers: Final = get_logging_caching_headers(result) or {}
+    assert "x-litellm-compressed-prompt" not in headers
+    from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+
+    _, metadata = get_or_create_metadata_bucket(result)
+    entry: Final = metadata["standard_logging_guardrail_information"][0]["guardrail_response"]
     if managed and role == LitellmUserRoles.INTERNAL_USER:
-        assert "x-litellm-compressed-prompt" not in headers
+        assert "compressed_messages" not in entry
+        assert "Private system canary" not in json.dumps(entry)
     else:
-        decoded: Final = json.loads(base64.b64decode(headers["x-litellm-compressed-prompt"]))
-        assert decoded == result["messages"]
+        assert entry["compressed_messages"] == result["messages"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("json_bytes", [12285, 12288, 12289])
-async def test_compressed_prompt_header_byte_limit_never_truncates(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, json_bytes: int
+@pytest.mark.parametrize("store_prompts", [True, False])
+@pytest.mark.parametrize("redact", [True, False])
+async def test_compressed_prompt_log_capture_respects_storage_and_redaction(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, store_prompts: bool, redact: bool
 ) -> None:
-    import base64
-
+    from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": store_prompts})
+    monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
     guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
-    empty: Final = [ORIGINAL_MESSAGES[0], {"role": "user", "content": ""}, *ORIGINAL_MESSAGES[2:]]
-    overhead: Final = len(json.dumps(empty, ensure_ascii=False, separators=(",", ":")).encode())
-    compressed: Final = [{"role": "user", "content": "a" * (json_bytes - overhead)}]
-    respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(200, json={"messages": compressed})
-    data: Final = {
+    compressed: Final = [{"role": "user", "content": "Résumé 日本語 summary"}]
+    respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(
+        200, json={"messages": compressed, "tokens_before": 1000, "tokens_after": 10}
+    )
+    request_data: Final = {
         "secret_fields": {},
         "proxy_server_request": {"headers": {"x-litellm-return-compressed-prompt": "true"}},
     }
     result: Final = await guardrail.apply_guardrail(
         inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
-        request_data=data,
+        request_data=request_data,
         input_type="request",
     )
-    headers: Final = get_logging_caching_headers(data) or {}
-    if json_bytes <= 12288:
-        value: Final = headers["x-litellm-compressed-prompt"]
-        assert len(value) == 4 * ((json_bytes + 2) // 3)
-        assert json.loads(base64.b64decode(value)) == result["structured_messages"]
-        assert "x-litellm-compressed-prompt-omitted" not in headers
+    entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+    assert entry["tokens_saved"] == 990
+    if store_prompts and not redact:
+        assert entry["compressed_messages"] == result["structured_messages"]
+        result["structured_messages"][1]["content"] = "Later guardrail rewrite"
+        assert entry["compressed_messages"][1]["content"] != "Later guardrail rewrite"
     else:
-        assert headers["x-litellm-compressed-prompt-omitted"] == "too_large"
-        assert "x-litellm-compressed-prompt" not in headers
+        assert "compressed_messages" not in entry
+        assert "Résumé" not in json.dumps(request_data, ensure_ascii=False)
+    assert "x-litellm-compressed-prompt" not in (get_logging_caching_headers(request_data) or {})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["bypass", "skip", "fail_open", "no_opt_in"])
-async def test_compressed_prompt_header_does_not_survive_an_uncompressed_attempt(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, scenario: str
+async def test_compressed_prompt_log_uses_existing_storage_truncation(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    guardrail: Final = HeadroomGuardrail(
-        api_base=FAKE_API_BASE, guardrail_name="headroom", unreachable_fallback="fail_open"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "100")
+    guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
+    respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(200, json={"messages": COMPRESSED_MESSAGES})
+    request_data: Final = {}
+    result: Final = await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
+        request_data=request_data,
+        input_type="request",
     )
-    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(503)
-    inputs: Final = GenericGuardrailAPIInputs(
-        texts=[], structured_messages=ORIGINAL_MESSAGES[-1:] if scenario == "skip" else ORIGINAL_MESSAGES
+    entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in entry["compressed_messages"][1]["content"]
+    assert result["structured_messages"][1]["content"] == COMPRESSED_MESSAGES[0]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redaction_source", ["header", "dynamic"])
+async def test_compressed_prompt_log_respects_request_redaction(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, redaction_source: str
+) -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
+    respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(200, json={"messages": COMPRESSED_MESSAGES})
+    logging_obj: Final = Logging(
+        model="openai/test",
+        messages=ORIGINAL_MESSAGES,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="redaction",
+        function_id="redaction",
     )
-    data: Final = {
-        "secret_fields": {"_headroom_compressed_prompt": "c3RhbGU="},
-        "proxy_server_request": {
-            "headers": {
-                "x-litellm-return-compressed-prompt": "false" if scenario == "no_opt_in" else "true",
-                "x-headroom-bypass": "true" if scenario == "bypass" else "false",
-            }
-        },
-    }
-    result: Final = await guardrail.apply_guardrail(inputs=inputs, request_data=data, input_type="request")
-    headers: Final = get_logging_caching_headers(data) or {}
-    assert result is inputs
-    assert route.call_count == (1 if scenario in ("fail_open", "no_opt_in") else 0)
-    assert "x-litellm-compressed-prompt" not in headers
-    assert "x-litellm-compressed-prompt-omitted" not in headers
+    if redaction_source == "header":
+        logging_obj.model_call_details["litellm_params"] = {
+            "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}
+        }
+    else:
+        logging_obj.model_call_details["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
+    request_data: Final = {}
+    result: Final = await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
+        request_data=request_data,
+        input_type="request",
+        logging_obj=logging_obj,
+    )
+    entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+    assert "compressed_messages" not in entry
+    assert result["structured_messages"][1] == COMPRESSED_MESSAGES[0]

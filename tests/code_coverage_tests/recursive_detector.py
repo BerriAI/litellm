@@ -17,7 +17,7 @@ IGNORE_FUNCTIONS = [
     "transform_prompt",
     "mask_dict",
     "_serialize",  # we now set a max depth for this
-    "_sanitize_request_body_for_spend_logs_payload",  # testing added for circular reference
+    "sanitize_request_body_for_spend_logs_payload",  # testing added for circular reference
     "_sanitize_value",  # testing added for circular reference
     "set_schema_property_ordering",  # testing added for infinite recursion
     "process_items",  # testing added for infinite recursion + max depth set.
@@ -82,7 +82,7 @@ IGNORE_FUNCTIONS = [
     "_replace_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
     "_sort_processed_sets",  # bounded by the nesting depth of the log-record extra it walks (a finite JSON tree, no cycles possible).
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
-    "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
+    "_without_requester_ip_address",  # walks only the fresh tree sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
 ]
 
 

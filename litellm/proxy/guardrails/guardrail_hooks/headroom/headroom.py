@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import math
 import re
@@ -57,8 +56,6 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
-_RETURN_PROMPT_HEADER: Final = "x-litellm-return-compressed-prompt"
-_MAX_PROMPT_HEADER_BYTES: Final = 16 * 1024
 _STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
     (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
 )
@@ -533,14 +530,14 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout = self._resolve_timeout(timeout)
 
-    def _request_header_enabled(self, request_data: Mapping[str, object], header: str) -> bool:
+    def _should_bypass(self, request_data: Mapping[str, object]) -> bool:
         psr: Final = request_data.get("proxy_server_request")
         if not _is_str_object_dict(psr):
             return False
         headers: Final = psr.get("headers")
         if not _is_str_object_dict(headers):
             return False
-        value: Final = headers.get(header)
+        value: Final = headers.get(BYPASS_HEADER)
         return str(value).lower() == "true"
 
     def _request_headers(self) -> dict[str, str]:
@@ -787,12 +784,7 @@ class HeadroomGuardrail(CustomGuardrail):
         if input_type != "request":
             return inputs
 
-        from litellm.proxy.common_utils.callback_utils import HEADROOM_COMPRESSED_PROMPT_KEY
-
-        response_state: Final = request_data.get("secret_fields")
-        if _is_str_object_dict(response_state):
-            response_state.pop(HEADROOM_COMPRESSED_PROMPT_KEY, None)
-        if self._request_header_enabled(request_data, BYPASS_HEADER):
+        if self._should_bypass(request_data):
             verbose_proxy_logger.debug("Headroom: %s header set; skipping compression", BYPASS_HEADER)
             return inputs
 
@@ -861,20 +853,31 @@ class HeadroomGuardrail(CustomGuardrail):
             protected_indices=protected_indices,
         )
 
-        if (
-            _is_str_object_dict(response_state)
-            and response_state.get("_headroom_prompt_export_allowed") is not False
-            and self._request_header_enabled(request_data, _RETURN_PROMPT_HEADER)
-        ):
-            encoded_prompt: Final = base64.b64encode(
-                json.dumps(compressed, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            ).decode("ascii")
-            response_state[HEADROOM_COMPRESSED_PROMPT_KEY] = (
-                encoded_prompt if len(encoded_prompt) <= _MAX_PROMPT_HEADER_BYTES else "too_large"
+        from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+        from litellm.proxy.spend_tracking.spend_tracking_utils import (
+            sanitize_request_body_for_spend_logs_payload,
+            should_store_prompts_and_responses_in_spend_logs,
+        )
+
+        response_state: Final = request_data.get("secret_fields")
+        logging_details: Final = (
+            logging_obj.model_call_details if logging_obj is not None else {"litellm_params": request_data}
+        )
+        capture_prompt: Final = (
+            should_store_prompts_and_responses_in_spend_logs()
+            and not should_redact_message_logging(logging_details)
+            and not (
+                _is_str_object_dict(response_state) and response_state.get("_headroom_prompt_logging_allowed") is False
             )
+        )
+        guardrail_response: Final = (
+            sanitize_request_body_for_spend_logs_payload({**result.stats, "compressed_messages": compressed})
+            if capture_prompt
+            else result.stats
+        )
 
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=result.stats,
+            guardrail_json_response=guardrail_response,
             request_data=request_data,
             guardrail_status="success",
             guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
