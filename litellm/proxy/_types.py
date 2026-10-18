@@ -1154,7 +1154,7 @@ class ProviderInfo(LiteLLMPydanticObjectBase):
 
 
 class BlockUsers(LiteLLMPydanticObjectBase):
-    user_ids: list[str]  # required
+    user_ids: list[str] = Field(min_length=1, max_length=1000)
 
 
 class ModelParams(LiteLLMPydanticObjectBase):
@@ -1842,6 +1842,20 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
     models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+
+    @model_validator(mode="after")
+    def validate_budget_update(self) -> "UpdateCustomerRequest":
+        if {"budget_id", "max_budget"}.issubset(self.model_fields_set):
+            raise ValueError("Set either 'max_budget' or 'budget_id', not both.")
+        return self
+
+
+class BulkUpdateCustomerRequest(LiteLLMPydanticObjectBase):
+    model_config = ConfigDict(frozen=True)
+
+    customers: tuple[UpdateCustomerRequest, ...] = Field(
+        min_length=1, max_length=500, description="Customer updates processed independently in request order"
+    )
 
 
 class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
