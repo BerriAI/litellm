@@ -1087,7 +1087,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "coralbricks/glm-5.3-fast"
+    "default_model_placeholder": "coralbricks/deepseek-v4.1-flash-fast"
   },
   {
     "provider": "CORTECS",

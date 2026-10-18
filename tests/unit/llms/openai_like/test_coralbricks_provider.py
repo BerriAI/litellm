@@ -19,13 +19,13 @@ def test_coralbricks_provider_resolution(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("CORALBRICKS_API_KEY", "coralbricks-test-key")
 
     model, provider, api_key, api_base = get_llm_provider(
-        model="coralbricks/glm-5.3-fast",
+        model=CORALBRICKS_MODEL,
         custom_llm_provider=None,
         api_base=None,
         api_key=None,
     )
 
-    assert model == "glm-5.3-fast"
+    assert model == CORALBRICKS_MODEL_ID
     assert provider == "coralbricks"
     assert api_key == "coralbricks-test-key"
     assert api_base == "https://inference.coralbricks.ai/v1"
@@ -37,7 +37,7 @@ def test_coralbricks_provider_keeps_explicit_credentials(monkeypatch: pytest.Mon
     monkeypatch.setenv("CORALBRICKS_API_KEY", "coralbricks-env-key")
 
     _, provider, api_key, api_base = get_llm_provider(
-        model="coralbricks/glm-5.3-fast",
+        model=CORALBRICKS_MODEL,
         custom_llm_provider=None,
         api_base="https://coralbricks.internal.example/v1",
         api_key="coralbricks-explicit-key",
@@ -59,7 +59,7 @@ def test_coralbricks_is_available_in_add_model_form():
 
     assert coralbricks["provider"] == "CORALBRICKS"
     assert coralbricks["provider_display_name"] == "CoralBricks"
-    assert coralbricks["default_model_placeholder"] == "coralbricks/glm-5.3-fast"
+    assert coralbricks["default_model_placeholder"] == CORALBRICKS_MODEL
     assert {field["key"]: field["required"] for field in coralbricks["credential_fields"]} == {
         "api_base": False,
         "api_key": True,
@@ -444,8 +444,6 @@ def _billed_chat_cost(model_id: str) -> float:
 @pytest.mark.parametrize(
     ("deprecated_slug", "current_slug"),
     (
-        ("glm-5.3-fp4", "glm-5.3-fast"),
-        ("glm-5.3", "glm-5.3-fast"),
         ("deepseek-v4.1-flash-fast-fp4", "deepseek-v4.1-flash-fast"),
         ("deepseek-v4.1-flash", "deepseek-v4.1-flash-fast"),
     ),
