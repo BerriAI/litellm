@@ -1513,15 +1513,11 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
-        for _field in _protected_fields:
-            if _field in non_default_values or _field in _sent_fields:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
-                    },
-                )
+        _reject_ceiling_self_update(
+            sent_fields=_sent_fields,
+            non_default_values=non_default_values,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     existing_metadata: Final = (
         cast(dict, getattr(existing_user_row, "metadata", {}) or {}) if existing_user_row is not None else {}
@@ -1639,6 +1635,56 @@ async def _update_single_user_helper(
         )
     _strip_password_from_response(response)
     return response
+
+
+_SELF_UPDATE_PROTECTED_FIELDS: Final[tuple[str, ...]] = (
+    "max_budget",
+    "model_max_budget",
+    "soft_budget",
+    "spend",
+    "object_permission",
+    # User-level ceilings sit above per-key self-service sizing, so a
+    # self-write that lifts them is an escalation path.
+    "budget_duration",
+    "rpm_limit",
+    "tpm_limit",
+    "max_parallel_requests",
+    "models",
+    # Membership authority: user_object.teams / organizations feed
+    # GrantResolver.resolve and scope /key/list, team-model visibility and
+    # BYOK team scoping, so a self-write would grant real team access while
+    # the real gate (/team/member_add) stays admin-only (R1-M3).
+    "teams",
+    "organizations",
+)
+
+
+def _reject_ceiling_self_update(
+    *,
+    sent_fields: set[str],
+    non_default_values: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Raise 403 when a non-admin self-update touches a user-level ceiling.
+
+    object_permission is a ceiling on what this human may reach, so a
+    self-write is an escalation path: an empty grant list means "no
+    restriction" and would lift a restriction an admin placed on them.
+    Checked against the fields the caller actually SENT, because
+    `_update_internal_user_params` drops empty values, and
+    `object_permission: {}` is precisely the clear-my-own-ceiling case
+    this must refuse.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    for _field in _SELF_UPDATE_PROTECTED_FIELDS:
+        if _field in non_default_values or _field in sent_fields:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
+                },
+            )
 
 
 def can_user_call_user_update(

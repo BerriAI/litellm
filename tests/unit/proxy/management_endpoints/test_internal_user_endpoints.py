@@ -5211,3 +5211,106 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# /user/update self-update ceiling fields (fork hardening R2-17)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("rpm_limit", 1000000),
+        ("tpm_limit", 1000000),
+        ("max_parallel_requests", 1000),
+        ("budget_duration", "1s"),
+        ("models", []),
+    ],
+)
+def test_user_update_self_write_of_ceiling_fields_rejected(field, value):
+    """A non-admin self-update must not lift user-wide ceilings; those sit
+    above per-key settings and were admin-imposed."""
+    from fastapi import HTTPException
+    from litellm.proxy._types import LitellmUserRoles, UpdateUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _reject_ceiling_self_update,
+    )
+
+    data = UpdateUserRequest(user_id="self", **{field: value})
+    with pytest.raises(HTTPException) as exc:
+        _reject_ceiling_self_update(
+            sent_fields=set(data.fields_set()),
+            non_default_values={field: value},
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="self", user_role=LitellmUserRoles.INTERNAL_USER
+            ),
+        )
+    assert int(getattr(exc.value, "status_code", 0)) == 403
+    assert f"'{field}'" in str(exc.value.detail)
+
+
+def test_user_update_self_write_of_innocuous_field_allowed():
+    """Guardrail on the tightening: user_alias self-edits keep flowing."""
+    from litellm.proxy._types import LitellmUserRoles, UpdateUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _reject_ceiling_self_update,
+    )
+
+    data = UpdateUserRequest(user_id="self", user_alias="me")
+    _reject_ceiling_self_update(
+        sent_fields=set(data.fields_set()),
+        non_default_values={"user_alias": "me"},
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="self", user_role=LitellmUserRoles.INTERNAL_USER
+        ),
+    )
+
+
+def test_user_update_admin_self_write_unrestricted():
+    """Proxy admins still edit every field on their own record."""
+    from litellm.proxy._types import LitellmUserRoles, UpdateUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _reject_ceiling_self_update,
+    )
+
+    data = UpdateUserRequest(user_id="admin", rpm_limit=1000000, models=[])
+    _reject_ceiling_self_update(
+        sent_fields=set(data.fields_set()),
+        non_default_values={"rpm_limit": 1000000, "models": []},
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# /user/update membership self-grant (fork hardening R1-M3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_update_self_write_of_membership_rejected():
+    """A non-admin self-write of `teams` / `organizations` must be rejected:
+    user_object.teams is GrantResolver's membership authority and scopes
+    /key/list, team-model visibility and BYOK scoping."""
+    from fastapi import HTTPException
+    from litellm.proxy._types import LitellmUserRoles, UpdateUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _reject_ceiling_self_update,
+    )
+    for field, value in (
+        ("teams", ["victim-team"]),
+        ("organizations", ["victim-org"]),
+    ):
+        data = UpdateUserRequest(user_id="self", **{field: value})
+        with pytest.raises(HTTPException) as exc:
+            _reject_ceiling_self_update(
+                sent_fields=set(data.fields_set()),
+                non_default_values={field: value},
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="self", user_role=LitellmUserRoles.INTERNAL_USER
+                ),
+            )
+        assert int(getattr(exc.value, "status_code", 0)) == 403
+        assert f"'{field}'" in str(exc.value.detail)
