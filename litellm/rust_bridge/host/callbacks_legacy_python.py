@@ -25,6 +25,7 @@ from typing import (
 from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.hook_pairing import HookPairing
     from litellm.litellm_core_utils.litellm_logging import Logging
 
 
@@ -69,8 +70,10 @@ def setup(
 
 # Loggers whose current native call is async: their sync failure step is followed by the async one
 _ASYNC_CALLS: Final[weakref.WeakSet[Logging]] = weakref.WeakSet()
-# Loggers whose async success handler was enqueued or deferred ahead of the sync success step
-_ASYNC_SUCCESS_SCHEDULED: Final[weakref.WeakSet[LoggingSurface]] = weakref.WeakSet()
+# The pairing a logger's sync success step shares with the async success run enqueued or deferred ahead of it
+_SUCCESS_PAIRINGS: Final[weakref.WeakKeyDictionary[LoggingSurface, HookPairing]] = weakref.WeakKeyDictionary()
+# The pairing a logger's async failure step shares with the sync failure step that ran just before it
+_FAILURE_PAIRINGS: Final[weakref.WeakKeyDictionary[LoggingSurface, HookPairing]] = weakref.WeakKeyDictionary()
 
 
 def _begin_call(call_setup: CallSetup, asynchronous: bool) -> CallSetup:
@@ -78,8 +81,15 @@ def _begin_call(call_setup: CallSetup, asynchronous: bool) -> CallSetup:
         _ASYNC_CALLS.add(call_setup.logger)
     else:
         _ASYNC_CALLS.discard(call_setup.logger)
-    _ASYNC_SUCCESS_SCHEDULED.discard(call_setup.logger)
+    _SUCCESS_PAIRINGS.pop(call_setup.logger, None)
+    _FAILURE_PAIRINGS.pop(call_setup.logger, None)
     return _claim_budget_reservation(call_setup, asynchronous)
+
+
+def _success_pairing(logger: LoggingSurface) -> HookPairing:
+    from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor
+
+    return _SUCCESS_PAIRINGS.setdefault(logger, HookPairing(run_held_hook_in_executor))
 
 
 def _claim_budget_reservation(call_setup: CallSetup, asynchronous: bool) -> CallSetup:
@@ -148,7 +158,7 @@ class LoggingSurface(Protocol):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
         *,
-        async_handler_runs: bool = True,
+        hook_pairing: HookPairing | None = None,
     ) -> None: ...
 
     def failure_handler(
@@ -158,7 +168,7 @@ class LoggingSurface(Protocol):
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         *,
-        for_async_request: bool = False,
+        hook_pairing: HookPairing | None = None,
     ) -> None: ...
 
     def async_failure_handler(
@@ -167,6 +177,8 @@ class LoggingSurface(Protocol):
         traceback_exception: str,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
+        *,
+        hook_pairing: HookPairing | None = None,
     ) -> Coroutine[object, object, None]: ...
 
     def success_handler(
@@ -177,7 +189,7 @@ class LoggingSurface(Protocol):
         cache_hit: bool | None = None,
         *,
         for_async_request: bool = False,
-        async_handler_runs: bool = True,
+        hook_pairing: HookPairing | None = None,
         **kwargs: object,
     ) -> None: ...
 
@@ -187,6 +199,8 @@ class LoggingSurface(Protocol):
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
+        *,
+        hook_pairing: HookPairing | None = None,
         **kwargs: object,
     ) -> Coroutine[object, object, None]: ...
 
@@ -258,7 +272,7 @@ def defers_async_logging(logger: LoggingSurface) -> bool:
 
 
 def defer_success(logger: LoggingSurface, pending: object) -> None:
-    _ASYNC_SUCCESS_SCHEDULED.add(logger)
+    _success_pairing(logger)
     setattr(logger, "_native_pending_logging", pending)
 
 
@@ -274,7 +288,7 @@ def sync_success_for_async_call(
         start_time=start,
         end_time=end,
         cache_hit=_cache_hit(logger),
-        async_handler_runs=logger in _ASYNC_SUCCESS_SCHEDULED,
+        hook_pairing=_SUCCESS_PAIRINGS.get(logger),
     )
 
 
@@ -282,13 +296,16 @@ def failure_handler(
     logger: LoggingSurface, error: Exception, start: datetime.datetime, end: datetime.datetime, asynchronous: bool
 ) -> Coroutine[object, object, None] | None:
     from litellm.litellm_core_utils.core_helpers import unbind_budget_reservation_from_callbacks
+    from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor
 
     trace: Final = "".join(traceback.format_exception(error))
     if asynchronous:
         if not is_internal_call():
             unbind_budget_reservation_from_callbacks(logger.litellm_params)
-        return logger.async_failure_handler(error, trace, start, end)
-    logger.failure_handler(error, trace, start, end, for_async_request=logger in _ASYNC_CALLS)
+        return logger.async_failure_handler(error, trace, start, end, hook_pairing=_FAILURE_PAIRINGS.pop(logger, None))
+    if logger in _ASYNC_CALLS:
+        _FAILURE_PAIRINGS[logger] = HookPairing(run_held_hook_in_executor)
+    logger.failure_handler(error, trace, start, end, hook_pairing=_FAILURE_PAIRINGS.get(logger))
     return None
 
 
@@ -308,8 +325,9 @@ def submit_success(logger: LoggingSurface, response: object, start: datetime.dat
 def async_success_handler(
     logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
 ) -> Coroutine[object, object, None]:
-    _ASYNC_SUCCESS_SCHEDULED.add(logger)
-    return logger.async_success_handler(response, start, end, cache_hit=_cache_hit(logger))
+    return logger.async_success_handler(
+        response, start, end, cache_hit=_cache_hit(logger), hook_pairing=_success_pairing(logger)
+    )
 
 
 def enqueue_logging(coroutine: Coroutine[object, object, None]) -> None:

@@ -203,7 +203,12 @@ def _model(name: str, model: str, api_base: str, **extra: object) -> dict[str, o
     }
 
 
-def write_hook_count_config(path: Path, provider_url: str, litellm_settings: Mapping[str, object]) -> Path:
+def write_hook_count_config(
+    path: Path,
+    provider_url: str,
+    litellm_settings: Mapping[str, object],
+    guardrails: tuple[Mapping[str, object], ...] = (),
+) -> Path:
     """One success and one failure deployment per surface, all answered by `provider`."""
     models: Final = []
     tools: Final = []
@@ -238,6 +243,7 @@ def write_hook_count_config(path: Path, provider_url: str, litellm_settings: Map
                 "model_list": models,
                 "search_tools": tools,
                 "litellm_settings": dict(litellm_settings),
+                **({"guardrails": [dict(guardrail) for guardrail in guardrails]} if guardrails else {}),
                 "general_settings": {
                     "master_key": "os.environ/LITELLM_MASTER_KEY",
                     "database_url": "os.environ/DATABASE_URL",

@@ -86,6 +86,7 @@ from litellm.litellm_core_utils.hidden_params import (
     served_from_cache,
     set_hidden_param,
 )
+from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
@@ -778,6 +779,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.defer_async_logging: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
+        self.async_success_hook_pairing: HookPairing | None = None
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2276,11 +2278,13 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             return
 
+        hook_pairing: Final = HookPairing(run_held_hook_in_executor)
         await self.async_success_handler(
             result,
             start_time=start_time,
             end_time=end_time,
             cache_hit=cache_hit,
+            hook_pairing=hook_pairing,
             **kwargs,
         )
 
@@ -2294,6 +2298,7 @@ class Logging(LiteLLMLoggingBaseClass):
             end_time=end_time,
             cache_hit=cache_hit,
             for_async_request=True,
+            hook_pairing=hook_pairing,
             **kwargs,
         )
 
@@ -2380,11 +2385,12 @@ class Logging(LiteLLMLoggingBaseClass):
             self.failure_handler(exception, traceback_exception)
             return
 
+        hook_pairing: Final = HookPairing(run_held_hook_in_executor)
         try:
-            await self.async_failure_handler(exception, traceback_exception)
+            await self.async_failure_handler(exception, traceback_exception, hook_pairing=hook_pairing)
         finally:
             if self._should_run_sync_failure_callbacks_for_async_calls():
-                executor.submit(self.failure_handler, exception, traceback_exception, for_async_request=True)
+                executor.submit(self.failure_handler, exception, traceback_exception, hook_pairing=hook_pairing)
 
     def should_run_logging(
         self,
@@ -2399,13 +2405,15 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception:
             return True
 
-    def claim_async_success_log(self) -> bool:
+    def claim_async_success_log(self, hook_pairing: HookPairing | None = None) -> bool:
         """One async success log per request. The innermost @client wrapper always exits first,
         since the outer one is awaiting it, so it claims the log here and the outer wrapper gets
-        False and schedules nothing."""
+        False and schedules nothing. The claiming wrapper's ``hook_pairing`` stays readable as
+        ``async_success_hook_pairing`` for the outer wrapper's sync run."""
         if self._async_success_scheduled:
             return False
         self._async_success_scheduled = True
+        self.async_success_hook_pairing = hook_pairing
         return True
 
     def mark_logging_complete(
@@ -2986,7 +2994,7 @@ class Logging(LiteLLMLoggingBaseClass):
         cache_hit: bool | None = None,
         *,
         for_async_request: bool = False,
-        async_handler_runs: bool = True,
+        hook_pairing: HookPairing | None = None,
         **kwargs: object,  # kwargs-ok: forwarded to _success_handler_body
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own success
@@ -2999,7 +3007,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     cache_hit=cache_hit,
                     for_async_request=for_async_request,
-                    async_handler_runs=async_handler_runs,
+                    hook_pairing=hook_pairing,
                     **kwargs,
                 )
         finally:
@@ -3012,7 +3020,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
         for_async_request: bool = False,
-        async_handler_runs: bool = True,
+        hook_pairing: HookPairing | None = None,
         **kwargs: Any,  # kwargs-ok: forwarded from success_handler
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
@@ -3425,17 +3433,19 @@ class Logging(LiteLLMLoggingBaseClass):
                                 call_details["complete_response"] = call_details.get("complete_streaming_response", {})
                                 result = call_details_view["complete_response"]
 
-                            if not (
-                                for_async_request
-                                and async_handler_runs
-                                and self._async_handler_logs_to(callback, "async_log_success_event")
+                            log_success = functools.partial(
+                                callback.log_success_event,
+                                kwargs=call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                            if hook_pairing is not None and self._async_handler_logs_to(
+                                callback, "async_log_success_event"
                             ):
-                                callback.log_success_event(
-                                    kwargs=call_details,
-                                    response_obj=result,
-                                    start_time=start_time,
-                                    end_time=end_time,
-                                )
+                                hook_pairing.hold(callback, log_success)
+                            else:
+                                log_success()
                     if (
                         callable(callback) is True and is_sync_request and customLogger is not None
                     ):  # custom logger functions
@@ -3474,6 +3484,8 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
+        *,
+        hook_pairing: HookPairing | None = None,
         **kwargs: object,  # kwargs-ok: forwarded to _async_success_handler_body
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own success
@@ -3481,9 +3493,16 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             with post_response_phase():
                 return await self._async_success_handler_body(
-                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    hook_pairing=hook_pairing,
+                    **kwargs,
                 )
         finally:
+            if hook_pairing is not None:
+                hook_pairing.end()
             self._restore_correlation_context()
 
     async def _async_success_handler_body(
@@ -3492,6 +3511,7 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
+        hook_pairing: HookPairing | None = None,
         **kwargs: Any,  # kwargs-ok: forwarded from async_success_handler
     ) -> None:
         """
@@ -3770,6 +3790,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     if isinstance(callback, ShadowEvalLogger) and (
                         not self.stream or "async_complete_streaming_response" in model_call_details
                     ):
+                        if hook_pairing is not None:
+                            hook_pairing.reach(callback)
                         await callback.async_log_success_event(
                             kwargs=model_call_details,
                             response_obj=model_call_details["async_complete_streaming_response"]
@@ -3781,6 +3803,8 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                     elif self.stream is True:
                         if "async_complete_streaming_response" in model_call_details:
+                            if hook_pairing is not None:
+                                hook_pairing.reach(callback)
                             await callback.async_log_success_event(
                                 kwargs=model_call_details,
                                 response_obj=model_call_details["async_complete_streaming_response"],
@@ -3795,6 +3819,8 @@ class Logging(LiteLLMLoggingBaseClass):
                                 end_time=end_time,
                             )
                     else:
+                        if hook_pairing is not None:
+                            hook_pairing.reach(callback)
                         await callback.async_log_success_event(
                             kwargs=model_call_details,
                             response_obj=result,
@@ -3967,7 +3993,7 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         *,
-        for_async_request: bool = False,
+        hook_pairing: HookPairing | None = None,
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
@@ -3977,7 +4003,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 traceback_exception=traceback_exception,
                 start_time=start_time,
                 end_time=end_time,
-                for_async_request=for_async_request,
+                hook_pairing=hook_pairing,
             )
         finally:
             self._restore_correlation_context()
@@ -3988,7 +4014,7 @@ class Logging(LiteLLMLoggingBaseClass):
         traceback_exception: str,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
-        for_async_request: bool = False,
+        hook_pairing: HookPairing | None = None,
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Failure Call: %s", litellm.failure_callback)
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
@@ -4081,14 +4107,20 @@ class Logging(LiteLLMLoggingBaseClass):
                         isinstance(callback, CustomLogger)
                         and is_sync_request
                         and self.call_type != CallTypes.pass_through.value
-                        and not (for_async_request and self._async_handler_logs_to(callback, "async_log_failure_event"))
                     ):  # custom logger class
-                        callback.log_failure_event(
+                        log_failure = functools.partial(
+                            callback.log_failure_event,
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=result,
                             kwargs=self.model_call_details,
                         )
+                        if hook_pairing is not None and self._async_handler_logs_to(
+                            callback, "async_log_failure_event"
+                        ):
+                            hook_pairing.hold(callback, log_failure)
+                        else:
+                            log_failure()
                     if callback == "langfuse":
                         global langFuseLogger
                         verbose_logger.debug("reaches langfuse for logging failure")
@@ -4165,6 +4197,8 @@ class Logging(LiteLLMLoggingBaseClass):
         traceback_exception: str,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
+        *,
+        hook_pairing: HookPairing | None = None,
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
@@ -4174,8 +4208,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 traceback_exception=traceback_exception,
                 start_time=start_time,
                 end_time=end_time,
+                hook_pairing=hook_pairing,
             )
         finally:
+            if hook_pairing is not None:
+                hook_pairing.end()
             self._restore_correlation_context()
 
     async def _async_failure_handler_body(
@@ -4184,6 +4221,7 @@ class Logging(LiteLLMLoggingBaseClass):
         traceback_exception: str,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
+        hook_pairing: HookPairing | None = None,
     ) -> None:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
@@ -4219,6 +4257,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 if not should_run:
                     continue
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    if hook_pairing is not None:
+                        hook_pairing.reach(callback)
                     await callback.async_log_failure_event(
                         kwargs=self.model_call_details,
                         response_obj=result,
@@ -4274,7 +4314,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
         *,
-        async_handler_runs: bool = True,
+        hook_pairing: HookPairing | None = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -4291,7 +4331,7 @@ class Logging(LiteLLMLoggingBaseClass):
             end_time,
             cache_hit,
             for_async_request=True,
-            async_handler_runs=async_handler_runs,
+            hook_pairing=hook_pairing,
         )
 
     def handle_sync_cache_hit_success_callbacks(
@@ -4398,7 +4438,7 @@ class Logging(LiteLLMLoggingBaseClass):
         logger: CustomLogger,
         async_hook: Literal["async_log_success_event", "async_log_failure_event"],
     ) -> bool:
-        """True when the async handler gives ``logger`` its own ``async_hook`` for this call."""
+        """True when the async run of this call is expected to hand ``logger`` its own ``async_hook``."""
         if getattr(type(logger), async_hook) is getattr(CustomLogger, async_hook):
             return False
         if async_hook == "async_log_failure_event":

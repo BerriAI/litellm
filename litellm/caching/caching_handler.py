@@ -30,6 +30,7 @@ from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
@@ -830,12 +831,14 @@ class LLMCachingHandler:
 
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
+        hook_pairing: Final = HookPairing(run_held_hook_in_executor)
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=logging_obj.async_success_handler(
                 result=cached_result,
                 start_time=start_time,
                 end_time=end_time,
                 cache_hit=cache_hit,
+                hook_pairing=hook_pairing,
             )
         )
 
@@ -844,6 +847,7 @@ class LLMCachingHandler:
             start_time=start_time,
             end_time=end_time,
             cache_hit=cache_hit,
+            hook_pairing=hook_pairing,
         )
 
     async def _retrieve_from_cache(

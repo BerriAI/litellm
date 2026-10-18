@@ -155,6 +155,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
+from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -3597,9 +3598,11 @@ class ProxyLogging:
             original_exception
         )
         traceback_str: Final = traceback.format_exc() if include_traceback else ""
+        hook_pairing: Final = HookPairing(run_held_hook_in_executor)
         await litellm_logging_obj.async_failure_handler(
             exception=original_exception,
             traceback_exception=traceback_str,
+            hook_pairing=hook_pairing,
         )
 
         threading.Thread(
@@ -3608,7 +3611,7 @@ class ProxyLogging:
                 original_exception,
                 traceback_str,
             ),
-            kwargs={"for_async_request": True},
+            kwargs={"hook_pairing": hook_pairing},
             daemon=True,
         ).start()
 
