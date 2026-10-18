@@ -180,12 +180,64 @@ def test_nested_wrapping_reenters_instead_of_deadlocking(tmp_path: Path) -> None
     assert b"nested ok" in stdout
 
 
-def test_wrapped_command_exit_code_is_propagated(tmp_path: Path) -> None:
-    proc = subprocess.run(
-        [sys.executable, str(HELPER), sys.executable, "-c", "raise SystemExit(7)"],
-        env=_env(tmp_path / "locks", "2"),
+def test_wrapped_command_exit_code_is_propagated_and_named_on_stderr(tmp_path: Path) -> None:
+    env = _env(tmp_path / "locks", "2")
+    failed = subprocess.run(
+        [sys.executable, str(HELPER), sys.executable, "-c", "raise SystemExit(5)"],
+        env=env,
+        capture_output=True,
     )
-    assert proc.returncode == 7
+    assert failed.returncode == 5
+    assert b"'raise SystemExit(5)'` exited 5" in failed.stderr
+    succeeded = subprocess.run(_wrapped(["pass"]), env=env, capture_output=True)
+    assert succeeded.returncode == 0
+    assert b"exited" not in succeeded.stderr
+
+
+def test_sigterm_while_queued_says_the_command_never_ran(tmp_path: Path) -> None:
+    lock_dir = tmp_path / "locks"
+    holder_started = tmp_path / "holder.started"
+    release = tmp_path / "release"
+    done = tmp_path / "done"
+    env = _env(lock_dir, "1")
+    holder = subprocess.Popen(_wrapped([START_THEN_WAIT_FOR, str(holder_started), str(release)]), env=env)
+    try:
+        assert _wait_until(holder_started.exists, 10)
+        contender = subprocess.Popen(_wrapped([TOUCH_TARGET, str(done)]), env=env, stderr=subprocess.PIPE)
+        try:
+            time.sleep(1.5)
+            contender.send_signal(signal.SIGTERM)
+            assert contender.wait(timeout=10) == 128 + signal.SIGTERM
+            assert contender.stderr is not None
+            assert b"SIGTERM arrived while waiting for a slot" in contender.stderr.read()
+            release.touch()
+            assert holder.wait(timeout=10) == 0
+            assert not done.exists()
+        finally:
+            _reap(contender)
+    finally:
+        release.touch()
+        _reap(holder)
+
+
+def test_sigterm_after_the_command_started_does_not_claim_it_never_ran(tmp_path: Path) -> None:
+    started = tmp_path / "started"
+    release = tmp_path / "release"
+    wrapper = subprocess.Popen(
+        _wrapped([START_THEN_WAIT_FOR, str(started), str(release)]),
+        env=_env(tmp_path / "locks", "1"),
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert _wait_until(started.exists, 10)
+        wrapper.send_signal(signal.SIGTERM)
+        wrapper.wait(timeout=10)
+        release.touch()
+        assert wrapper.stderr is not None
+        assert b"never ran" not in wrapper.stderr.read()
+    finally:
+        release.touch()
+        _reap(wrapper)
 
 
 def test_missing_command_exits_127_and_no_command_exits_2(tmp_path: Path) -> None:
