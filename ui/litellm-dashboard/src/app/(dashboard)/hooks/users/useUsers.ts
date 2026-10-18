@@ -94,7 +94,8 @@ export const useUserLookup = (userId: string | null) => {
         return mapUserInfoV2ToUserInfo(await userGetInfoV2(accessToken!, userId!));
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
-          return null;
+          const response = await userListCall(accessToken!, [userId!], 1, USER_LIST_MAX_PAGE_SIZE);
+          return response.users.find((user) => user.user_id === userId) ?? null;
         }
         throw error;
       }

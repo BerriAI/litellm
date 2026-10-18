@@ -325,17 +325,42 @@ describe("useUserLookup", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(userGetInfoV2).toHaveBeenCalledWith("test-access-token", "user-1-0");
+    expect(userListCall).not.toHaveBeenCalled();
     expect(result.current.data).toMatchObject(exactUser);
     expect(result.current.data?.user_id).toBe("user-1-0");
   });
 
-  it("resolves to null when the user info endpoint returns a 404", async () => {
+  it("falls back to the exact user list match when the user info endpoint returns a 404", async () => {
+    const response = buildUserListResponse(1, 1);
+    const exactUser = { ...response.users[1], user_id: "bob", user_alias: "Bob" };
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      page_size: 100,
+      users: [{ ...response.users[0], user_id: "bob2" }, exactUser],
+    });
     vi.mocked(userGetInfoV2).mockRejectedValue(new ApiError("Not Found", 404, {}));
 
-    const { result } = renderHook(() => useUserLookup("someone-else"), { wrapper });
+    const { result } = renderHook(() => useUserLookup("bob"), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject(exactUser);
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["bob"], 1, 100);
+  });
+
+  it("resolves to null when the user list contains only a substring match", async () => {
+    const response = buildUserListResponse(1, 1);
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      page_size: 100,
+      users: [{ ...response.users[0], user_id: "bob2" }],
+    });
+    vi.mocked(userGetInfoV2).mockRejectedValue(new ApiError("Not Found", 404, {}));
+
+    const { result } = renderHook(() => useUserLookup("bob"), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toBeNull();
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["bob"], 1, 100);
   });
 
   it("rethrows errors other than 404", async () => {
@@ -346,6 +371,7 @@ describe("useUserLookup", () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error).toBe(serverError);
+    expect(userListCall).not.toHaveBeenCalled();
   });
 
   it("does not query without a user id", async () => {
