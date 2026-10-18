@@ -1150,17 +1150,21 @@ def _base_model_widened_window(
     return MappingProxyType({"max_input_tokens": base_max_input_tokens})
 
 
+def _deployment_declares_no_vision(deployment: DeploymentTypedDict) -> bool:
+    """Whether the deployment's model_info explicitly declares no vision support."""
+    if "model_info" not in deployment or deployment["model_info"] is None:
+        return False
+    model_info: Final = cast(dict[str, object], deployment["model_info"])  # cast-ok: model_info is a string-keyed dict
+    return model_info.get("supports_vision") is False
+
+
 def _vision_excluded_deployment_indices(
     requires_vision_support: bool, deployments: Sequence[DeploymentTypedDict]
 ) -> frozenset[int]:
     """Indices of deployments to skip because the request needs vision support they lack."""
     if not requires_vision_support:
         return frozenset()
-    return frozenset(
-        idx
-        for idx, deployment in enumerate(deployments)
-        if deployment.get("model_info", {}).get("supports_vision") is False
-    )
+    return frozenset(idx for idx, deployment in enumerate(deployments) if _deployment_declares_no_vision(deployment))
 
 
 class Router:
@@ -14143,16 +14147,19 @@ class Router:
             if request_kwargs is not None and litellm.drop_params is False
             else frozenset()
         )
-        requires_vision_support: Final = request_contains_image_content(messages=messages, input=input)
+        requires_vision_support: Final = request_contains_image_content(
+            messages=messages,
+            input=cast(Sequence[object] | str | None, input),  # cast-ok: forwarded from pre-call args
+        )
 
         ## Vision pre-filter: exclude deployments that declare no vision support when the
         ## request carries image input. Computed up front so the per-deployment loop below
         ## keeps its existing shape (and complexity budget).
         _vision_excluded_indices: Final = _vision_excluded_deployment_indices(
-            requires_vision_support, _returned_deployments
+            requires_vision_support,
+            cast(Sequence[DeploymentTypedDict], _returned_deployments),  # cast-ok: router deployments are plain dicts
         )
         _vision_error: Final = len(_vision_excluded_indices) > 0
-        invalid_model_indices.update(_vision_excluded_indices)
 
         ## get model group RPM ##
         dt: Final = get_utc_datetime()
@@ -14232,8 +14239,12 @@ class Router:
             if no_deployment_takes_params
             else candidates_lacking_params
         )
-        excluded_indices: Final = frozenset(invalid_model_indices) | frozenset(
-            idx for (idx, _), fails in zip(param_candidates, candidates_failing_params, strict=True) if fails
+        excluded_indices: Final = (
+            frozenset(invalid_model_indices)
+            | _vision_excluded_indices
+            | frozenset(
+                idx for (idx, _), fails in zip(param_candidates, candidates_failing_params, strict=True) if fails
+            )
         )
 
         if len(excluded_indices) == len(_returned_deployments):

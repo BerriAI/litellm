@@ -316,10 +316,13 @@ def request_contains_image_content(
 def _responses_input_item_contains_image(item: object) -> bool:
     if not isinstance(item, Mapping):
         return False
-    if item.get("type") in _IMAGE_CONTENT_PART_TYPES:
+    mapping: Final = cast(Mapping[str, object], item)  # cast-ok: Responses input items are string-keyed mappings
+    if mapping.get("type") in _IMAGE_CONTENT_PART_TYPES:
         return True
-    content: Final = item.get("content")
-    return isinstance(content, list) and _content_parts_contain_image(content)
+    content: Final = mapping.get("content")
+    if not isinstance(content, list):
+        return False
+    return _content_parts_contain_image(cast(Sequence[object], content))  # cast-ok: content verified as list above
 
 
 def audio_or_image_in_message_content(message: AllMessageValues) -> bool:

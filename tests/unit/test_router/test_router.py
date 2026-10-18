@@ -29849,3 +29849,13 @@ def test_vision_excluded_deployment_indices():
 
     assert _vision_excluded_deployment_indices(True, deployments) == frozenset({1})
     assert _vision_excluded_deployment_indices(False, deployments) == frozenset()
+
+
+def test_deployment_declares_no_vision():
+    from litellm.router import _deployment_declares_no_vision
+
+    assert _deployment_declares_no_vision({"model_info": {"supports_vision": False}}) is True
+    assert _deployment_declares_no_vision({"model_info": {"supports_vision": True}}) is False
+    assert _deployment_declares_no_vision({"model_info": {}}) is False
+    assert _deployment_declares_no_vision({"model_info": None}) is False
+    assert _deployment_declares_no_vision({}) is False
