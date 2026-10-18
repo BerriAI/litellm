@@ -1111,7 +1111,7 @@ _check_permissions_caller_permission: Final = check_permissions_caller_permissio
 
 
 def _check_budget_limits_delegation_ceiling(
-    budget_limits: list[BudgetLimitEntry] | None,
+    budget_limits: Sequence[BudgetLimitEntry] | None,
     delegation_ceiling: float | None,
     user_api_key_dict: UserAPIKeyAuth,
     is_ui_session_team_key: bool,
@@ -1164,7 +1164,7 @@ def _check_budget_limits_delegation_ceiling(
 def _enforce_budget_delegation_ceiling(
     requested_max_budget: float | None,
     requested_team_id: str | None,
-    budget_limits: list[BudgetLimitEntry] | None,
+    budget_limits: Sequence[BudgetLimitEntry] | None,
     team_table: LiteLLM_TeamTableCachedObj | None,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
@@ -3427,7 +3427,7 @@ async def _owner_may_change_key_budget(
             _enforce_budget_delegation_ceiling(
                 requested_max_budget=effective.max_budget,
                 requested_team_id=team_id,
-                budget_limits=list(effective.budget_limits),
+                budget_limits=effective.budget_limits,
                 team_table=team_table,
                 user_api_key_dict=user_api_key_dict,
             )
