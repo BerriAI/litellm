@@ -23233,8 +23233,9 @@ class TestKeyUpdateBudgetAuthorityGates:
                 prisma_client=AsyncMock(),
                 user_api_key_cache=MagicMock(),
             )
-            assert int(getattr(exc.value, "status_code", 0)) == 403
-            assert "budget authority fields" in str(exc.value.detail)
+
+        assert int(getattr(exc.value, "status_code", 0)) == 403
+        assert "budget authority fields" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
