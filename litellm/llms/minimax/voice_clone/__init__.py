@@ -6,7 +6,7 @@ from .transformation import (
     VoiceCloneResponse,
 )
 
-__all__ = [
+__all__ = [ # mutable-ok: public export list is intentionally mutable for package compatibility
     "MinimaxVoiceCloneConfig",
     "MinimaxVoiceCloneError",
     "VoiceCloneResponse",

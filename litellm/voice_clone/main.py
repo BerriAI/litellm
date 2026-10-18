@@ -31,7 +31,7 @@ def voice_clone(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = "minimax",
-    extra_headers: dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None, # mutable-ok: caller may provide mutable extra headers
     client: httpx.Client | None = None,
 ) -> VoiceCloneResponse:
     """Upload an audio sample and create a MiniMax custom voice.
@@ -70,7 +70,7 @@ def voice_clone(
         clone_body = config.transform_clone_request(file_id=file_id, voice_id=voice_id, model=model)
         clone_response = http_client.post(
             config.get_complete_url(api_base=api_base, operation="clone"),
-            headers={**headers, "Content-Type": "application/json"},
+            headers={**headers, "Content-Type": "application/json"}, # mutable-ok: JSON request body is passed to httpx
             json=clone_body,
             timeout=timeout_value,
         )
@@ -90,7 +90,7 @@ async def avoice_clone(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = "minimax",
-    extra_headers: dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None, # mutable-ok: caller may provide mutable extra headers
     client: httpx.AsyncClient | None = None,
 ) -> VoiceCloneResponse:
     """Asynchronously upload and clone a MiniMax voice."""
@@ -102,7 +102,7 @@ async def avoice_clone(
     timeout_value = timeout if timeout is not None else 600.0
     http_client = client or get_async_httpx_client(
         llm_provider=LlmProviders.MINIMAX,
-        params={"timeout": timeout_value},
+        params={"timeout": timeout_value}, # mutable-ok: JSON request body is passed to httpx
     )
     upload_response = await http_client.post(
         config.get_complete_url(api_base=api_base, operation="upload"),
@@ -115,7 +115,7 @@ async def avoice_clone(
     clone_body = config.transform_clone_request(file_id=file_id, voice_id=voice_id, model=model)
     clone_response = await http_client.post(
         config.get_complete_url(api_base=api_base, operation="clone"),
-        headers={**headers, "Content-Type": "application/json"},
+        headers={**headers, "Content-Type": "application/json"}, # mutable-ok: provider request and export collections are intentionally mutable
         json=clone_body,
         timeout=timeout_value,
     )

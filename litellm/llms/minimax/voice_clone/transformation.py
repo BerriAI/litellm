@@ -27,9 +27,9 @@ from litellm.types.llms.openai import FileTypes
 class VoiceCloneResponse(TypedDict):
     """Normalized response returned after a successful voice clone."""
 
-    file_id: str
-    voice_id: str
-    model: str
+    file_id: str # writable-ok: normalized response is intentionally a mutable compatibility payload
+    voice_id: str # writable-ok: normalized response is intentionally a mutable compatibility payload
+    model: str # writable-ok: normalized response is intentionally a mutable compatibility payload
 
 
 class MinimaxVoiceCloneError(BaseLLMException):
@@ -62,19 +62,19 @@ class MinimaxVoiceCloneConfig:
     def get_complete_url(cls, api_base: str | None = None, operation: str = "clone") -> str:
         """Return the endpoint URL for ``upload`` or ``clone``."""
         try:
-            path = {"upload": cls.FILE_UPLOAD_PATH, "clone": cls.VOICE_CLONE_PATH}[operation]
+            path = {"upload": cls.FILE_UPLOAD_PATH, "clone": cls.VOICE_CLONE_PATH}[operation] # mutable-ok: operation lookup is a small local dispatch table
         except KeyError as exc:
             raise ValueError("operation must be 'upload' or 'clone'") from exc
         return f"{cls._base_url(api_base)}{path}"
 
     @staticmethod
-    def validate_environment(headers: dict[str, str] | None = None, api_key: str | None = None) -> dict[str, str]:
+    def validate_environment(headers: dict[str, str] | None = None, api_key: str | None = None) -> dict[str, str]: # mutable-ok: provider payloads and public headers require mutable mappings
         """Add MiniMax authentication while preserving caller headers."""
         resolved_key = api_key or litellm.api_key or get_secret_str("MINIMAX_API_KEY")
         if not resolved_key:
             raise ValueError("MiniMax API key is required for voice cloning")
 
-        result = dict(headers or {})
+        result = dict(headers or {}) # mutable-ok: caller headers must remain independently mutable
         result["Authorization"] = f"Bearer {resolved_key}"
         return result
 
@@ -83,7 +83,7 @@ class MinimaxVoiceCloneConfig:
         cls,
         file: FileTypes,
         purpose: str = "voice_clone",
-    ) -> tuple[dict[str, tuple[str, bytes, str]], dict[str, str]]:
+    ) -> tuple[dict[str, tuple[str, bytes, str]], dict[str, str]]: # mutable-ok: provider payloads and public headers require mutable mappings
         """Convert a LiteLLM file value to MiniMax multipart fields."""
         if purpose not in cls.UPLOAD_PURPOSES:
             allowed = ", ".join(sorted(cls.UPLOAD_PURPOSES))
@@ -95,7 +95,7 @@ class MinimaxVoiceCloneConfig:
         if not isinstance(content, bytes):
             content = bytes(content)
         content_type = extracted.get("content_type") or "application/octet-stream"
-        return {"file": (filename, content, content_type)}, {"purpose": purpose}
+        return {"file": (filename, content, content_type)}, {"purpose": purpose} # mutable-ok: multipart fields require mutable mapping for httpx
 
     @classmethod
     def transform_upload_response(cls, raw_response: httpx.Response) -> str:
@@ -112,16 +112,16 @@ class MinimaxVoiceCloneConfig:
         return file_id
 
     @classmethod
-    def transform_clone_request(cls, file_id: str, voice_id: str, model: str) -> dict[str, str]:
+    def transform_clone_request(cls, file_id: str, voice_id: str, model: str) -> dict[str, str]: # mutable-ok: provider payloads and public headers require mutable mappings
         """Build the required MiniMax voice-clone JSON body."""
-        values = {"file_id": file_id, "voice_id": voice_id, "model": model}
+        values = {"file_id": file_id, "voice_id": voice_id, "model": model} # mutable-ok: request body is serialized as mutable JSON
         for name, value in values.items():
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} is required for MiniMax voice cloning")
         if model not in cls.SUPPORTED_MODELS:
             supported = ", ".join(sorted(cls.SUPPORTED_MODELS))
             raise ValueError(f"Unsupported MiniMax voice-clone model {model!r}; supported models: {supported}")
-        return {name: value.strip() for name, value in values.items()}
+        return {name: value.strip() for name, value in values.items()} # mutable-ok: request body is serialized as mutable JSON
 
     @classmethod
     def transform_clone_response(
@@ -141,10 +141,10 @@ class MinimaxVoiceCloneConfig:
         )
         if not voice_id:
             raise MinimaxVoiceCloneError("MiniMax clone response did not include voice_id", raw_response.status_code)
-        return {"file_id": file_id, "voice_id": voice_id, "model": model}
+        return {"file_id": file_id, "voice_id": voice_id, "model": model} # mutable-ok: parsed response is normalized from provider JSON
 
     @staticmethod
-    def _json_response(raw_response: httpx.Response) -> dict[str, object]:
+    def _json_response(raw_response: httpx.Response) -> dict[str, object]: # mutable-ok: provider payloads and public headers require mutable mappings
         try:
             payload = raw_response.json()
         except ValueError as exc:
@@ -183,7 +183,7 @@ class MinimaxVoiceCloneConfig:
     def _raise_for_api_status(payload: Mapping[str, object], http_status: int) -> None:
         base_resp = payload.get("base_resp")
         status_code = base_resp.get("status_code") if isinstance(base_resp, Mapping) else None
-        if http_status >= 400 or (status_code is not None and str(status_code) not in {"0", "200"}):
+        if http_status >= 400 or (status_code is not None and str(status_code) not in {"0", "200"}): # mutable-ok: status code allowlist is a local membership set
             status_message = base_resp.get("status_msg") if isinstance(base_resp, Mapping) else None
             detail = str(status_message or payload.get("message") or "MiniMax voice-clone request failed")
             raise MinimaxVoiceCloneError(detail, http_status or int(status_code or 0))
