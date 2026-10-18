@@ -3,7 +3,7 @@
 from bisect import bisect_left
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import accumulate, chain, takewhile
+from itertools import accumulate, chain, groupby, takewhile
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, TypeAlias, cast  # noqa: TID251  # isinstance-checked hot-path JSON
 
@@ -702,7 +702,55 @@ def _tool_config_tail(tools: Sequence[object], order: Sequence[int]) -> _ToolCon
     )
 
 
+def _first_cache_point_with_a_ttl(tools: Sequence[object], run: Sequence[int]) -> object | None:
+    return next(filter(_sets_a_ttl, ((_fields(tools[index]) or {}).get("cachePoint") for index in run)), None)
+
+
+def _cache_points_inside_the_tool_config(tools: Sequence[object], order: Sequence[int]) -> Mapping[_Path, object]:
+    """The first passed-through cachePoint with a ttl in each run of them that another tool follows, by the tool just
+    before that run."""
+    runs: Final = tuple(
+        (is_cache_point, tuple(run))
+        for is_cache_point, run in groupby(order, key=lambda index: "cachePoint" in (_fields(tools[index]) or {}))
+    )
+    candidates: Final = tuple(
+        (before[-1], _first_cache_point_with_a_ttl(tools, run))
+        for (_, before), (is_cache_point, run), _ in zip(runs, runs[1:], runs[2:])
+        if is_cache_point
+    )
+    return MappingProxyType(
+        {("tools", tool): cache_point for tool, cache_point in candidates if cache_point is not None}
+    )
+
+
+def _stands_in(covered: _Placed, passed_through: object, drop_params: bool) -> bool:
+    return drop_params or covered.kind == "free" or covered.ttl == _ttl(passed_through)
+
+
 def _route_plan(
+    marks: Sequence[_Placed],
+    tools: Sequence[object],
+    tail: _ToolConfigTail,
+    inside: Mapping[_Path, object],
+    tool_config_cache_control: ChatCompletionCachedContent | None,
+    drop_params: bool,
+) -> _Plan:
+    """A passed-through cachePoint with a ttl ``inside`` the tool config takes the place of the translated mark on the
+    tool just before it, the same way one in the ``tail`` does."""
+    stood_in: Final = MappingProxyType(
+        {
+            mark.path: replace(mark, ttl=_ttl(inside[mark.path]), kind="written")
+            for mark in marks
+            if mark.path in inside and mark.kind != "written" and _stands_in(mark, inside[mark.path], drop_params)
+        }
+    )
+    plan: Final = _tail_route_plan(
+        tuple(stood_in.get(mark.path, mark) for mark in marks), tools, tail, tool_config_cache_control, drop_params
+    )
+    return replace(plan, dropped=plan.dropped | frozenset(stood_in))
+
+
+def _tail_route_plan(
     marks: Sequence[_Placed],
     tools: Sequence[object],
     tail: _ToolConfigTail,
@@ -716,11 +764,7 @@ def _route_plan(
     or under ``drop_params``."""
     passed_through: Final = next(filter(_sets_a_ttl, tail.cache_points), None)
     covered: Final = next((mark for mark in marks if mark.path == tail.tool and mark.kind != "written"), None)
-    if (
-        passed_through is not None
-        and covered is not None
-        and (drop_params or covered.kind == "free" or covered.ttl == _ttl(passed_through))
-    ):
+    if passed_through is not None and covered is not None and _stands_in(covered, passed_through, drop_params):
         stand_in: Final = replace(covered, ttl=_ttl(passed_through), kind="written")
         covered_plan: Final = _planned(
             tuple(stand_in if mark is covered else mark for mark in marks if mark.path != _TOOL_CONFIG), drop_params
@@ -846,6 +890,7 @@ def claude_prompt_cache(
         marks,
         renamed_tools,
         _tool_config_tail(renamed_tools, tool_config_order),
+        _cache_points_inside_the_tool_config(renamed_tools, tool_config_order),
         sent_tool_config_cache_control,
         drop_params,
     )

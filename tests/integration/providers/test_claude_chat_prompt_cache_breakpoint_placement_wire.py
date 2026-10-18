@@ -807,6 +807,10 @@ _BASH_SYSTEM_TOOL: Final[dict[str, JsonValue]] = {
     "systemTool": {"name": "bash", "additionalToolConfiguration": {"type": "bash_20250124"}}
 }
 _MARKED_TOOL: Final[dict[str, JsonValue]] = {**TOOL, "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}
+_TIME_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}},
+}
 
 
 @pytest.mark.parametrize(
@@ -887,6 +891,13 @@ _MARKED_TOOL: Final[dict[str, JsonValue]] = {**TOOL, "prompt_cache_breakpoint": 
             (Mark(_TOOL_LABEL, "1h"), Mark("other", None)),
             "1h",
             id="cache-point-without-a-ttl-right-after-the-marked-tool",
+        ),
+        pytest.param(
+            [_MARKED_TOOL, {"cachePoint": {"type": "default", "ttl": "1h"}}, _TIME_TOOL],
+            True,
+            (Mark(_TOOL_LABEL, "1h"), Mark("tool:get_time", "5m")),
+            None,
+            id="cache-point-with-an-hour-between-the-marked-tool-and-another",
         ),
     ),
 )
