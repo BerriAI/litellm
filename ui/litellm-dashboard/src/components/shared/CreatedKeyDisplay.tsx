@@ -103,9 +103,8 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
       <div className="flex flex-wrap gap-2">
         <Button
           type="button"
-          variant="outline"
+          variant={selectedAgent === "claude-code" ? "default" : "outline"}
           aria-pressed={selectedAgent === "claude-code"}
-          className={selectedAgent === "claude-code" ? "border-primary bg-muted" : ""}
           onClick={() => setSelectedAgent("claude-code")}
         >
           <img src={anthropicLogo.src} alt="" className="size-4 object-contain" />
@@ -113,9 +112,8 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
         </Button>
         <Button
           type="button"
-          variant="outline"
+          variant={selectedAgent === "codex" ? "default" : "outline"}
           aria-pressed={selectedAgent === "codex"}
-          className={selectedAgent === "codex" ? "border-primary bg-muted" : ""}
           onClick={() => setSelectedAgent("codex")}
         >
           <img src={openaiLogo.src} alt="" className="size-4 object-contain" />
