@@ -1475,9 +1475,11 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
             exception=exception,
             retry_policy=kwargs.get("retry_policy"),
         )
-        kwargs["retry_policy"] = reset_retry_policy()
         if retry_policy_num_retries is not None:
             num_retries = retry_policy_num_retries
+            kwargs["retry_policy"] = reset_retry_policy()
+        else:
+            kwargs.pop("retry_policy", None)
 
     return num_retries, kwargs
 
@@ -1990,13 +1992,12 @@ def client(original_function):
                 if (
                     num_retries and not is_completion_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
+                    status_code: Final[object] = getattr(e, "status_code", None)
                     if (
-                        isinstance(e, openai.APIError)
-                        or isinstance(e, openai.Timeout)
-                        or isinstance(e, openai.APIConnectionError)
-                    ):
+                        "retry_policy" in kwargs or not isinstance(status_code, int) or should_retry(status_code)
+                    ) and isinstance(e, (openai.APIError, openai.APITimeoutError, openai.APIConnectionError)):
                         kwargs["num_retries"] = num_retries
-                        return litellm.completion_with_retries(*args, **kwargs)
+                        return litellm.completion_with_retries(*args, _initial_exception=e, **kwargs)
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
@@ -2305,19 +2306,17 @@ def client(original_function):
                 if (
                     num_retries and not is_acompletion_litellm_router_call and not isinstance(e, ImportError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
-                    try:
+                    status_code: Final[object] = getattr(e, "status_code", None)
+                    if (
+                        "retry_policy" in kwargs or not isinstance(status_code, int) or should_retry(status_code)
+                    ) and isinstance(e, (openai.APIError, openai.APITimeoutError, openai.APIConnectionError)):
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
                         kwargs["num_retries"] = num_retries
                         kwargs["original_function"] = original_function
-                        if isinstance(e, openai.RateLimitError):  # rate limiting specific error
-                            kwargs["retry_strategy"] = "exponential_backoff_retry"
-                        elif isinstance(e, openai.APIError):  # generic api error
-                            kwargs["retry_strategy"] = "constant_retry"
-                        result = await litellm.acompletion_with_retries(*args, **kwargs)
-                    except Exception:
-                        pass
-                    else:
-                        return result
+                        try:
+                            return await litellm.acompletion_with_retries(*args, _initial_exception=e, **kwargs)
+                        except openai.APIError as retry_err:
+                            e = retry_err
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict

@@ -167,6 +167,7 @@ from litellm.utils import (
     Usage,
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
+    calculate_retry_after,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
     create_tokenizer,
@@ -183,6 +184,7 @@ from litellm.utils import (
     mock_completion_streaming_obj,
     pre_process_non_default_params,
     read_config_args,
+    should_retry,
     should_run_mock_completion,
     supports_httpx_timeout,
     validate_and_fix_openai_messages,
@@ -6334,55 +6336,142 @@ def completion(
         )
 
 
+class _RetryOutcome(Protocol):
+    def exception(self) -> BaseException | None: ...
+
+
+class _RetryState(Protocol):
+    @property
+    def attempt_number(self) -> int: ...
+
+    @property
+    def outcome(self) -> _RetryOutcome | None: ...
+
+
+def _compute_retry_wait(
+    exc: BaseException | None,
+    attempt_number: int,
+    num_retries: int,
+    retry_strategy: str,
+) -> float:
+    if retry_strategy != "exponential_backoff_retry":
+        return 0.0
+    remaining: Final[int] = max(0, num_retries - attempt_number)
+    headers: Final[httpx.Headers | None] = (
+        httpx.Headers(exc.response.headers)
+        if isinstance(exc, openai.APIStatusError) and getattr(exc.response, "headers", None)
+        else None
+    )
+    return float(
+        calculate_retry_after(
+            remaining_retries=remaining,
+            max_retries=num_retries,
+            response_headers=headers,
+        )
+    )
+
+
+def _build_retry_predicate(retry_policy_override: bool) -> Callable[[BaseException], bool]:
+    """Check if an exception is transient or explicitly enabled via RetryPolicy."""
+
+    def _predicate(e: BaseException) -> bool:
+        if retry_policy_override and isinstance(e, openai.APIError):
+            return True
+        status_code: Final[object] = getattr(e, "status_code", None)
+        if isinstance(status_code, int):
+            return should_retry(status_code)
+        return isinstance(e, (openai.APITimeoutError, openai.APIConnectionError))
+
+    return _predicate
+
+
+def _build_retry_wait_fn(num_retries: int, retry_strategy: str) -> Callable[[_RetryState], float]:
+    """Tenacity wait callback honoring provider Retry-After headers and jitter via calculate_retry_after."""
+
+    def _wait_fn(retry_state: _RetryState) -> float:
+        outcome: Final[_RetryOutcome | None] = retry_state.outcome
+        exc: Final[BaseException | None] = outcome.exception() if outcome is not None else None
+        return _compute_retry_wait(
+            exc=exc,
+            attempt_number=retry_state.attempt_number,
+            num_retries=num_retries,
+            retry_strategy=retry_strategy,
+        )
+
+    return _wait_fn
+
+
 def completion_with_retries(*args, **kwargs):
     """
-    Executes a litellm.completion() with 3 retries
+    Executes a litellm.completion() with retries
     """
     try:
         import tenacity
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    num_retries: Final = kwargs.pop("num_retries", 3)
+    raw_retries: Final[object] = kwargs.pop("num_retries", 3)
+    num_retries: Final[int] = raw_retries if isinstance(raw_retries, int) else 3
     # reset retries in .completion()
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
-    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
+    retry_strategy: Final[str] = (
+        "constant_retry" if kwargs.pop("retry_strategy", None) == "constant_retry" else "exponential_backoff_retry"
+    )
     original_function: Final = kwargs.pop("original_function", completion)
-    if retry_strategy == "exponential_backoff_retry":
-        retryer = tenacity.Retrying(
-            wait=tenacity.wait_exponential(multiplier=1, max=10),
-            stop=tenacity.stop_after_attempt(num_retries),
-            reraise=True,
+    initial_exc: Final[object] = kwargs.pop("_initial_exception", None)
+    retry_policy_override: Final[bool] = kwargs.pop("retry_policy", None) is not None
+    if isinstance(initial_exc, BaseException):
+        wait_seconds: Final[float] = _compute_retry_wait(
+            exc=initial_exc,
+            attempt_number=0,
+            num_retries=num_retries,
+            retry_strategy=retry_strategy,
         )
-    else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        time.sleep(wait_seconds)
+    retryer: Final = tenacity.Retrying(
+        wait=_build_retry_wait_fn(num_retries, retry_strategy),
+        stop=tenacity.stop_after_attempt(num_retries),
+        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_override)),
+        reraise=True,
+    )
     return retryer(original_function, *args, **kwargs)
 
 
 async def acompletion_with_retries(*args, **kwargs):
     """
     [DEPRECATED]. Use 'acompletion' or router.acompletion instead!
-    Executes a litellm.completion() with 3 retries
+    Executes a litellm.acompletion() with retries
     """
     try:
         import tenacity
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    num_retries: Final = kwargs.pop("num_retries", 3)
+    raw_retries: Final[object] = kwargs.pop("num_retries", 3)
+    num_retries: Final[int] = raw_retries if isinstance(raw_retries, int) else 3
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
-    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
-    original_function: Final = kwargs.pop("original_function", completion)
-    if retry_strategy == "exponential_backoff_retry":
-        retryer = tenacity.AsyncRetrying(
-            wait=tenacity.wait_exponential(multiplier=1, max=10),
-            stop=tenacity.stop_after_attempt(num_retries),
-            reraise=True,
+    retry_strategy: Final[str] = (
+        "constant_retry" if kwargs.pop("retry_strategy", None) == "constant_retry" else "exponential_backoff_retry"
+    )
+    original_function: Final = kwargs.pop("original_function", acompletion)
+    initial_exc: Final[object] = kwargs.pop("_initial_exception", None)
+    retry_policy_override: Final[bool] = kwargs.pop("retry_policy", None) is not None
+    if isinstance(initial_exc, BaseException):
+        wait_seconds: Final[float] = _compute_retry_wait(
+            exc=initial_exc,
+            attempt_number=0,
+            num_retries=num_retries,
+            retry_strategy=retry_strategy,
         )
-    else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        await asyncio.sleep(wait_seconds)
+    retryer: Final = tenacity.AsyncRetrying(
+        wait=_build_retry_wait_fn(num_retries, retry_strategy),
+        stop=tenacity.stop_after_attempt(num_retries),
+        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_override)),
+        reraise=True,
+    )
     return await retryer(original_function, *args, **kwargs)
 
 
