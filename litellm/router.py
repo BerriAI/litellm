@@ -1150,6 +1150,17 @@ def _base_model_widened_window(
     return MappingProxyType({"max_input_tokens": base_max_input_tokens})
 
 
+def _vision_excluded_deployment_indices(requires_vision_support: bool, deployments: list) -> set[int]:
+    """Indices of deployments to skip because the request needs vision support they lack."""
+    if not requires_vision_support:
+        return set()
+    return {
+        idx
+        for idx, deployment in enumerate(deployments)
+        if deployment.get("model_info", {}).get("supports_vision") is False
+    }
+
+
 class Router:
     @property
     def _routing_groups(self) -> dict[str, RoutingGroup]:
@@ -14107,7 +14118,6 @@ class Router:
         _context_window_error = False
         _potential_error_str = ""
         _rate_limit_error = False
-        _vision_error = False
         parent_otel_span: Final = get_parent_otel_span_from_kwargs(request_kwargs)
 
         has_countable_input: Final = (messages is not None or input is not None) and not compaction_pending(
@@ -14133,6 +14143,15 @@ class Router:
         )
         requires_vision_support: Final = request_contains_image_content(messages=messages, input=input)
 
+        ## Vision pre-filter: exclude deployments that declare no vision support when the
+        ## request carries image input. Computed up front so the per-deployment loop below
+        ## keeps its existing shape (and complexity budget).
+        _vision_excluded_indices: Final = _vision_excluded_deployment_indices(
+            requires_vision_support, _returned_deployments
+        )
+        _vision_error: Final = len(_vision_excluded_indices) > 0
+        invalid_model_indices.update(_vision_excluded_indices)
+
         ## get model group RPM ##
         dt: Final = get_utc_datetime()
         current_minute: Final = dt.strftime("%H-%M")
@@ -14144,11 +14163,6 @@ class Router:
             # Cache nested dict access to avoid repeated temporary dict allocations
             _litellm_params = deployment.get("litellm_params", {})
             _model_info = deployment.get("model_info", {})
-
-            if requires_vision_support and _model_info.get("supports_vision") is False:
-                invalid_model_indices.add(idx)
-                _vision_error = True
-                continue
 
             max_input_tokens = deployment_max_input_tokens[idx]
             if (
