@@ -317,7 +317,14 @@ export function BulkEditCustomersModal({
       { enabled: edits.budget.enabled && edits.budget.mode === "link", catalog: budgets, label: "Budgets" },
       { enabled: edits.models.enabled || edits.defaultModel.enabled, catalog: models, label: "Models" },
       { enabled: mcpEdited, catalog: servers, label: "MCP servers" },
-      { enabled: edits.mcpAccessGroups.enabled, catalog: groups, label: "MCP access groups" },
+      {
+        enabled:
+          mcpEdited &&
+          (edits.mcpAccessGroups.enabled ||
+            customers.some((customer) => storedMcpGrant(customer).mcp_access_groups.length > 0)),
+        catalog: groups,
+        label: "MCP access groups",
+      },
       { enabled: mcpEdited, catalog: toolsets, label: "MCP toolsets" },
     ].find(({ enabled, catalog }) => enabled && (catalog.isLoading || catalog.isError));
     if (unavailable) {

@@ -384,52 +384,81 @@ describe("bulk customer edits", () => {
     });
   });
 
-  it("keeps a removed group's tool limit when the same server is still granted by a toolset", () => {
+  it.each<Record<string, string[]>>([{}, { retained: ["read"] }])(
+    "keeps a retained toolset when removing its group with map %j",
+    (toolPermissions) => {
+      const servers: MCPServer[] = [
+        {
+          server_id: "retained",
+          mcp_access_groups: ["removed-group"],
+          created_at: "",
+          created_by: "",
+          updated_at: "",
+          updated_by: "",
+        },
+      ];
+      const toolsets: MCPToolset[] = [
+        {
+          toolset_id: "retained-toolset",
+          toolset_name: "Retained tools",
+          tools: [{ server_id: "retained", tool_name: "read" }],
+        },
+      ];
+      const customer = {
+        ...customers[0],
+        object_permission: {
+          mcp_access_groups: ["removed-group"],
+          mcp_toolsets: ["retained-toolset"],
+          mcp_tool_permissions: toolPermissions,
+        },
+      };
+      expect(
+        buildBulkCustomerPayload(
+          [customer],
+          {
+            ...emptyBulkCustomerEdits(),
+            mcpAccessGroups: { enabled: true, value: [] },
+          },
+          { servers: servers, toolsets: toolsets },
+          getCustomerBudgetCounts([customer]),
+        ),
+      ).toEqual({
+        ok: true,
+        payload: {
+          customers: [
+            {
+              user_id: customer.user_id,
+              object_permission: {
+                mcp_access_groups: [],
+                mcp_tool_permissions: toolPermissions,
+              },
+            },
+          ],
+        },
+      });
+    },
+  );
+
+  it("allows a newly selected group to grant full access", () => {
+    const edits = { ...emptyBulkCustomerEdits(), mcpAccessGroups: { enabled: true, value: ["new-group"] } };
     const servers: MCPServer[] = [
       {
-        server_id: "retained",
-        mcp_access_groups: ["removed-group"],
+        server_id: "new-server",
+        mcp_access_groups: ["new-group"],
         created_at: "",
         created_by: "",
         updated_at: "",
         updated_by: "",
       },
     ];
-    const toolsets: MCPToolset[] = [
-      {
-        toolset_id: "retained-toolset",
-        toolset_name: "Retained tools",
-        tools: [{ server_id: "retained", tool_name: "read" }],
-      },
-    ];
-    const customer = {
-      ...customers[0],
-      object_permission: {
-        mcp_access_groups: ["removed-group"],
-        mcp_toolsets: ["retained-toolset"],
-        mcp_tool_permissions: { retained: ["read"] },
-      },
-    };
-    expect(
-      buildBulkCustomerPayload(
-        [customer],
-        {
-          ...emptyBulkCustomerEdits(),
-          mcpAccessGroups: { enabled: true, value: [] },
-        },
-        { servers: servers, toolsets: toolsets },
-        getCustomerBudgetCounts([customer]),
-      ),
-    ).toEqual({
+    const result = buildBulkCustomerPayload([customers[0]], edits, { servers, toolsets: [] }, new Map());
+    expect(result).toEqual({
       ok: true,
       payload: {
         customers: [
           {
-            user_id: customer.user_id,
-            object_permission: {
-              mcp_access_groups: [],
-              mcp_tool_permissions: { retained: ["read"] },
-            },
+            user_id: customers[0].user_id,
+            object_permission: { mcp_access_groups: ["new-group"], mcp_tool_permissions: {} },
           },
         ],
       },
@@ -618,21 +647,27 @@ describe("bulk customer edits", () => {
     });
   });
   it.each([
-    { toolsets: [], replaceServers: false },
-    { toolsets: ["replacement-tools"], replaceServers: false },
-    { toolsets: [], replaceServers: true },
-    { toolsets: ["replacement-tools"], replaceServers: true },
-  ])("rejects widening a retained direct server when replacing toolsets: %j", ({ toolsets, replaceServers }) => {
+    { toolsets: [], replaceServers: false, viaGroup: false },
+    { toolsets: ["replacement-tools"], replaceServers: false, viaGroup: false },
+    { toolsets: [], replaceServers: true, viaGroup: false },
+    { toolsets: ["replacement-tools"], replaceServers: true, viaGroup: false },
+    { toolsets: [], replaceServers: false, viaGroup: true },
+    { toolsets: ["replacement-tools"], replaceServers: false, viaGroup: true },
+    { toolsets: [], replaceServers: true, viaGroup: true },
+    { toolsets: ["replacement-tools"], replaceServers: true, viaGroup: true },
+  ])("rejects widening a retained server when replacing toolsets: %j", ({ toolsets, replaceServers, viaGroup }) => {
     const row: EndUser = {
       ...customers[0],
       object_permission: {
-        mcp_servers: ["server-a"],
+        mcp_servers: viaGroup ? [] : ["server-a"],
+        mcp_access_groups: viaGroup ? ["group-a"] : [],
         mcp_toolsets: ["original-tools"],
         mcp_tool_permissions: {},
       },
     };
     const servers: MCPServer[] = ["server-a", "server-b"].map((server_id) => ({
       server_id,
+      mcp_access_groups: server_id === "server-a" ? ["group-a"] : [],
       created_at: "",
       created_by: "",
       updated_at: "",

@@ -536,30 +536,80 @@ describe("Bulk customer editor", () => {
     });
   });
 
-  it("refuses a toolset replacement that would unlimit a retained direct server", async () => {
+  it.each(["direct", "group", "legacy group"])(
+    "refuses a toolset replacement that would unlimit a retained %s server",
+    async (scope) => {
+      const original: EndUser = {
+        ...customers[0],
+        object_permission: {
+          mcp_servers: scope === "direct" ? ["server-a"] : [],
+          mcp_access_groups: scope === "direct" ? [] : ["group-a"],
+          mcp_toolsets: ["toolset-old"],
+          mcp_tool_permissions: {},
+        },
+      };
+      fetchServers.mockResolvedValue([
+        {
+          server_id: "server-a",
+          server_name: "A",
+          mcp_access_groups: scope === "legacy group" ? [{ name: "group-a" }] : ["group-a"],
+        },
+        { server_id: "server-b", server_name: "B" },
+      ]);
+      fetchToolsets.mockResolvedValue([
+        {
+          toolset_id: "toolset-old",
+          toolset_name: "Old A tools",
+          tools: [{ server_id: "server-a", tool_name: "read" }],
+        },
+        {
+          toolset_id: "toolset-new",
+          toolset_name: "Research tools",
+          tools: [{ server_id: "server-b", tool_name: "read" }],
+        },
+      ]);
+      const user = userEvent.setup();
+      mountModal([original]);
+      await optIntoToolsets(user);
+      await user.click(screen.getByRole("button", { name: "Apply changes" }));
+      expect(await screen.findByRole("alert", { name: "Bulk update error" })).toHaveTextContent(
+        "This change would give a retained MCP server every tool",
+      );
+      expect(post).not.toHaveBeenCalled();
+    },
+  );
+  it("requires a failed group catalog before editing toolsets with retained groups", async () => {
     const original: EndUser = {
       ...customers[0],
-      object_permission: { mcp_servers: ["server-a"], mcp_toolsets: ["toolset-old"], mcp_tool_permissions: {} },
+      object_permission: { mcp_access_groups: ["research-group"], mcp_tool_permissions: { "server-new": ["read"] } },
     };
+    fetchGroups.mockRejectedValueOnce(new Error("Catalog unavailable"));
     fetchServers.mockResolvedValue([
-      { server_id: "server-a", server_name: "A" },
-      { server_id: "server-b", server_name: "B" },
-    ]);
-    fetchToolsets.mockResolvedValue([
-      { toolset_id: "toolset-old", toolset_name: "Old A tools", tools: [{ server_id: "server-a", tool_name: "read" }] },
-      {
-        toolset_id: "toolset-new",
-        toolset_name: "Research tools",
-        tools: [{ server_id: "server-b", tool_name: "read" }],
-      },
+      { server_id: "server-new", server_name: "Research server", mcp_access_groups: ["research-group"] },
     ]);
     const user = userEvent.setup();
     mountModal([original]);
     await optIntoToolsets(user);
+    await screen.findByText("MCP access groups could not be loaded");
     await user.click(screen.getByRole("button", { name: "Apply changes" }));
     expect(await screen.findByRole("alert", { name: "Bulk update error" })).toHaveTextContent(
-      "This change would give a retained MCP server every tool",
+      "MCP access groups must finish loading",
     );
     expect(post).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Retry MCP access groups" }));
+    await waitFor(() => expect(screen.queryByText("MCP access groups could not be loaded")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+    await waitFor(() => expect(post).toHaveBeenCalledOnce());
+    expect(post).toHaveBeenCalledWith("/customer/bulk_update", {
+      accessToken: "sk-test",
+      body: {
+        customers: [
+          {
+            user_id: original.user_id,
+            object_permission: { mcp_toolsets: ["toolset-new"], mcp_tool_permissions: { "server-new": ["read"] } },
+          },
+        ],
+      },
+    });
   });
 });

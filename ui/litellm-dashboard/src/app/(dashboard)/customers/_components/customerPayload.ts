@@ -1,7 +1,12 @@
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import type { UpdateCustomerRequest } from "@/app/(dashboard)/hooks/customers/customerApi";
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
-import { mcpAllowedToolsFor, mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
+import { NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
+import {
+  accessGroupNamesOf,
+  mcpAllowedToolsFor,
+  mcpServersForIdentifier,
+} from "@/components/mcp_server_management/effectiveMcpServers";
 import {
   extractMcpEntitlementUpdate,
   type McpEntitlementUpdate,
@@ -81,7 +86,18 @@ export const buildCustomerPayload = (
   };
 };
 
-const unrestrictedDirectServerIds = (
+export const directAndGroupServerIds = (grant: McpEntitlementUpdate, servers: MCPServer[]): ReadonlySet<string> => {
+  if (grant.mcp_servers.includes(NO_MCP_SERVERS_SENTINEL)) return new Set();
+  const directIds = grant.mcp_servers.flatMap((identifier) =>
+    mcpServersForIdentifier(servers, identifier).map((server) => server.server_id),
+  );
+  const groupIds = servers
+    .filter((server) => accessGroupNamesOf(server).some((group) => grant.mcp_access_groups.includes(group)))
+    .map((server) => server.server_id);
+  return new Set([...directIds, ...groupIds]);
+};
+
+const unrestrictedServerIds = (
   grant: McpEntitlementUpdate,
   servers: MCPServer[],
   toolsets: MCPToolset[],
@@ -91,10 +107,10 @@ const unrestrictedDirectServerIds = (
       .filter((toolset) => grant.mcp_toolsets.includes(toolset.toolset_id))
       .flatMap((toolset) => toolset.tools.map((tool) => tool.server_id)),
   );
+  const grantedIds = directAndGroupServerIds(grant, servers);
   return new Set(
-    grant.mcp_servers
-      .flatMap((identifier) => mcpServersForIdentifier(servers, identifier))
-      .filter((server) => !toolsetServerIds.has(server.server_id))
+    servers
+      .filter((server) => grantedIds.has(server.server_id) && !toolsetServerIds.has(server.server_id))
       .filter((server) => mcpAllowedToolsFor(server, grant.mcp_tool_permissions, servers) === undefined)
       .map((server) => server.server_id),
   );
@@ -108,7 +124,18 @@ export const serversLosingToolLimits = (
 ): readonly MCPServer[] => {
   const grant = extractMcpEntitlementUpdate(values, existing?.object_permission, servers, toolsets);
   if (!grant) return [];
-  const unrestricted = unrestrictedDirectServerIds(grant, servers, toolsets);
-  const alreadyUnrestricted = unrestrictedDirectServerIds(storedMcpGrant(existing), servers, toolsets);
-  return servers.filter((server) => unrestricted.has(server.server_id) && !alreadyUnrestricted.has(server.server_id));
+  const stored = storedMcpGrant(existing);
+  const retainedIds = directAndGroupServerIds(stored, servers);
+  const directIds = new Set(
+    grant.mcp_servers.flatMap((identifier) =>
+      mcpServersForIdentifier(servers, identifier).map((server) => server.server_id),
+    ),
+  );
+  const unrestricted = unrestrictedServerIds(grant, servers, toolsets);
+  const alreadyUnrestricted = unrestrictedServerIds(stored, servers, toolsets);
+  const needsToolLimit = (server: MCPServer): boolean => {
+    const protectedGrant = retainedIds.has(server.server_id) || directIds.has(server.server_id);
+    return protectedGrant && unrestricted.has(server.server_id) && !alreadyUnrestricted.has(server.server_id);
+  };
+  return servers.filter(needsToolLimit);
 };

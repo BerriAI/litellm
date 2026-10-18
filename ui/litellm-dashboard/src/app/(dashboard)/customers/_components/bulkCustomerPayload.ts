@@ -3,9 +3,9 @@ import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { extractMcpEntitlement, extractMcpEntitlementUpdate } from "@/components/mcp_server_management/mcpEntitlement";
-import { mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
 
 import {
+  directAndGroupServerIds,
   hasSharedCustomerBudget,
   serversLosingToolLimits,
   storedMcpGrant,
@@ -115,17 +115,13 @@ export const buildBulkCustomerPayload = (
   if (
     Object.keys(objectPermission).length > 0 &&
     customers.some((customer) => {
-      const directServerIds = new Set(
-        storedMcpGrant(customer).mcp_servers.flatMap((identifier) =>
-          mcpServersForIdentifier(catalogs.servers, identifier).map((server) => server.server_id),
-        ),
-      );
+      const retainedServerIds = directAndGroupServerIds(storedMcpGrant(customer), catalogs.servers);
       return serversLosingToolLimits(
         bulkCustomerFormValues(customer, edits),
         customer,
         catalogs.servers,
         catalogs.toolsets,
-      ).some((server) => directServerIds.has(server.server_id));
+      ).some((server) => retainedServerIds.has(server.server_id));
     })
   ) {
     return {
