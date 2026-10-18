@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
@@ -410,7 +411,7 @@ class PipelineExecutor:
 
             duration = time.perf_counter() - start_time
 
-            action = _pipeline_action_for_outcome(step, outcome)
+            action = _pipeline_action_for_step(step, outcome, original_exception)
 
             step_result = PipelineStepResult(
                 guardrail_name=step.guardrail,
@@ -746,6 +747,17 @@ def _carry_working_guardrail_information(
     if recorded is existing:
         return
     _append_guardrail_information(request_data=request_data, entries=[e for e in recorded if e not in existing])
+
+
+def _pipeline_action_for_step(step: PipelineStep, outcome: str, original_exception: Exception | None) -> str:
+    """
+    The action a step takes: block when its guardrail returned a rewrite the endpoint
+    cannot apply, whatever on_fail and on_error say, else the action configured for
+    the outcome.
+    """
+    if isinstance(original_exception, UnappliableRequestRewrite):
+        return "block"
+    return _pipeline_action_for_outcome(step, outcome)
 
 
 def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:
