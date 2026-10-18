@@ -713,10 +713,8 @@ def _model_cost_replaced_since_import(fetch: _ImportFetch | None) -> bool:
     return fetch is not None and not _litellm_model_cost_is(fetch.bundled)
 
 
-def _is_cost_entry(
-    value: object,
-) -> TypeIs[dict[str, object]]:  # guard-ok: cost map keys are str  # mutable-ok: entries are merged in place
-    return isinstance(value, dict)
+def _is_cost_entry(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: cost map keys are str
+    return isinstance(value, Mapping)
 
 
 def _bundled_as_loaded(fetch: _ImportFetch) -> Mapping[str, Mapping[str, object]]:
@@ -738,14 +736,16 @@ def _fields_written_since_import(
     return frozenset(chain(rewritten, loaded.keys() - current.keys()))
 
 
-def _merge_remote_fields(
-    current: dict[str, object],  # mutable-ok: a live litellm.model_cost entry, so references to it see the remote map
-    remote: Mapping[str, object],
-    written: frozenset[str],
-) -> None:
-    current.update({name: value for name, value in remote.items() if name not in written})
-    for name in current.keys() - remote.keys() - written:
-        current.pop(name, None)
+def _merged_entry(
+    current: Mapping[str, object], remote: Mapping[str, object], written: frozenset[str]
+) -> dict[str, object]:  # mutable-ok: cost map entries are dicts callers may edit
+    fields: Final = {
+        **{name: value for name, value in remote.items() if name not in written},
+        **{name: value for name, value in current.items() if name in written},
+    }
+    if isinstance(current, AliasedCostEntry):
+        return AliasedCostEntry(fields, current.names)
+    return fields
 
 
 def _untouched_since_import(current: object, loaded: Mapping[str, object], parsed: Mapping[str, object]) -> bool:
@@ -763,16 +763,21 @@ def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object])
         for key, entry in remote
         if key in fetch.loaded and _is_cost_entry(current := fetch.bundled.get(key)) and _is_cost_entry(entry)
     }
-    for current, key, entry in shared_once.values():
-        _merge_remote_fields(
+    merged: Final = {
+        entry_id: _merged_entry(
             current, entry, _fields_written_since_import(current, fetch.loaded[key], parsed.get(key, _NO_FIELDS))
         )
-    fetch.bundled.update({key: entry for key, entry in remote if key not in fetch.loaded and key not in fetch.bundled})
+        for entry_id, (current, key, entry) in shared_once.items()
+    }
+    changed: Final = {entry_id: entry for entry_id, entry in merged.items() if entry != shared_once[entry_id][0]}
+    replaced: Final = {key: changed[id(value)] for key, value in tuple(fetch.bundled.items()) if id(value) in changed}
+    added: Final = {key: entry for key, entry in remote if key not in fetch.loaded and key not in fetch.bundled}
     dropped: Final = tuple(
         key
         for key in fetch.loaded.keys() - finalized.keys()
         if _untouched_since_import(fetch.bundled.get(key), fetch.loaded[key], parsed.get(key, _NO_FIELDS))
     )
+    fetch.bundled.update({**replaced, **added})
     for key in dropped:
         fetch.bundled.pop(key, None)
     _record_remote_adoption()

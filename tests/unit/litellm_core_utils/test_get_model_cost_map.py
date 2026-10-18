@@ -1007,16 +1007,62 @@ def test_references_to_the_map_taken_at_import_see_the_remote_map_once_it_lands(
     try:
         monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
         held_map = litellm.model_cost
-        held_entry = litellm.model_cost["gpt-4o"]
         assert started.wait(timeout=10)
     finally:
         _finish_fetch(release)
 
     held_map["my-direct-edit"] = {"litellm_provider": "openai", "mode": "chat"}
     assert held_map["gpt-4o"]["input_cost_per_token"] == remote_price
-    assert held_entry["input_cost_per_token"] == remote_price
     assert "claude-remote-only-test" in held_map
     assert "my-direct-edit" in litellm.model_cost
+
+
+def test_a_model_entry_being_read_field_by_field_when_the_remote_map_lands_reads_to_the_end(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    remote_map = _load_root_cost_map()
+    remote_map["gpt-4o"] = {**remote_map["gpt-4o"], "supports_remote_only_test_field": True}
+    client, started, release = _held_client(httpx.Response(200, content=json.dumps(remote_map).encode()))
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        bundled_fields = len(litellm.model_cost["gpt-4o"])
+        fields = iter(litellm.model_cost["gpt-4o"].items())
+        first = next(fields)
+    finally:
+        _finish_fetch(release)
+
+    assert len([first, *fields]) == bundled_fields
+    assert litellm.model_cost["gpt-4o"]["supports_remote_only_test_field"] is True
+
+
+def test_an_alias_the_remote_map_no_longer_lists_stops_resolving(isolated_litellm_cost_state, monkeypatch):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    remote_map = json.loads(_cost_map_with_aliased_model(5.0))
+    del remote_map["my-aliased-model"]["aliases"]
+    client, started, release = _held_client(httpx.Response(200, content=json.dumps(remote_map).encode()))
+    try:
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            load_model_cost_map_at_import(
+                url=_URL,
+                client=client,
+                local=lambda: ModelCostMapReloaded(model_cost_map=json.loads(_cost_map_with_aliased_model(1.0))),
+            ),
+        )
+        assert started.wait(timeout=10)
+        assert "my-aliased-model-alias" in litellm.model_cost
+    finally:
+        _finish_fetch(release)
+
+    assert litellm.model_cost["my-aliased-model"]["input_cost_per_token"] == 5.0
+    assert "my-aliased-model-alias" not in litellm.model_cost
 
 
 def test_a_price_pinned_to_its_bundled_value_before_the_remote_map_lands_keeps_it(
