@@ -70,20 +70,24 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
 
     verbose_logger.debug("Checking for Prisma schema diff...")
     timeout: Final = prisma_command_timeout()
+    # schema.prisma reads its datasource url from DATABASE_URL, so hand the URL to
+    # the child through its environment. On the command line the password would be
+    # readable by any local user through ps or /proc/<pid>/cmdline.
+    env: Final = {**os.environ, "DATABASE_URL": db_url}
     try:
         result: Final = run_prisma(
             [
                 "prisma",
                 "migrate",
                 "diff",
-                "--from-url",
-                db_url,
+                "--from-schema-datasource",
+                "./schema.prisma",
                 "--to-schema-datamodel",
                 "./schema.prisma",
                 "--script",
             ],
             timeout=timeout,
-            env=os.environ.copy(),
+            env=env,
         )
 
         sql_commands: Final = extract_sql_commands(result.stdout)

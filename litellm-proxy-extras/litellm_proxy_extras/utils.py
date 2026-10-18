@@ -306,8 +306,10 @@ class ProxyExtrasDBManager:
                     "migrate",
                     "diff",
                     "--from-empty",
-                    "--to-url",
-                    database_url,
+                    # Read the URL from DATABASE_URL (already in prisma_env) through
+                    # the schema's datasource, so the password stays out of argv.
+                    "--to-schema-datasource",
+                    schema_path,
                     "--script",
                 ],
                 stdout=open(migration_file, "w"),
@@ -519,6 +521,11 @@ class ProxyExtrasDBManager:
         diff_dir = Path(tempfile.mkdtemp(prefix="litellm_migration_diff_"))
         diff_sql_path = diff_dir / "migration.sql"
 
+        # Hand the URL to the child as DATABASE_URL, which the schema's datasource
+        # reads. On the command line any local user could read the password.
+        diff_env = _get_prisma_env()
+        diff_env["DATABASE_URL"] = diff_url
+
         # 1. Generate migration SQL for the diff between DB and schema
         try:
             logger.info("Generating migration diff between DB and schema.prisma...")
@@ -528,15 +535,15 @@ class ProxyExtrasDBManager:
                         _get_prisma_command(),
                         "migrate",
                         "diff",
-                        "--from-url",
-                        diff_url,
+                        "--from-schema-datasource",
+                        schema_path,
                         "--to-schema-datamodel",
                         schema_path,
                         "--script",
                     ],
                     timeout=prisma_command_timeout(),
                     stdout=f,
-                    env=_get_prisma_env(),
+                    env=diff_env,
                 )
         except subprocess.CalledProcessError as e:
             logger.warning(f"Failed to generate migration diff: {e.stderr}")
