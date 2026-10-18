@@ -59373,10 +59373,11 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
+            "/v1/batch",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -59417,10 +59418,11 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
+            "/v1/batch",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -59528,10 +59530,11 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
+            "/v1/batch",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -67611,10 +67614,11 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
+            "/v1/batch",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -67647,10 +67651,11 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
+            "/v1/batch",
             "/v1/responses"
         ],
         "supported_modalities": [
