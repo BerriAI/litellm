@@ -852,6 +852,11 @@ def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object])
         for key, entry in remote
         if key not in fetch.loaded and key not in fetch.bundled
     }
+    added_since_import: Final = {
+        key: _merged_entry(current, entry, frozenset(current.keys()))
+        for key, entry in remote
+        if key not in fetch.loaded and _is_cost_entry(current := fetch.bundled.get(key)) and _is_cost_entry(entry)
+    }
     dropped: Final = tuple(
         key
         for key in fetch.loaded.keys() - finalized.keys()
@@ -859,7 +864,7 @@ def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object])
     )
     for live_entry, entry in updated_in_place:
         live_entry.update(entry)
-    fetch.bundled.update({**replaced, **added})
+    fetch.bundled.update({**replaced, **added, **added_since_import})
     for key in dropped:
         fetch.bundled.pop(key, None)
     GetModelCostMap._snapshot_loaded_catalog(  # pyright: ignore[reportPrivateUsage]  # same module

@@ -1304,6 +1304,36 @@ def test_a_router_built_before_the_remote_map_lands_prices_its_models_from_the_r
     assert litellm.get_model_info("openai/gpt-4o")["input_cost_per_token"] == remote_price
 
 
+def test_a_router_built_before_the_remote_map_lands_serves_a_bare_model_only_the_remote_map_knows(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, retry_started, release = _rate_limited_then_held_client(_remote_map_with("claude-remote-only-test"))
+    try:
+        monkeypatch.setattr(
+            litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client, sleep=lambda _: None)
+        )
+        assert retry_started.wait(timeout=10)
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "remote-only",
+                    "litellm_params": {"model": "claude-remote-only-test", "api_key": "sk-test"},
+                }
+            ],
+            ignore_invalid_deployments=True,
+        )
+        served_before_the_remote_map = len(router.model_list)
+    finally:
+        _finish_fetch(release)
+
+    assert served_before_the_remote_map == 0
+    assert [deployment["model_name"] for deployment in router.model_list] == ["remote-only"]
+    assert litellm.get_model_info("claude-remote-only-test")["litellm_provider"] == "anthropic"
+
+
 def test_a_partial_edit_made_before_the_remote_map_lands_keeps_only_the_fields_it_changed(
     isolated_litellm_cost_state, monkeypatch
 ):
