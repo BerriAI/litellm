@@ -530,6 +530,11 @@ _TIME_FUNCTION: Final = {
     "description": "Get the local time for a city",
     "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
 }
+_WEB_SEARCH_FUNCTION: Final = {
+    "name": "web_search",
+    "description": "Search the web",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+}
 
 
 def _openai_tool(function: Mapping[str, object]) -> dict[str, object]:
@@ -596,8 +601,17 @@ def test_token_counter_counts_tools_by_the_models_chat_template_family(model: st
 
 
 @pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
-def test_token_counter_skips_tools_without_a_function_for_chat_template_families(model: str):
-    builtin_tool: Final = {"type": "web_search_preview"}
+@pytest.mark.parametrize(
+    "builtin_tool",
+    [
+        {"type": "web_search_preview"},
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+        {"name": "web_search"},
+    ],
+)
+def test_token_counter_skips_tools_not_sent_as_functions_for_chat_template_families(
+    model: str, builtin_tool: dict[str, object]
+):
     weather_tool: Final = _openai_tool(_WEATHER_FUNCTION)
 
     assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[builtin_tool]) == token_counter_new(
@@ -606,6 +620,25 @@ def test_token_counter_skips_tools_without_a_function_for_chat_template_families
     assert token_counter_new(
         model=model, messages=list(_USER_MESSAGES), tools=[builtin_tool, weather_tool]
     ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[weather_tool])
+
+
+def _responses_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "function", **function}
+
+
+def _gemini_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"function_declarations": [function]}
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize("function", [_WEATHER_FUNCTION, _WEB_SEARCH_FUNCTION])
+@pytest.mark.parametrize("tool_shape", [_responses_tool, _gemini_tool])
+def test_token_counter_counts_function_tools_like_chat_completions_tools_for_chat_template_families(
+    model: str, function: Mapping[str, object], tool_shape: Callable[[Mapping[str, object]], dict[str, object]]
+):
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=[tool_shape(function)]
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool(function)])
 
 
 # Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
@@ -626,6 +659,8 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: obj
         {"name": "get_weather", "input_schema": _WEATHER_FUNCTION["parameters"]},
         _anthropic_tool(_WEATHER_FUNCTION),
         {**_anthropic_tool(_WEATHER_FUNCTION), "strict": True},
+        {**_anthropic_tool(_WEATHER_FUNCTION), "defer_loading": True, "input_examples": [{"location": "Paris"}]},
+        _anthropic_tool(_WEB_SEARCH_FUNCTION),
     ],
 )
 def test_token_counter_counts_anthropic_tools_as_sent_to_chat_template_families(

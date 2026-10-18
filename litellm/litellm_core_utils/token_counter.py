@@ -351,6 +351,9 @@ EXTRAPOLATION_SAMPLES: Final = 16
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
+_ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
+    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming")
+)
 
 
 def _count_offload_limiter_for_this_loop() -> anyio.CapacityLimiter:
@@ -650,7 +653,9 @@ def _count_chat_template_tools(
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection,
 ) -> int:
-    functions: Final = tuple(function for function in _function_definitions(tools) if function.get("name"))
+    functions: Final = tuple(
+        function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name")
+    )
     if not functions:
         return 0
     system_turn_tokens: Final = 0 if includes_system_message else tool_section.implicit_system_turn_tokens
@@ -1077,10 +1082,23 @@ def _format_function_definitions(tools: Sequence[object]) -> str:
     return "\n".join(lines)
 
 
-def _function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+def _tools_sent_as_functions(tools: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(tool for tool in _tool_mappings(tools) if not _is_anthropic_web_search_tool(tool))
+
+
+def _is_anthropic_web_search_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("name") == "web_search" and "input_schema" not in tool and tool.get("type") != "function"
+
+
+def _tool_mappings(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
     for tool in tools:
         if isinstance(tool, Mapping):
-            yield from _function_definitions_for_tool(cast(Mapping[str, object], tool))
+            yield cast(Mapping[str, object], tool)
+
+
+def _function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+    for tool in _tool_mappings(tools):
+        yield from _function_definitions_for_tool(tool)
 
 
 def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mapping[str, object]]:
@@ -1094,13 +1112,19 @@ def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mappi
             if isinstance(declaration, Mapping):
                 yield declaration
         return
-    parameters: Final = tool.get("input_schema") or tool.get("parameters") or {}
+    input_schema: Final = tool.get("input_schema")
+    parameters: Final = input_schema or tool.get("parameters") or {}
     normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
+    unmapped_anthropic_keys: Final = (
+        {key: value for key, value in tool.items() if key not in _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE}
+        if input_schema is not None
+        else {}
+    )
     description: Final = tool.get("description")
     strict: Final = tool.get("strict")
     yield {
         "name": tool.get("name"),
-        "parameters": normalized_parameters,
+        "parameters": {**normalized_parameters, **unmapped_anthropic_keys},
         **({"description": description} if description is not None else {}),
         **({"strict": bool(strict)} if strict is not None else {}),
     }
