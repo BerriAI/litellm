@@ -1,3 +1,6 @@
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,8 +16,10 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.key_budget_change import (
     KeyBudgetAdminOnly,
+    KeyBudgetChange,
     KeyBudgetLoosened,
     KeyBudgetTightened,
     KeyBudgetUnchanged,
@@ -24,61 +29,105 @@ from litellm.proxy.management_endpoints.key_budget_change import (
 from litellm.proxy.management_endpoints.key_management_endpoints import _validate_update_key_data
 from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 
-_OWNER = "owner-1"
-_TEAM = "team-1"
-_WEEKLY = {"budget_duration": "7d", "max_budget": 50.0, "reset_at": "2026-10-08T00:00:00+00:00"}
+_OWNER: Final = "owner-1"
+_TEAM_ADMIN: Final = "team-admin"
+_TEAM: Final = "team-1"
+_WEEKLY: Final[Mapping[str, object]] = MappingProxyType(
+    {"budget_duration": "7d", "max_budget": 50.0, "reset_at": "2026-10-08T00:00:00+00:00"}
+)
 
 
-def _key(**overrides):
+def _key(
+    *,
+    user_id: str = _OWNER,
+    created_by: str = _OWNER,
+    team_id: str | None = None,
+    max_budget: float | None = None,
+    budget_limits: Sequence[Mapping[str, object]] | None = None,
+    budget_id: str | None = None,
+) -> LiteLLM_VerificationToken:
     return LiteLLM_VerificationToken(
-        **{"token": "hashed-owner-key", "user_id": _OWNER, "created_by": _OWNER, "metadata": {}, **overrides}
+        token="hashed-owner-key",
+        user_id=user_id,
+        created_by=created_by,
+        team_id=team_id,
+        max_budget=max_budget,
+        budget_limits=None if budget_limits is None else [dict(window) for window in budget_limits],
+        budget_id=budget_id,
+        metadata={},
     )
 
 
-def _window(duration, cap):
-    return {"budget_duration": duration, "max_budget": cap}
+def _window(duration: str, cap: float) -> Mapping[str, object]:
+    return MappingProxyType({"budget_duration": duration, "max_budget": cap})
 
 
 @pytest.mark.parametrize(
     ("update", "stored", "expected"),
     [
-        ({"key_alias": "renamed"}, {"max_budget": 10.0}, KeyBudgetUnchanged()),
-        ({"max_budget": 10.0}, {"max_budget": 10.0}, KeyBudgetUnchanged()),
-        ({"max_budget": 5.0}, {"max_budget": 10.0}, KeyBudgetTightened()),
-        ({"max_budget": 5.0}, {}, KeyBudgetTightened()),
-        ({"max_budget": 20.0}, {"max_budget": 10.0}, KeyBudgetLoosened()),
-        ({"max_budget": None}, {"max_budget": 10.0}, KeyBudgetLoosened()),
-        ({"budget_limits": [_window("24h", 5.0)]}, {}, KeyBudgetTightened()),
-        ({"budget_limits": [_WEEKLY, _window("24h", 5.0)]}, {"budget_limits": [_WEEKLY]}, KeyBudgetTightened()),
-        ({"budget_limits": [_window("7d", 50.0)]}, {"budget_limits": [_WEEKLY]}, KeyBudgetTightened()),
-        ({"budget_limits": [_window("7d", 40.0)]}, {"budget_limits": [_WEEKLY]}, KeyBudgetTightened()),
-        ({"budget_limits": [_window("7d", 60.0)]}, {"budget_limits": [_WEEKLY]}, KeyBudgetLoosened()),
-        ({"budget_limits": [_window("24h", 5.0)]}, {"budget_limits": [_WEEKLY]}, KeyBudgetLoosened()),
-        ({"budget_limits": []}, {"budget_limits": [_WEEKLY]}, KeyBudgetLoosened()),
-        ({"budget_limits": None}, {"budget_limits": [_WEEKLY]}, KeyBudgetLoosened()),
-        ({"budget_limits": [_window("1d", 5.0)]}, {"budget_limits": [_window("24h", 5.0)]}, KeyBudgetLoosened()),
+        (UpdateKeyRequest(key="sk-1", key_alias="renamed"), _key(max_budget=10.0), KeyBudgetUnchanged()),
+        (UpdateKeyRequest(key="sk-1", max_budget=10.0), _key(max_budget=10.0), KeyBudgetUnchanged()),
+        (UpdateKeyRequest(key="sk-1", max_budget=5.0), _key(max_budget=10.0), KeyBudgetTightened()),
+        (UpdateKeyRequest(key="sk-1", max_budget=5.0), _key(), KeyBudgetTightened()),
+        (UpdateKeyRequest(key="sk-1", max_budget=20.0), _key(max_budget=10.0), KeyBudgetLoosened()),
+        (UpdateKeyRequest(key="sk-1", max_budget=None), _key(max_budget=10.0), KeyBudgetLoosened()),
+        (UpdateKeyRequest(key="sk-1", budget_limits=[_window("24h", 5.0)]), _key(), KeyBudgetTightened()),
         (
-            {"budget_limits": [_window("7d", 40.0)]},
-            {"budget_limits": [_WEEKLY, _window("7d", 30.0)]},
+            UpdateKeyRequest(key="sk-1", budget_limits=[_WEEKLY, _window("24h", 5.0)]),
+            _key(budget_limits=[_WEEKLY]),
+            KeyBudgetTightened(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_limits=[_window("7d", 50.0)]),
+            _key(budget_limits=[_WEEKLY]),
+            KeyBudgetTightened(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_limits=[_window("7d", 40.0)]),
+            _key(budget_limits=[_WEEKLY]),
+            KeyBudgetTightened(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_limits=[_window("7d", 60.0)]),
+            _key(budget_limits=[_WEEKLY]),
             KeyBudgetLoosened(),
         ),
         (
-            {"budget_limits": [_window("24h", 5.0)]},
-            {"budget_limits": [{"budget_duration": "24h"}]},
+            UpdateKeyRequest(key="sk-1", budget_limits=[_window("24h", 5.0)]),
+            _key(budget_limits=[_WEEKLY]),
+            KeyBudgetLoosened(),
+        ),
+        (UpdateKeyRequest(key="sk-1", budget_limits=[]), _key(budget_limits=[_WEEKLY]), KeyBudgetLoosened()),
+        (UpdateKeyRequest(key="sk-1", budget_limits=None), _key(budget_limits=[_WEEKLY]), KeyBudgetLoosened()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_limits=[_window("1d", 5.0)]),
+            _key(budget_limits=[_window("24h", 5.0)]),
             KeyBudgetLoosened(),
         ),
         (
-            {"max_budget": 5.0, "budget_limits": []},
-            {"max_budget": 10.0, "budget_limits": [_WEEKLY]},
+            UpdateKeyRequest(key="sk-1", budget_limits=[_window("7d", 40.0)]),
+            _key(budget_limits=[_WEEKLY, _window("7d", 30.0)]),
             KeyBudgetLoosened(),
         ),
-        ({"spend": 0.0}, {}, KeyBudgetAdminOnly()),
-        ({"soft_budget": 1.0}, {}, KeyBudgetAdminOnly()),
-        ({"soft_budget": None, "max_budget": 5.0}, {"max_budget": 10.0}, KeyBudgetAdminOnly()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_limits=[_window("24h", 5.0)]),
+            _key(budget_limits=[{"budget_duration": "24h"}]),
+            KeyBudgetLoosened(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", max_budget=5.0, budget_limits=[]),
+            _key(max_budget=10.0, budget_limits=[_WEEKLY]),
+            KeyBudgetLoosened(),
+        ),
+        (UpdateKeyRequest(key="sk-1", spend=0.0), _key(), KeyBudgetAdminOnly()),
+        (UpdateKeyRequest(key="sk-1", soft_budget=1.0), _key(), KeyBudgetAdminOnly()),
+        (UpdateKeyRequest(key="sk-1", soft_budget=None, max_budget=5.0), _key(max_budget=10.0), KeyBudgetAdminOnly()),
     ],
 )
-def test_classify_key_budget_change(update, stored, expected):
-    assert classify_key_budget_change(UpdateKeyRequest(key="sk-1", **update), _key(**stored)) == expected
+def test_classify_key_budget_change(
+    update: UpdateKeyRequest, stored: LiteLLM_VerificationToken, expected: KeyBudgetChange
+) -> None:
+    assert classify_key_budget_change(update, stored) == expected
 
 
 @pytest.mark.parametrize(
@@ -91,30 +140,51 @@ def test_classify_key_budget_change(update, stored, expected):
         ({"self_serve_budget_policy": True}, "disabled"),
     ],
 )
-def test_resolve_self_serve_budget_policy(settings, expected):
+def test_resolve_self_serve_budget_policy(settings: Mapping[str, object], expected: str) -> None:
     assert resolve_self_serve_budget_policy(settings) == expected
 
 
-def _team(member_permissions):
+def _team(member_permissions: Sequence[str]) -> LiteLLM_TeamTableCachedObj:
     return LiteLLM_TeamTableCachedObj(
         team_id=_TEAM,
-        members_with_roles=[Member(user_id="team-admin", role="admin"), Member(user_id=_OWNER, role="user")],
-        team_member_permissions=member_permissions,
+        members_with_roles=[Member(user_id=_TEAM_ADMIN, role="admin"), Member(user_id=_OWNER, role="user")],
+        team_member_permissions=list(member_permissions),
     )
 
 
-def _caller(**overrides):
-    return UserAPIKeyAuth(**{"user_id": _OWNER, "user_role": LitellmUserRoles.INTERNAL_USER, **overrides})
+def _caller(
+    *,
+    user_id: str = _OWNER,
+    max_budget: float | None = None,
+    team_id: str | None = None,
+    user_max_budget: float | None = None,
+) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        user_id=user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        max_budget=max_budget,
+        team_id=team_id,
+        user_max_budget=user_max_budget,
+    )
 
 
-async def _update(monkeypatch, *, policy, data, existing, team=None, caller=None):
-    settings = {} if policy is None else {"self_serve_budget_policy": policy}
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", settings)
-    get_team = AsyncMock(return_value=team)
-    monkeypatch.setattr("litellm.proxy.management_endpoints.key_management_endpoints.get_team_object", get_team)
-    monkeypatch.setattr("litellm.proxy.management_helpers.team_member_permission_checks.get_team_object", get_team)
-    prisma = MagicMock()
+async def _update(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    policy: str | None,
+    data: UpdateKeyRequest,
+    existing: LiteLLM_VerificationToken,
+    team: LiteLLM_TeamTableCachedObj | None = None,
+    caller: UserAPIKeyAuth | None = None,
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {} if policy is None else {"self_serve_budget_policy": policy},
+    )
+    prisma: Final = MagicMock()
     prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    prisma.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     await _validate_update_key_data(
         data=data,
         existing_key_row=existing,
@@ -122,13 +192,16 @@ async def _update(monkeypatch, *, policy, data, existing, team=None, caller=None
         llm_router=None,
         premium_user=False,
         prisma_client=prisma,
-        user_api_key_cache=MagicMock(),
+        user_api_key_cache=UserApiKeyCache(),
     )
 
 
-_ADD_DAILY_WINDOW = UpdateKeyRequest(key="sk-1", budget_limits=[_WEEKLY, _window("24h", 5.0)])
-_RAISE_WEEKLY_WINDOW = UpdateKeyRequest(key="sk-1", budget_limits=[_window("7d", 80.0)])
-_TEAM_KEY_WITH_WEEKLY = {"team_id": _TEAM, "budget_limits": [_WEEKLY]}
+_ADD_DAILY_WINDOW: Final = UpdateKeyRequest(key="sk-1", budget_limits=[_WEEKLY, _window("24h", 5.0)])
+_RAISE_WEEKLY_WINDOW: Final = UpdateKeyRequest(key="sk-1", budget_limits=[_window("7d", 80.0)])
+
+
+def _team_key_with_weekly(*, user_id: str = _OWNER, created_by: str = _OWNER) -> LiteLLM_VerificationToken:
+    return _key(user_id=user_id, created_by=created_by, team_id=_TEAM, budget_limits=[_WEEKLY])
 
 
 @pytest.mark.asyncio
@@ -140,12 +213,14 @@ _TEAM_KEY_WITH_WEEKLY = {"team_id": _TEAM, "budget_limits": [_WEEKLY]}
         ("ceiling", _RAISE_WEEKLY_WINDOW, ["/key/update", "/key/generate"]),
     ],
 )
-async def test_owner_changes_team_key_budget_when_policy_allows(monkeypatch, policy, data, member_permissions):
+async def test_owner_changes_team_key_budget_when_policy_allows(
+    monkeypatch: pytest.MonkeyPatch, policy: str, data: UpdateKeyRequest, member_permissions: Sequence[str]
+) -> None:
     await _update(
         monkeypatch,
         policy=policy,
         data=data,
-        existing=_key(**_TEAM_KEY_WITH_WEEKLY),
+        existing=_team_key_with_weekly(),
         team=_team(member_permissions),
     )
 
@@ -162,46 +237,48 @@ async def test_owner_changes_team_key_budget_when_policy_allows(monkeypatch, pol
         ("ceiling", UpdateKeyRequest(key="sk-1", spend=0.0), ["/key/update", "/key/generate"]),
     ],
 )
-async def test_owner_team_key_budget_change_needs_admin(monkeypatch, policy, data, member_permissions):
+async def test_owner_team_key_budget_change_needs_admin(
+    monkeypatch: pytest.MonkeyPatch, policy: str | None, data: UpdateKeyRequest, member_permissions: Sequence[str]
+) -> None:
     with pytest.raises(HTTPException) as exc:
         await _update(
             monkeypatch,
             policy=policy,
             data=data,
-            existing=_key(**_TEAM_KEY_WITH_WEEKLY),
+            existing=_team_key_with_weekly(),
             team=_team(member_permissions),
         )
     assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_key_created_by_someone_else_needs_admin_even_to_tighten(monkeypatch):
+async def test_key_created_by_someone_else_needs_admin_even_to_tighten(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(HTTPException) as exc:
         await _update(
             monkeypatch,
             policy="ceiling",
             data=_ADD_DAILY_WINDOW,
-            existing=_key(created_by="team-admin", **_TEAM_KEY_WITH_WEEKLY),
+            existing=_team_key_with_weekly(created_by=_TEAM_ADMIN),
             team=_team(["/key/update", "/key/generate"]),
         )
     assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_team_member_without_update_permission_is_still_rejected(monkeypatch):
+async def test_team_member_without_update_permission_is_still_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ProxyException) as exc:
         await _update(
             monkeypatch,
             policy="ceiling",
             data=_ADD_DAILY_WINDOW,
-            existing=_key(**_TEAM_KEY_WITH_WEEKLY),
+            existing=_team_key_with_weekly(),
             team=_team(["/key/generate"]),
         )
     assert str(exc.value.code) == "401"
 
 
 @pytest.mark.asyncio
-async def test_ceiling_lets_owner_raise_personal_key_budget(monkeypatch):
+async def test_ceiling_lets_owner_raise_personal_key_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     await _update(
         monkeypatch,
         policy="ceiling",
@@ -211,7 +288,7 @@ async def test_ceiling_lets_owner_raise_personal_key_budget(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ceiling_caps_owner_raise_at_callers_own_budget(monkeypatch):
+async def test_ceiling_caps_owner_raise_at_callers_own_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(HTTPException) as exc:
         await _update(
             monkeypatch,
@@ -225,7 +302,19 @@ async def test_ceiling_caps_owner_raise_at_callers_own_budget(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ceiling_caps_ui_session_owner_raise_at_user_budget(monkeypatch):
+async def test_ceiling_does_not_cap_a_team_admin_raising_their_own_team_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    await _update(
+        monkeypatch,
+        policy="ceiling",
+        data=UpdateKeyRequest(key="sk-1", max_budget=30.0),
+        existing=_key(user_id=_TEAM_ADMIN, created_by=_TEAM_ADMIN, team_id=_TEAM, max_budget=10.0),
+        team=_team(["/key/update"]),
+        caller=_caller(user_id=_TEAM_ADMIN, max_budget=20.0),
+    )
+
+
+@pytest.mark.asyncio
+async def test_ceiling_caps_ui_session_owner_raise_at_user_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(HTTPException) as exc:
         await _update(
             monkeypatch,
@@ -239,7 +328,7 @@ async def test_ceiling_caps_ui_session_owner_raise_at_user_budget(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ceiling_respects_personal_key_generation_role_restriction(monkeypatch):
+async def test_ceiling_respects_personal_key_generation_role_restriction(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "litellm.key_generation_settings",
         {"personal_key_generation": {"allowed_user_roles": [LitellmUserRoles.PROXY_ADMIN.value]}},
@@ -255,7 +344,9 @@ async def test_ceiling_respects_personal_key_generation_role_restriction(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_lower_only_lets_owner_lower_personal_key_budget_without_generate_rights(monkeypatch):
+async def test_lower_only_lets_owner_lower_personal_key_budget_without_generate_rights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "litellm.key_generation_settings",
         {"personal_key_generation": {"allowed_user_roles": [LitellmUserRoles.PROXY_ADMIN.value]}},
@@ -269,7 +360,7 @@ async def test_lower_only_lets_owner_lower_personal_key_budget_without_generate_
 
 
 @pytest.mark.asyncio
-async def test_ceiling_respects_team_key_generation_role_restriction(monkeypatch):
+async def test_ceiling_respects_team_key_generation_role_restriction(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "litellm.key_generation_settings",
         {"team_key_generation": {"allowed_team_member_roles": ["admin"]}},
@@ -279,7 +370,7 @@ async def test_ceiling_respects_team_key_generation_role_restriction(monkeypatch
             monkeypatch,
             policy="ceiling",
             data=_RAISE_WEEKLY_WINDOW,
-            existing=_key(**_TEAM_KEY_WITH_WEEKLY),
+            existing=_team_key_with_weekly(),
             team=_team(["/key/update", "/key/generate"]),
         )
     assert exc.value.status_code == 403
@@ -287,7 +378,9 @@ async def test_ceiling_respects_team_key_generation_role_restriction(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("policy", ["lower_only", "ceiling"])
-async def test_owner_cannot_override_a_cap_inherited_from_a_linked_budget(monkeypatch, policy):
+async def test_owner_cannot_override_a_cap_inherited_from_a_linked_budget(
+    monkeypatch: pytest.MonkeyPatch, policy: str
+) -> None:
     with pytest.raises(HTTPException) as exc:
         await _update(
             monkeypatch,
@@ -299,10 +392,10 @@ async def test_owner_cannot_override_a_cap_inherited_from_a_linked_budget(monkey
 
 
 @pytest.mark.asyncio
-async def test_ceiling_cannot_leave_a_key_uncapped_when_an_upperbound_is_configured(monkeypatch):
-    monkeypatch.setattr(
-        "litellm.upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(max_budget=20.0)
-    )
+async def test_ceiling_cannot_leave_a_key_uncapped_when_an_upperbound_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(max_budget=20.0))
     with pytest.raises(HTTPException) as exc:
         await _update(
             monkeypatch,
@@ -314,7 +407,9 @@ async def test_ceiling_cannot_leave_a_key_uncapped_when_an_upperbound_is_configu
 
 
 @pytest.mark.asyncio
-async def test_ceiling_checks_the_retained_max_budget_when_only_windows_change(monkeypatch):
+async def test_ceiling_checks_the_retained_max_budget_when_only_windows_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with pytest.raises(HTTPException) as exc:
         await _update(
             monkeypatch,
@@ -328,7 +423,7 @@ async def test_ceiling_checks_the_retained_max_budget_when_only_windows_change(m
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("policy", [None, "disabled"])
-async def test_owner_cannot_clear_max_budget_by_default(monkeypatch, policy):
+async def test_owner_cannot_clear_max_budget_by_default(monkeypatch: pytest.MonkeyPatch, policy: str | None) -> None:
     with pytest.raises(HTTPException) as exc:
         await _update(
             monkeypatch,

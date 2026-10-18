@@ -100,17 +100,20 @@ class EffectiveKeyBudget:
     budget_limits: tuple[BudgetLimitEntry, ...]
 
 
+def stored_budget_windows(existing: LiteLLM_VerificationToken) -> tuple[BudgetLimitEntry, ...]:
+    """The key's stored windows, or none when the column holds something the window model cannot read."""
+    try:
+        return tuple(_STORED_WINDOWS.validate_python(existing.budget_limits or []))
+    except ValidationError:
+        return ()
+
+
 def effective_key_budget(data: UpdateKeyRequest, existing: LiteLLM_VerificationToken) -> EffectiveKeyBudget:
     """The budget the key would carry after the update, with omitted fields keeping their stored values."""
     max_budget: Final = data.max_budget if "max_budget" in data.model_fields_set else existing.max_budget
     if "budget_limits" in data.model_fields_set:
         return EffectiveKeyBudget(max_budget=max_budget, budget_limits=tuple(data.budget_limits or ()))
-    try:
-        stored: Final = tuple(_STORED_WINDOWS.validate_python(existing.budget_limits or []))
-    except ValidationError:
-        stored_fallback: Final[tuple[BudgetLimitEntry, ...]] = ()
-        return EffectiveKeyBudget(max_budget=max_budget, budget_limits=stored_fallback)
-    return EffectiveKeyBudget(max_budget=max_budget, budget_limits=stored)
+    return EffectiveKeyBudget(max_budget=max_budget, budget_limits=stored_budget_windows(existing))
 
 
 def classify_key_budget_change(data: UpdateKeyRequest, existing: LiteLLM_VerificationToken) -> KeyBudgetChange:

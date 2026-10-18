@@ -115,6 +115,7 @@ from litellm.proxy.management_endpoints.key_budget_change import (
     classify_key_budget_change,
     effective_key_budget,
     resolve_self_serve_budget_policy,
+    stored_budget_windows,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401  # legacy module exports
     _add_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2804,16 +2805,12 @@ async def prepare_key_update_data(
             non_default_values["budget_duration"] = budget_duration
 
     if "budget_limits" in non_default_values:
-        raw_windows: Final = non_default_values["budget_limits"]
-        if raw_windows:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            initialized_windows: Final = []
-            for window in raw_windows:
-                w = window if isinstance(window, dict) else window.model_dump()
-                w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-                initialized_windows.append(w)
-            non_default_values["budget_limits"] = json.dumps(initialized_windows)
+        requested_windows: Final = _budget_limit_windows(data.budget_limits)
+        if requested_windows:
+            stored_windows: Final = stored_budget_windows(existing_key_row)
+            non_default_values["budget_limits"] = json.dumps(
+                [_window_with_reset_at(window, stored_windows) for window in requested_windows]
+            )
         else:
             # [] / None clears the field; prisma-client-py has no DbNull
             # sentinel for Json? columns, so store the JSON literal null
@@ -3393,7 +3390,8 @@ async def _owner_may_change_key_budget(
     Whether the key's owner may make this budget change without admin rights, per
     general_settings.self_serve_budget_policy. `ceiling` lets the owner loosen only when they
     could have created the key with the new budget anyway (same generate permissions and
-    delegation ceiling as /key/generate).
+    delegation ceiling as /key/generate). Team and org admins answer False on a loosen so they
+    keep the admin path, which has no ceiling.
     """
     policy: Final = resolve_self_serve_budget_policy(_general_settings())
     if policy == "disabled":
@@ -3416,6 +3414,10 @@ async def _owner_may_change_key_budget(
                     user_api_key_cache=user_api_key_cache,
                 )
             )
+            if team_table is not None and await get_team_access().allows(
+                user_api_key_dict, team_table, TEAM_OR_ORG_ADMIN
+            ):
+                return False
             if not _caller_may_generate_key(team_table=team_table, user_api_key_dict=user_api_key_dict):
                 return False
             effective: Final = effective_key_budget(data=data, existing=existing_key_row)
@@ -6563,6 +6565,26 @@ def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple
         return ()
     raw_windows: Final = json.loads(budget_limits) if isinstance(budget_limits, str) else budget_limits
     return tuple(raw_window if isinstance(raw_window, dict) else raw_window.model_dump() for raw_window in raw_windows)
+
+
+def _window_with_reset_at(
+    window: Mapping[str, object], stored_windows: Sequence[BudgetLimitEntry]
+) -> Mapping[str, object]:
+    """A resubmitted window keeps its running period, so editing one window never restarts the others."""
+    duration: Final = str(window["budget_duration"])
+    now: Final = datetime.now(timezone.utc)
+    open_reset_at: Final = next(
+        (w.reset_at for w in stored_windows if w.budget_duration == duration and _is_open_reset_at(w.reset_at, now)),
+        None,
+    )
+    reset_at: Final = open_reset_at if open_reset_at is not None else get_budget_reset_time(budget_duration=duration)
+    return {**window, "reset_at": reset_at.isoformat()}
+
+
+def _is_open_reset_at(reset_at: datetime | None, now: datetime) -> bool:
+    if reset_at is None:
+        return False
+    return (reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)) > now
 
 
 def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str, object]:
