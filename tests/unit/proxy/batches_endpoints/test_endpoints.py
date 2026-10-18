@@ -35,7 +35,7 @@ import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -3257,6 +3257,129 @@ async def test_cancel__unified_batch_id_rejects_key_without_model_grant(cancel_h
 
     assert exc_info.value.code == "403"
     cancel_harness.router_acancel.assert_not_called()
+
+
+TEAM_INTERNAL_MODEL_NAME: Final = "model_name_team-a_00000000-0000-0000-0000-000000000000"
+TEAM_PUBLIC_MODEL_NAME: Final = "team-gpt4o-mini"
+
+
+def _team_scoped_deployment() -> Deployment:
+    return Deployment(
+        model_name=TEAM_INTERNAL_MODEL_NAME,
+        litellm_params=LiteLLM_Params(model="gpt-4o-mini"),
+        model_info=ModelInfo(id="dep-team-a-1", team_id="team-a", team_public_model_name=TEAM_PUBLIC_MODEL_NAME),
+    )
+
+
+def _route_unified_batch_to_team_deployment(
+    harness: RetrieveHarness | CancelHarness, deployment: Deployment | None = None
+) -> None:
+    target: Final = deployment or _team_scoped_deployment()
+    harness.router.resolve_model_name_from_model_id = MagicMock(return_value=target.model_name)
+    harness.router.get_deployment_by_model_group_name = MagicMock(return_value=target)
+
+
+@pytest.mark.asyncio
+async def test_retrieve__team_scoped_deployment_authorizes_owning_team_by_public_name(
+    retrieve_harness: RetrieveHarness,
+) -> None:
+    _route_unified_batch_to_team_deployment(retrieve_harness)
+
+    resp: Final = await call_retrieve(
+        retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to(TEAM_PUBLIC_MODEL_NAME)
+    )
+
+    assert retrieve_harness.router_aretrieve.call_count == 1
+    assert resp._hidden_params["model_id"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_cancel__team_scoped_deployment_authorizes_owning_team_by_public_name(
+    cancel_harness: CancelHarness,
+) -> None:
+    _route_unified_batch_to_team_deployment(cancel_harness)
+
+    await call_cancel(cancel_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to(TEAM_PUBLIC_MODEL_NAME))
+
+    assert cancel_harness.router_acancel.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment, user",
+    [
+        pytest.param(
+            _team_scoped_deployment(), _key_restricted_to("some-other-model"), id="owning-team-key-without-the-model"
+        ),
+        pytest.param(
+            _team_scoped_deployment(),
+            UserAPIKeyAuth(
+                api_key="sk-team-b",
+                team_id="team-b",
+                team_models=[TEAM_PUBLIC_MODEL_NAME],
+                models=[TEAM_PUBLIC_MODEL_NAME],
+            ),
+            id="other-team-key-granted-the-same-public-name",
+        ),
+        pytest.param(
+            Deployment(
+                model_name="model_name_team-a_ml_00000000-0000-0000-0000-000000000000",
+                litellm_params=LiteLLM_Params(model="gpt-4o-mini"),
+                model_info=ModelInfo(
+                    id="dep-team-a-ml-1", team_id="team-a_ml", team_public_model_name=TEAM_PUBLIC_MODEL_NAME
+                ),
+            ),
+            _key_restricted_to(TEAM_PUBLIC_MODEL_NAME),
+            id="team-whose-id-prefixes-the-owning-team-id",
+        ),
+    ],
+)
+async def test_retrieve__team_scoped_deployment_rejects_keys_outside_its_grant(
+    retrieve_harness: RetrieveHarness, deployment: Deployment, user: UserAPIKeyAuth
+) -> None:
+    _route_unified_batch_to_team_deployment(retrieve_harness, deployment)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=user)
+
+    assert exc_info.value.code == "403"
+    retrieve_harness.router_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment, user",
+    [
+        pytest.param(
+            _team_scoped_deployment(),
+            _key_restricted_to(TEAM_INTERNAL_MODEL_NAME),
+            id="owning-team-key-granted-the-internal-name",
+        ),
+        pytest.param(
+            Deployment(
+                model_name=TEAM_INTERNAL_MODEL_NAME,
+                litellm_params=LiteLLM_Params(model="gpt-4o-mini"),
+                model_info=ModelInfo(id="dep-team-a-1", team_id="team-a"),
+            ),
+            UserAPIKeyAuth(
+                api_key="sk-legacy",
+                team_id="team-a",
+                team_models=["legacy-team-model"],
+                models=["legacy-team-model"],
+                team_model_aliases={"legacy-team-model": TEAM_INTERNAL_MODEL_NAME},
+            ),
+            id="legacy-team-model-reached-through-a-team-alias",
+        ),
+    ],
+)
+async def test_retrieve__team_scoped_deployment_authorizes_internal_name_and_legacy_alias_grants(
+    retrieve_harness: RetrieveHarness, deployment: Deployment, user: UserAPIKeyAuth
+) -> None:
+    _route_unified_batch_to_team_deployment(retrieve_harness, deployment)
+
+    await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=user)
+
+    assert retrieve_harness.router_aretrieve.call_count == 1
 
 
 @pytest.mark.asyncio
