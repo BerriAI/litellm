@@ -7,7 +7,7 @@ from litellm.types.router import GenericLiteLLMParams
 @pytest.mark.asyncio
 async def test_team_admin_cannot_move_api_base_keeping_server_key():
     from fastapi import HTTPException
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
     from litellm.types.router import GenericLiteLLMParams
 
     from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -19,7 +19,7 @@ async def test_team_admin_cannot_move_api_base_keeping_server_key():
     model_params = MagicMock()
     model_params.litellm_params = stored
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(ProxyException) as exc:
         await ModelManagementAuthChecks._reject_non_admin_wif_write(
             model_params=model_params,
             incoming_params=incoming.model_dump(exclude_none=True),
@@ -80,6 +80,10 @@ async def test_team_admin_wif_association_still_guarded():
     with (
         patch.object(mme, "effective_server_owned_wif_fields", AsyncMock(return_value=("oidc_token_url",))),
     ):
+        # Capture outside the except block: on this stack both the static-key
+        # harvest gate and the WIF rule can fire for the same shape; accept
+        # either interdiction.
+        guard_raised = None
         try:
             await ModelManagementAuthChecks._reject_non_admin_wif_write(
                 model_params=model_params,
@@ -90,8 +94,6 @@ async def test_team_admin_wif_association_still_guarded():
                 prisma_client=AsyncMock(),
             )
         except Exception as guard_error:
-            # On this stack both the static-key harvest gate and the WIF
-            # rule can fire for the same shape; accept either interdiction.
-            assert ("api_key stays server-owned" in str(guard_error)) or ("workload identity" in str(guard_error))
-            return
-        raise AssertionError("expected a server-owned-key interdiction to fire")
+            guard_raised = guard_error
+        assert guard_raised is not None, "expected a server-owned-key interdiction to fire"
+        assert ("api_key stays server-owned" in str(guard_raised)) or ("workload identity" in str(guard_raised))
