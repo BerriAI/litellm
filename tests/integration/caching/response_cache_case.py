@@ -216,22 +216,19 @@ MESSAGE_STREAM_WITHOUT_CONTENT_BLOCKS: Final = SseResponse(
 
 
 class Upstream:
-    """The owned upstream's observations, drained once per read and kept, filtered per deployment."""
+    """The owned upstream's observations, filtered per deployment."""
 
     def __init__(self, url: str = CONTROL_URL) -> None:
         self._url: Final = url.rstrip("/")
-        self._seen: tuple[dict[str, JsonValue], ...] = ()
 
     def received(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
         with httpx.Client(timeout=10, trust_env=False) as client:
             payload: Final = JSON_OBJECT.validate_json(client.get(f"{self._url}/__observations").content)
         requests: Final = payload["requests"]
         assert isinstance(requests, list)
-        self._seen = (
-            *self._seen,
-            *(object_value(item) for item in requests),
-        )  # rebind-ok: drained observations accumulate
-        return tuple(item for item in self._seen if f"/{identity}/" in string_value(item.get("path", "")))
+        return tuple(
+            item for item in map(object_value, requests) if f"/{identity}/" in string_value(item.get("path", ""))
+        )
 
     def calls(self, identity: str) -> int:
         """The LLM calls the deployment took; the proxy's boot-time ``GET /v1/models`` discovery of a config

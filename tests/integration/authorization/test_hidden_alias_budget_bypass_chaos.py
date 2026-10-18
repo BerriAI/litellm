@@ -26,6 +26,7 @@ from integration.authorization._hidden_alias_budget import (
     install_aliases,
     landed_all_once,
     remove_aliases,
+    reset_upstream_requests,
     settle_candidate,
     settle_chat,
     upstream_hits,
@@ -73,7 +74,7 @@ def test_mixed_concurrent_burst_through_hidden_free_aliases_lands_each_call_once
     markers: Final = tuple(f"burst-{_KINDS[index % len(_KINDS)]}-{index}-{uuid.uuid4().hex}" for index in range(30))
     with rig.gateway.scenario() as scenario:
         key: Final = exhausted_key(rig, scenario)
-        upstream_requests(rig.gateway.upstream_url)
+        reset_upstream_requests(rig.gateway.upstream_url)
         responses: Final = _send_all(lambda marker: _mixed_call(rig, key, marker), markers)
         assert [response.status_code for response in responses] == [200] * len(markers), [
             response.text for response in responses if response.status_code != 200
@@ -96,7 +97,7 @@ def test_alias_flipped_to_a_free_group_during_a_burst_only_ever_serves_or_refuse
         settle_chat(rig, alias, rig.gateway.key, 200)
         key: Final = exhausted_key(rig, scenario)
         settle_chat(rig, alias, key, BUDGET_EXCEEDED)
-        upstream_requests(rig.gateway.upstream_url)
+        reset_upstream_requests(rig.gateway.upstream_url)
 
         def wave(candidate: Gateway) -> frozenset[int]:
             markers: Final = _burst_markers("flip", _WAVE)

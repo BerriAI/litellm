@@ -40,7 +40,7 @@ def candidate(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
 @pytest.fixture
 def upstream(candidate: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=candidate.upstream_url, timeout=5, trust_env=False) as client:
-        client.get("/__observations").raise_for_status()
+        client.delete("/__observations").raise_for_status()
         yield client
 
 
@@ -78,6 +78,7 @@ def test_a_key_without_models_inherits_the_users_exact_and_wildcard_grants(
         assert _chat(candidate, f"anthropic/{wildcard_model}", key).status_code == 200
         assert _chat(candidate, "good-model", key).status_code == 200
         assert _observed_models(upstream) == [wildcard_model, "good-model-upstream"]
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = tuple(
             _chat(candidate, outside, key)
             for outside in (f"groq/{wildcard_model}", f"bedrock/anthropic.{wildcard_model}")

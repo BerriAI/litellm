@@ -424,7 +424,7 @@ def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(
         assert unpriced_model_info["input_cost_per_token"] is None, unpriced_model_info
         assert unpriced_model_info["output_cost_per_token"] is None, unpriced_model_info
 
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         blocked: Final = _bounded_chat(gateway, unpriced, key, f"unpriced {uuid.uuid4().hex}")
         assert blocked.status_code == 403, blocked.text
         assert blocked.json() == {
@@ -454,7 +454,7 @@ def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(
         )
         disabled_settings: Final = object_value(settings_rows[0]["param_value"])
         assert disabled_settings["block_requests_for_models_without_pricing"] is False, disabled_settings
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         unpriced_content: Final = f"unpriced {uuid.uuid4().hex}"
         now_served: Final = _bounded_chat(gateway, unpriced, key, unpriced_content)
         assert now_served.status_code == 200, now_served.text
