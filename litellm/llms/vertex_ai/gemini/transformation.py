@@ -1199,9 +1199,8 @@ def transform_request_body(
                 k for k in ("temperature", "top_p", "top_k") if k in filtered_params
             )
             if unsupported_sampling:
-                drop_override: Final[object] = (
-                    litellm_params.get("drop_params") if isinstance(litellm_params, dict) else None
-                )
+                params_map: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_params)
+                drop_override: Final[object] = params_map.get("drop_params")
                 should_drop: Final[bool] = (
                     bool(drop_override) if drop_override is not None else bool(litellm.drop_params)
                 )
@@ -1213,8 +1212,9 @@ def transform_request_body(
                         ),
                         status_code=400,
                     )
+                filtered_dict: Final[dict[str, object]] = cast(dict[str, object], filtered_params)
                 for k in unsupported_sampling:
-                    filtered_params.pop(k, None)
+                    filtered_dict.pop(k, None)
 
         generation_config: Final[GenerationConfig | None] = GenerationConfig(**filtered_params)
 

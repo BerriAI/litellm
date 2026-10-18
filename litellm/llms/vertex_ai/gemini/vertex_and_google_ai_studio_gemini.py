@@ -1247,16 +1247,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             f"gemini/{model}",
             model.replace("vertex_ai/", "").replace("gemini/", ""),
         )
-        for cost_map in (litellm.model_cost, get_bundled_model_cost_map()):
+        bundled_map: Final[Mapping[str, object]] = cast(Mapping[str, object], get_bundled_model_cost_map())
+        cost_maps: Final[tuple[Mapping[str, object], Mapping[str, object]]] = (
+            cast(Mapping[str, object], litellm.model_cost),
+            bundled_map,
+        )
+        for cost_map in cost_maps:
             for cand in candidates:
                 model_entry: object = cost_map.get(cand)
-                if isinstance(model_entry, dict):
-                    val: object = model_entry.get("supports_sampling_params")
+                if isinstance(model_entry, Mapping):
+                    entry_map: Mapping[str, object] = cast(Mapping[str, object], model_entry)
+                    val: object = entry_map.get("supports_sampling_params")
                     if isinstance(val, bool):
                         return val
 
         # Fallback for Gemini 3.x Flash models if not explicitly set in catalog
         normalized_name: Final[str] = model.lower().replace("vertex_ai/", "").replace("gemini/", "")
+        if "tts" in normalized_name:
+            return True
         return not ("gemini-3." in normalized_name and "flash" in normalized_name)
 
     @classmethod
@@ -1265,7 +1273,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _apply_sampling_param(
-        optional_params: dict,  # mutable-ok: in-out request params dict mutated in place
+        optional_params: dict[str, object],  # mutable-ok: in-out request params dict mutated in place
         model: str,
         param: str,
         value: object,
@@ -1295,7 +1303,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for param, value in non_default_params.items():
             if param == "temperature":
                 if not supports_sampling:
-                    self._apply_sampling_param(optional_params, model, "temperature", value, drop_params)
+                    self._apply_sampling_param(
+                        cast(dict[str, object], optional_params), model, "temperature", cast(object, value), drop_params
+                    )
                 else:
                     if VertexGeminiConfig._is_gemini_3_or_newer(model):
                         if value is not None and value < 1.0:
@@ -1309,10 +1319,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                                 model,
                             )
                             gemini_sampling_params_warned = True
-                    self._apply_sampling_param(optional_params, model, "temperature", value, drop_params)
+                    self._apply_sampling_param(
+                        cast(dict[str, object], optional_params), model, "temperature", cast(object, value), drop_params
+                    )
             elif param == "top_p":
                 if not supports_sampling:
-                    self._apply_sampling_param(optional_params, model, "top_p", value, drop_params)
+                    self._apply_sampling_param(
+                        cast(dict[str, object], optional_params), model, "top_p", cast(object, value), drop_params
+                    )
                 else:
                     if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
                         verbose_logger.warning(
@@ -1320,10 +1334,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             model,
                         )
                         gemini_sampling_params_warned = True
-                    self._apply_sampling_param(optional_params, model, "top_p", value, drop_params)
+                    self._apply_sampling_param(
+                        cast(dict[str, object], optional_params), model, "top_p", cast(object, value), drop_params
+                    )
             elif param == "top_k":
                 if not supports_sampling:
-                    self._apply_sampling_param(optional_params, model, "top_k", value, drop_params)
+                    self._apply_sampling_param(
+                        cast(dict[str, object], optional_params), model, "top_k", cast(object, value), drop_params
+                    )
                 else:
                     if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
                         verbose_logger.warning(
@@ -1331,7 +1349,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             model,
                         )
                         gemini_sampling_params_warned = True
-                    self._apply_sampling_param(optional_params, model, "top_k", value, drop_params)
+                    self._apply_sampling_param(
+                        cast(dict[str, object], optional_params), model, "top_k", cast(object, value), drop_params
+                    )
             elif (
                 param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues

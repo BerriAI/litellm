@@ -1,13 +1,14 @@
 """Test vertex_ai / gemini supports_sampling_params flag behavior (Issue #47015)."""
 
 import copy
-from typing import Generator
+from collections.abc import Generator
 
 import pytest
+
 import litellm
 from litellm import Router
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
 MODEL = "gemini-3.8-flash"
 
@@ -128,3 +129,4 @@ def test_bundled_cost_map_gemini_flash_supports_sampling_params_is_false() -> No
     assert VertexGeminiConfig._supports_sampling_params("vertex_ai/gemini-3.8-flash") is False
     assert VertexGeminiConfig._supports_sampling_params("vertex_ai/gemini-3.6-flash") is False
     assert VertexGeminiConfig._supports_sampling_params("gemini-3.5-flash-lite") is False
+    assert VertexGeminiConfig._supports_sampling_params("gemini-3.1-flash-tts-preview") is True
