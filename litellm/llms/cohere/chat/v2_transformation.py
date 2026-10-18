@@ -174,10 +174,12 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
-        data: Final[dict[str, object]] = super().transform_request(  # pyright: ignore[reportUnknownMemberType]  # untyped parent dictionary contract
+        data: Final[dict[str, object]]
+        data = super().transform_request(  # pyright: ignore[reportUnknownMemberType]  # untyped parent dictionaries
             model, list(messages), dict(optional_params), dict(litellm_params), dict(headers)
         )
-        messages_to_send: Final[Sequence[AllMessageValues] | None] = data.get("messages")  # pyright: ignore[reportAssignmentType]  # legacy dict erases the message-list type
+        messages_to_send: Final[Sequence[AllMessageValues] | None]
+        messages_to_send = data.get("messages")  # pyright: ignore[reportAssignmentType]  # parent erases message type
         if messages_to_send is not None:
             litellm.remove_index_from_tool_calls(messages=list(messages_to_send))
 
@@ -191,10 +193,12 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
-        data: Final[dict[str, object]] = await super().async_transform_request(  # pyright: ignore[reportUnknownMemberType]  # untyped parent dictionaries
+        data: Final[dict[str, object]]
+        data = await super().async_transform_request(  # pyright: ignore[reportUnknownMemberType]  # untyped parent
             model, list(messages), dict(optional_params), dict(litellm_params), dict(headers)
         )
-        messages_to_send: Final[Sequence[AllMessageValues] | None] = data.get("messages")  # pyright: ignore[reportAssignmentType]  # legacy dict erases the message-list type
+        messages_to_send: Final[Sequence[AllMessageValues] | None]
+        messages_to_send = data.get("messages")  # pyright: ignore[reportAssignmentType]  # parent erases message type
         if messages_to_send is not None:
             litellm.remove_index_from_tool_calls(messages=list(messages_to_send))
 
