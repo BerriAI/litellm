@@ -1882,3 +1882,126 @@ def test_config_yaml_invalid_method(client):
     # Method-not-allowed responses still return a JSON-ish body via the
     # FastAPI default handler — assert the body is not the success payload.
     assert response.content != b'{"hello":"world"}'
+
+
+# ---------------------------------------------------------------------------
+# store_model_in_db reporting surfaces (/config/list + /config/field/info)
+# ---------------------------------------------------------------------------
+
+
+def test_config_list_reflects_env_resolved_store_model_in_db(client, auth_as, mock_prisma, monkeypatch):
+    """store_model_in_db enabled only via the STORE_MODEL_IN_DB env var (absent from
+    config.yaml and the DB row) must surface as field_value=True in /config/list with
+    stored_in_db=False — the Admin UI "Store Model in DB" toggle reads this endpoint
+    and rendered OFF while the feature was active (issue #47238)."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _seed_settings_store(monkeypatch, db_row={})
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "store_model_in_db", True)
+    # pre-publish state: the config-load normalization wrote the YAML-resolved false
+    monkeypatch.setitem(ps.general_settings, "store_model_in_db", False)
+
+    ps._publish_store_model_in_db(True, ps.proxy_config.settings)  # what startup_event does after resolving the flag
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/config/list", params={"config_type": "general_settings"})
+    assert response.status_code == 200
+    entry = {item["field_name"]: item for item in response.json()}["store_model_in_db"]
+    assert entry["field_value"] is True
+    assert entry["stored_in_db"] is False
+    assert entry["editable"] is True
+
+
+def test_config_field_info_reflects_env_resolved_store_model_in_db(client, auth_as, mock_prisma, monkeypatch):
+    """/config/field/info reads the settings store, which does not see the env var either;
+    after startup publishes the effective flag the endpoint must return it."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _seed_settings_store(monkeypatch, db_row={})
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "store_model_in_db", True)
+
+    ps._publish_store_model_in_db(True, ps.proxy_config.settings)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/config/field/info", params={"field_name": "store_model_in_db"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["field_name"] == "store_model_in_db"
+    assert body["field_value"] is True
+    assert body["editable"] is True
+
+
+def test_publish_store_model_in_db_skips_store_write_for_config_owned_key(client, auth_as, mock_prisma, monkeypatch):
+    """When general_settings.store_model_in_db is declared in config.yaml the file owns
+    it: /config/list still reports the effective (env-resolved) value, but the row is
+    non-editable and the settings store keeps the config-owned value untouched."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _seed_settings_store(monkeypatch, db_row={}, yaml_values={"store_model_in_db": True})
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "store_model_in_db", True)
+    monkeypatch.setitem(ps.general_settings, "store_model_in_db", True)
+
+    ps._publish_store_model_in_db(True, ps.proxy_config.settings)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/config/list", params={"config_type": "general_settings"})
+    assert response.status_code == 200
+    entry = {item["field_name"]: item for item in response.json()}["store_model_in_db"]
+    assert entry["field_value"] is True
+    assert entry["source"] == "config"
+    assert entry["editable"] is False
+
+
+def test_store_model_in_db_reload_updates_reporting_surfaces(client, auth_as, mock_prisma, monkeypatch):
+    """A DB general_settings row flip applied by the periodic reload must update the
+    module global AND both reporting surfaces, not just the settings store."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    store = SettingsStore("general_settings")
+    store.load_yaml({})
+    store.apply_db_row("general_settings", {"store_model_in_db": True})
+    monkeypatch.setattr(ps.proxy_config, "settings", store)
+    monkeypatch.setattr(ps, "store_model_in_db", False)
+    monkeypatch.setitem(ps.general_settings, "store_model_in_db", False)
+
+    asyncio.run(ps.proxy_config._apply_store_model_in_db_setting({"store_model_in_db": True}))
+
+    assert ps.store_model_in_db is True
+    assert ps.general_settings["store_model_in_db"] is True
+    assert store["store_model_in_db"] is True
+
+
+def test_store_model_in_db_publish_skips_config_owned_store_when_general_settings_aliases_it(monkeypatch):
+    """Code paths may point general_settings at the settings store itself; publishing the
+    effective flag must never raise ConfigOwnedKeyError for a config-owned key, and the
+    file-owned value must stay untouched."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    store = SettingsStore("general_settings")
+    store.load_yaml({"store_model_in_db": "os.environ/PROOF_FLAG"})
+    monkeypatch.setattr(ps.proxy_config, "settings", store)
+    monkeypatch.setattr(ps, "general_settings", store, raising=False)
+
+    ps._publish_store_model_in_db(False, store)  # the DB row said false; the config file owns the key
+
+    assert store["store_model_in_db"] == "os.environ/PROOF_FLAG"

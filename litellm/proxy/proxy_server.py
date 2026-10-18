@@ -2947,6 +2947,34 @@ disable_spend_logs = False
 jwt_handler: Final = JWTHandler()
 prompt_injection_detection_obj: Final[OPTIONAL_PromptInjectionDetection | None] = None
 store_model_in_db: bool = False
+
+
+def _publish_store_model_in_db(value: bool, settings_store: SettingsStore | None = None) -> None:
+    """Mirror the effective ``store_model_in_db`` flag into the surfaces the Admin UI reads.
+
+    ``/config/list`` reads the in-memory ``general_settings`` mapping and
+    ``/config/field/info`` reads the settings store — neither sees the
+    ``STORE_MODEL_IN_DB`` env var, so without this an env-enabled deployment
+    reported the flag as false and the UI toggle rendered OFF while the feature
+    was active (the runtime global is resolved from YAML OR env OR DB at
+    startup, and from the DB row on reloads). Callers holding the live store
+    pass it explicitly; keys owned by the config file are never written to the
+    store — the file owns the value and shadowed writes are rejected.
+    """
+    try:
+        if settings_store is None:
+            settings_store = proxy_config.settings
+        if not settings_store.owned_by_config("store_model_in_db"):
+            settings_store["store_model_in_db"] = value
+    except AttributeError:
+        # No live settings store (e.g. a mocked ProxyConfig in unit tests).
+        pass
+    # ``general_settings`` is usually a plain dict, but some code paths point it
+    # at the settings store itself, which the branch above already updated.
+    if general_settings is not settings_store:
+        general_settings["store_model_in_db"] = value
+
+
 open_telemetry_logger: OpenTelemetry | None = None
 ### GATEWAY REQUEST COUNTS (SGR) ###
 # Folded in memory by BillableRequestMetricsMiddleware, drained to
@@ -8392,8 +8420,7 @@ class ProxyConfig:
             return
         normalized: Final = coerce_bool(value)
         store_model_in_db = normalized if isinstance(normalized, bool) else bool(normalized)
-        if not self.settings.owned_by_config("store_model_in_db"):
-            self.settings["store_model_in_db"] = store_model_in_db
+        _publish_store_model_in_db(store_model_in_db, self.settings)
 
     async def _apply_retention_settings(
         self,
@@ -11408,6 +11435,10 @@ class ProxyStartupEvent:
                         verbose_proxy_logger.info("store_model_in_db=True loaded from DB, overriding config/env")
             except Exception as e:
                 verbose_proxy_logger.debug("Failed to check DB for store_model_in_db: %s", str(e))
+
+        # Keep the reporting surfaces (/config/list, /config/field/info) in sync with the
+        # effective flag — they only see YAML + DB, not the STORE_MODEL_IN_DB env var.
+        _publish_store_model_in_db(store_model_in_db)
 
         config_reload_interval_seconds = proxy_config_reload_interval_seconds
         if not isinstance(config_reload_interval_seconds, int) or config_reload_interval_seconds <= 0:
