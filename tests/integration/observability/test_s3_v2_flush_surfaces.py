@@ -22,6 +22,8 @@ from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
 from integration._support.wire import wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 PER_REQUEST_KEY: Final = re.compile(rf"^/{BUCKET}/{PREFIX}/\d{{4}}-\d{{2}}-\d{{2}}/.+\.json$")
 BATCH_KEY: Final = re.compile(
     rf"^/{BUCKET}/{PREFIX}/\d{{4}}-\d{{2}}-\d{{2}}/batch_\d{{2}}-\d{{2}}-\d{{2}}_[0-9a-f]{{32}}\.jsonl$"

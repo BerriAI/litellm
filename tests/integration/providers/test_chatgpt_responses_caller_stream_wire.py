@@ -26,7 +26,7 @@ from openai.types.responses import (
 )
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 _MODEL: Final = "chatgpt/gpt-5.5"
 _NO_CACHE: Final[Mapping[str, JsonValue]] = {"cache": {"no-cache": True}}

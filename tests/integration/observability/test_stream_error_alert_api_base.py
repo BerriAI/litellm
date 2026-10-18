@@ -34,7 +34,7 @@ from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import ResponseFailedEvent, ResponseTextDeltaEvent
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 AZURE_KEY: Final = "synthetic-azure-key"
 API_VERSION: Final = "2025-04-01-preview"

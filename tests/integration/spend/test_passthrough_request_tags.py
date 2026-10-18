@@ -15,6 +15,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 def _chat_reply(marker: str) -> dict[str, JsonValue]:
     return {

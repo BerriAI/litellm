@@ -18,6 +18,8 @@ from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 

@@ -180,6 +180,8 @@ import httpx
 import pytest
 from integration._support.client import Gateway, eventually
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _QUERY: Final = "integration capped search"
 _TEXT_BLOCK: Final = {"type": "text", "text": "searching once more"}
 _NOT_INTERCEPTED: Final = "native tool reached the provider"

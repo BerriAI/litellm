@@ -30,6 +30,8 @@ from integration.providers._responses_bridge_prompt_cache_breakpoint import (
     _send_call,
 )
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _CONFIG_MODEL: Final = "responses-bridge-cache-breakpoint-chaos"
 
 _API_KEY: Final = "synthetic-responses-bridge-key"

@@ -22,6 +22,8 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 REDACTED: Final = "REDACTED_BY_LITELM"
 TOOL_INPUT: Final = {"key": "order-123", "sort_key": "created_at"}

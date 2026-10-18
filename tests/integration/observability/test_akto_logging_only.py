@@ -26,6 +26,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 LOG_KEY: Final = "synthetic-akto-log-key"
 INPUT_KEY: Final = "synthetic-akto-input-key"
 OUTPUT_KEY: Final = "synthetic-akto-output-key"

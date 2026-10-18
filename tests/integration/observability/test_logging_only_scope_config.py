@@ -48,6 +48,8 @@ from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 def test_G7_database_invalid_scope_reads_preserve_pre_call_blocking(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"logging-scope-g7-{uuid.uuid4().hex}"

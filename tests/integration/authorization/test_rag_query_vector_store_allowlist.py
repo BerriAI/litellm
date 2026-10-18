@@ -25,6 +25,8 @@ from openai.types.chat import ChatCompletion
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 CONFIG_STORE_ID: Final = "vs_integration_config_store"
 PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 REMOVE_OPENAI_API_BASE: Final = ("OPENAI_API_BASE",)

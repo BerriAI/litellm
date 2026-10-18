@@ -18,6 +18,8 @@ from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _ROW: Final = "anthropic.claude-audit-reload-v1:0"
 _GEO: Final = f"au.{_ROW}"
 _FINETUNE: Final = "ft:gpt-audit-reload-2025-01-01"

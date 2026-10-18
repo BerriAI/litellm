@@ -14,6 +14,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from jwt.algorithms import RSAAlgorithm
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 AUDIENCE: Final = "litellm-integration"
 KEY_ID: Final = "integration-signing-key"
 CLIENT_CLAIM: Final = "client_id"

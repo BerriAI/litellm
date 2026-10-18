@@ -50,7 +50,7 @@ from pydantic import JsonValue
 
 _PRIMARY: Final = "bridged-primary"
 _SPARE: Final = "bridged-spare"
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 
 def assert_failed_once(wire: Wire, call_id: str, model: str, attempts: int = 1) -> tuple[Request, ...]:

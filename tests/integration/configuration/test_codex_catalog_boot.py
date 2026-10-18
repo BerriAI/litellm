@@ -16,6 +16,8 @@ from pydantic import JsonValue
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from tests.integration._support.process import owned_proxy, owned_proxy_process
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 CLIENT_VERSION: Final = "0.159.3"
 FRESH_CONNECTION: Final = {"Connection": "close"}
 CONSISTENT_READS: Final = 8

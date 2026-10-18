@@ -54,7 +54,7 @@ from tests.integration._support.process import (
 from tests.integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 WORKERS: Final = 2
 BURST: Final = 20

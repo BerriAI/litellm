@@ -20,6 +20,8 @@ from tests.integration._support.upstream import delete_scenario, register_scenar
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from tests.integration.pricing.test_realtime_cached_audio_pricing import one_realtime_turn
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 REALTIME_MODEL: Final = "gpt-realtime-2"
 REALTIME_INPUT_TEXT_TOKENS: Final = 10
 REALTIME_INPUT_AUDIO_TOKENS: Final = 20

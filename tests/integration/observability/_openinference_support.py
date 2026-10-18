@@ -5,7 +5,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import chain
 from pathlib import Path
 from typing import Final
@@ -854,11 +854,7 @@ def _rig(
                 if fresh_client_connections
                 else owned.gateway.client
             )
-            proxy: Final = Gateway(
-                client=proxy_client,
-                key=owned.gateway.key,
-                upstream_url=owned.gateway.upstream_url,
-            )
+            proxy: Final = replace(owned.gateway, client=proxy_client)
             scenario: Final = resources.enter_context(proxy.scenario())
             model: Final = scenario.model(
                 model=model_name,

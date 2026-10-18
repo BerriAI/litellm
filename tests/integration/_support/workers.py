@@ -86,9 +86,9 @@ def worker_endpoints() -> Mapping[str, str]:
     )
 
 
-def _replica_urls(database: str) -> Mapping[str, str]:
-    writer: Final = urlsplit(os.environ["INTEGRATION_PROXY_DATABASE_URL"])
-    reader: Final = urlsplit(os.environ["INTEGRATION_PROXY_READ_REPLICA_URL"])
+def replica_urls(database: str, inherited: Mapping[str, str] = os.environ) -> Mapping[str, str]:
+    writer: Final = urlsplit(inherited["INTEGRATION_PROXY_DATABASE_URL"])
+    reader: Final = urlsplit(inherited["INTEGRATION_PROXY_READ_REPLICA_URL"])
     database_path: Final = urlsplit(database).path
     assert writer.username is not None and reader.username is not None
     with psycopg.connect(database, autocommit=True) as admin:
@@ -164,7 +164,7 @@ def worker_services(
                 "INTEGRATION_PROXY_READ_REPLICA_URL": "",
                 "REDIS_HOST": cache.host,
                 "REDIS_PORT": str(cache.port),
-                **(_replica_urls(database) if replica else {}),
+                **(replica_urls(database, inherited) if replica else {}),
             }
         )
 

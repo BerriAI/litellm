@@ -31,6 +31,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _JSON_TOOL: Final = "json_tool_call"
 _USER_TOOL: Final = "lookup"
 _STRUCTURED_OUTPUTS_BETA: Final = "structured-outputs-2025-11-13"

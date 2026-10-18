@@ -32,6 +32,8 @@ from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply
 from pydantic import BaseModel, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _ECHO: Final = "catalog-echo:"
 _PROBE: Final = "catalog-probe"
 _DESCRIPTION: Final = "Look up one record"

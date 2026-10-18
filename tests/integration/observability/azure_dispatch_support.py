@@ -10,7 +10,7 @@ from typing import Final
 
 import yaml
 from integration._support.client import Gateway, object_value
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy_process
 from integration._support.redis_process import OwnedRedis, owned_redis
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
@@ -528,6 +528,7 @@ def dispatch_proxy(
         },
         config=config,
         workers=workers,
+        state=OwnedState.SHARED_WITH_WORKER,
     ) as owned:
         yield owned
 

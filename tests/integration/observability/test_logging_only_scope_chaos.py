@@ -49,6 +49,8 @@ from integration._support.ports import allocate_port
 from openai import APIConnectionError as OpenAIAPIConnectionError
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _EDGE_DELAY_SECONDS: Final = 5
 
 

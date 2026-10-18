@@ -24,7 +24,7 @@ from integration._support.client import Gateway, eventually, held, list_value, o
 from integration._support.database import read_rows
 from integration._support.idle_gateway import MARKER, Arrival, Drop, IdleGateway, idle_gateway
 from integration._support.openai_wire import chat_reply, chat_stream, responses_reply
-from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, WorkerHealthcheck, owned_proxy_process
 from integration._support.wire import Reply, Request
 from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
@@ -704,7 +704,13 @@ def proxy_for(
         directory, tuple(row.deploy(row.model, gateways[row.name].url, steady) for row in rows)
     )
     with owned_proxy_process(
-        gateway, directory, overrides, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT
+        gateway,
+        directory,
+        overrides,
+        config=config,
+        workers=2,
+        healthcheck=WorkerHealthcheck.LENIENT,
+        state=OwnedState.SHARED_WITH_WORKER,
     ) as owned:
         yield UpstreamProxy(owned, two_workers(owned), MappingProxyType({row.name: row for row in rows}), gateways)
 

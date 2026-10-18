@@ -43,6 +43,8 @@ from tests.integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _Route = tuple[str, str, tuple[str, ...], dict[str, JsonValue], str]
 _EVAL_DATA_SOURCE_CONFIG: Final[dict[str, JsonValue]] = {
     "type": "custom",

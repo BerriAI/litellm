@@ -22,7 +22,7 @@ from integration._support.upstream import JsonResponse, SseResponse, delete_scen
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 Surface = Literal["chat", "chat-stream", "messages", "messages-stream", "responses", "responses-stream"]
 

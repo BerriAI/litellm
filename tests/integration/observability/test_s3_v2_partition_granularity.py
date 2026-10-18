@@ -33,6 +33,8 @@ from integration._support.database_relay import database_relay
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 FLUSH: Final = {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1"}
 HOUR: Final = {"s3_partition_granularity": "hour"}
 ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-4-5-20250929"

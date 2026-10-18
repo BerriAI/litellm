@@ -20,6 +20,8 @@ from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 BETA: Final = "dangerous-tool-use-2026-09-03"
 SAFEGUARDS: Final[list[JsonValue]] = [
     {"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}

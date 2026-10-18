@@ -207,7 +207,7 @@ def router_default_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[G
             },
         )
         with owned_proxy_process(gateway, directory, {}, config=config) as owned:
-            yield Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url)
+            yield owned.gateway
 
 
 def test_ocr_multipart_without_file_returns_400(gateway: Gateway) -> None:

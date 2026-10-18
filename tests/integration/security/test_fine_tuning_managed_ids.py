@@ -19,6 +19,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 MANAGED_MODEL: Final = "gpt-4.1-managed-ids"
 DEPLOYMENT_KEY: Final = "sk-fine-tuning-managed-deployment"
 TRAINING_LINE: Final = b'{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}\n'

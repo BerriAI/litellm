@@ -29,7 +29,7 @@ from tests.integration._support.process import (
 )
 from tests.integration._support.redis_process import owned_redis
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 PROVIDER_KEY: Final = "integration-provider-key"
 EVICTION_WARNING: Final = "config cache eviction of router_settings failed"

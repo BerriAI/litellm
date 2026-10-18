@@ -12,6 +12,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from pydantic import BaseModel, JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 class _BlockedCustomerInfo(BaseModel):
     user_id: str

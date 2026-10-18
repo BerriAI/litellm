@@ -58,6 +58,8 @@ from pydantic import JsonValue
 
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.parametrize(
     ("row_id", "endpoint", "stream", "client_kind", "scope", "include_scope", "block_directions"),

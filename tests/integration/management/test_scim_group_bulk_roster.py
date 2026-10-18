@@ -36,6 +36,8 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 from psycopg import sql
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 GROUP_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:Group"
 PATCH_OP_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 SMALL_PUSH: Final = 5

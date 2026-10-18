@@ -26,6 +26,8 @@ from pydantic import JsonValue
 
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, SseResponse
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _Kind: TypeAlias = Literal["chat", "chat_stream", "messages", "responses", "completions", "moderations"]
 
 _ALL_KINDS: Final[tuple[_Kind, ...]] = ("chat", "chat_stream", "messages", "responses", "completions", "moderations")

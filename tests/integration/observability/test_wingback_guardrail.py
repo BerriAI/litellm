@@ -13,6 +13,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 API_KEY: Final = "wbk_eg_synthetic"
 APP_ID: Final = "synthetic-app"
 DENIED: Final = "synthetic wingback denied marker"
