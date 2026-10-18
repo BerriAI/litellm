@@ -41,7 +41,7 @@ from pydantic import JsonValue
 
 from tests.integration.cost_calculation.cost_tracking_case import StoredResponse
 
-pytestmark: Final = pytest.mark.timeout(480)
+pytestmark: Final = [pytest.mark.timeout(480), pytest.mark.shares_worker_state]
 
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _MARKER_HEADER: Final = "x-litellm-spend-logs-metadata"

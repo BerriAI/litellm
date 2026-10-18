@@ -230,6 +230,16 @@
     "api_key_env": "REKA_API_KEY",
     "api_base_env": "REKA_API_BASE"
   },
+  "openinfer": {
+    "base_url": "https://api.openinfer.ai/v1",
+    "api_key_env": "OPENINFER_API_KEY",
+    "api_base_env": "OPENINFER_API_BASE",
+    "base_class": "openai_gpt",
+    "provider_info": {
+      "supports_function_calling": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
   "inferenceapis": {
     "base_url": "https://api.inferenceapis.com/v1",
     "api_key_env": "INFERENCEAPIS_API_KEY",

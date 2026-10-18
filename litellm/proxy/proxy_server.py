@@ -55,6 +55,7 @@ from typing import (
 )
 
 import anyio
+import anyio.lowlevel
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
@@ -99,6 +100,13 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.bedrock.count_tokens.kimi_k3 import (
+    HUGGING_FACE_SOURCE,
+    KimiK3Encodings,
+    kimi_k3_anthropic_tokens,
+    kimi_k3_template_tokens,
+    kimi_k3_tokens,
+)
 from litellm.proxy._types import (
     UI_TEAM_ID,
     AwsErrorTypeProxyException,
@@ -148,6 +156,15 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
+)
+from litellm.proxy.common_utils.token_count_settings import (
+    TOKENIZER_LOAD_MAX_RUNNING,
+    TOKENIZER_LOAD_REUSE_SECONDS,
+    TOKENIZER_LOAD_WAIT_SECONDS,
+    ProviderCountFailure,
+    TokenCountSettings,
+    cost_map_entry,
+    resolve_token_count_settings,
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.router_utils.access_windows import access_windows_config_error
@@ -304,6 +321,7 @@ from litellm.constants import (
     CLI_SSO_SESSION_TTL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
+    DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MODEL_CREATED_AT_TIME,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_ADMIN_NAME,
@@ -337,6 +355,7 @@ from litellm.litellm_core_utils.core_helpers import (
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
+    iter_items,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -434,6 +453,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     request_litellm_call_id,
     resolve_litellm_call_id,
     should_return_raw_model_name,
+    sse_error_payload,
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -993,7 +1013,13 @@ from litellm.types.secret_managers.main import (
     KeyManagementSettings,
     KeyManagementSystem,
 )
-from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
+from litellm.types.utils import (
+    CredentialItem,
+    CustomHuggingfaceTokenizer,
+    RawRequestTypedDict,
+    SelectTokenizerResponse,
+    StandardLoggingPayload,
+)
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import add_custom_logger_callback_to_specific_event
 
@@ -10447,6 +10473,7 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
+    ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -10458,6 +10485,7 @@ async def async_data_generator(
         else response
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
+    stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -10514,6 +10542,7 @@ async def async_data_generator(
                 await asyncio.sleep(0)
                 loop_released_at = time.monotonic()
             if item is _STREAM_KEEPALIVE:
+                stream_started = True
                 yield ": ping\n\n"
                 continue
             chunk = item
@@ -10525,6 +10554,7 @@ async def async_data_generator(
                     request_data=request_data,
                     str_so_far=_str_so_far,
                 )
+            stream_started = True
 
             # Mid-stream fallbacks surface metadata on individual chunks rather than
             # the response wrapper. Keep scanning chunks until a fallback model is
@@ -10630,7 +10660,7 @@ async def async_data_generator(
         if error_message is not None:
             yield error_message
         # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
-        if not request_data.get("_litellm_skip_openai_stream_done"):
+        if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
@@ -10647,13 +10677,14 @@ async def async_data_generator(
             if guarded_layer is not response:
                 await close_guarded_stream(guarded_layer)
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
-        await proxy_logging_obj.post_call_failure_hook(
+        replacement: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=request_data,
         )
+        client_error: Final[Exception] = e if replacement is None else replacement
         verbose_proxy_logger.debug(
             "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
             e,
@@ -10661,31 +10692,31 @@ async def async_data_generator(
 
         if error_state is not None:
             stream_completed = True
-            error_frame: Final = error_state.format_failure(e)
+            error_frame: Final = error_state.format_failure(client_error)
             if error_frame is not None:
                 yield error_frame
-            if not request_data.get("_litellm_skip_openai_stream_done"):
+            if ends_with_openai_done:
                 yield _OPENAI_STREAM_DONE_FRAME
             return
-        if isinstance(e, HTTPException):
-            raise e
-        elif isinstance(e, StreamingCallbackError):
-            error_msg = str(e)
-        else:
-            # Only include the error message, not the traceback.
-            # The traceback is already logged above via verbose_proxy_logger.exception().
-            # Including it in the SSE response leaks internal details to clients.
-            error_msg = str(e)
-
-        proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+        if isinstance(e, HTTPException) and (not stream_started or not ends_with_openai_done):
+            raise client_error
+        error_returned: Final = json.dumps(
+            {
+                "error": sse_error_payload(client_error)[1]
+                if isinstance(client_error, HTTPException)
+                else ProxyException(
+                    message=getattr(client_error, "message", str(client_error)),
+                    type=getattr(client_error, "type", "None"),
+                    param=getattr(client_error, "param", "None"),
+                    code=getattr(client_error, "status_code", 500),
+                ).to_dict()
+            },
+            default=str,
         )
-        error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
         yield f"data: {error_returned}\n\n"
+        if ends_with_openai_done:
+            yield _OPENAI_STREAM_DONE_FRAME
     finally:
         await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=request,
@@ -14673,25 +14704,36 @@ async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
     model_to_use: str,
+    region: str | None,
     messages: list | None,
     contents: list | None,
-    deployment: dict[str, object] | None,
+    deployment: Mapping[str, object] | None,
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
-) -> Optional["TokenCountResponse"]:
-    """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
         return None
+    deployment_in_region: Final = (
+        None
+        if deployment is None
+        else dict(deployment)
+        if region is None
+        else {
+            **deployment,
+            "litellm_params": {**(as_str_mapping(deployment.get("litellm_params")) or {}), "aws_region_name": region},
+        }
+    )
     try:
         result: Final = await provider_counter.count_tokens(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=deployment,
+            deployment=deployment_in_region,
             request_model=request_model,
             tools=tools,
             system=system,
@@ -14700,22 +14742,323 @@ async def _try_provider_token_count(
             context_management=context_management,
         )
     except httpx.HTTPStatusError as e:
-        error_message: Final = getattr(e, "message", None) or str(e)
-        status_code: Final = getattr(e, "status_code", None) or e.response.status_code
-        raise ProxyException(
-            message=error_message,
-            type="token_counting_error",
-            param="model",
-            code=status_code,
+        return ProviderCountFailure(
+            status_code=getattr(e, "status_code", None) or e.response.status_code,
+            message=getattr(e, "message", None) or str(e),
         )
     if result is not None and result.error is True:
-        raise ProxyException(
+        return ProviderCountFailure(
+            status_code=result.status_code or 500,
             message=result.error_message or "Token counting failed",
-            type="token_counting_error",
-            param="model",
-            code=result.status_code or 500,
+            rejected_before_provider_call=result.rejected_before_provider_call,
         )
     return result
+
+
+async def _provider_token_count(
+    count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
+    model_to_use: str,
+    settings: TokenCountSettings,
+    local_estimate_allowed: bool,
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    """Count with the provider, using the token_count_model in its region when one is set.
+
+    Returns None when the count should be estimated locally, or the provider's failure when the framed local
+    estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
+    count_model: Final = settings.count_model
+    counted: Final = await (
+        count_with(model_to_use, None) if count_model is None else count_with(count_model.model, count_model.region)
+    )
+    if counted is None:
+        return None
+    if isinstance(counted, TokenCountResponse):
+        if count_model is None:
+            return counted.model_copy(update={"count_source": "provider"})
+        return counted.model_copy(update={"count_source": "token_count_model", "model_used": count_model.model})
+    failure: Final = (
+        counted
+        if count_model is None or count_model.region is None
+        else counted.with_hint(
+            f"This model counts tokens with {count_model.model} in {count_model.region}. "
+            "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
+        )
+    )
+    if count_model is None and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
+        return failure
+    raise failure.to_proxy_exception()
+
+
+@dataclass(frozen=True, slots=True)
+class _LocalTokenEstimate:
+    total_tokens: int
+    tokenizer_type: str
+
+
+def _is_fork_guard_error(error: BaseException) -> bool:
+    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+    return isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking))
+
+
+def _is_tokenizer_panic(error: BaseException) -> bool:
+    return type(error).__module__ == "pyo3_runtime" and type(error).__name__ == "PanicException"
+
+
+def _answers_provider_error(error: BaseException) -> bool:
+    return (isinstance(error, Exception) or _is_tokenizer_panic(error)) and not _is_fork_guard_error(error)
+
+
+def _provider_error_after_failed_estimate(
+    provider_failure: ProviderCountFailure, error: BaseException
+) -> ProxyException:
+    verbose_proxy_logger.warning(
+        "Local token estimate failed after the provider's count error %s, answering that error: %s",
+        provider_failure.status_code,
+        type(error).__name__,
+    )
+    return provider_failure.to_proxy_exception()
+
+
+async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure: ProviderCountFailure) -> int:
+    try:
+        return await estimate
+    except BaseException as e:
+        if not _answers_provider_error(e):
+            raise
+        raise _provider_error_after_failed_estimate(provider_failure, e) from e
+
+
+@dataclass(frozen=True, slots=True)
+class _CustomTokenizerKey:
+    identifier: str
+    revision: str
+    auth_token: str | None
+
+
+class _TokenizerLoadsBusy(Exception):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenizerLoadOutcome:
+    tokenizer: SelectTokenizerResponse | BaseException
+    finished_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _SharedTokenizerLoad:
+    outcome: asyncio.Task[_TokenizerLoadOutcome]
+    started_at: float
+
+    def reusable(self, now: float) -> bool:
+        return not self.outcome.done() or now - self.outcome.result().finished_at < TOKENIZER_LOAD_REUSE_SECONDS
+
+
+async def _loaded_tokenizer(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, threads: anyio.CapacityLimiter
+) -> SelectTokenizerResponse | BaseException:
+    try:
+        return await asyncify(litellm.utils.select_tokenizer, limiter=threads)(
+            model=model, custom_tokenizer=custom_tokenizer
+        )
+    except asyncio.CancelledError:
+        raise
+    except BaseException as e:  # noqa: BLE001  # every count sharing this load decides what it answers, pyo3 panics included
+        return e
+
+
+async def _tokenizer_load_outcome(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, threads: anyio.CapacityLimiter
+) -> _TokenizerLoadOutcome:
+    tokenizer: Final = await _loaded_tokenizer(model, custom_tokenizer, threads)
+    return _TokenizerLoadOutcome(tokenizer=tokenizer, finished_at=asyncio.get_running_loop().time())
+
+
+@dataclass(slots=True)
+class _TokenizerLoads:
+    threads: anyio.CapacityLimiter
+    running: int = 0
+
+    def start(
+        self, model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, loop: asyncio.AbstractEventLoop
+    ) -> _SharedTokenizerLoad | None:
+        if self.running >= self.threads.total_tokens:
+            return None
+        self.running += 1
+        outcome: Final = loop.create_task(_tokenizer_load_outcome(model, custom_tokenizer, self.threads))
+        outcome.add_done_callback(self._finished)
+        return _SharedTokenizerLoad(outcome=outcome, started_at=loop.time())
+
+    def _finished(self, _outcome: asyncio.Task[_TokenizerLoadOutcome]) -> None:
+        self.running -= 1
+
+
+_TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_tokenizer_loads")
+
+
+def _tokenizer_loads_for_this_loop() -> _TokenizerLoads:
+    existing: Final = _TOKENIZER_LOADS.get(None)
+    if existing is not None:
+        return existing
+    created: Final = _TokenizerLoads(threads=anyio.CapacityLimiter(TOKENIZER_LOAD_MAX_RUNNING))
+    _TOKENIZER_LOADS.set(created)
+    return created
+
+
+@dataclass(slots=True)
+class _TokenizerLoadSlot:
+    model: str
+    custom_tokenizer: CustomHuggingfaceTokenizer | None
+    current: _SharedTokenizerLoad | None = None
+
+    def load(self, loads: _TokenizerLoads, loop: asyncio.AbstractEventLoop) -> _SharedTokenizerLoad | None:
+        current: Final = self.current
+        if current is not None and current.reusable(loop.time()):
+            return current
+        self.current = loads.start(self.model, self.custom_tokenizer, loop)
+        return self.current
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _tokenizer_load_slot(
+    model: str, custom_tokenizer: _CustomTokenizerKey | None, loop: asyncio.AbstractEventLoop
+) -> _TokenizerLoadSlot:
+    return _TokenizerLoadSlot(
+        model=model,
+        custom_tokenizer=None
+        if custom_tokenizer is None
+        else CustomHuggingfaceTokenizer(
+            identifier=custom_tokenizer.identifier,
+            revision=custom_tokenizer.revision,
+            auth_token=custom_tokenizer.auth_token,
+        ),
+    )
+
+
+async def _tokenizer_after_provider_error(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
+) -> SelectTokenizerResponse | BaseException:
+    loop: Final = asyncio.get_running_loop()
+    try:
+        load: Final = _tokenizer_load_slot(
+            model,
+            None
+            if custom_tokenizer is None
+            else _CustomTokenizerKey(
+                identifier=custom_tokenizer["identifier"],
+                revision=custom_tokenizer["revision"],
+                auth_token=custom_tokenizer["auth_token"],
+            ),
+            loop,
+        ).load(_tokenizer_loads_for_this_loop(), loop)
+        if load is None:
+            return _TokenizerLoadsBusy()
+        outcome: Final = await asyncio.wait_for(
+            asyncio.shield(load.outcome),
+            timeout=max(load.started_at + TOKENIZER_LOAD_WAIT_SECONDS - loop.time(), 0),
+        )
+    except Exception as e:  # noqa: BLE001  # a tokenizer that cannot be read, loaded in time, or loaded at all answers the provider's error
+        return e
+    return outcome.tokenizer
+
+
+async def _tokenizer_or_provider_error(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure
+) -> SelectTokenizerResponse:
+    tokenizer: Final = await _tokenizer_after_provider_error(model, custom_tokenizer)
+    if not isinstance(tokenizer, BaseException):
+        return tokenizer
+    if not _answers_provider_error(tokenizer):
+        raise tokenizer.with_traceback(None)
+    raise _provider_error_after_failed_estimate(provider_failure, tokenizer) from tokenizer
+
+
+async def _local_token_estimate(
+    model: str,
+    prompt: str | None,
+    messages: Sequence[AllMessageValues] | None,
+    tools: list[ChatCompletionToolParam] | None,
+    custom_tokenizer: CustomHuggingfaceTokenizer | None,
+    provider_failure: ProviderCountFailure | None,
+) -> _LocalTokenEstimate:
+    tokenizer: Final = (
+        await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
+        if provider_failure is None
+        else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
+    )
+    count: Final = offload_token_count(litellm.token_counter)(
+        model=model,
+        text=prompt,
+        messages=messages,
+        tools=tools,
+        custom_tokenizer=tokenizer,
+    )
+    total_tokens: Final = await (
+        count if provider_failure is None else _estimate_or_provider_error(count, provider_failure)
+    )
+    return _LocalTokenEstimate(total_tokens=total_tokens, tokenizer_type=str(tokenizer["type"]))
+
+
+_KIMI_K3_ENCODINGS: Final = KimiK3Encodings(
+    source=HUGGING_FACE_SOURCE, retry_after_seconds=TOKENIZER_LOAD_REUSE_SECONDS
+)
+
+
+async def _kimi_k3_count(
+    request: TokenCountRequest,
+    messages_format: TokenCountMessagesFormat,
+    model: str,
+    messages: Sequence[AllMessageValues],
+    tools: Sequence[ChatCompletionToolParam] | None,
+) -> int | None:
+    encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
+    if encoding is None:
+        return None
+    match messages_format:
+        case "anthropic":
+            return await offload_token_count(kimi_k3_anthropic_tokens)(
+                encoding, model, request.model_dump(include={"messages", "system", "tools"}, exclude_none=True)
+            )
+        case "openai":
+            return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools)
+
+
+class _TokenCountDeployment(TypedDict, total=False):
+    litellm_params: ReadOnly[Mapping[str, object]]
+    model_info: ReadOnly[Mapping[str, object]]
+
+
+_TOKEN_COUNT_DEPLOYMENT: Final = TypeAdapter(_TokenCountDeployment)
+
+
+def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[str, object] | None:
+    group: Final = () if router is None else router.get_all_deployments(model_name=model_group)
+    return group[0] if group else None
+
+
+def _non_empty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _deployment_aws_region(deployment: _TokenCountDeployment) -> str:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    params: Final = deployment.get("litellm_params", {})
+    return BaseAWSLLM().get_aws_region_name(
+        {"aws_region_name": params.get("aws_region_name")}, model=_non_empty_str(params.get("model"))
+    )
+
+
+def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
+    model_info: Final = deployment.get("model_info", {})
+    params: Final = deployment.get("litellm_params", {})
+    base_model: Final = _non_empty_str(model_info.get("base_model")) or _non_empty_str(params.get("base_model"))
+    if base_model is not None:
+        return base_model, None
+    model: Final = _non_empty_str(params.get("model"))
+    if model is None:
+        return request_model, None
+    return model, _non_empty_str(params.get("custom_llm_provider"))
 
 
 _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
@@ -14726,6 +15069,14 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 def _drops_params(deployment: Mapping[str, object] | None) -> bool:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
     return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
+
+
+_ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
+
+
+def _estimable_contents(contents: Sequence[Mapping[str, object]]) -> bool:
+    parts: Final = chain.from_iterable(iter_items(content.get("parts") or ()) for content in contents)
+    return all(set(as_str_mapping(part) or ()) <= _ESTIMABLE_GOOGLE_PART_KEYS for part in parts)
 
 
 def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
@@ -14831,6 +15182,14 @@ async def count_request_tokens(
     model_to_use: str = (
         litellm_model_name if isinstance(litellm_model_name, str) and litellm_model_name else request.model
     )
+    deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
+        deployment or _model_group_deployment(llm_router, request.model) or {}
+    )
+    settings: Final = await asyncify(resolve_token_count_settings)(
+        configured=deployment_view.get("model_info", {}),
+        default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
+        deployment_region=partial(_deployment_aws_region, deployment_view),
+    )
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
     provider_counter: BaseTokenCounter | None = None
@@ -14850,24 +15209,33 @@ async def count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
-    if provider_counter is not None:
-        prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
-        result: Final = await _try_provider_token_count(
-            provider_counter=provider_counter,
-            custom_llm_provider=custom_llm_provider,
+    contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
+    prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    ladder: Final = (
+        None
+        if provider_counter is None
+        else await _provider_token_count(
+            count_with=partial(
+                _try_provider_token_count,
+                provider_counter,
+                custom_llm_provider,
+                messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
+                contents=None if prompt_as_message else contents,
+                deployment=deployment,
+                request_model=request.model,
+                tools=tools,
+                system=system,
+                messages_format=messages_format,
+                output_format=output_format,
+                context_management=_count_context_management(context_management, request.model, request_litellm_params),
+            ),
             model_to_use=model_to_use,
-            messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
-            contents=None if prompt_as_message else contents,
-            deployment=deployment,
-            request_model=request.model,
-            tools=tools,
-            system=system,
-            messages_format=messages_format,
-            output_format=output_format,
-            context_management=_count_context_management(context_management, request.model, request_litellm_params),
+            settings=settings,
+            local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
         )
-        if result is not None:
-            return result
+    )
+    if isinstance(ladder, TokenCountResponse):
+        return ladder
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
@@ -14885,11 +15253,6 @@ async def count_request_tokens(
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    _tokenizer_used: Final = await asyncify(litellm.utils.select_tokenizer)(
-        model=model_to_use, custom_tokenizer=custom_tokenizer
-    )
-
-    tokenizer_used: Final = str(_tokenizer_used["type"])
     system_message: Final = _system_message(system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
@@ -14902,18 +15265,38 @@ async def count_request_tokens(
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    total_tokens: Final = await offload_token_count(litellm.token_counter)(
+    framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
+    kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
+    exact: Final = (
+        await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, counted_tools)
+        if kimi_k3_messages is not None and custom_tokenizer is None
+        else None
+    )
+    if exact is not None:
+        return TokenCountResponse(
+            total_tokens=exact + framing,
+            request_model=request.model,
+            model_used=model_to_use,
+            tokenizer_type="huggingface_tokenizer",
+            count_source="local_estimate",
+        )
+    estimate: Final = await _local_token_estimate(
         model=model_to_use,
-        text=prompt if counted_messages is None else None,
+        prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
-        custom_tokenizer=_tokenizer_used,
+        custom_tokenizer=custom_tokenizer,
+        provider_failure=ladder,
+    )
+    template: Final = (
+        0 if kimi_k3_messages is None else kimi_k3_template_tokens(len(kimi_k3_messages), bool(counted_tools))
     )
     return TokenCountResponse(
-        total_tokens=total_tokens,
+        total_tokens=estimate.total_tokens + template + framing,
         request_model=request.model,
         model_used=model_to_use,
-        tokenizer_type=tokenizer_used,
+        tokenizer_type=estimate.tokenizer_type,
+        count_source="local_estimate",
     )
 
 
