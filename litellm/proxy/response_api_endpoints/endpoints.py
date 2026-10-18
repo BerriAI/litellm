@@ -1648,6 +1648,9 @@ async def cancel_response(
     return response
 
 
+_RESPONSES_WS_SESSION_CLOSE_GRACE_SECONDS: Final = 5.0
+
+
 def _resolve_responses_ws_session_limit_seconds() -> float:
     from litellm.proxy.proxy_server import general_settings
 
@@ -2161,9 +2164,10 @@ async def responses_websocket_endpoint(
         await asyncio.wait_for(asyncio.shield(session_task), timeout=limit_seconds)
     except asyncio.TimeoutError:
         verbose_proxy_logger.info("Responses WebSocket closed: session duration limit reached")
-        session_task.cancel()
         with contextlib.suppress(Exception):
             await websocket.close(code=1000, reason="Session duration limit reached")
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(asyncio.shield(session_task), timeout=_RESPONSES_WS_SESSION_CLOSE_GRACE_SECONDS)
     finally:
         if not session_task.done():
             session_task.cancel()

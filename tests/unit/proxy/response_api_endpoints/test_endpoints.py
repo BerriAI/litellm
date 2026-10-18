@@ -2368,10 +2368,8 @@ class TestResponsesWSFirstFrameModelAuth:
         assert booked["request_data"]["model"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("relay_crashes", [False, True])
-    async def test_close_time_failure_row_bills_the_guardrails_of_the_turns_the_deployment_refused(
-        self, relay_crashes: bool
-    ):
+    @pytest.mark.parametrize("ending", ["refusal", "crash", "session_limit"])
+    async def test_close_time_failure_row_bills_the_guardrails_of_the_turns_the_deployment_refused(self, ending: str):
         from litellm.exceptions import RateLimitError
         from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
 
@@ -2384,7 +2382,8 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.receive_text = AsyncMock(
             return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
-        ws.close = AsyncMock()
+        closed = asyncio.Event()
+        ws.close = AsyncMock(side_effect=lambda **kwargs: closed.set())
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
             return_value=({"model": "gpt-4o-mini", "litellm_metadata": {"model_group": "gpt-4o-mini"}}, MagicMock())
@@ -2408,8 +2407,10 @@ class TestResponsesWSFirstFrameModelAuth:
                     )
                     if turn != "three":
                         guarded.bill_refusal()
-                if relay_crashes:
+                if ending == "crash":
                     raise crash
+                if ending == "session_limit":
+                    await closed.wait()
                 return refusal
 
             return relay()
@@ -2433,6 +2434,10 @@ class TestResponsesWSFirstFrameModelAuth:
                 new_callable=AsyncMock,
                 side_effect=route_request,
             ),
+            patch(  # test-quality-ok: a short session limit stands in for the configured one so the cap fires mid-session
+                "litellm.proxy.response_api_endpoints.endpoints._resolve_responses_ws_session_limit_seconds",
+                return_value=0.05 if ending == "session_limit" else 3600.0,
+            ),
             patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
                 "litellm.proxy.proxy_server.proxy_logging_obj",
                 proxy_logging_obj,
@@ -2442,7 +2447,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
         booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
-        assert booked["original_exception"] is (crash if relay_crashes else refusal)
+        assert booked["original_exception"] is (crash if ending == "crash" else refusal)
         assert booked["request_data"]["litellm_metadata"] == {
             "model_group": "gpt-4o-mini",
             "standard_logging_guardrail_information": [{"guardrail_cost": 0.2}, {"guardrail_cost": 0.4}],
