@@ -19,6 +19,19 @@
   ],
   "mappings": [
     {
+      "id": "anthropic-cache-control-hook",
+      "python_paths": [
+        "litellm/integrations/anthropic_cache_control_hook.py",
+        "litellm/types/integrations/anthropic_cache_control_hook.py"
+      ],
+      "rust_paths": [
+        "litellm-rust/crates/integrations/src/anthropic_cache_control_hook.rs",
+        "litellm-rust/crates/llms-types/src/integrations/anthropic_cache_control_hook.rs"
+      ],
+      "checkpoint_sha": "2dfeb80e04d971fa00f72c12e0bd4fb42bc3c027",
+      "checkpoint_state": "aligned"
+    },
+    {
       "id": "messages",
       "python_paths": [
         "litellm/messages/",

@@ -59,6 +59,7 @@ impl<'a, H> OcrCallHooks<'a, H> {
                     .cloned()
                     .collect(),
                 api_key: request.connection.api_key.clone(),
+                gateway_injected_cache_blocks: 0,
             },
         }
     }

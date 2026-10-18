@@ -61,6 +61,7 @@ FAKES = {
         litellm_params=litellm_params,
         custom_llm_provider=provider,
     ),
+    'record_gateway_injection': lambda kwargs, added: kwargs['litellm_metadata'].update(gateway_injection=added),
     'pre_call': lambda logger, input, api_key, additional_args: logger.pre_call(input, api_key, additional_args),
     'post_call': lambda logger, original_response, api_key, additional_args: logger.post_call(
         original_response, api_key, additional_args

@@ -32,5 +32,6 @@ def anthropic_model_capabilities(model: str, custom_llm_provider: str | None) ->
         "supports_sampling_params": AnthropicModelInfo._supports_sampling_params(resolved_model),  # pyright: ignore[reportPrivateUsage]  # same gate the handler applies
         "supports_speed": AnthropicConfig._model_supports_speed_param(resolved_model, provider),  # pyright: ignore[reportPrivateUsage]  # same gate the handler applies
         "supports_mid_conversation_system": supports("supports_mid_conversation_system"),
+        "supports_prompt_caching": litellm.utils.supports_prompt_caching(resolved_model, provider),
         "effort_tiers": {level: tier(level) for level in ("minimal", "low", "medium", "high", "xhigh", "max")},
     }

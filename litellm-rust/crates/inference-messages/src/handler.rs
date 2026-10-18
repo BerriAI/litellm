@@ -51,6 +51,7 @@ impl MessagesRoute {
             environment,
             timeout,
             api_key,
+            gateway_injected_cache_blocks,
         } = request;
         let request_context = RequestContext {
             model: body.model.clone(),
@@ -58,6 +59,7 @@ impl MessagesRoute {
             optional_params: serde_json::to_value(&body.params).map_err(serialize_failure)?,
             secret_fields: Vec::new(),
             api_key,
+            gateway_injected_cache_blocks,
         };
         let authenticated =
             resolve_auth(&self.auth, environment, &|key| std::env::var(key).ok()).await?;

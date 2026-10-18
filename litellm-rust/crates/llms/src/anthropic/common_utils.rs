@@ -1971,6 +1971,7 @@ mod tests {
                 supports_sampling_params: true,
                 supports_speed: false,
                 supports_mid_conversation_system: false,
+                supports_prompt_caching: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
             }
         );

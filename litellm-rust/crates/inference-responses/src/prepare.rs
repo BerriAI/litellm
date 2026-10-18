@@ -44,6 +44,7 @@ pub(super) async fn prepare(
             }
             _ => None,
         },
+        gateway_injected_cache_blocks: 0,
     };
     let body = config.transform_responses_api_request(model, call.input, call.optional_params)?;
     Ok(ProviderResponsesRequest {

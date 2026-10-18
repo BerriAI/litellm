@@ -4,8 +4,9 @@ use bytes::Bytes;
 use litellm_host::call::CallOutput;
 use litellm_llms::{ErrorDetail, base_llm::messages::context::MessagesModelCapabilities};
 use litellm_llms_types::{
-    formats::messages::{MessagesRequest, MessagesResponse},
+    formats::messages::{CacheControlTtl, MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
+    integrations::CacheControlInjectionPoint,
 };
 use litellm_router_types::LitellmParams;
 use serde::{Deserialize, Serialize};
@@ -62,6 +63,14 @@ pub struct MessagesSettings {
     pub additional_drop_params: Vec<String>,
     #[serde(default)]
     pub request_timeout: Option<f64>,
+    #[serde(default)]
+    pub cache_control_injection_points: Vec<CacheControlInjectionPoint>,
+    #[serde(default)]
+    pub enable_prompt_caching: bool,
+    #[serde(default)]
+    pub prompt_caching_ttl: Option<CacheControlTtl>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 impl MessagesSettings {
@@ -116,6 +125,16 @@ mod tests {
             ..MessagesShaping::default()
         },
     )]
+    #[case::prompt_caching_capability(
+        json!({"capabilities": {"supports_prompt_caching": true}}),
+        MessagesShaping {
+            capabilities: MessagesModelCapabilities {
+                supports_prompt_caching: true,
+                ..MessagesModelCapabilities::default()
+            },
+            ..MessagesShaping::default()
+        },
+    )]
     #[case::everything_the_python_host_projects(
         json!({
             "capabilities": {
@@ -139,6 +158,7 @@ mod tests {
                 reasoning_auto_summary: true,
                 additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
                 request_timeout: Some(1800.0),
+                ..MessagesSettings::default()
             },
             capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
@@ -149,6 +169,7 @@ mod tests {
                 supports_sampling_params: false,
                 supports_speed: true,
                 supports_mid_conversation_system: false,
+                supports_prompt_caching: false,
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,
@@ -183,5 +204,33 @@ mod tests {
             serialized["capabilities"],
             serde_json::to_value(expected.capabilities).unwrap()
         );
+    }
+
+    #[rstest]
+    #[case::five_minutes("5m", CacheControlTtl::FiveMinutes)]
+    #[case::one_hour("1h", CacheControlTtl::OneHour)]
+    fn cache_control_settings_are_projected(
+        #[case] ttl: &str,
+        #[case] expected_ttl: CacheControlTtl,
+    ) {
+        let point = json!({"location": "message", "index": -1, "control": {"type": "ephemeral"}});
+        let projected = json!({
+            "cache_control_injection_points": [point],
+            "enable_prompt_caching": true,
+            "prompt_caching_ttl": ttl,
+            "user_agent": "claude-cli/1.0"
+        });
+
+        let shaping: MessagesShaping = serde_json::from_value(projected.clone()).unwrap();
+        let serialized = serde_json::to_value(&shaping).unwrap();
+
+        assert!(serialized["enable_prompt_caching"].as_bool().unwrap());
+        assert_eq!(serialized["prompt_caching_ttl"], json!(ttl));
+        assert_eq!(serialized["user_agent"], json!("claude-cli/1.0"));
+        assert_eq!(
+            serialized["cache_control_injection_points"],
+            projected["cache_control_injection_points"]
+        );
+        assert_eq!(shaping.settings.prompt_caching_ttl, Some(expected_ttl));
     }
 }

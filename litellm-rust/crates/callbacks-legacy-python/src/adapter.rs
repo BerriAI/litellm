@@ -374,6 +374,12 @@ impl LegacyLogging {
         wire: Box<WireRequest>,
         context: &RequestContext,
     ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
+        if context.gateway_injected_cache_blocks > 0 {
+            crate::python::Logging::RecordGatewayInjection.call(
+                py,
+                (self.call.kwargs(), context.gateway_injected_cache_blocks),
+            )?;
+        }
         let logger = self.logger()?;
         logger.update_from_kwargs(py, self.call.kwargs(), &wire, context)?;
         let body = to_py(py, &wire.body)?
@@ -722,7 +728,7 @@ if asynchronous:
         });
     }
 
-    #[rstest::rstest]
+    #[rstest]
     fn kwargs_returned_by_the_pre_call_hook_are_what_the_call_prepares() {
         Python::initialize();
         Python::attach(|py| {
@@ -1089,7 +1095,32 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
         body: Value,
         secret_fields: &[&str],
     ) -> WireRequest {
-        before_send_bound(&[], script, optional_params, body, secret_fields)
+        before_send_bound(&[], script, optional_params, body, secret_fields, 0)
+    }
+
+    #[rstest]
+    #[case::none_injected(0, None)]
+    #[case::gateway_injected(2, Some(2))]
+    fn gateway_cache_injection_is_recorded_before_pre_call(
+        #[case] injected: usize,
+        #[case] expected: Option<usize>,
+    ) {
+        let expected = serde_json::to_value(expected).unwrap();
+        before_send_bound(
+            &[("expected", &expected)],
+            c"
+metadata = {}
+kwargs = {'litellm_metadata': metadata}
+observed = []
+on_pre_call = lambda additional_args: observed.append(metadata.get('gateway_injection'))
+def check():
+    assert observed == [expected], observed
+",
+            json!({}),
+            json!({}),
+            &[],
+            injected,
+        );
     }
 
     /// [`before_send_with_secrets`] with `bindings` placed in the namespace before `script` runs.
@@ -1099,6 +1130,7 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
         optional_params: Value,
         body: Value,
         secret_fields: &[&str],
+        gateway_injected_cache_blocks: usize,
     ) -> WireRequest {
         Python::initialize();
         Python::attach(|py| {
@@ -1117,6 +1149,7 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
                 optional_params,
                 secret_fields: secret_fields.iter().map(|name| name.to_string()).collect(),
                 api_key: Some(SecretValue::new("route-key")),
+                gateway_injected_cache_blocks,
             };
             let wire = WireRequest {
                 url: "https://provider.invalid/ocr".into(),
@@ -1170,6 +1203,7 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
             optional_params: json!({}),
             secret_fields: vec![],
             api_key: Some(SecretValue::new("route-key")),
+            gateway_injected_cache_blocks: 0,
         }
     }
 
@@ -1725,6 +1759,7 @@ def check():
                 json!({}),
                 Value::Object(body.clone()),
                 &[],
+                0,
             );
 
             prop_assert_eq!(wire.body, edit.sent(&body));
