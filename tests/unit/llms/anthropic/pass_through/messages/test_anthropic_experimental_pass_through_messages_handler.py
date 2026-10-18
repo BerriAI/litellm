@@ -1,10 +1,12 @@
 import asyncio
+import copy
 import json
 import os
 import uuid
 from typing import Any, Dict, Final, List
 
 import httpx
+import respx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -25,6 +27,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StreamingChoices,
 )
+from litellm.utils import _invalidate_model_cost_lowercase_map
 import unittest.mock
 
 
@@ -1076,6 +1079,44 @@ async def test_messages_strips_provider_prefix_exactly_once(requested_model, exp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info, expected_url",
+    [
+        (None, "https://api.perplexity.ai/v1/responses"),
+        ({"id": "pinned-id", "mode": "chat"}, "https://api.perplexity.ai/chat/completions"),
+    ],
+)
+async def test_messages_honors_a_chat_pin_on_a_prefixed_responses_deployment(
+    monkeypatch: pytest.MonkeyPatch, model_info: dict[str, str] | None, expected_url: str
+) -> None:
+    """A deployment id whose stripped form is a chat row is kept on the Responses API, unless the
+    deployment pins ``mode: chat``, which has to decide the route before the prefix is stripped."""
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.model_cost["perplexity/perplexity/pin-test-model"] = {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    }
+    litellm.model_cost["perplexity/pin-test-model"] = {"litellm_provider": "perplexity", "mode": "chat"}
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route(host="api.perplexity.ai").mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(litellm.exceptions.InternalServerError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="perplexity/perplexity/pin-test-model",
+                api_key="test-api-key",
+                model_info=model_info,
+            )
+
+    assert {str(call.request.url) for call in upstream.calls} == {expected_url}
+
+
+@pytest.mark.asyncio
 async def test_native_messages_strips_replayed_provider_specific_fields_from_wire():
     captured = {}
 
@@ -1842,6 +1883,20 @@ async def test_native_claude_messages_response_is_left_to_claude_code_when_its_b
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_native_claude_route_that_drops_safeguards_gets_the_classifier_verdict(stream: bool):
+    response = await _native_messages(
+        "sail/claude-sonnet-4-6", _native_upstream(stream=stream, model="claude-sonnet-4-6"), stream=stream
+    )
+
+    if stream:
+        message_deltas = [event for event in response if event["type"] == "message_delta"]
+        assert [delta["delta"]["safeguard_results"] for delta in message_deltas] == [_FLAGGED_CURL]
+    else:
+        assert list(response["safeguard_results"]) == _FLAGGED_CURL
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
     """
     Test the anthropic_messages with routing strategy and verify that _latency_per_deployment
@@ -2207,3 +2262,35 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         mock_get_credentials.assert_called_once()
         credentials_args = mock_get_credentials.call_args.kwargs
         assert credentials_args.get("aws_region_name") == test_region
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed_messages", [["hi"], "hi", [{"role": "user", "content": "hi"}, 7]])
+async def test_anthropic_messages_with_safeguards_and_no_classifier_keep_the_upstream_400_for_malformed_messages(
+    malformed_messages: object,
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    def upstream_rejects_the_messages(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": "messages: invalid"}},
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_rejects_the_messages))
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await handler.anthropic_messages(
+            max_tokens=16,
+            messages=malformed_messages,  # pyright: ignore[reportArgumentType]  # the malformed body under test
+            model="anthropic/claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            api_key="sk-test",
+            client=upstream,
+            safeguards=[{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}],
+        )
+
+    assert rejected.value.status_code == 400
+    assert "invalid_request_error" in str(rejected.value)
