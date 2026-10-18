@@ -544,7 +544,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             return cached[2]
 
         index: Final[list[tuple[str, dict]]] = []
-        for key, model_info in model_cost.items():
+        for key, model_info in (*model_cost.items(),):
             if not key.startswith("fireworks_ai/"):
                 continue
             if not isinstance(model_info, dict):

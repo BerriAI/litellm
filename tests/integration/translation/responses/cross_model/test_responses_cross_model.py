@@ -22,25 +22,12 @@ from integration.translation.responses.bases.openai_responses import GPT_5_6_SOL
 from integration.translation.runner import assert_translation
 
 GPT_6_1_SOL_TWO_MESSAGES_BEFORE_TOOLS_TEST_CASE: Final = two_messages_before_tools(GPT_6_1_SOL_TEST_CASE)
-CLAUDE_SONNET_5_5_CROSS_MODEL_PROVIDER_USAGE: Final = {
-    "input_tokens": 4,
-    "cache_creation_input_tokens": 873,
-    "cache_read_input_tokens": 0,
-    "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-    "output_tokens": 509,
-    "output_tokens_details": {"thinking_tokens": 313},
-    "service_tier": "standard",
-    "inference_geo": "global",
-}
 AZURE_CLAUDE_SONNET_5_5_CROSS_MODEL_TEST_CASE: Final = replace(
     AZURE_CLAUDE_SONNET_5_5_TEST_CASE,
     scenario="cross_model_rich_request",
     litellm_request={**CLAUDE_SONNET_5_5_TEST_CASE.litellm_request, "model": "azure_ai/claude-sonnet-5-5"},
     expected_provider_request=CLAUDE_SONNET_5_5_TEST_CASE.expected_provider_request,
-    mock_provider_response={
-        **CLAUDE_SONNET_5_5_TEST_CASE.mock_provider_response,
-        "usage": CLAUDE_SONNET_5_5_CROSS_MODEL_PROVIDER_USAGE,
-    },
+    mock_provider_response=CLAUDE_SONNET_5_5_TEST_CASE.mock_provider_response,
     expected_litellm_response={
         **CLAUDE_SONNET_5_5_TEST_CASE.expected_litellm_response,
         "model": "azure_ai/claude-sonnet-5-5",
