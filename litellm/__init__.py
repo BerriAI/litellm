@@ -873,8 +873,9 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
         elif value.get("litellm_provider") == "baseten":
-            # retired Model APIs stay in the cost map for spend tracking but are no longer servable
-            if not _is_past_deprecation_date(value):
+            if _is_past_deprecation_date(value):
+                baseten_models.discard(key)
+            else:
                 baseten_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.

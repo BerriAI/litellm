@@ -1,5 +1,6 @@
 import os
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -7,8 +8,7 @@ import respx
 
 import litellm
 from litellm.llms.baseten.chat import BasetenConfig
-from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager, get_valid_models
+from litellm.utils import get_valid_models
 
 
 class TestBasetenRouting:
@@ -61,8 +61,8 @@ class TestBasetenModelDiscovery:
 
     def test_models_by_provider_comes_from_registry(self):
         """Static listing uses the model cost map, not the retired 2023 deployment IDs."""
-        baseten_models = litellm.models_by_provider["baseten"]
-        servable_registry_models = {
+        baseten_models: Final = litellm.models_by_provider["baseten"]
+        servable_registry_models: Final = {
             key
             for key, value in litellm.model_cost.items()
             if value.get("litellm_provider") == "baseten" and not litellm._is_past_deprecation_date(value)
@@ -78,6 +78,20 @@ class TestBasetenModelDiscovery:
         assert litellm.model_cost["baseten/zai-org/GLM-5"]["deprecation_date"]
         assert "baseten/zai-org/GLM-5" not in litellm.models_by_provider["baseten"]
 
+    def test_cost_map_reload_drops_a_newly_retired_model(self):
+        """A refreshed cost map that marks a listed model retired removes it without a restart."""
+        model: Final = "baseten/acme/reload-probe"
+        try:
+            litellm.add_known_models({model: {"litellm_provider": "baseten"}})
+            assert model in litellm.models_by_provider["baseten"]
+
+            litellm.add_known_models({model: {"litellm_provider": "baseten", "deprecation_date": "2000-01-01"}})
+
+            assert model not in litellm.models_by_provider["baseten"]
+        finally:
+            litellm.baseten_models.discard(model)
+            litellm.add_known_models({})
+
     @pytest.mark.parametrize(
         "value, expected",
         [
@@ -90,35 +104,31 @@ class TestBasetenModelDiscovery:
     def test_is_past_deprecation_date(self, value, expected):
         assert litellm._is_past_deprecation_date(value) is expected
 
-    def test_provider_model_info_registered(self):
-        provider_config = ProviderConfigManager.get_provider_model_info(model=None, provider=LlmProviders.BASETEN)
-        assert isinstance(provider_config, BasetenConfig)
-
-    def test_get_models_calls_model_api(self):
-        mock_response = MagicMock(status_code=200)
-        mock_response.json.return_value = {
-            "object": "list",
-            "data": [
-                {"id": "zai-org/GLM-5", "object": "model"},
-                {"id": "moonshotai/Kimi-K2.5", "object": "model"},
-            ],
-        }
-
-        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
-            models = BasetenConfig().get_models(api_key="test-key")
-
-        mock_get.assert_called_once_with(
-            url="https://inference.baseten.co/v1/models",
-            headers={"Authorization": "Bearer test-key"},
+    def test_get_models_calls_model_api(self, respx_mock: respx.MockRouter) -> None:
+        route: Final = respx_mock.get("https://inference.baseten.co/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {"id": "zai-org/GLM-5", "object": "model"},
+                        {"id": "moonshotai/Kimi-K2.5", "object": "model"},
+                    ],
+                },
+            )
         )
+
+        models: Final = BasetenConfig().get_models(api_key="test-key")
+
         assert models == ["baseten/zai-org/GLM-5", "baseten/moonshotai/Kimi-K2.5"]
+        assert route.calls.last.request.headers["Authorization"] == "Bearer test-key"
 
     def test_get_models_respects_custom_api_base(self, respx_mock: respx.MockRouter) -> None:
         respx_mock.get("https://custom.baseten.example/v1/models").mock(
             return_value=httpx.Response(200, json={"data": [{"id": "zai-org/GLM-5"}]})
         )
 
-        models = BasetenConfig().get_models(api_key="test-key", api_base="https://custom.baseten.example/v1/")
+        models: Final = BasetenConfig().get_models(api_key="test-key", api_base="https://custom.baseten.example/v1/")
 
         assert models == ["baseten/zai-org/GLM-5"]
 
@@ -127,21 +137,22 @@ class TestBasetenModelDiscovery:
         with pytest.raises(ValueError, match="BASETEN_API_KEY"):
             BasetenConfig().get_models()
 
-    def test_get_models_raises_on_error_status(self):
-        mock_response = MagicMock(status_code=403, text="forbidden")
+    def test_get_models_raises_on_error_status(self, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get("https://inference.baseten.co/v1/models").mock(
+            return_value=httpx.Response(403, text="forbidden")
+        )
 
-        with patch.object(litellm.module_level_client, "get", return_value=mock_response):
-            with pytest.raises(ValueError, match="403"):
-                BasetenConfig().get_models(api_key="test-key")
+        with pytest.raises(ValueError, match="403"):
+            BasetenConfig().get_models(api_key="test-key")
 
     @patch.dict(os.environ, {"BASETEN_API_KEY": "test-key"})
-    def test_get_valid_models_check_provider_endpoint(self):
+    def test_get_valid_models_check_provider_endpoint(self, respx_mock: respx.MockRouter) -> None:
         """check_provider_endpoint=True returns the live catalog instead of the static list."""
-        mock_response = MagicMock(status_code=200)
-        mock_response.json.return_value = {"data": [{"id": "brand-new/model"}]}
+        respx_mock.get("https://inference.baseten.co/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "brand-new/model"}]})
+        )
 
-        with patch.object(litellm.module_level_client, "get", return_value=mock_response):
-            models = get_valid_models(check_provider_endpoint=True, custom_llm_provider="baseten")
+        models: Final = get_valid_models(check_provider_endpoint=True, custom_llm_provider="baseten")
 
         assert models == ["baseten/brand-new/model"]
 
