@@ -5,8 +5,10 @@ count actual model entries, not reserved meta keys) and the extraction of the
 """
 
 import asyncio, importlib, importlib.resources as importlib_get_model, json, litellm
+import ctypes
 import logging
 import os
+import signal
 import sys
 import threading
 from typing import Final
@@ -946,6 +948,27 @@ def test_import_load_reports_why_the_remote_fetch_failed(isolated_litellm_cost_s
     assert source["fallback_reason"].startswith("Remote fetch failed: HTTP 404")
 
 
+def test_import_load_reports_why_the_last_attempt_failed_while_a_retry_waits(isolated_litellm_cost_state, monkeypatch):
+    import litellm
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    monkeypatch.setattr(module, "_litellm_import_complete", threading.Event())
+    sleeps = _BlockingSleeps()
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(429)))
+    try:
+        bundled = module.load_model_cost_map_at_import(url=_URL, client=client, sleep=sleeps, rng=random.Random(0))
+        retry_wait_began_during_import = sleeps.called.acquire(timeout=1)
+        monkeypatch.setattr(litellm, "model_cost", bundled)
+        module.mark_litellm_import_complete()
+        assert retry_wait_began_during_import or sleeps.called.acquire(timeout=10)
+        source = get_model_cost_map_source_info()
+    finally:
+        _finish_fetch(sleeps.release)
+
+    assert source["source"] == "local"
+    assert source["fallback_reason"].startswith("Remote fetch failed: HTTP 429")
+
+
 def test_a_fetch_resumed_after_fork_adopts_the_remote_map_while_the_inherited_one_hangs(
     isolated_litellm_cost_state, monkeypatch
 ):
@@ -1015,6 +1038,26 @@ def test_references_to_the_map_taken_at_import_see_the_remote_map_once_it_lands(
     assert held_map["gpt-4o"]["input_cost_per_token"] == remote_price
     assert "claude-remote-only-test" in held_map
     assert "my-direct-edit" in litellm.model_cost
+
+
+def test_a_model_entry_held_from_import_sees_the_remote_price_and_edits_through_it_reach_the_map(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    body, remote_price = _remote_map_repricing_gpt_4o()
+    client, started, release = _held_client(httpx.Response(200, content=body))
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        held_entry = litellm.model_cost["gpt-4o"]
+        assert started.wait(timeout=10)
+    finally:
+        _finish_fetch(release)
+
+    held_entry["output_cost_per_token"] = 9.0
+    assert held_entry["input_cost_per_token"] == remote_price
+    assert litellm.model_cost["gpt-4o"]["output_cost_per_token"] == 9.0
 
 
 def test_a_model_entry_being_read_field_by_field_when_the_remote_map_lands_reads_to_the_end(
@@ -1219,6 +1262,33 @@ def test_a_partial_edit_made_before_the_remote_map_lands_keeps_only_the_fields_i
     assert litellm.model_cost["gpt-4o"]["input_cost_per_token"] == remote_price
     assert litellm.model_cost["gpt-4o"]["max_tokens"] == 7
     assert "output_cost_per_token" not in litellm.model_cost["gpt-4o"]
+
+
+def test_a_model_entry_replaced_by_one_with_fewer_fields_before_the_remote_map_lands_stays_as_written(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    remote_map = _load_root_cost_map()
+    remote_map["gpt-4o"] = {**remote_map["gpt-4o"], "output_cost_per_reasoning_token": 1.0}
+    client, started, release = _held_client(httpx.Response(200, content=json.dumps(remote_map).encode()))
+    replacement = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 2e-06,
+    }
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        litellm.model_cost["gpt-4o"] = dict(
+            replacement
+        )  # test-quality-ok: the replacement is what is under test, and the fixture restores model_cost
+    finally:
+        _finish_fetch(release)
+
+    assert litellm.model_cost["gpt-4o"] == replacement
 
 
 def test_a_model_deleted_before_the_remote_map_lands_stays_deleted(isolated_litellm_cost_state, monkeypatch):
@@ -1574,6 +1644,44 @@ def test_a_process_forked_while_the_remote_map_is_in_flight_inherits_it_once_ado
         if child == 0:
             inherited = "claude-remote-only-test" in litellm.model_cost and module._PendingImportFetch.fetch is None
             os._exit(0 if inherited else 1)
+        _, wait_status = os.waitpid(child, 0)
+    finally:
+        _finish_fetch(release)
+
+    assert os.waitstatus_to_exitcode(wait_status) == 0
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
+def test_a_process_forked_without_the_fork_hooks_while_the_remote_map_is_in_flight_prices_from_it(
+    isolated_litellm_cost_state, monkeypatch
+):
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    body, remote_price = _remote_map_repricing_gpt_4o()
+    first_request_started = threading.Event()
+    release = threading.Event()
+    served = []
+
+    def handler(request):
+        served.append(request)
+        if len(served) == 1:
+            first_request_started.set()
+            release.wait(timeout=10)
+        return httpx.Response(200, content=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert first_request_started.wait(timeout=10)
+        child = ctypes.PyDLL(None).fork()
+        if child == 0:
+            signal.signal(signal.SIGALRM, signal.SIG_DFL)
+            signal.alarm(10)
+            try:
+                cost = litellm.cost_per_token(model="gpt-4o", prompt_tokens=1000, completion_tokens=0)[0]
+                os._exit(0 if cost == pytest.approx(1000 * remote_price) else 1)
+            finally:
+                os._exit(2)
         _, wait_status = os.waitpid(child, 0)
     finally:
         _finish_fetch(release)

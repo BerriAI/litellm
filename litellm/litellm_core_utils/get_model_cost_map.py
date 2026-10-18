@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 import urllib.parse
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -431,7 +431,7 @@ def _fetch_remote_model_cost_map_with_retry_sync(
     url: str,
     timeout: int,
     attempts: range,
-    sleep: Callable[[float], None],
+    wait_to_retry: Callable[[_FetchAttemptRetryable, float], None],
     rng: random.Random,
     client: _SyncGetClient,
 ) -> ModelCostMapReloadResult:
@@ -443,7 +443,7 @@ def _fetch_remote_model_cost_map_with_retry_sync(
         wait_seconds = _next_retry_wait(outcome=outcome, attempt=attempt, max_attempts=max_attempts, rng=rng)
         if isinstance(wait_seconds, ModelCostMapReloadUnavailable):
             return wait_seconds
-        sleep(wait_seconds)
+        wait_to_retry(outcome, wait_seconds)
     return ModelCostMapReloadUnavailable(reason="model cost map fetch failed")
 
 
@@ -649,12 +649,18 @@ def _finalize_model_cost_map(model_cost: dict) -> dict:
     return _expand_model_aliases(model_cost)
 
 
-def _finalize_loaded_model_cost_map(loaded: ModelCostMapReloaded) -> ModelCostMapReloaded:
+def _record_and_finalize(loaded: ModelCostMapReloaded) -> ModelCostMapReloaded:
     _cost_map_source_info.source_revision = loaded.revision
     _cost_map_source_info.etag = loaded.etag
-    finalized: Final = _finalize_model_cost_map(loaded.model_cost_map)
-    GetModelCostMap._snapshot_loaded_catalog(finalized)  # pyright: ignore[reportPrivateUsage]  # same module
-    return replace(loaded, model_cost_map=finalized)
+    return replace(loaded, model_cost_map=_finalize_model_cost_map(loaded.model_cost_map))
+
+
+def _finalize_loaded_model_cost_map(loaded: ModelCostMapReloaded) -> ModelCostMapReloaded:
+    finalized: Final = _record_and_finalize(loaded)
+    GetModelCostMap._snapshot_loaded_catalog(  # pyright: ignore[reportPrivateUsage]  # same module
+        finalized.model_cost_map
+    )
+    return finalized
 
 
 def adopt_model_cost_map(
@@ -696,6 +702,7 @@ class _ScheduledAttempt:
 class _PendingImportFetch:
     fetch: _ImportFetch | None = None
     thread: threading.Thread | None = None
+    pid: int = 0
     next_attempt: _ScheduledAttempt | None = None
     adoptions: int = 0
 
@@ -711,6 +718,12 @@ def _litellm_model_cost_is(expected: Mapping[str, object]) -> bool:
 
 def _model_cost_replaced_since_import(fetch: _ImportFetch | None) -> bool:
     return fetch is not None and not _litellm_model_cost_is(fetch.bundled)
+
+
+def _report_import_fetch_failure(fetch: _ImportFetch | None, reason: str) -> None:
+    _litellm_import_complete.wait()
+    if not _model_cost_replaced_since_import(fetch):
+        _cost_map_source_info.fallback_reason = reason
 
 
 def _is_cost_entry(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: cost map keys are str
@@ -739,8 +752,9 @@ def _fields_written_since_import(
 def _merged_entry(
     current: Mapping[str, object], remote: Mapping[str, object], written: frozenset[str]
 ) -> dict[str, object]:  # mutable-ok: cost map entries are dicts callers may edit
+    trimmed: Final = any(name not in current for name in written)
     fields: Final = {
-        **{name: value for name, value in remote.items() if name not in written},
+        **{name: value for name, value in remote.items() if name not in written and (name in current or not trimmed)},
         **{name: value for name, value in current.items() if name in written},
     }
     if isinstance(remote, AliasedCostEntry):
@@ -754,8 +768,20 @@ def _alias_names(entry: Mapping[str, object]) -> tuple[str, ...] | None:
     return entry.names if isinstance(entry, AliasedCostEntry) else None
 
 
+def _updatable_in_place(merged: Mapping[str, object], current: Mapping[str, object]) -> bool:
+    return (
+        isinstance(current, MutableMapping)
+        and merged.keys() == current.keys()
+        and _alias_names(merged) == _alias_names(current)
+    )
+
+
 def _same_entry(merged: Mapping[str, object], current: Mapping[str, object]) -> bool:
     return merged == current and _alias_names(merged) == _alias_names(current)
+
+
+def _live_entry_if_equal(live: object, remote: object) -> object:
+    return live if live == remote else remote
 
 
 def _untouched_since_import(current: object, loaded: Mapping[str, object], parsed: Mapping[str, object]) -> bool:
@@ -782,9 +808,19 @@ def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object])
     changed: Final = {
         entry_id: entry for entry_id, entry in merged.items() if not _same_entry(entry, shared_once[entry_id][0])
     }
-    replaced: Final = {key: changed[id(value)] for key, value in tuple(fetch.bundled.items()) if id(value) in changed}
+    reshaped: Final = {
+        entry_id: entry
+        for entry_id, entry in changed.items()
+        if not _updatable_in_place(entry, shared_once[entry_id][0])
+    }
+    updated_in_place: Final = tuple(
+        (live, entry)
+        for entry_id, entry in changed.items()
+        if entry_id not in reshaped and isinstance(live := shared_once[entry_id][0], MutableMapping)
+    )
+    replaced: Final = {key: reshaped[id(value)] for key, value in tuple(fetch.bundled.items()) if id(value) in reshaped}
     kept_for_remote: Final = {
-        id(entry): changed.get(entry_id, current) for entry_id, (current, _, entry) in shared_once.items()
+        id(entry): reshaped.get(entry_id, current) for entry_id, (current, _, entry) in shared_once.items()
     }
     added: Final = {
         key: kept_for_remote.get(id(entry), entry)
@@ -796,9 +832,14 @@ def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object])
         for key in fetch.loaded.keys() - finalized.keys()
         if _untouched_since_import(fetch.bundled.get(key), fetch.loaded[key], parsed.get(key, _NO_FIELDS))
     )
+    for live_entry, entry in updated_in_place:
+        live_entry.update(entry)
     fetch.bundled.update({**replaced, **added})
     for key in dropped:
         fetch.bundled.pop(key, None)
+    GetModelCostMap._snapshot_loaded_catalog(  # pyright: ignore[reportPrivateUsage]  # same module
+        {key: _live_entry_if_equal(fetch.bundled.get(key), entry) for key, entry in remote}
+    )
     _record_remote_adoption()
     utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
     litellm.add_known_models_to_model_list()
@@ -810,7 +851,7 @@ def _adopt_remote_model_cost_map(
     url: str,
     timeout: int,
     attempts: range,
-    sleep: Callable[[float], None],
+    wait_to_retry: Callable[[_FetchAttemptRetryable, float], None],
     rng: random.Random,
     client: _SyncGetClient,
     import_fetch: _ImportFetch | None,
@@ -819,7 +860,7 @@ def _adopt_remote_model_cost_map(
         url=url,
         timeout=timeout,
         attempts=attempts,
-        sleep=sleep,
+        wait_to_retry=wait_to_retry,
         rng=rng,
         client=client,
     )
@@ -829,8 +870,7 @@ def _adopt_remote_model_cost_map(
             url,
             result.reason,
         )
-        if not _model_cost_replaced_since_import(import_fetch):
-            _cost_map_source_info.fallback_reason = f"Remote fetch failed: {result.reason}"
+        _report_import_fetch_failure(import_fetch, f"Remote fetch failed: {result.reason}")
         return
     _litellm_import_complete.wait()
     if not GetModelCostMap.validate_model_cost_map(
@@ -841,18 +881,17 @@ def _adopt_remote_model_cost_map(
             "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
             url,
         )
-        if not _model_cost_replaced_since_import(import_fetch):
-            _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
+        _report_import_fetch_failure(import_fetch, "Remote data failed integrity validation")
         return
     if _model_cost_replaced_since_import(import_fetch):
         verbose_logger.debug("LiteLLM: litellm.model_cost was replaced after import; not adopting the remote map")
         return
-    finalized: Final = _finalize_loaded_model_cost_map(result).model_cost_map
     if import_fetch is None:
+        finalized: Final = _finalize_loaded_model_cost_map(result).model_cost_map
         _record_remote_adoption()
         adopt_model_cost_map(finalized)
         return
-    _merge_into_import_map(import_fetch, finalized)
+    _merge_into_import_map(import_fetch, _record_and_finalize(result).model_cost_map)
 
 
 def _record_remote_adoption() -> None:
@@ -879,7 +918,7 @@ def _retry_remote_fetch_in_background(
             url=url,
             timeout=timeout,
             attempts=range(2, max_attempts + 1),
-            sleep=sleep,
+            wait_to_retry=lambda _, seconds: sleep(seconds),
             rng=rng,
             client=client,
             import_fetch=None,
@@ -889,12 +928,13 @@ def _retry_remote_fetch_in_background(
 
 
 def _run_import_fetch(fetch: _ImportFetch) -> None:
-    def settle_then_sleep(seconds: float) -> None:
+    def settle_then_sleep(failed: _FetchAttemptRetryable, seconds: float) -> None:
         scheduled: Final = _PendingImportFetch.next_attempt
         _PendingImportFetch.next_attempt = _ScheduledAttempt(
             attempt=(scheduled.attempt if scheduled is not None else fetch.first_attempt) + 1,
             at=time.monotonic() + seconds,
         )
+        _report_import_fetch_failure(fetch, f"Remote fetch failed: {failed.reason}")
         fetch.first_attempt_settled.set()
         fetch.sleep(seconds)
 
@@ -905,7 +945,7 @@ def _run_import_fetch(fetch: _ImportFetch) -> None:
             url=fetch.url,
             timeout=fetch.timeout,
             attempts=range(fetch.first_attempt, fetch.max_attempts + 1),
-            sleep=settle_then_sleep,
+            wait_to_retry=settle_then_sleep,
             rng=fetch.rng,
             client=fetch.client,
             import_fetch=fetch,
@@ -929,6 +969,7 @@ def _start_import_fetch(fetch: _ImportFetch) -> None:
     )
     _PendingImportFetch.fetch = fetch
     _PendingImportFetch.thread = thread
+    _PendingImportFetch.pid = os.getpid()
     thread.start()
 
 
@@ -973,7 +1014,18 @@ def wait_for_import_model_cost_map(since: int) -> bool:
     return _PendingImportFetch.adoptions != since
 
 
+_resume_after_unhooked_fork: Final = threading.Lock()
+
+
+def _resume_import_fetch_after_unhooked_fork() -> None:
+    with _resume_after_unhooked_fork:
+        if _PendingImportFetch.fetch is not None and _PendingImportFetch.pid != os.getpid():
+            _resume_import_fetch_after_fork()
+
+
 def wait_for_pending_import_model_cost_map() -> None:
+    if _PendingImportFetch.fetch is not None and _PendingImportFetch.pid != os.getpid():
+        _resume_import_fetch_after_unhooked_fork()
     pending: Final = _PendingImportFetch.fetch
     if (
         pending is None
@@ -1013,11 +1065,12 @@ def load_model_cost_map_at_import(
     Return the bundled map right away and fetch the remote one in a background thread,
     so ``import litellm`` never waits on the network. Once the remote map passes the
     integrity check it is merged into the returned dict in place, so references taken
-    at import see it too, and every field written since import keeps its value. A caller
-    that replaced ``litellm.model_cost`` outright keeps its own map. Costs and model info
-    looked up while the first attempt is in flight wait for it, see
-    ``wait_for_pending_import_model_cost_map``. A process forked during a retry wait
-    resumes the retry schedule on its own.
+    at import see it too, and every field written since import keeps its value. An entry
+    that lost fields since import keeps its own set of fields. A caller that replaced
+    ``litellm.model_cost`` outright keeps its own map. Costs and model info looked up
+    while the first attempt is in flight wait for it, see
+    ``wait_for_pending_import_model_cost_map``. A process forked while the fetch is
+    pending, by ``os.fork`` or by a server forking at the C level, resumes it on its own.
     """
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
         return get_model_cost_map(url=url, timeout=timeout)
