@@ -734,9 +734,20 @@ class VertexPassthroughLoggingHandler:
     @staticmethod
     def _get_custom_llm_provider_from_url(url: str) -> str:
         parsed_url: Final = urlparse(url)
-        if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
+        hostname: Final = parsed_url.hostname
+        if hostname is not None and hostname.endswith("generativelanguage.googleapis.com"):
             return litellm.LlmProviders.GEMINI.value
-        return litellm.LlmProviders.VERTEX_AI.value
+        if (
+            hostname is None
+            or hostname.endswith("googleapis.com")
+            or VertexPassthroughLoggingHandler._is_vertex_resource_path(parsed_url.path)
+        ):
+            return litellm.LlmProviders.VERTEX_AI.value
+        return litellm.LlmProviders.GEMINI.value
+
+    @staticmethod
+    def _is_vertex_resource_path(path: str) -> bool:
+        return "/projects/" in path or "/publishers/" in path
 
     @staticmethod
     def _is_multimodal_embedding_response(json_response: dict) -> bool:

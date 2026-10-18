@@ -161,6 +161,7 @@ pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
+_PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -633,8 +634,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
         )
+        kept_out_of_litellm_params: Final = (
+            _KEPT_OUT_OF_LITELLM_PARAMS
+            if _key_or_team_allows_client_pricing_override(user_api_key_dict)
+            else _KEPT_OUT_OF_LITELLM_PARAMS | _PRICING_MODEL_OVERRIDE_PARAMS
+        )
         litellm_params_in_body: Final = MappingProxyType(
-            {k: v for k, v in litellm_keys_in_body.items() if k not in _KEPT_OUT_OF_LITELLM_PARAMS}
+            {k: v for k, v in litellm_keys_in_body.items() if k not in kept_out_of_litellm_params}
         )
 
         _metadata = dict(

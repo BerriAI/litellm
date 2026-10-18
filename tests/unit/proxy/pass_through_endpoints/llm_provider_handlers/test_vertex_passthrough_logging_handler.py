@@ -213,6 +213,35 @@ def test_generate_content_spend_follows_the_vertex_location(
     assert _cost_the_logger_records(location, stream=stream) == pytest.approx(expected), (location, stream)
 
 
+@pytest.mark.parametrize(
+    "gemini_api_base", ["https://generativelanguage.googleapis.com", "https://llm-egress.internal.example/google"]
+)
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+def test_gemini_api_spend_has_no_vertex_uplift_whatever_host_serves_it(
+    regional_uplift_rate_card: None, monkeypatch: pytest.MonkeyPatch, gemini_api_base: str, stream: bool
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"gemini/{_UPLIFT_MODEL}",
+        {
+            "input_cost_per_token": _UPLIFT_INPUT_RATE,
+            "output_cost_per_token": _UPLIFT_OUTPUT_RATE,
+            "litellm_provider": "gemini",
+            "mode": "chat",
+        },
+    )
+    method: Final = "streamGenerateContent?alt=sse" if stream else "generateContent"
+
+    recorded: Final = _cost_the_logger_records_for(
+        f"{gemini_api_base}/v1beta/models/{_UPLIFT_MODEL}:{method}",
+        stream=stream,
+        reply=_generate_content_payload(),
+        stream_events=[_generate_content_payload()],
+    )
+
+    assert recorded == pytest.approx(7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE), (gemini_api_base, stream)
+
+
 _CUSTOM_PRICED_DEPLOYMENT: Final = "vertex-custom-priced-deployment"
 _CUSTOM_INPUT_RATE: Final = 2e-09
 _CUSTOM_OUTPUT_RATE: Final = 3e-09
