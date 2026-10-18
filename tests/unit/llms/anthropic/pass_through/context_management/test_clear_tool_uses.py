@@ -330,6 +330,45 @@ def test_history_of_only_excluded_tools_is_left_unchanged():
     assert new_messages == original
 
 
+def _clear_with_keep_two(messages):
+    return apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 2},
+        },
+    )
+
+
+def test_tiny_results_are_never_cleared_and_do_not_count_toward_keep():
+    messages = _make_history(6)
+    messages[2]["content"][0]["content"] = "(Bash completed with no output)"
+    messages[12]["content"][0]["content"] = [{"type": "text", "text": "\u9ce5" * 15}]
+    new_messages, applied = _clear_with_keep_two(messages)
+    assert _cleared_ids(new_messages) == {"toolu_01", "toolu_02"}
+    assert applied is not None
+    assert applied["cleared_tool_uses"] == 2
+
+
+def test_results_over_46_bytes_and_empty_results_still_count():
+    messages = _make_history(5)
+    messages[2]["content"][0]["content"] = "x" * 47
+    messages[4]["content"][0]["content"] = ""
+    messages[6]["content"][0]["content"] = [
+        {"type": "text", "text": "ok"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}},
+    ]
+    new_messages, applied = _clear_with_keep_two(messages)
+    assert _cleared_ids(new_messages) == {"toolu_00", "toolu_01"}
+    assert new_messages[6]["content"][0]["content"] == [{"type": "text", "text": CLEARED_TOOL_RESULT_PLACEHOLDER}]
+    assert applied is not None
+    assert applied["cleared_tool_uses"] == 3
+
+
 def _tool_inputs(messages):
     return {
         block["id"]: block["input"]
@@ -439,7 +478,7 @@ def test_tool_result_list_content_shape_preserved():
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_a",
-                    "content": [{"type": "text", "text": "huge result"}],
+                    "content": [{"type": "text", "text": "huge result: " + "x" * 200}],
                 }
             ],
         },
@@ -453,7 +492,7 @@ def test_tool_result_list_content_shape_preserved():
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_b",
-                    "content": [{"type": "text", "text": "keep me"}],
+                    "content": [{"type": "text", "text": "keep me: " + "y" * 200}],
                 }
             ],
         },

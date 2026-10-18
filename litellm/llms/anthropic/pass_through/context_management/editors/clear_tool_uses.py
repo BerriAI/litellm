@@ -1,6 +1,7 @@
 """``clear_tool_uses_20250919`` polyfill, matching the Anthropic API's selection.
 
-``keep`` counts clearable tool uses only, and uses of ``exclude_tools`` are never cleared. Clearing goes oldest
+``keep`` counts clearable tool uses only. Uses of ``exclude_tools`` are never cleared, and neither are uses whose
+result is 1 to 46 bytes of text, which the API leaves out of its count. Clearing goes oldest
 first in batches of at least ``clear_at_least`` tokens and leaves an incomplete last batch, so the cleared prefix
 only grows between requests and each batch costs one prompt-cache miss.
 """
@@ -25,6 +26,7 @@ from ..constants import (
 from ..placeholders import build_cleared_tool_result_content
 
 T = TypeVar("T")
+_TINY_RESULT_BYTES: Final = 46
 ToolNames = Literal["all"] | frozenset[str]
 
 
@@ -91,6 +93,31 @@ def _tool_result_texts(blocks: Sequence[Mapping[str, object]]) -> Mapping[str, s
     """Return tool_use_id -> the text of its tool_result; non-text blocks count as empty."""
     pairs: Final = (_tool_result_text(block) for block in blocks)
     return dict(pair for pair in pairs if pair is not None)
+
+
+def _text_bytes(content: object) -> int | None:
+    """Return the UTF-8 size of a text-only result, or None when it holds anything but text."""
+    if isinstance(content, str):
+        return len(content.encode("utf-8"))
+    parts: Final = _parse(_BLOCKS, content) or ()
+    texts: Final = tuple(part.get("text") for part in parts)
+    if any(part.get("type") != "text" or not isinstance(text, str) for part, text in zip(parts, texts)):
+        return None
+    return sum(len(text.encode("utf-8")) for text in texts if isinstance(text, str))
+
+
+def _tiny_result_id(block: Mapping[str, object]) -> str | None:
+    block_id: Final = block.get("tool_use_id")
+    if block.get("type") != "tool_result" or not isinstance(block_id, str):
+        return None
+    size: Final = _text_bytes(block.get("content"))
+    return block_id if size is not None and 0 < size <= _TINY_RESULT_BYTES else None
+
+
+def _tiny_result_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[str]:
+    """Return ids whose result is 1 to 46 bytes of text; the API neither counts nor clears those uses."""
+    ids: Final = (_tiny_result_id(block) for block in blocks)
+    return frozenset(block_id for block_id in ids if block_id is not None)
 
 
 def _resolve_clear_at_least(value: object) -> tuple[int, bool]:
@@ -297,8 +324,11 @@ def apply_clear_tool_uses_20250919(
 
     keep_count: Final = _resolve_keep_count(keep)
     blocks: Final = _all_blocks(messages)
+    tiny: Final = _tiny_result_ids(blocks)
     clearable: Final = tuple(
-        tool_use_id for tool_use_id, name in _tool_uses_in_order(blocks) if name not in exclude_tools
+        tool_use_id
+        for tool_use_id, name in _tool_uses_in_order(blocks)
+        if name not in exclude_tools and tool_use_id not in tiny
     )
     if len(clearable) <= keep_count:
         return messages, None
