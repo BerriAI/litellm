@@ -901,9 +901,9 @@ def _cap_requested_scopes(requested: str | None, server: MCPServer) -> str | Non
     dropped: Final = [scope for scope in scopes if scope not in configured]
     if dropped:
         verbose_logger.debug(
-            "MCP server %s: dropped requested OAuth scopes %s outside the configured scopes",
+            "MCP server %s: dropped %d requested OAuth scopes outside the configured scopes",
             server.server_id,
-            dropped,
+            len(dropped),
         )
     return " ".join(scope for scope in scopes if scope in configured) or None
 

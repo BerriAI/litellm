@@ -5170,17 +5170,22 @@ async def test_authorize_with_enforced_identity_binding_adds_only_openid_beyond_
 
 
 @pytest.mark.asyncio
-async def test_authorize_logs_dropped_scope_names_and_server_but_not_client_credentials(caplog):
+@pytest.mark.parametrize(
+    "client_scope, dropped_count", [("all ir.incidents:read", 1), ("all admin ir.incidents:read", 2)]
+)
+async def test_authorize_logs_dropped_scope_count_and_server_but_not_client_credentials(
+    caplog, client_scope, dropped_count
+):
     import logging
 
     server = _resource_server(scopes=list(_READ_SCOPES), configured_scopes=_READ_SCOPES)
     with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
-        await _upstream_authorize_scope(server, "all ir.incidents:read")
+        await _upstream_authorize_scope(server, client_scope)
 
     dropped_logs = [record for record in caplog.records if "outside the configured" in record.getMessage()]
     assert [record.levelno for record in dropped_logs] == [logging.DEBUG], caplog.text
     message = dropped_logs[0].getMessage()
-    assert "'all'" in message and "res-srv" in message
+    assert f"dropped {dropped_count} requested" in message and "res-srv" in message
     assert "ir.incidents:read" not in message
     assert "gateway-client" not in message and "gateway-secret" not in message
 
