@@ -7048,7 +7048,11 @@ class ProxyConfig:
             MappingProxyType(
                 {
                     name: typed_general_settings[name]
-                    for name in ("vector_store_deny_by_default", "search_tool_deny_by_default")
+                    for name in (
+                        "vector_store_deny_by_default",
+                        "search_tool_deny_by_default",
+                        "vertex_ai_pass_through_drop_anthropic_betas",
+                    )
                     if name in typed_general_settings
                 }
             )

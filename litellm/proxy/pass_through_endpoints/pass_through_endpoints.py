@@ -1087,6 +1087,10 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
+def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return headers
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1102,6 +1106,7 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1122,6 +1127,7 @@ async def pass_through_request(
         guardrails_config: Optional field - guardrails configuration for passthrough endpoint
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
+        upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1149,13 +1155,15 @@ async def pass_through_request(
     #########################################################
     try:
         url = httpx.URL(target)
-        headers = custom_headers
-        headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+        forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request_headers=safe_get_request_headers(request).copy(),
-            headers=headers,
+            headers=custom_headers,
             forward_headers=forward_headers,
         )
-        upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
+        upstream_headers: Final = _with_trace_context(
+            upstream_headers_filter(forwarded_headers),
+            parent_span=user_api_key_dict.parent_otel_span,
+        )
 
         requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
@@ -2105,6 +2113,7 @@ def create_pass_through_route(
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2244,6 +2253,7 @@ def create_pass_through_route(
                         custom_llm_provider=custom_llm_provider,
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
+                        upstream_headers_filter=upstream_headers_filter,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
