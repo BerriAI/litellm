@@ -2425,6 +2425,7 @@ def test_check_and_create_cache_clamps_negative_creation_tokens() -> None:
     assert cache_name == "cachedContents/created"
     assert logging_obj.vertex_ai_cache_creation_input_tokens == 0
 
+
 class TestResolvedCacheNameMemoization:
     """A resolved cache name is remembered, so a cache *hit* costs no round trip.
 
@@ -2465,6 +2466,19 @@ class TestResolvedCacheNameMemoization:
         response.json.return_value = {"cachedContents": [item]}
         return response
 
+    @staticmethod
+    def _scope_of(cache_key: str, *, api_key: str = "test_key") -> str:
+        """The memo key `_check` would land on, built the way the code builds it.
+
+        Spelled out rather than hardcoded because the scope carries a credential
+        fingerprint; what these tests assert is which entry is used, not its text.
+        """
+        from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
+            _memo_scope,
+        )
+
+        return _memo_scope("vertex_ai", "test_project", "us-central1", None, api_key, cache_key)
+
     def _check(self, cache_key: str):
         return self.context_caching.check_cache(
             cache_key=cache_key,
@@ -2500,7 +2514,7 @@ class TestResolvedCacheNameMemoization:
         assert self.mock_client.get.call_count == 1
 
         # the cache lapsed while the proxy was up
-        self.ctx_caching._memo["vertex_ai|test_project|us-central1||target_key"] = (
+        self.ctx_caching._memo[self._scope_of("target_key")] = (
             "cache_1",
             datetime.now(timezone.utc).timestamp() - 1,
         )
@@ -2529,6 +2543,62 @@ class TestResolvedCacheNameMemoization:
         assert self.mock_client.get.call_count == 2
         assert not self.ctx_caching._memo
 
+    def _check_as(self, cache_key: str, *, api_key: str, vertex_project: str = "test_project"):
+        return self.context_caching.check_cache(
+            cache_key=cache_key,
+            client=self.mock_client,
+            headers={"Authorization": "Bearer token"},
+            api_key=api_key,
+            api_base=None,
+            logging_obj=self.mock_logging,
+            custom_llm_provider="vertex_ai",
+            vertex_project=vertex_project,
+            vertex_location="us-central1",
+            vertex_auth_header="Bearer test-token",
+        )
+
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_a_second_credential_does_not_reuse_the_first_cache_name(self, mock_get_token_url):
+        """Two keys are two tenants, even with everything else equal.
+
+        A cachedContents name resolved with one credential is not readable with
+        another, so sharing a memo entry would hand the second caller a name it
+        cannot use and keep failing until the entry expired. The Gemini API path
+        has no project or location to tell tenants apart, which is why the
+        credential is in the scope.
+        """
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        self.mock_client.get.return_value = self._list_response("shared_prompt", self._expire_time(3600))
+
+        assert self._check_as("shared_prompt", api_key="key-tenant-a") == "cache_1"
+        assert self.mock_client.get.call_count == 1
+
+        # Same prompt, same project and region, different credential: this must
+        # resolve on its own rather than read the first tenant's entry.
+        assert self._check_as("shared_prompt", api_key="key-tenant-b") == "cache_1"
+        assert self.mock_client.get.call_count == 2, "the second credential reused the first one's memo entry"
+
+        # ...and each is memoized separately afterwards.
+        assert self._check_as("shared_prompt", api_key="key-tenant-a") == "cache_1"
+        assert self._check_as("shared_prompt", api_key="key-tenant-b") == "cache_1"
+        assert self.mock_client.get.call_count == 2
+
+    def test_the_credential_itself_is_never_stored(self):
+        """Only a non-reversible tag goes in the process-lifetime dict."""
+        from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
+            _credential_fingerprint,
+            _memo_scope,
+        )
+
+        secret: Final = "AIzaSy-super-secret-key"
+        scope: Final = _memo_scope("gemini", None, None, None, secret, "prompt_key")
+
+        assert secret not in scope
+        assert _credential_fingerprint(secret) in scope
+        # distinct keys, distinct tags; a missing key is not an error
+        assert _credential_fingerprint(secret) != _credential_fingerprint(secret + "x")
+        assert _credential_fingerprint(None) == ""
+
     @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
     def test_distinct_keys_do_not_share_an_entry(self, mock_get_token_url):
         """Two prefixes must resolve independently."""
@@ -2547,8 +2617,8 @@ class TestResolvedCacheNameMemoization:
         assert self.mock_client.get.call_count == 2
         # entries are scoped to the Google resource, not the prompt alone
         assert set(self.ctx_caching._memo) == {
-            "vertex_ai|test_project|us-central1||key_a",
-            "vertex_ai|test_project|us-central1||key_b",
+            self._scope_of("key_a"),
+            self._scope_of("key_b"),
         }
 
     def test_unparseable_expire_time_is_not_memoized(self):

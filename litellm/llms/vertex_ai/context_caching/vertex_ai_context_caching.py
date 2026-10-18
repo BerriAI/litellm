@@ -1,3 +1,4 @@
+import hashlib
 import re
 import time
 from collections.abc import Sequence
@@ -81,20 +82,47 @@ def _parse_expire_time(expire_time: str | None) -> float | None:
         return None
 
 
+def _credential_fingerprint(api_key: str | None) -> str:
+    """A non-reversible tag for the credential a memo entry belongs to.
+
+    Provider, project, location and base URL do not identify a tenant on the
+    Gemini API path -- the key does. Two keys sharing a memo entry would hand
+    one of them a cachedContents name it cannot read, and it would keep failing
+    until the entry expired. Only a truncated SHA-256 is kept: enough to tell
+    tenants apart, and no part of the secret itself held in a process-lifetime
+    dict.
+    """
+    if not api_key:
+        return ""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+
 def _memo_scope(
     custom_llm_provider: str,
     vertex_project: str | None,
     vertex_location: str | None,
     api_base: str | None,
+    api_key: str | None,
     cache_key: str,
 ) -> str:
-    """Scope a memo entry to the Google resource it belongs to.
+    """Scope a memo entry to the Google resource and credential it belongs to.
 
     A cachedContents name is a per-project, per-location resource, so the same
     prompt in a different project or region is a *different* cache. Keying on
-    the prompt alone would hand one deployment another's resource name.
+    the prompt alone would hand one deployment another's resource name. The
+    credential is part of the scope because the Gemini API path has no project
+    or location to distinguish tenants by.
     """
-    return "|".join((custom_llm_provider, vertex_project or "", vertex_location or "", api_base or "", cache_key))
+    return "|".join(
+        (
+            custom_llm_provider,
+            vertex_project or "",
+            vertex_location or "",
+            api_base or "",
+            _credential_fingerprint(api_key),
+            cache_key,
+        )
+    )
 
 
 def _remember_cache_name(cache_key: str, cache_name: str | None, expire_time: str | None) -> None:
@@ -242,7 +270,9 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
-        memo_key: Final = _memo_scope(custom_llm_provider, vertex_project, vertex_location, api_base, cache_key)
+        memo_key: Final = _memo_scope(
+            custom_llm_provider, vertex_project, vertex_location, api_base, api_key, cache_key
+        )
         remembered: Final = _get_remembered_cache_name(memo_key)
         if remembered is not None:
             return remembered
@@ -336,7 +366,9 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
-        memo_key: Final = _memo_scope(custom_llm_provider, vertex_project, vertex_location, api_base, cache_key)
+        memo_key: Final = _memo_scope(
+            custom_llm_provider, vertex_project, vertex_location, api_base, api_key, cache_key
+        )
         remembered: Final = _get_remembered_cache_name(memo_key)
         if remembered is not None:
             return remembered
@@ -559,7 +591,12 @@ class ContextCachingEndpoints(VertexBase):
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
         _remember_cache_name(
             _memo_scope(
-                custom_llm_provider, vertex_project, vertex_location, api_base, generated_cache_key
+                custom_llm_provider,
+                vertex_project,
+                vertex_location,
+                api_base,
+                api_key,
+                generated_cache_key,
             ),
             raw_response_cached.get("name"),
             raw_response_cached.get("expireTime"),
@@ -720,7 +757,12 @@ class ContextCachingEndpoints(VertexBase):
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
         _remember_cache_name(
             _memo_scope(
-                custom_llm_provider, vertex_project, vertex_location, api_base, generated_cache_key
+                custom_llm_provider,
+                vertex_project,
+                vertex_location,
+                api_base,
+                api_key,
+                generated_cache_key,
             ),
             raw_response_cached.get("name"),
             raw_response_cached.get("expireTime"),
