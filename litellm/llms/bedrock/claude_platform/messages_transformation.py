@@ -5,6 +5,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
+from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
@@ -64,6 +65,27 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
                 messages=messages,
             ),
             api_base,
+        )
+
+    async def avalidate_anthropic_messages_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        model: str,
+        messages: list[object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        return await run_aws_signing(
+            self.validate_anthropic_messages_environment,
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
         )
 
     def transform_anthropic_messages_request(

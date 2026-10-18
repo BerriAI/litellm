@@ -1813,13 +1813,13 @@ async def run_aws_signing(
     )
 
 
-async def sign_request_off_loop_if_aws(
+async def run_off_loop_if_aws(
     provider_config: object,
-    sign_request: Callable[_SignParams, _SignedRequest],
+    call: Callable[_SignParams, _SignedRequest],
     /,
     *args: _SignParams.args,
-    **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped sign_request signature
+    **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped call's signature
 ) -> _SignedRequest:
     if isinstance(provider_config, SignsRequestsWithAWS):
-        return await run_aws_signing(sign_request, *args, **kwargs)
-    return sign_request(*args, **kwargs)
+        return await run_aws_signing(call, *args, **kwargs)
+    return call(*args, **kwargs)
