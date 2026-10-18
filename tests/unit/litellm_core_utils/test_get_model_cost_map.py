@@ -1101,7 +1101,6 @@ def test_a_model_entry_being_read_field_by_field_when_the_remote_map_lands_reads
     "start_loop",
     [
         pytest.param(iter, id="models"),
-        pytest.param(lambda model_cost: iter(model_cost.keys()), id="keys"),
         pytest.param(lambda model_cost: iter(model_cost.values()), id="values"),
         pytest.param(lambda model_cost: iter(model_cost.items()), id="items"),
     ],

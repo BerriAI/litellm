@@ -51,7 +51,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 
 if TYPE_CHECKING:
-    from _collections_abc import dict_items, dict_keys, dict_values
+    from _collections_abc import dict_items, dict_values
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
@@ -589,9 +589,6 @@ class _SnapshotIteratingDict(dict[str, object]):
 
     def __iter__(self) -> Iterator[str]:
         return iter(tuple(super().keys()))
-
-    def keys(self) -> "dict_keys[str, object]":
-        return dict(super().items()).keys()
 
     def values(self) -> "dict_values[str, object]":
         return dict(super().items()).values()
