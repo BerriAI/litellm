@@ -21520,8 +21520,10 @@ async def test_key_generation_premium_permission_error_precedes_project_ownershi
             team_table=None,
         )
 
-    assert error.value.status_code == 500
-    assert error.value.detail == {"error": "Internal Server Error."}
+    assert error.value.status_code == 403
+    detail = str(error.value.detail)
+    assert "get_spend_routes" in detail
+    assert "Enterprise" in detail
     mock_prisma_client.insert_data.assert_not_awaited()
 
 
