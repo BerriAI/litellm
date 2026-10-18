@@ -9,7 +9,7 @@ import json
 import unittest
 from collections.abc import Mapping
 from typing import Any, Final, Literal, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
@@ -2457,7 +2457,10 @@ class TestResponsesWSFirstFrameModelAuth:
         }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("relay_outcome", ["still_relaying", "already_returned", "returns_despite_the_cancel"])
+    @pytest.mark.parametrize(
+        "relay_outcome",
+        ["still_relaying", "already_returned", "returns_despite_the_cancel", "crashes_despite_the_cancel"],
+    )
     async def test_session_limit_frees_the_slot_at_once_and_never_cuts_the_failure_row(self, relay_outcome: str):
         from litellm.exceptions import RateLimitError
         from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
@@ -2480,6 +2483,7 @@ class TestResponsesWSFirstFrameModelAuth:
             return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
         )
         refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        crash = RuntimeError("relay crashed")
         row_may_finish = asyncio.Event()
         row_written = asyncio.Event()
 
@@ -2493,9 +2497,11 @@ class TestResponsesWSFirstFrameModelAuth:
                 guarded.bill_refusal(refusal)
                 if relay_outcome == "still_relaying":
                     await asyncio.Event().wait()
-                if relay_outcome == "returns_despite_the_cancel":
+                if relay_outcome in ("returns_despite_the_cancel", "crashes_despite_the_cancel"):
                     with contextlib.suppress(asyncio.CancelledError):
                         await asyncio.Event().wait()
+                if relay_outcome == "crashes_despite_the_cancel":
+                    raise crash
                 return refusal
 
             return relay()
@@ -2505,7 +2511,10 @@ class TestResponsesWSFirstFrameModelAuth:
             side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
         )
         proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
-        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+        async def release_over_the_network(user_api_key_dict):
+            await asyncio.sleep(0.01)
+
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(side_effect=release_over_the_network)
 
         with (
             patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
@@ -2535,13 +2544,16 @@ class TestResponsesWSFirstFrameModelAuth:
             )
             finished, _ = await asyncio.wait({endpoint}, timeout=1)
             assert endpoint in finished
-            ws.close.assert_awaited_once_with(code=1000, reason="Session duration limit reached")
+            limit_close = call(code=1000, reason="Session duration limit reached")
+            crash_close = call(code=1011, reason="Internal server error")
+            crashed = relay_outcome == "crashes_despite_the_cancel"
+            assert ws.close.await_args_list == ([limit_close, crash_close] if crashed else [limit_close])
             proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
             assert not row_written.is_set()
             row_may_finish.set()
             await asyncio.wait_for(row_written.wait(), timeout=1)
 
-        assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"] is refusal
+        assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"] is (crash if crashed else refusal)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("ending", ["client_closed", "crash"])

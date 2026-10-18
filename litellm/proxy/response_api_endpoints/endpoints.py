@@ -2107,7 +2107,7 @@ async def _responses_websocket_session(
             task_name="Responses WebSocket failure row",
         )
 
-    async def relay_failure() -> Exception | None:
+    async def relay_and_bill_failure() -> asyncio.Task[object] | None:
         try:
             llm_call: Final = await route_request(
                 data=routed_data,
@@ -2121,21 +2121,22 @@ async def _responses_websocket_session(
                 _ = bill_socket_failure(refused_turns.first)
             raise
         except Exception as e:
+            crash_row: Final = bill_socket_failure(e)
             with contextlib.suppress(Exception):
                 await websocket.send_text(_responses_ws_failure_frame(e))
             with contextlib.suppress(Exception):
                 await websocket.close(code=1011, reason="Internal server error")
-            return e
-        return outcome if isinstance(outcome, Exception) else None
+            return crash_row
+        return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
 
     # Phase 2: route to upstream provider
     try:
-        failure: Final = await relay_failure()
+        failure_row: Final = await relay_and_bill_failure()
     finally:
         await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
-    if failure is not None:
+    if failure_row is not None:
         with contextlib.suppress(Exception):
-            await asyncio.shield(bill_socket_failure(failure))
+            await asyncio.shield(failure_row)
 
 
 @router.websocket("/v1/responses")
