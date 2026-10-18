@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from packaging.version import Version
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,7 +28,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_environment_value,
 )
-from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info, redacted_guardrail_response
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import str_to_bool
@@ -57,6 +58,7 @@ else:
 
 _DENIED_STEERING_KEYS: Final = frozenset({"headers", "endpoint", "caching_groups", "previous_models"})
 _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+_MASKING_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REDACTED_PROXY_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "cookie", "referer"})
 
 
@@ -739,9 +741,9 @@ class LangFuseLogger:
             mask_output: Final = _as_steering_flag(clean_metadata.pop("mask_output", False))
             # Look for masking function in the dedicated location first (set by scrub_sensitive_keys_in_metadata)
             # Fall back to metadata for backwards compatibility
-            masking_function: Final = litellm_params.get("_langfuse_masking_function") or clean_metadata.pop(
-                "langfuse_masking_function", None
-            )
+            masking_function: Final = _MASKING_PARAMS_ADAPTER.validate_python(litellm_params).get(
+                "_langfuse_masking_function"
+            ) or clean_metadata.pop("langfuse_masking_function", None)
 
             # Apply custom masking function if provided
             masked_input: Final[object] = (
@@ -993,7 +995,11 @@ class LangFuseLogger:
                     tracing=self.tracing, parent=generation, enrichments=enrichments
                 )
                 self._log_guardrail_information_as_span(
-                    tracing=self.tracing, parent=generation, standard_logging_object=standard_logging_object
+                    tracing=self.tracing,
+                    parent=generation,
+                    standard_logging_object=standard_logging_object,
+                    mask_content=mask_input or mask_output,
+                    masking_function=masking_function if callable(masking_function) else None,
                 )
             finally:
                 generation.end(end_time)
@@ -1136,11 +1142,29 @@ class LangFuseLogger:
             return flush_interval
         return parsed
 
+    @staticmethod
+    def _masked_guardrail_response(
+        value: object, mask_content: bool, masking_function: Callable[[object], object] | None
+    ) -> object:
+        if mask_content:
+            return redacted_guardrail_response(value)
+        response: Final = _object_mapping(value)
+        if masking_function is None or response is None or "compressed_messages" not in response:
+            return value
+        return {
+            **response,
+            "compressed_messages": LangFuseLogger._apply_masking_function(
+                response["compressed_messages"], masking_function
+            ),
+        }
+
     def _log_guardrail_information_as_span(
         self,
         tracing: "LangfuseTracing",
         parent: "LangfuseObservation",
         standard_logging_object: StandardLoggingPayload | None,
+        mask_content: bool = False,
+        masking_function: Callable[[object], object] | None = None,
     ):
         """
         Log guardrail information as a span
@@ -1179,7 +1203,9 @@ class LangFuseLogger:
                 attributes=observation_attributes(
                     observation_type="span",
                     input=guardrail_entry.get("guardrail_request", None),
-                    output=guardrail_entry.get("guardrail_response", None),
+                    output=self._masked_guardrail_response(
+                        guardrail_entry.get("guardrail_response"), mask_content, masking_function
+                    ),
                     metadata=MappingProxyType(
                         {
                             "guardrail_name": guardrail_entry.get("guardrail_name", None),

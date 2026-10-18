@@ -285,7 +285,9 @@ class GuardrailSpanData:
     _ERROR_STATUSES: ClassVar[frozenset[str]] = frozenset({"guardrail_intervened", "guardrail_failed_to_respond"})
 
     @classmethod
-    def from_logging_entry(cls, entry: StandardLoggingGuardrailInformation) -> GuardrailSpanData:
+    def from_logging_entry(
+        cls, entry: StandardLoggingGuardrailInformation, *, capture_content: bool = True
+    ) -> GuardrailSpanData:
         """Build from one ``standard_logging_guardrail_information`` entry.
 
         Reads the canonical, provider-agnostic ``StandardLoggingGuardrailInformation``
@@ -293,6 +295,8 @@ class GuardrailSpanData:
         typed as enums or lists (e.g. ``guardrail_mode``) are normalized to a
         stable string rather than assumed to already be plain strings.
         """
+        from litellm.litellm_core_utils.redact_messages import redacted_guardrail_response
+
         get: Final = cast(Mapping[str, object], entry).get
         status: Final = as_str(get("guardrail_status"))
         response: Final = get("guardrail_response")
@@ -310,7 +314,9 @@ class GuardrailSpanData:
             masked_entity_count=_total_masked_entities(get("masked_entity_count")),
             provider=as_str(get("guardrail_provider")),
             action=as_str(get("guardrail_action")),
-            response_json=_json_or_none(response) if response is not None else None,
+            response_json=_json_or_none(response if capture_content else redacted_guardrail_response(response))
+            if response is not None
+            else None,
             violation_categories=as_str_tuple(get("violation_categories")) or (),
             confidence_score=as_float(get("confidence_score")),
             risk_score=as_float(get("risk_score")),
