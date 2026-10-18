@@ -446,6 +446,32 @@ def test_vertex_pass_through_drops_the_configured_anthropic_beta_before_calling_
     assert json.loads(outbound.content) == _VERTEX_CLAUDE_BODY
 
 
+
+def test_vertex_pass_through_matches_a_configured_beta_written_with_spaces_around_it(
+    vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(
+        proxy_server.general_settings, "vertex_ai_pass_through_drop_anthropic_betas", [f" {_VERTEX_REJECTED_BETA} "]
+    )
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_CALLER_PATH}").mock(
+        return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
+    )
+
+    response: Final = vertex_proxy.post(
+        f"/vertex_ai/{_VERTEX_CALLER_PATH}",
+        json=_VERTEX_CLAUDE_BODY,
+        headers={
+            "x-litellm-api-key": "sk-caller",
+            "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}",
+            "anthropic-beta": _VERTEX_SENT_BETAS,
+        },
+    )
+
+    assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
+    assert upstream.calls.last.request.headers["anthropic-beta"] == "claude-code-20250219,effort-2025-11-24"
+
 def test_vertex_pass_through_refuses_a_malformed_drop_setting_without_calling_vertex(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
 ) -> None:
