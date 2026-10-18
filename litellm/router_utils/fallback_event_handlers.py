@@ -26,6 +26,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_stream_stall,
     set_cooldown_deployments,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -70,6 +71,13 @@ def _trigger_cooldown_for_failed_deployment(
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: failure originated "
                 "from advisor orchestration, not the selected deployment."
+            )
+            return
+
+        if is_stream_stall(exception):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: its stream stalled on a read timeout, "
+                "which stays out of cooldown as it does for the primary deployment."
             )
             return
 

@@ -4377,12 +4377,15 @@ class Router:
 
                 return response
         except litellm.Timeout as e:
-            deployment_request_timeout_param: Final = _timeout_debug_deployment_dict.get("litellm_params", {}).get(
-                "request_timeout", None
+            deployment_litellm_params: Final[Mapping[str, object]] = _timeout_debug_deployment_dict.get(
+                "litellm_params", {}
             )
-            deployment_timeout_param = _timeout_debug_deployment_dict.get("litellm_params", {}).get("timeout", None)
             if litellm.expose_router_debug_in_errors:
-                e.message += f"\n\nDeployment Info: request_timeout: {deployment_request_timeout_param}\ntimeout: {deployment_timeout_param}"
+                e.message += (
+                    f"\n\nDeployment Info: request_timeout: {deployment_litellm_params.get('request_timeout')}"
+                    f"\ntimeout: {deployment_litellm_params.get('timeout')}"
+                    f"\nstream_timeout: {deployment_litellm_params.get('stream_timeout')}"
+                )
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
