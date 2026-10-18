@@ -47,4 +47,5 @@ def test_foreign_server_cannot_shadow_another_server_tool_name():
         # a legit bare-name row keeps dispatching to its owner
         assert manager.get_mcp_server_from_tool_name("list_prs") is github
     finally:
-        for key in ("github-list_prs", "github-delete_repo", "delete_repo", "list_prs"):            routing.pop(key, None)
+        for key in ("github-list_prs", "github-delete_repo", "delete_repo", "list_prs"):
+            routing.pop(key, None)
