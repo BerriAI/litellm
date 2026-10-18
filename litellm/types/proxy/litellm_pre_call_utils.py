@@ -25,5 +25,6 @@ class SecretFields(TypedDict):
 
     raw_headers: dict
     _headroom_compressed_prompt: NotRequired[ReadOnly[str]]
+    _headroom_prompt_export_allowed: NotRequired[ReadOnly[bool]]
     user_provider_credentials: NotRequired[ReadOnly[Mapping[str, str]]]
     user_provider_credentials_user_id: NotRequired[ReadOnly[str]]

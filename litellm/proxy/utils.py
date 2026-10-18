@@ -172,6 +172,7 @@ from litellm.proxy._types import (
     Member,
     SpecialModelNames,
     UserAPIKeyAuth,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -2192,6 +2193,7 @@ class ProxyLogging:
         prompt_id: str,
         prompt_version: int | None,
         call_type: CallTypesLiteral,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> None:
         """Process prompt template if applicable."""
 
@@ -2218,6 +2220,11 @@ class ProxyLogging:
             data.pop("prompt_environment", None)
 
         if custom_logger and prompt_spec is not None:
+            response_state: Final = TypeAdapter(Mapping[str, object]).validate_python(data).get("secret_fields")
+            if isinstance(response_state, dict):
+                response_state["_headroom_prompt_export_allowed"] = (
+                    user_api_key_dict is not None and user_api_key_has_admin_view(user_api_key_dict)
+                )
             is_responses_call: Final = call_type == "aresponses"
             original_responses_input: Final = data.get("input", "") if is_responses_call else ""
             client_messages: Final = (
@@ -2526,6 +2533,7 @@ class ProxyLogging:
                 prompt_id=prompt_id,
                 prompt_version=parse_prompt_version(data.get("prompt_version", None)),
                 call_type=call_type,
+                user_api_key_dict=user_api_key_dict,
             )
 
         # Snapshotted here, before _maybe_execute_pipelines or any guardrail in

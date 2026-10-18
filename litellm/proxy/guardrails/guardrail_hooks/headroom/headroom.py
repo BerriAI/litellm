@@ -861,7 +861,11 @@ class HeadroomGuardrail(CustomGuardrail):
             protected_indices=protected_indices,
         )
 
-        if _is_str_object_dict(response_state) and self._request_header_enabled(request_data, _RETURN_PROMPT_HEADER):
+        if (
+            _is_str_object_dict(response_state)
+            and response_state.get("_headroom_prompt_export_allowed") is not False
+            and self._request_header_enabled(request_data, _RETURN_PROMPT_HEADER)
+        ):
             encoded_prompt: Final = base64.b64encode(
                 json.dumps(compressed, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             ).decode("ascii")

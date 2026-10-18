@@ -33,6 +33,7 @@ from fastapi import HTTPException
 
 import litellm
 
+from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     HeadroomGuardrail,
     has_headroom_retrieve_tool,
@@ -3100,9 +3101,7 @@ async def test_compressed_prompt_response_header_requires_request_opt_in(
     )
     request_data: Final = {
         "secret_fields": {"raw_headers": {"x-preserved": "kept"}},
-        "proxy_server_request": {
-            "headers": {} if opt_in is None else {"x-litellm-return-compressed-prompt": opt_in}
-        }
+        "proxy_server_request": {"headers": {} if opt_in is None else {"x-litellm-return-compressed-prompt": opt_in}},
     }
     result: Final = await guardrail.apply_guardrail(
         inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
@@ -3124,6 +3123,79 @@ async def test_compressed_prompt_response_header_requires_request_opt_in(
     else:
         assert "x-litellm-compressed-prompt" not in headers
     assert "x-litellm-compressed-prompt-omitted" not in headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY]
+)
+@pytest.mark.parametrize("managed", [True, False])
+async def test_compressed_prompt_respects_managed_template_visibility(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, role: LitellmUserRoles, managed: bool
+) -> None:
+    import base64
+    from datetime import datetime
+
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+    from litellm.proxy.prompts import prompt_registry
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    registry: Final = prompt_registry.InMemoryPromptRegistry()
+    monkeypatch.setattr(prompt_registry, "IN_MEMORY_PROMPT_REGISTRY", registry)
+    registry.initialize_prompt(
+        PromptSpec(
+            prompt_id="private-template",
+            litellm_params=PromptLiteLLMParams(
+                prompt_id="private-template",
+                prompt_integration="dotprompt",
+                dotprompt_content="System: Private system canary",
+            ),
+        )
+    )
+    guardrail: Final = HeadroomGuardrail(
+        api_base=FAKE_API_BASE, guardrail_name="headroom", default_on=True, event_hook="pre_call"
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(
+        200, json={"messages": COMPRESSED_MESSAGES, "tokens_before": 1000, "tokens_after": 10}
+    )
+    logging_obj: Final = Logging(
+        model="openai/test",
+        messages=ORIGINAL_MESSAGES,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="prompt-visibility",
+        function_id="prompt-visibility",
+    )
+    request_data: Final = {
+        "model": "openai/test",
+        "messages": ORIGINAL_MESSAGES,
+        "litellm_logging_obj": logging_obj,
+        "secret_fields": {"raw_headers": {}},
+        "proxy_server_request": {"headers": {"x-litellm-return-compressed-prompt": "true"}},
+        **({"prompt_id": "private-template"} if managed else {}),
+    }
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    result: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_role=role), data=request_data, call_type="acompletion"
+    )
+    assert result is not None
+    assert route.call_count == 1
+    assert "A" * 5000 not in json.dumps(result["messages"])
+    assert ("Private system canary" in json.dumps(result["messages"])) is managed
+    headers: Final = get_logging_caching_headers(result) or {}
+    if managed and role == LitellmUserRoles.INTERNAL_USER:
+        assert "x-litellm-compressed-prompt" not in headers
+    else:
+        decoded: Final = json.loads(base64.b64decode(headers["x-litellm-compressed-prompt"]))
+        assert decoded == result["messages"]
 
 
 @pytest.mark.asyncio
