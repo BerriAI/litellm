@@ -8820,6 +8820,55 @@ def test_drop_params_drops_a_pdf_the_model_cannot_read(respx_mock: respx.MockRou
     assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
 
 
+@pytest.mark.parametrize(
+    "pdf_file",
+    [
+        {"filename": "report.pdf", "file_data": "JVBERi0xLjQK"},
+        {"file_id": "file-report", "format": "application/pdf"},
+        {"file_id": "file-report", "filename": "Report.PDF"},
+    ],
+    ids=["bare_base64_named_pdf", "file_id_with_pdf_format", "file_id_named_pdf"],
+)
+def test_drop_params_drops_a_pdf_file_part_without_a_data_url(
+    respx_mock: respx.MockRouter, pdf_file: dict[str, str]
+) -> None:
+    api_base: Final = "http://localhost:12350/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[{"role": "user", "content": [_SUMMARIZE_TEXT_PART, {"type": "file", "file": pdf_file}]}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
+def test_drop_params_keeps_an_image_data_url_whose_filename_says_pdf(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12351/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+    image_part: Final = {
+        "type": "file",
+        "file": {"filename": "scan.pdf", "file_data": "data:image/png;base64,iVBORw0KGgo="},
+    }
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[{"role": "user", "content": [_SUMMARIZE_TEXT_PART, image_part]}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART, image_part]}]
+
+
 def test_pdf_to_a_model_that_cannot_read_it_is_rejected_without_drop_params(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "http://localhost:12348/v1"
     route: Final = _mock_pdf_chat_route(respx_mock, api_base)

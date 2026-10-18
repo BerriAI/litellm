@@ -9,6 +9,7 @@ import httpx
 
 import litellm
 from litellm import LlmProviders
+from litellm.litellm_core_utils.prompt_templates.common_utils import messages_with_file_parts_as_image_urls
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 
@@ -217,7 +218,7 @@ class VertexAIPartnerModels(VertexBase):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,
-                    messages=messages,
+                    messages=list(messages_with_file_parts_as_image_urls(messages)),
                     acompletion=acompletion,
                     api_base=api_base,
                     model_response=model_response,

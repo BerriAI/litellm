@@ -297,8 +297,10 @@ def anthropic_inline_document(document: Mapping[str, object]) -> InlineDocument 
 
 def is_pdf_file_part(part: object) -> bool:
     match part:
-        case {"type": "file", "file": {"file_data": str() as file_data}}:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data.startswith("data:"):
             return file_data.startswith("data:application/pdf")
+        case {"type": "file", "file": {"format": str() as file_format}}:
+            return file_format == "application/pdf"
         case {"type": "file", "file": {"filename": str() as filename}}:
             return filename.lower().endswith(".pdf")
         case _:
@@ -330,6 +332,36 @@ def _message_without_pdf_file_parts(message: AllMessageValues) -> AllMessageValu
 
 def messages_without_pdf_file_parts(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
     return tuple(_message_without_pdf_file_parts(message) for message in messages)
+
+
+_CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
+
+
+def _file_part_as_image_url(part: object) -> object:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
+            fields: Final = _CONTENT_PART.validate_python(part)
+            return {key: value for key, value in fields.items() if key != "file"} | {
+                "type": "image_url",
+                "image_url": {"url": file_data},
+            }
+        case _:
+            return part
+
+
+def message_with_file_parts_as_image_urls(message: Mapping[str, object]) -> Mapping[str, object]:
+    parts: Final = content_parts(message)
+    if not parts:
+        return message
+    return {**message, "content": [_file_part_as_image_url(part) for part in parts]}
+
+
+def _typed_message_with_file_parts_as_image_urls(message: AllMessageValues) -> AllMessageValues:
+    return cast(AllMessageValues, message_with_file_parts_as_image_urls(message))  # cast-ok: same message, image parts
+
+
+def messages_with_file_parts_as_image_urls(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    return tuple(_typed_message_with_file_parts_as_image_urls(message) for message in messages)
 
 
 def _image_part_url(part: Mapping[str, object]) -> str | None:
