@@ -2,6 +2,7 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
+import json
 from typing import Final, cast
 
 from pydantic import JsonValue
@@ -11,13 +12,19 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
     CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
     CLAUDE_FABLE_5_1_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_MESSAGES_STREAM,
     CLAUDE_FABLE_5_1_STREAM,
     CLAUDE_FABLE_5_1_THINKING,
     CLAUDE_FABLE_5_1_TOOL_CALL,
+    CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
     CLAUDE_OPUS_5_5_CACHE_READ,
     CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
     CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
     CLAUDE_OPUS_5_5_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_STREAM,
     CLAUDE_OPUS_5_5_STREAM,
     CLAUDE_OPUS_5_5_THINKING,
     CLAUDE_OPUS_5_5_TOOL_CALL,
@@ -25,6 +32,8 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_SONNET_5_5_CACHE_WRITE_1H,
     CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
     CLAUDE_SONNET_5_5_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_MESSAGES_STREAM,
     CLAUDE_SONNET_5_5_STREAM,
     CLAUDE_SONNET_5_5_THINKING,
     CLAUDE_SONNET_5_5_TOOL_CALL,
@@ -41,26 +50,72 @@ from integration.cost_calculation.cost_tracking_case import (
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
-def _gemini_case_response(response: JsonResponse | SseResponse, model_version: str) -> JsonResponse | SseResponse:
+def _gemini_case_response(
+    response: JsonResponse | SseResponse,
+    model_version: str,
+    usage_fields: dict[str, JsonValue] | None = None,
+) -> JsonResponse | SseResponse:
     match response:
         case JsonResponse():
-            return response.model_copy(update={"body": {**response.body, "modelVersion": model_version}})
+            usage: Final = response.body.get("usageMetadata")
+            body: Final = {**response.body, "modelVersion": model_version}
+            return response.model_copy(
+                update={
+                    "body": {
+                        **body,
+                        **(
+                            {
+                                "usageMetadata": {
+                                    **cast(dict[str, JsonValue], usage),
+                                    **usage_fields,
+                                }
+                            }
+                            if usage_fields is not None and isinstance(usage, dict)
+                            else {}
+                        ),
+                    }
+                }
+            )
         case SseResponse():
             return response.model_copy(
                 update={
-                    "frames": tuple(frame.replace("gemini-3.8-flash", model_version) for frame in response.frames)
+                    "frames": tuple(
+                        _gemini_case_frame(frame, model_version, usage_fields) for frame in response.frames
+                    )
                 }
             )
 
 
+def _gemini_case_frame(frame: str, model_version: str, usage_fields: dict[str, JsonValue] | None) -> str:
+    replaced: Final = frame.replace("gemini-3.8-flash", model_version)
+    if usage_fields is None:
+        return replaced
+    prefix, separator, payload = replaced.partition("data: ")
+    if not separator or payload == "[DONE]":
+        return replaced
+    event: Final = cast(dict[str, JsonValue], json.loads(payload))
+    usage: Final = event.get("usageMetadata")
+    if not isinstance(usage, dict):
+        return replaced
+    return f"{prefix}data: {json.dumps({**event, 'usageMetadata': {**usage, **usage_fields}})}"
+
+
 def _gemini_case(
-    sibling: CostTrackingTestCase, name: str, model: str, expected: ExactExpected
+    sibling: CostTrackingTestCase,
+    name: str,
+    model: str,
+    expected: ExactExpected,
+    *,
+    usage_fields: dict[str, JsonValue] | None = None,
+    model_version: str = "gemini-3.1-pro-preview",
 ) -> CostTrackingTestCase:
     return sibling.model_copy(
         update={
             "name": name,
             "model": model,
-            "response": _gemini_case_response(cast(JsonResponse | SseResponse, sibling.response), "gemini-3.1-pro-preview"),
+            "response": _gemini_case_response(
+                cast(JsonResponse | SseResponse, sibling.response), model_version, usage_fields
+            ),
             "expected": expected,
         }
     )
@@ -97,6 +152,7 @@ def _vertex_claude_shape_case(
     expected: ExactExpected,
     response_content: list[dict[str, JsonValue]] | None = None,
     adaptive_thinking: bool = False,
+    thinking_effort: str = "medium",
 ) -> CostTrackingTestCase:
     response: Final = cast(JsonResponse, sibling.response)
     request: Final = (
@@ -107,7 +163,7 @@ def _vertex_claude_shape_case(
                 if key not in {"reasoning_effort", "allowed_openai_params"}
             },
             "thinking": {"type": "adaptive"},
-            "output_config": {"effort": "medium"},
+            "output_config": {"effort": thinking_effort},
             "allowed_openai_params": ["thinking", "output_config"],
         }
         if adaptive_thinking
@@ -1716,6 +1772,8 @@ GEMINI_3_8_FLASH_INPUT_TEXT: Final = CostTrackingTestCase(
                 "candidatesTokenCount": 412,
                 "totalTokenCount": 2252,
                 "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
+                "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+                "trafficType": "ON_DEMAND",
             },
             "modelVersion": "gemini-3.8-flash",
         },
@@ -1770,6 +1828,8 @@ GEMINI_3_8_FLASH_CACHE_READ: Final = CostTrackingTestCase(
                 "totalTokenCount": 13308,
                 "cachedContentTokenCount": 12288,
                 "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12928}],
+                "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 380}],
+                "trafficType": "ON_DEMAND",
             },
             "modelVersion": "gemini-3.8-flash",
         },
@@ -2117,6 +2177,8 @@ GEMINI_3_8_FLASH_STREAM: Final = CostTrackingTestCase(
                     "candidatesTokenCount": 412,
                     "totalTokenCount": 2252,
                     "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
+                    "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+                    "trafficType": "ON_DEMAND",
                 },
                 "modelVersion": "gemini-3.8-flash",
             },
@@ -3122,26 +3184,256 @@ VERTEX_AI_CLAUDE_FABLE_5_1_TOOL_CALL: Final = _vertex_claude_shape_case(
     ),
 )
 
+VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT,
+    "vertex_ai/claude-haiku-5-5-input_text",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(input_tokens=1840, output_tokens=412),
+    ExactExpected(spend=0.00507, input_cost=0.002392, output_cost=0.002678, prompt_tokens=1840, completion_tokens=412),
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_STREAM: Final = VERTEX_AI_CLAUDE_SONNET_5_5_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-haiku-5-5-stream",
+        "model": "vertex_ai/claude-haiku-5-5",
+        "response": _vertex_claude_stream_response("claude-haiku-5-5", "end_turn", ("scripted answer",)),
+        "expected": VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_READ,
+    "vertex_ai/claude-haiku-5-5-cache_read",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(input_tokens=14, output_tokens=6, cache_read_input_tokens=27003),
+    ExactExpected(
+        spend=0.00356759,
+        input_cost=0.00352859,
+        output_cost=0.000039,
+        prompt_tokens=27017,
+        completion_tokens=6,
+        cache_read_cost=0.00351039,
+    ),
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
+    "vertex_ai/claude-haiku-5-5-cache_write_5m",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(
+        input_tokens=14, output_tokens=6, cache_creation_input_tokens=27011, ephemeral_5m_input_tokens=27011
+    ),
+    ExactExpected(
+        spend=0.043950075,
+        input_cost=0.043911075,
+        output_cost=0.000039,
+        prompt_tokens=27025,
+        completion_tokens=6,
+        cache_creation_cost=0.043892875,
+    ),
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_1H: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_1H,
+    "vertex_ai/claude-haiku-5-5-cache_write_1h",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(
+        input_tokens=14, output_tokens=6, cache_creation_input_tokens=27011, ephemeral_1h_input_tokens=27011
+    ),
+    ExactExpected(
+        spend=0.0702858,
+        input_cost=0.0702468,
+        output_cost=0.000039,
+        prompt_tokens=27025,
+        completion_tokens=6,
+        cache_creation_cost=0.0702286,
+    ),
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_THINKING: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_SONNET_5_5_THINKING,
+    "vertex_ai/claude-haiku-5-5-thinking",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(input_tokens=18, output_tokens=144, thinking_tokens=37),
+    ExactExpected(
+        spend=0.0009594, input_cost=0.0000234, output_cost=0.000936, prompt_tokens=18, completion_tokens=144
+    ),
+    adaptive_thinking=True,
+    thinking_effort="low",
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_TOOL_CALL: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_SONNET_5_5_TOOL_CALL,
+    "vertex_ai/claude-haiku-5-5-tool_call",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(input_tokens=385, output_tokens=50),
+    ExactExpected(
+        spend=0.0008255, input_cost=0.0005005, output_cost=0.000325, prompt_tokens=385, completion_tokens=50
+    ),
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT: Final = CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/claude-haiku-5-5-messages_input_text",
+        "model": "vertex_ai/claude-haiku-5-5",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT.response,
+        "expected": VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM: Final = CLAUDE_HAIKU_5_5_MESSAGES_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-haiku-5-5-messages_stream",
+        "model": "vertex_ai/claude-haiku-5-5",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_HAIKU_5_5_STREAM.response,
+        "expected": VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT.expected,
+    }
+)
+
+VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT: Final = CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/claude-fable-5-1-messages_input_text",
+        "model": "vertex_ai/claude-fable-5-1",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT.response,
+        "expected": VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM: Final = CLAUDE_FABLE_5_1_MESSAGES_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-fable-5-1-messages_stream",
+        "model": "vertex_ai/claude-fable-5-1",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_FABLE_5_1_STREAM.response,
+        "expected": VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS: Final = bridge_pairs(
+    (VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT, VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
+VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT: Final = CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/claude-opus-5-5-messages_input_text",
+        "model": "vertex_ai/claude-opus-5-5",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT.response,
+        "expected": VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM: Final = CLAUDE_OPUS_5_5_MESSAGES_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-opus-5-5-messages_stream",
+        "model": "vertex_ai/claude-opus-5-5",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_OPUS_5_5_STREAM.response,
+        "expected": VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_OPUS_5_5_BRIDGE_PAIRS: Final = bridge_pairs(
+    (VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT: Final = CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/claude-sonnet-5-5-messages_input_text",
+        "model": "vertex_ai/claude-sonnet-5-5",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT.response,
+        "expected": VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_STREAM: Final = CLAUDE_SONNET_5_5_MESSAGES_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-sonnet-5-5-messages_stream",
+        "model": "vertex_ai/claude-sonnet-5-5",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_SONNET_5_5_STREAM.response,
+        "expected": VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_BRIDGE_PAIRS: Final = bridge_pairs(
+    (VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT, VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS: Final = bridge_pairs(
+    (VERTEX_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT, VERTEX_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
+
 
 GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT: Final = _gemini_case(
     GEMINI_3_8_FLASH_INPUT_TEXT, "vertex_ai/gemini-3.1-pro-preview-input_text", "vertex_ai/gemini-3.1-pro-preview",
-    ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
+    ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "trafficType": "ON_DEMAND",
+    },
 )
 GEMINI_3_1_PRO_PREVIEW_STREAM: Final = _gemini_case(
     GEMINI_3_8_FLASH_STREAM, "vertex_ai/gemini-3.1-pro-preview-stream", "vertex_ai/gemini-3.1-pro-preview",
-    ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
+    ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "trafficType": "ON_DEMAND",
+    },
 )
 GEMINI_3_1_PRO_PREVIEW_CACHE_READ: Final = _gemini_case(
     GEMINI_3_8_FLASH_CACHE_READ, "vertex_ai/gemini-3.1-pro-preview-cache_read", "vertex_ai/gemini-3.1-pro-preview",
-    ExactExpected(spend=0.00912736, input_cost=0.00411136, output_cost=0.005016, prompt_tokens=12928, completion_tokens=380)
+    ExactExpected(spend=0.00912736, input_cost=0.00411136, output_cost=0.005016, prompt_tokens=12928, completion_tokens=380),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 380}],
+        "trafficType": "ON_DEMAND",
+    },
 )
 GEMINI_3_1_PRO_PREVIEW_REASONING: Final = _gemini_case(
     GEMINI_3_1_PRO_REASONING, "vertex_ai/gemini-3.1-pro-preview-reasoning", "vertex_ai/gemini-3.1-pro-preview",
-    ExactExpected(spend=0.056056, input_cost=0.002728, output_cost=0.053328, prompt_tokens=1240, completion_tokens=4040)
+    ExactExpected(spend=0.056056, input_cost=0.002728, output_cost=0.053328, prompt_tokens=1240, completion_tokens=4040),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 560}],
+        "trafficType": "ON_DEMAND",
+    },
+)
+GEMINI_3_8_FLASH_REASONING: Final = _gemini_case(
+    GEMINI_3_1_PRO_REASONING,
+    "vertex_ai/gemini-3.8-flash-reasoning",
+    "vertex_ai/gemini-3.8-flash",
+    ExactExpected(
+        spend=0.01144,
+        input_cost=0.0006448,
+        output_cost=0.0107952,
+        prompt_tokens=1240,
+        completion_tokens=4040,
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 560}],
+        "trafficType": "ON_DEMAND",
+    },
+    model_version="gemini-3.8-flash",
 )
 GEMINI_3_1_PRO_PREVIEW_TOOL_CALL: Final = _gemini_case(
     GEMINI_3_8_FLASH_TOOL_CALL, "vertex_ai/gemini-3.1-pro-preview-tool_call", "vertex_ai/gemini-3.1-pro-preview",
     ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
+)
+
+GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K: Final = _gemini_case(
+    GEMINI_3_1_PRO_TIERED_INPUT_ABOVE_200K,
+    "vertex_ai/gemini-3.1-pro-preview-tiered_input_above_200k",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.913396, input_cost=0.90112, output_cost=0.012276, prompt_tokens=204800, completion_tokens=620
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 620}],
+        "trafficType": "ON_DEMAND",
+    },
+)
+GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K: Final = _gemini_case(
+    GEMINI_3_1_PRO_TIERED_CACHE_READ_ABOVE_200K,
+    "vertex_ai/gemini-3.1-pro-preview-tiered_cache_read_above_200k",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.11628672, input_cost=0.10678272, output_cost=0.009504, prompt_tokens=205824, completion_tokens=480
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 480}],
+        "trafficType": "ON_DEMAND",
+        "cacheTokensDetails": [{"modality": "TEXT", "tokenCount": 201728}],
+    },
 )
 
 GEMINI_4_ARGON_INPUT_TEXT: Final = GEMINI_3_8_FLASH_INPUT_TEXT.model_copy(
@@ -3301,6 +3593,15 @@ GEMINI_4_ARGON_TOOL_CALL: Final = GEMINI_3_8_FLASH_TOOL_CALL.model_copy(
     }
 )
 
+GEMINI_4_ARGON_ROUTE_BRIDGES: Final = bridge_pairs(
+    (GEMINI_4_ARGON_INPUT_TEXT, GEMINI_4_ARGON_STREAM),
+    ("/v1/responses", "/v1/messages"),
+)
+GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES: Final = bridge_pairs(
+    (GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT, GEMINI_3_1_PRO_PREVIEW_STREAM),
+    ("/v1/responses", "/v1/messages"),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_INPUT_TEXT,
     GEMINI_3_1_PRO_CACHE_READ,
@@ -3326,6 +3627,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_STREAM_TOOL_CALL,
     GEMINI_3_1_PRO_STREAM_FULL_USAGE,
     GEMINI_3_8_FLASH_INPUT_TEXT,
+    GEMINI_3_8_FLASH_REASONING,
     GEMINI_3_8_FLASH_CACHE_READ,
     GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,
     GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY,
@@ -3367,9 +3669,30 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     VERTEX_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
     VERTEX_AI_CLAUDE_FABLE_5_1_THINKING,
     VERTEX_AI_CLAUDE_FABLE_5_1_TOOL_CALL,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_STREAM,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_THINKING,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_TOOL_CALL,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    *(pair.bridged for pair in VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS),
+    VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    *(pair.bridged for pair in VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS),
+    VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    *(pair.bridged for pair in VERTEX_AI_CLAUDE_OPUS_5_5_BRIDGE_PAIRS),
+    VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    *(pair.bridged for pair in VERTEX_AI_CLAUDE_SONNET_5_5_BRIDGE_PAIRS),
     GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,
     GEMINI_3_1_PRO_PREVIEW_STREAM,
     GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
+    GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K,
+    GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K,
     GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
     GEMINI_4_ARGON_INPUT_TEXT,
@@ -3377,6 +3700,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_4_ARGON_CACHE_READ,
     GEMINI_4_ARGON_REASONING,
     GEMINI_4_ARGON_TOOL_CALL,
+    *(pair.bridged for pair in GEMINI_4_ARGON_ROUTE_BRIDGES),
+    *(pair.bridged for pair in GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES),
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -3397,8 +3722,59 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     ),
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_OPUS_5_5_STREAM),
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_FABLE_5_1_STREAM),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_HAIKU_5_5_STREAM
+    ),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+        streamed=VERTEX_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS[0].bridged,
+        streamed=VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+        streamed=VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS[0].bridged,
+        streamed=VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+        streamed=VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_OPUS_5_5_BRIDGE_PAIRS[0].bridged,
+        streamed=VERTEX_AI_CLAUDE_OPUS_5_5_BRIDGE_PAIRS[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+        streamed=VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_SONNET_5_5_BRIDGE_PAIRS[0].bridged,
+        streamed=VERTEX_AI_CLAUDE_SONNET_5_5_BRIDGE_PAIRS[1].bridged,
+    ),
     StreamParityTestCase(plain=GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT, streamed=GEMINI_3_1_PRO_PREVIEW_STREAM),
     StreamParityTestCase(plain=GEMINI_4_ARGON_INPUT_TEXT, streamed=GEMINI_4_ARGON_STREAM),
+    StreamParityTestCase(
+        plain=GEMINI_4_ARGON_ROUTE_BRIDGES[0].bridged,
+        streamed=GEMINI_4_ARGON_ROUTE_BRIDGES[2].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_4_ARGON_ROUTE_BRIDGES[1].bridged,
+        streamed=GEMINI_4_ARGON_ROUTE_BRIDGES[3].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[0].bridged,
+        streamed=GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[2].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[1].bridged,
+        streamed=GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[3].bridged,
+    ),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -3406,6 +3782,10 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
         (GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_3_8_FLASH_CACHE_READ, GEMINI_3_8_FLASH_STREAM),
         ("/v1/responses", "/v1/messages"),
     ),
-    *bridge_pairs((GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,), ("/v1/responses",)),
-    *bridge_pairs((GEMINI_4_ARGON_INPUT_TEXT,), ("/v1/responses",)),
+    *GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES,
+    *GEMINI_4_ARGON_ROUTE_BRIDGES,
+    *VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS,
+    *VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS,
+    *VERTEX_AI_CLAUDE_OPUS_5_5_BRIDGE_PAIRS,
+    *VERTEX_AI_CLAUDE_SONNET_5_5_BRIDGE_PAIRS,
 )

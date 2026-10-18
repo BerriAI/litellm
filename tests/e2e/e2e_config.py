@@ -111,10 +111,6 @@ CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haik
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
 S3_PARTITION_GRANULARITY = os.environ.get("E2E_S3_PARTITION_GRANULARITY", "day")
 
-LINEAR_MCP_URL = os.environ.get("E2E_LINEAR_MCP_URL", "https://mcp.linear.app/mcp")
-LINEAR_STORAGE_STATE = os.environ.get("E2E_LINEAR_STORAGE_STATE", "")
-LINEAR_READONLY_TOOL: Final = "list_teams"  # as listed by tools/list on mcp.linear.app when PR #33787 landed
-
 # Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
 # service in docker-compose.yml maps it to host 16686). Trace-completeness tests
 # read exported spans back through it.
@@ -207,7 +203,6 @@ MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
 PROMPT_CACHING_OPT_IN_ENV = "E2E_PROMPT_CACHING_STACK"
 PERF_TESTS_OPT_IN_ENV: Final = "E2E_PERF_TESTS"
 CLI_DETERMINISM_OPT_IN_ENV = "E2E_CLI_DETERMINISM"
-MCP_OAUTH_LIVE_OPT_IN_ENV: Final = "E2E_MCP_OAUTH_LIVE"
 PROVIDER_EDGE_HOST_OPT_IN_ENV: Final = "E2E_PROVIDER_EDGE_HOST_REACHABLE"
 OWNED_GATEWAY_OPT_IN_ENV: Final = "E2E_OWNED_GATEWAY"
 OTEL_V2_OPT_IN_ENV: Final = "E2E_OTEL_V2"
@@ -237,7 +232,7 @@ MEMORY_TRANSCRIPT_TURNS = int(os.environ.get("E2E_MEMORY_TRANSCRIPT_TURNS", "40"
 MEMORY_CONCURRENCY = int(os.environ.get("E2E_MEMORY_CONCURRENCY", "4"))
 MEMORY_RSS_SETTLE_SAMPLES = int(os.environ.get("E2E_MEMORY_RSS_SETTLE_SAMPLES", "15"))
 MEMORY_RSS_SAMPLE_INTERVAL_SECONDS = float(os.environ.get("E2E_MEMORY_RSS_SAMPLE_INTERVAL_SECONDS", "1"))
-MEMORY_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_RSS_BUDGET_MB", "48"))
+MEMORY_RSS_CEILING_MB = float(os.environ.get("E2E_MEMORY_RSS_CEILING_MB", "200"))
 MEMORY_IDLE_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_IDLE_RSS_BUDGET_MB", "768"))
 MEMORY_STORED_REQUEST_BUDGET_KB = float(os.environ.get("E2E_MEMORY_STORED_REQUEST_BUDGET_KB", "64"))
 

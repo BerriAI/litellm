@@ -42,6 +42,10 @@ def openai_error_type(exc: object, status_code: int) -> str:
     carried: Final = attribute_of(exc, "type")
     if isinstance(carried, str) and carried != STRINGIFIED_NONE:
         return carried
+    return openai_error_type_for_status(status_code)
+
+
+def openai_error_type_for_status(status_code: int) -> str:
     mapped: Final = _OPENAI_ERROR_TYPE_BY_STATUS.get(status_code)
     if mapped is not None:
         return mapped
