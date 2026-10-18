@@ -6526,7 +6526,7 @@ async def test_fail_closed_rate_limit_enforcement_is_read_from_general_settings(
 
 @pytest.mark.parametrize(
     "configured_value, rejects",
-    [(True, True), ("true", True), (False, False), ("false", False), ("sometimes", False)],
+    [(True, True), ("true", True), (False, False), ("false", False), ("sometimes", True)],
     ids=["bool_true", "string_true", "bool_false", "string_false", "not_a_boolean"],
 )
 @pytest.mark.asyncio
