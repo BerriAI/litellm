@@ -342,8 +342,6 @@ override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
     "packaging>=24.0",
     "cryptography>=50.0.0,<51.0",
-    # litellm-admin-mcp pins mcp==2.2.0, which lacks max_sse_event_size
-    "mcp>=2.3.0,<3",
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"

@@ -29,7 +29,6 @@ constraints = [
 ]
 overrides = [
     { name = "cryptography", specifier = ">=50.0.0,<51.0" },
-    { name = "mcp", specifier = ">=2.3.0,<3" },
     { name = "packaging", specifier = ">=24.0" },
 ]
 
