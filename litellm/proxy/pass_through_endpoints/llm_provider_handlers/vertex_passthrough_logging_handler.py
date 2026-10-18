@@ -11,7 +11,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
-from litellm.litellm_core_utils.hidden_params import set_hidden_param
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
@@ -670,8 +670,15 @@ class VertexPassthroughLoggingHandler:
         all_openai_chunks: Final = [parsed_chunk for parsed_chunk in parsed_chunks if parsed_chunk is not None]
 
         complete_streaming_response: Final = litellm.stream_chunk_builder(chunks=all_openai_chunks)
+        VertexPassthroughLoggingHandler._drop_location_blind_stream_builder_cost(complete_streaming_response)
 
         return complete_streaming_response
+
+    @staticmethod
+    def _drop_location_blind_stream_builder_cost(response: ModelResponse | TextCompletionResponse | None) -> None:
+        hidden_params: Final = get_hidden_params(response)
+        if hidden_params is not None:
+            hidden_params.pop("response_cost", None)
 
     @staticmethod
     def extract_model_from_url(url: str) -> str:
@@ -789,7 +796,6 @@ class VertexPassthroughLoggingHandler:
 
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
-        set_hidden_param(litellm_model_response, "response_cost", response_cost)
 
         # pretty print standard logging object
         verbose_proxy_logger.debug("kwargs= %s", kwargs)
