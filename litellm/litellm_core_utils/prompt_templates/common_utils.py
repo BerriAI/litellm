@@ -310,9 +310,7 @@ def request_contains_image_content(
         for content in (message.get("content"),)
     ):
         return True
-    return isinstance(input, list) and any(
-        _responses_input_item_contains_image(item) for item in input
-    )
+    return isinstance(input, list) and any(_responses_input_item_contains_image(item) for item in input)
 
 
 def _responses_input_item_contains_image(item: object) -> bool:
