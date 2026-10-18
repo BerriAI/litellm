@@ -1118,6 +1118,7 @@ def test_input_tokens_counts_marked_items_without_their_marks(gateway: Gateway) 
     assert _JSON_OBJECT.validate_json(response.text) == {
         "object": "response.input_tokens",
         "input_tokens": _COUNTED_TOKENS,
+        "litellm_count_source": "provider",
     }
     assert counted.target.endswith("/count_tokens"), counted.target
     assert anthropic_labels(counted) == []
@@ -1199,6 +1200,7 @@ def test_input_tokens_reads_each_input_shape_without_item_marks(gateway: Gateway
     assert _JSON_OBJECT.validate_json(response.text) == {
         "object": "response.input_tokens",
         "input_tokens": _COUNTED_TOKENS,
+        "litellm_count_source": "provider",
     }
     assert [anthropic_labels(request) for request in counted] == [[]]
 

@@ -245,7 +245,10 @@ def test_enabled_gateway_count_tokens_alias_matches_native_count_tokens_route(en
             "/claude_code_gateway/v1/messages/count_tokens?beta=true", json=body, headers=headers
         )
         assert gateway_response.status_code == 200, gateway_response.text
-        assert _JSON_OBJECT.validate_json(gateway_response.content) == {"input_tokens": 41}, gateway_response.text
+        assert _JSON_OBJECT.validate_json(gateway_response.content) == {
+            "input_tokens": 41,
+            "litellm_count_source": "provider",
+        }, gateway_response.text
         native_response: Final = enabled_gateway.client.post(
             "/v1/messages/count_tokens?beta=true", json=body, headers=headers
         )

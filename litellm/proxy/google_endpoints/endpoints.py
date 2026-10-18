@@ -21,6 +21,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 
@@ -309,10 +310,12 @@ async def google_count_tokens(request: Request, model_name: str):
             ProxyException(message="Internal server error", type="internal_server_error", param=None, code=500),
         )
     original_response: Final[dict] = token_response.original_response or {}
-    return TokenCountDetailsResponse(
-        totalTokens=original_response.get("totalTokens") or token_response.total_tokens or 0,
-        promptTokensDetails=original_response.get("promptTokensDetails", []),
-    )
+    counted: Final[TokenCountDetailsResponse] = {
+        "totalTokens": original_response.get("totalTokens") or token_response.total_tokens or 0,
+        "promptTokensDetails": original_response.get("promptTokensDetails", []),
+        **count_source_fields(token_response),
+    }
+    return counted
 
 
 # ============================================================

@@ -584,6 +584,40 @@ def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
         _restore_model_cost_entries(model_keys)
 
 
+def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
+    """A deployment's ``token_count_model`` and ``token_count_framing`` must not land on
+    the shared ``{provider}/{model}`` key, or a sibling deployment of that model would count with them."""
+    from litellm.proxy.common_utils.token_count_settings import cost_map_entry
+
+    backend_model: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
+    deploy_id: Final = "sonnet-deploy-keep-token-count"
+    configured: Final = {
+        "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-west-2"},
+        "token_count_framing": 7,
+    }
+    builtin: Final = {field: cost_map_entry(backend_model).get(field) for field in configured}
+    assert all(builtin[field] != value for field, value in configured.items()), builtin
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (deploy_id, backend_model, backend_model.removeprefix("bedrock/"))
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "sonnet-keep-token-count",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": deploy_id, **configured},
+                }
+            ],
+        )
+
+        assert {field: litellm.model_cost[deploy_id][field] for field in configured} == configured
+        assert {field: cost_map_entry(backend_model).get(field) for field in configured} == builtin
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
 def test_should_store_full_pricing_under_deployment_model_id():
     """
     Per-deployment pricing (including zero) should be stored and
@@ -3884,9 +3918,7 @@ def test_router_capacity_widens_to_a_larger_base_model_window(
     )
     _invalidate_model_cost_lowercase_map()
     router: Final = _capacity_test_router(route, base, base_location, explicit_limit)
-    expected: Final = (
-        explicit_limit if explicit_limit is not None else (1024 if base_location is None else 8192)
-    )
+    expected: Final = explicit_limit if explicit_limit is not None else (1024 if base_location is None else 8192)
     assert _effective_max_input_tokens(router) == expected
     assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
     _invalidate_model_cost_lowercase_map()
