@@ -12,6 +12,7 @@ from mcp.types import (
 from mcp.types import Tool as MCPTool
 
 from litellm.mcp_client.tools import (
+    list_tools_result_with_pagination,
     _get_function_arguments,
     _normalize_mcp_input_schema,
     call_mcp_tool,
@@ -167,6 +168,22 @@ async def test_pagination_walk_stops_on_repeated_cursor(mock_session):
     result = await list_tools_with_pagination(mock_session)
     assert [tool.name for tool in result] == ["tool_0", "tool_1"]
     assert mock_session.list_tools.call_count == 2
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("last_cursor", [None, "page-1"])
+async def test_pagination_walk_keeps_the_shortest_ttl_only_for_a_complete_walk(mock_session, last_cursor):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(tools=[MCPTool(name="tool_0", inputSchema={})], nextCursor="page-1", ttl_ms=30000),
+        ListToolsResult(tools=[MCPTool(name="tool_1", inputSchema={})], nextCursor=last_cursor, ttl_ms=20000),
+    ]
+    result = await list_tools_result_with_pagination(mock_session)
+
+    assert [tool.name for tool in result.tools] == ["tool_0", "tool_1"]
+    if last_cursor is None:
+        assert 19000 < result.ttl_ms <= 20000
+    else:
+        assert result.ttl_ms == 0
 
 
 @pytest.mark.asyncio()
