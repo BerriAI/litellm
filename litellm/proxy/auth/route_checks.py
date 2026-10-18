@@ -301,7 +301,12 @@ class RouteChecks:
     def _has_truthy_permission(permissions: object | None, name: str) -> bool:
         """True when `name` is opted in with a truthy value (dict) or listed (sequence)."""
         if isinstance(permissions, dict):
-            return bool(permissions.get(name))
+            typed: Final = (
+                cast(  # cast-ok: isinstance(dict) narrows to dict[Unknown, Unknown]; keys are permission names
+                    dict[str, object], permissions
+                )
+            )
+            return bool(typed.get(name))
         if isinstance(permissions, (list, tuple, set)):
             return name in permissions
         return False

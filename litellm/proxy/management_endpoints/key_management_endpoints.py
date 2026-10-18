@@ -3529,7 +3529,12 @@ def _refuse_get_spend_routes_unless_premium(
     """
     if not isinstance(permissions, dict):
         return
-    if permissions.get("get_spend_routes") and premium_user is not True:
+    typed_permissions: Final = (
+        cast(  # cast-ok: isinstance(dict) narrows to dict[Unknown, Unknown]; permission map is str-keyed
+            dict[str, object], permissions
+        )
+    )
+    if typed_permissions.get("get_spend_routes") and premium_user is not True:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -5283,7 +5288,9 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            parsed_permissions: Final = json.loads(saved_token["permissions"])
+            parsed_permissions: Final = cast(  # cast-ok: permissions column stores a JSON object of permission flags
+                dict[str, object], json.loads(saved_token["permissions"])
+            )
             # Refuse only when the permission is requested (truthy). An explicit
             # false must not trip a substring check on the serialized JSON.
             _refuse_get_spend_routes_unless_premium(parsed_permissions, premium_user)
