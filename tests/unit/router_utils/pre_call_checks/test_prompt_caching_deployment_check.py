@@ -842,54 +842,6 @@ async def test_one_hour_pin_follows_the_deployments_one_hour_cache_support(
     assert (await pins.async_get_model_id(messages=messages, tools=None) is not None) is pinned_past_five_minutes
 
 
-@pytest.mark.asyncio
-async def test_application_profile_cache_hit_uses_model_info_base_model_for_one_hour_pin() -> None:
-    clock: Final = _ManualClock()
-    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
-    check: Final = PromptCachingDeploymentCheck(cache=cache)
-    model: Final = (
-        "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:"
-        "application-inference-profile/pinprofile"
-    )
-    messages: Final = cast(
-        list[AllMessageValues],
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "word " * 6000, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
-                ],
-            }
-        ],
-    )
-
-    await check.async_log_success_event(
-        kwargs={
-            "standard_logging_object": cast(
-                StandardLoggingPayload,
-                {
-                    "call_type": "acompletion",
-                    "custom_llm_provider": "bedrock",
-                    "model": model,
-                    "messages": messages,
-                    "model_id": "dep-1",
-                    "cache_hit": True,
-                    "model_map_information": {"model_map_key": model, "model_map_value": None},
-                },
-            ),
-            "litellm_params": {"model_info": {"base_model": "bedrock/us.anthropic.claude-sonnet-5-5"}},
-        },
-        response_obj=None,
-        start_time=None,
-        end_time=None,
-    )
-
-    pins: Final = PromptCachingCache(cache=cache)
-    assert await pins.async_get_model_id(messages=messages, tools=None) == {"model_id": "dep-1"}
-    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
-    assert await pins.async_get_model_id(messages=messages, tools=None) == {"model_id": "dep-1"}
-
-
 LONG_PROMPT = "word " * 3000
 ONE_PIXEL_PNG = (
     "data:image/png;base64,"

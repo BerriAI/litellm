@@ -65,16 +65,8 @@ def _honors_one_hour_cache_ttl(
 ) -> bool:
     if standard_logging_object["custom_llm_provider"] == "bedrock":
         deployment_model: Final = standard_logging_object["model"]
-        model_info: Final = litellm_params.get("model_info")
-        model_info_base_model: Final = (
-            cast(Mapping[str, object], model_info).get("base_model")  # cast-ok: router model_info keys are strings
-            if isinstance(model_info, Mapping)
-            else None
-        )
-        base_model: Final = get_base_model_from_metadata({"litellm_params": litellm_params}) or model_info_base_model
         capability_model: Final = bedrock_capability_model(
-            deployment_model,
-            base_model,
+            deployment_model, get_base_model_from_metadata({"litellm_params": litellm_params})
         )
         return bedrock_cache_point_ttl_supported(capability_model, deployment_model)
     model_map_value: Final = standard_logging_object["model_map_information"]["model_map_value"]
