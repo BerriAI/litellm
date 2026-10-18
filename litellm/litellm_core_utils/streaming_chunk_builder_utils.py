@@ -13,6 +13,7 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import partition_annotations
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
@@ -1553,10 +1554,17 @@ def stream_chunk_builder(
             # Merge annotations from ALL chunks — providers may spread
             # them across multiple streaming chunks or send them only in
             # the final chunk.
-            all_annotations: Final[list] = []
+            all_annotations: Final[list[object]] = []
             for ac in annotation_chunks:
                 all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
-            response["choices"][0]["message"]["annotations"] = all_annotations
+            message_annotations, provider_annotations = partition_annotations(all_annotations)
+            if message_annotations is not None:
+                response["choices"][0]["message"]["annotations"] = message_annotations
+            if provider_annotations:
+                response.choices[0].message.provider_specific_fields = {
+                    **(response.choices[0].message.provider_specific_fields or {}),
+                    "annotations": list(provider_annotations),
+                }
 
         audio_chunks: Final = [
             chunk
@@ -1619,7 +1627,10 @@ def stream_chunk_builder(
 
             if combined_provider_fields:
                 _choice = response.choices[0]
-                _choice.message.provider_specific_fields = combined_provider_fields
+                _choice.message.provider_specific_fields = {
+                    **(_choice.message.provider_specific_fields or {}),
+                    **combined_provider_fields,
+                }
 
         completion_output = get_content_from_model_response(response)
 

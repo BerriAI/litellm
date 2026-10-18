@@ -61,12 +61,13 @@ _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.
 
 
 _ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
-_URL_CITATIONS: Final = TypeAdapter(list[ChatCompletionAnnotation])
 
 
-def _is_url_citation(annotation: object) -> bool:
+def _is_provider_specific_annotation(annotation: object) -> bool:
     match annotation:
         case {"type": "url_citation"}:
+            return False
+        case {"type": _}:
             return True
         case _:
             return False
@@ -76,12 +77,12 @@ def _annotation_entries(annotations: object) -> tuple[object, ...]:
     return _ANNOTATION_ENTRIES.validate_python(annotations) if isinstance(annotations, list) else ()
 
 
-def _partition_annotations(annotations: object) -> tuple[object, tuple[object, ...]]:
+def partition_annotations(annotations: object) -> tuple[object, tuple[object, ...]]:
     entries: Final = _annotation_entries(annotations)
-    others: Final = tuple(annotation for annotation in entries if not _is_url_citation(annotation))
+    others: Final = tuple(annotation for annotation in entries if _is_provider_specific_annotation(annotation))
     if not others:
         return annotations, ()
-    return [annotation for annotation in entries if _is_url_citation(annotation)] or None, others
+    return [annotation for annotation in entries if not _is_provider_specific_annotation(annotation)] or None, others
 
 
 def _normalize_images_for_message(
@@ -812,7 +813,7 @@ def convert_to_model_response_object(
                     provider_specific_fields = dict(choice["message"].get("provider_specific_fields", None) or {})
                     for f in choice["message"].keys() - _MESSAGE_FIELDS:
                         provider_specific_fields[f] = choice["message"][f]
-                    annotations, other_annotations = _partition_annotations(choice["message"].get("annotations", None))
+                    annotations, other_annotations = partition_annotations(choice["message"].get("annotations", None))
                     if other_annotations:
                         provider_specific_fields["annotations"] = list(other_annotations)
 
@@ -837,7 +838,9 @@ def convert_to_model_response_object(
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
                         reasoning_items=choice["message"].get("reasoning_items", None),
-                        annotations=None if annotations is None else _URL_CITATIONS.validate_python(annotations),
+                        annotations=cast(  # cast-ok: provider annotation dicts pass through whole, keeping keys such as url_citation.content
+                            list[ChatCompletionAnnotation] | None, annotations
+                        ),
                         images=_normalize_images_for_message(choice["message"].get("images", None)),
                     )
                     finish_reason = choice.get("finish_reason", None)

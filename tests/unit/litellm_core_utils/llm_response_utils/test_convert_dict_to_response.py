@@ -2970,15 +2970,23 @@ def test_convert_to_model_response_object_function_output():
     assert result._hidden_params is not None
 
 
-def test_annotations_other_than_url_citation_move_to_provider_specific_fields():
-    url_citation: Final = {
-        "type": "url_citation",
-        "url_citation": {"url": "https://example.com", "title": "Example", "start_index": 0, "end_index": 4},
-    }
-    file_annotation: Final = {
-        "type": "file",
-        "file": {"hash": "abc123", "name": "report.pdf", "content": [{"type": "text", "text": "parsed page"}]},
-    }
+_URL_CITATION: Final = {
+    "type": "url_citation",
+    "url_citation": {
+        "url": "https://example.com",
+        "title": "Example",
+        "content": "cited snippet",
+        "start_index": 0,
+        "end_index": 4,
+    },
+}
+_FILE_ANNOTATION: Final = {
+    "type": "file",
+    "file": {"hash": "abc123", "name": "report.pdf", "content": [{"type": "text", "text": "parsed page"}]},
+}
+
+
+def _message_with_annotations(annotations: list[dict[str, object]]) -> Message:
     response: Final = {
         "id": "gen-1",
         "object": "chat.completion",
@@ -2988,15 +2996,26 @@ def test_annotations_other_than_url_citation_move_to_provider_specific_fields():
             {
                 "index": 0,
                 "finish_reason": "stop",
-                "message": {"role": "assistant", "content": "done", "annotations": [url_citation, file_annotation]},
+                "message": {"role": "assistant", "content": "done", "annotations": annotations},
             }
         ],
         "usage": {"completion_tokens": 1, "prompt_tokens": 1, "total_tokens": 2},
     }
-
-    message: Final = convert_to_model_response_object(
+    return convert_to_model_response_object(
         response_object=response, model_response_object=ModelResponse(), response_type="completion"
     ).choices[0].message
 
-    assert message.annotations == [url_citation]
-    assert message.provider_specific_fields["annotations"] == [file_annotation]
+
+def test_annotations_typed_other_than_url_citation_move_to_provider_specific_fields():
+    untyped_annotation: Final = {"start_index": 0, "end_index": 4}
+    message: Final = _message_with_annotations([_URL_CITATION, untyped_annotation, _FILE_ANNOTATION])
+
+    assert message.annotations == [_URL_CITATION, untyped_annotation]
+    assert message.provider_specific_fields["annotations"] == [_FILE_ANNOTATION]
+
+
+def test_url_citation_annotations_keep_provider_keys():
+    message: Final = _message_with_annotations([_URL_CITATION])
+
+    assert message.annotations == [_URL_CITATION]
+    assert "annotations" not in (message.provider_specific_fields or {})

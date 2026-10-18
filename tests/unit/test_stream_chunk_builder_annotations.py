@@ -189,3 +189,46 @@ def test_stream_chunk_builder_no_annotations():
 
     message = response["choices"][0]["message"]
     assert not hasattr(message, "annotations") or message.annotations is None
+
+
+def test_stream_chunk_builder_moves_typed_provider_annotations_like_non_streaming():
+    url_citation = {
+        "type": "url_citation",
+        "url_citation": {"url": "https://example.com", "title": "Example", "start_index": 0, "end_index": 5},
+    }
+    file_annotation = {"type": "file", "file": {"hash": "abc123", "name": "report.pdf"}}
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-test",
+            created=1700000000,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hello", role="assistant", provider_specific_fields={"region": "eu"}),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-test",
+            created=1700000000,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content=None, annotations=[url_citation, file_annotation]),
+                )
+            ],
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+    assert response is not None
+
+    message = response["choices"][0]["message"]
+    assert message.annotations == [url_citation]
+    assert message.provider_specific_fields == {"region": "eu", "annotations": [file_annotation]}

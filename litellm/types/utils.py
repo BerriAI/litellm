@@ -4048,7 +4048,12 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
 DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
-    {"supports_regex_lookaround", "supports_assistant_prefill", "supports_bedrock_native_structured_output"}
+    {
+        "supports_regex_lookaround",
+        "supports_assistant_prefill",
+        "supports_bedrock_native_structured_output",
+        "supports_pdf_input",
+    }
 )
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
