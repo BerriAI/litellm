@@ -3513,8 +3513,10 @@ _OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES: Final[tuple[str, ...]] = (
 def _strip_openai_version_prefix(normalized_path: str) -> str:
     """Forwarding adds the implicit /v1 for OpenAI only when the caller omitted
     it (see _join_url_paths), so both spellings of the same request must hit
-    the gate: `/v1/assistants` and `/assistants` are the same upstream call."""
-    if normalized_path == "/v1" or normalized_path.startswith("/v1/"):
+    the gate: `/v1/assistants`, `/assistants`, and case-variant versions
+    (`/V1/files`) are the same upstream call."""
+    lowered: Final = normalized_path.lower()
+    if lowered == "/v1" or lowered.startswith("/v1/"):
         return normalized_path[len("/v1"):]
     return normalized_path
 
@@ -3534,7 +3536,7 @@ def openai_proxy_gate(
         return
     normalized: Final = posixpath.normpath(f"/{endpoint_path.strip('/')}")
     canonical: Final = _strip_openai_version_prefix(normalized)
-    if canonical.startswith(_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES):
+    if canonical.lower().startswith(_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES):
         raise HTTPException(
             status_code=403,
             detail={

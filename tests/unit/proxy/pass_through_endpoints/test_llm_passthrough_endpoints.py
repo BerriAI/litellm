@@ -615,3 +615,23 @@ def test_openai_proxy_gate_canonicalizes_the_v1_spelling_identically():
         except Exception:
             continue
         raise AssertionError(f"expected the gate to fire for {path!r}")
+
+
+def test_openai_proxy_gate_matches_case_variant_version_prefixes():
+    """`/V1/files` is the same request to the same OpenAI account; the version
+    strip must not be case-sensitive. Found writing the reviewer-side corpus —
+    the original strip only compared lowercase."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        openai_proxy_gate,
+    )
+
+    for path in ("/V1/files", "/V1/assistants", "/V1/batches"):
+        with pytest.raises(HTTPException) as exc:
+            openai_proxy_gate(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+                endpoint_path=path,
+            )
+        assert int(getattr(exc.value, "status_code", 0)) == 403
