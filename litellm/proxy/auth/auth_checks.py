@@ -5412,9 +5412,7 @@ async def can_key_call_model(
         )
         if models_from_groups is not None:
             allowed_models: Final = (
-                list(dict.fromkeys([*key_models, *models_from_groups]))
-                if key_models
-                else models_from_groups
+                list(dict.fromkeys([*key_models, *models_from_groups])) if key_models else models_from_groups
             )
             if not allowed_models:
                 raise ModelAccessDeniedProxyException(
@@ -5645,9 +5643,7 @@ async def can_team_access_model(
         )
         if models_from_groups is not None:
             allowed_models: Final = (
-                list(dict.fromkeys([*team_models, *models_from_groups]))
-                if team_models
-                else models_from_groups
+                list(dict.fromkeys([*team_models, *models_from_groups])) if team_models else models_from_groups
             )
             if not allowed_models:
                 raise ModelAccessDeniedProxyException(
