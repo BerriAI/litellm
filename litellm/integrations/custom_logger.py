@@ -912,9 +912,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         This is useful for logging payloads that contain sensitive information.
         """
         import litellm
-        from litellm import Choices, Message, ModelResponse
         from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS
-        from litellm.litellm_core_utils.redact_messages import redacted_litellm_params
+        from litellm.litellm_core_utils.redact_messages import (
+            redacted_litellm_params,
+            redacted_standard_logging_payload,
+        )
 
         turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
         excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
@@ -940,41 +942,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
         }
 
-        # Handle turn_off_message_logging - redact messages and responses (if not already excluded)
-        if turn_off_message_logging and not self.redacts_messages_itself():
-            redacted_str: Final = "redacted-by-litellm"
-
-            if "messages" not in (excluded_fields or ()) and standard_logging_object_copy.get("messages") is not None:
-                standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
-
-            if "response" not in (excluded_fields or ()) and standard_logging_object_copy.get("response") is not None:
-                response: Final = standard_logging_object_copy["response"]
-                # Check if this is a ResponsesAPIResponse (has "output" field)
-                if isinstance(response, dict) and "output" in response:
-                    # Make a copy to avoid modifying the original
-                    from copy import deepcopy
-
-                    response_copy: Final = deepcopy(response)
-                    # Redact content in output array
-                    if isinstance(response_copy.get("output"), list):
-                        for output_item in response_copy["output"]:
-                            if isinstance(output_item, dict) and "content" in output_item:
-                                if isinstance(output_item["content"], list):
-                                    # Redact text in content items
-                                    for content_item in output_item["content"]:
-                                        if isinstance(content_item, dict) and "text" in content_item:
-                                            content_item["text"] = redacted_str
-                    standard_logging_object_copy["response"] = response_copy
-                else:
-                    # Standard ModelResponse format
-                    model_response: Final = ModelResponse(choices=[Choices(message=Message(content=redacted_str))])
-                    model_response_dict: Final = model_response.model_dump()
-                    standard_logging_object_copy["response"] = model_response_dict
-
         return {
             **model_call_details,
             **redacted_params,
-            "standard_logging_object": standard_logging_object_copy,
+            "standard_logging_object": (
+                redacted_standard_logging_payload(standard_logging_object_copy)
+                if turn_off_message_logging and not self.redacts_messages_itself()
+                else standard_logging_object_copy
+            ),
         }
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
