@@ -1,6 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "@/lib/toast";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import type { KeyResponse } from "../key_team_helpers/key_list";
+import type { MCPServer } from "../mcp_tools/types";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import { toKeyEditFormValues, toSubmittedValues } from "./keyEditFormValues";
 
 vi.mock("@/lib/toast", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -228,7 +233,7 @@ const baseKeyData = {
   next_rotation_at: null as any,
 };
 
-const renderView = (premiumUser: boolean) => {
+const renderView = (premiumUser: boolean, keyData: KeyResponse = baseKeyData as KeyResponse) => {
   // Configure the mock for this test
   mockUseAuthorized.mockReturnValue({
     accessToken: "access_abc",
@@ -242,18 +247,13 @@ const renderView = (premiumUser: boolean) => {
   });
 
   return render(
-    <KeyInfoView
-      keyId="tok_123"
-      onClose={() => {}}
-      keyData={baseKeyData as any}
-      onKeyDataUpdate={() => {}}
-      teams={[]}
-    />,
+    <KeyInfoView keyId="tok_123" onClose={() => {}} keyData={keyData} onKeyDataUpdate={() => {}} teams={[]} />,
   );
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(useMCPServers).mockReturnValue({ data: [] } as ReturnType<typeof useMCPServers>);
   (globalThis as any).__TEST_FORM_VALUES = undefined;
 });
 
@@ -373,6 +373,85 @@ describe("KeyInfoView handleKeyUpdate mcp_toolsets", () => {
     expect(sentPayload.object_permission.mcp_toolsets).toEqual(["ts-1"]);
     expect(sentPayload.max_budget).toBe(40000);
   });
+});
+
+describe("KeyInfoView handleKeyUpdate shared MCP aliases", () => {
+  it.each([
+    {
+      edit: "only renaming the key",
+      storedServers: ["server-a"],
+      storedToolPermissions: { shared: ["read"] },
+      selectedServers: ["server-a"],
+      expectedToolPermissions: { shared: ["read"] },
+    },
+    {
+      edit: "removing an explicitly selected server",
+      storedServers: ["server-a", "server-b"],
+      storedToolPermissions: { shared: ["read"] },
+      selectedServers: ["server-a"],
+      expectedToolPermissions: { "server-a": ["read"] },
+    },
+    {
+      edit: "choosing No MCP Servers",
+      storedServers: ["server-a"],
+      storedToolPermissions: { "server-b": ["read"] },
+      selectedServers: [NO_MCP_SERVERS_SENTINEL],
+      expectedToolPermissions: {},
+    },
+  ])(
+    "preserves unrelated permissions when $edit",
+    async ({ storedServers, storedToolPermissions, selectedServers, expectedToolPermissions }) => {
+      const servers: MCPServer[] = ["server-a", "server-b"].map((server_id) => ({
+        server_id,
+        alias: "shared",
+        created_at: "",
+        created_by: "",
+        updated_at: "",
+        updated_by: "",
+      }));
+      vi.mocked(useMCPServers).mockReturnValue({ data: servers } as ReturnType<typeof useMCPServers>);
+      const permission = {
+        mcp_servers: storedServers,
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: storedToolPermissions,
+        vector_stores: ["vector-store"],
+        agents: ["agent"],
+        agent_access_groups: ["agent-group"],
+        skills: ["skill"],
+        search_tools: ["search-tool"],
+      };
+      const keyData = { ...baseKeyData, object_permission: permission } as KeyResponse;
+      renderView(true, keyData);
+      fireEvent.click(screen.getByText("Settings"));
+      fireEvent.click(screen.getByText("Edit Settings"));
+      (globalThis as { __TEST_FORM_VALUES?: Record<string, unknown> }).__TEST_FORM_VALUES = toSubmittedValues(
+        {
+          ...toKeyEditFormValues(keyData),
+          key_alias: "Renamed key",
+          mcp_servers_and_groups: { servers: selectedServers, accessGroups: [], toolsets: [] },
+        },
+        { canViewPolicies: true, canViewPrompts: true },
+      );
+
+      fireEvent.click(screen.getByText("Mock Submit"));
+
+      await waitFor(() =>
+        expect(keyUpdateCallMock).toHaveBeenCalledExactlyOnceWith(
+          "access_abc",
+          expect.objectContaining({
+            key: keyData.token,
+            key_alias: "Renamed key",
+            object_permission: {
+              ...permission,
+              mcp_servers: selectedServers,
+              mcp_tool_permissions: expectedToolPermissions,
+            },
+          }),
+        ),
+      );
+    },
+  );
 });
 
 describe("KeyInfoView handleKeyUpdate cache sync", () => {
