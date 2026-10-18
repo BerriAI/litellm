@@ -36,6 +36,7 @@ from litellm.integrations.otel.model.semconv import (
     LiteLLM,
     RpcSystem,
     Server,
+    User,
 )
 from litellm.integrations.otel.model.spans import postgres_operation
 
@@ -46,6 +47,8 @@ class GenAIMapper:
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
         GenAI.OUTPUT_TYPE: lambda d: d.output_type.value if d.output_type else None,
         GenAI.CONVERSATION_ID: lambda d: d.session_id,
+        # The caller's ``trace_user_id``, else the proxy end user, for every backend that reads ``user.id``.
+        User.ID: lambda d: d.trace.user_id,
         GenAI.REQUEST_MODEL: lambda d: d.request_model or None,
         GenAI.REQUEST_TEMPERATURE: lambda d: d.request_params.temperature,
         GenAI.REQUEST_TOP_P: lambda d: d.request_params.top_p,

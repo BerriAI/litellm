@@ -47,6 +47,7 @@ from litellm.integrations.otel import (  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterSpec  # noqa: E402
 from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
+from litellm.integrations.otel.model.semconv import User  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
@@ -299,6 +300,22 @@ def test_replayed_llm_call_span_does_not_take_the_payloads_session_id():
     _emit_llm(logger, kwargs)
     (span,) = exporter.get_finished_spans()
     assert GenAI.CONVERSATION_ID not in span.attributes
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"user_api_key_end_user_id": "end-1"}, "end-1"),
+        ({"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}, "caller-1"),
+        ({"user_api_key_user_id": "internal-1"}, None),
+    ],
+    ids=["proxy-end-user", "caller-trace-user-wins", "internal-user-never-sent"],
+)
+def test_llm_call_span_carries_the_request_user_as_user_id(metadata, expected):
+    logger, exporter = _logger()
+    _emit_llm(logger, {**_kwargs(), "litellm_params": {"metadata": metadata}})
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes.get(User.ID) == expected
 
 
 def test_streaming_span_carries_time_to_first_chunk():

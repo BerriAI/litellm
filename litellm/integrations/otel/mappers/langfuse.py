@@ -27,12 +27,13 @@ from litellm.integrations.otel.model.payloads import (
     LLMRequestParams,
     LLMUsage,
 )
+from litellm.integrations.otel.model.semconv import User
 from litellm.integrations.otel.model.trace_controls import TraceControls
 
 LANGFUSE_OBSERVATION_INPUT: Final = "langfuse.observation.input"
 LANGFUSE_OBSERVATION_OUTPUT: Final = "langfuse.observation.output"
 LANGFUSE_TRACE_NAME: Final = "langfuse.trace.name"
-LANGFUSE_TRACE_USER_ID: Final = "user.id"
+LANGFUSE_TRACE_USER_ID: Final = User.ID
 LANGFUSE_TRACE_SESSION_ID: Final = "session.id"
 LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
 

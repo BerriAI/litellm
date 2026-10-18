@@ -29,6 +29,7 @@ from litellm.integrations.otel import (
     resolve_output_type,
     resolve_provider,
 )
+from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
 from litellm.integrations.otel.model.metadata import LLMCallEvent
@@ -38,6 +39,7 @@ from litellm.integrations.otel.model.payloads import (
     RequestIdentity,
     _upstream_address_port,
 )
+from litellm.integrations.otel.model.semconv import User
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -51,6 +53,7 @@ from litellm.integrations.otel.model.trace_controls import (
     caller_trace_controls,
     request_trace_controls,
 )
+from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
 
 @pytest.fixture(autouse=True)
@@ -1538,6 +1541,33 @@ def test_llm_span_stamps_gen_ai_conversation_id_only_when_the_caller_sent_one():
     without: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(trace_id="per-request-uuid"))
     assert without.session_id is None
     assert GenAI.CONVERSATION_ID not in GenAIMapper().map(without)
+
+
+def test_llm_span_stamps_user_id_only_when_the_request_names_a_user():
+    with_user: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(), trace=TraceControls(user_id="end-1")
+    )
+    assert GenAIMapper().map(with_user)[User.ID] == "end-1"
+
+    without: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload())
+    assert User.ID not in GenAIMapper().map(without)
+
+
+@pytest.mark.parametrize("callback_name", ["otel", *sorted(PRESET_BY_CALLBACK)])
+def test_every_v2_callback_sends_the_request_user_as_user_id(callback_name, monkeypatch):
+    for name in ("LEVOAI_API_KEY", "LEVOAI_ORG_ID", "LEVOAI_WORKSPACE_ID"):
+        monkeypatch.setenv(name, "levo-test")
+    monkeypatch.setenv("LEVOAI_COLLECTOR_URL", "http://127.0.0.1:4318")
+    config: Final = (
+        OpenTelemetryV2Config()
+        if callback_name == "otel"
+        else PRESET_BY_CALLBACK[callback_name](allow_missing_credentials=True)
+    )
+    data: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(), trace=TraceControls(user_id="end-1"))
+    attrs: Final = {
+        key: value for mapper in resolve_mappers(config.mapper_names) for key, value in mapper.map(data).items()
+    }
+    assert attrs[User.ID] == "end-1"
 
 
 def test_llm_span_carries_proxy_request_route():
