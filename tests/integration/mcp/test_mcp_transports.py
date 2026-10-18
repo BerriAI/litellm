@@ -10,10 +10,15 @@ from integration._support.mcp import (
     EntryPoint,
     McpCaller,
     PeerKind,
+    ScriptedTool,
+    call_tool,
+    listed_tools,
     mcp_peer,
     official_client_outcomes,
     peer_of,
     register_mcp,
+    scripted_peer,
+    text_result,
     tool_calls,
 )
 
@@ -244,3 +249,19 @@ def test_legacy_gateway_calls_modern_upstream_without_initialize(
             assert metadata["io.modelcontextprotocol/protocolVersion"] == "2026-07-28"
             assert "io.modelcontextprotocol/clientCapabilities" in metadata
             assert b"mcp-session-id" not in row.get("headers", {})
+
+
+def test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller(gateway: Gateway) -> None:
+    payload: Final = "x" * (3 * 1024 * 1024)
+    tool: Final = ScriptedTool("dump", lambda _: text_result(payload), event_stream=True)
+
+    with scripted_peer(tool) as peer, gateway.scenario() as scenario:
+        alias: Final = "bigsse" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        name: Final = next(full for full in listed_tools(gateway, key, identity) if full.endswith("dump"))
+        response: Final = call_tool(gateway, key, identity, name, {})
+        assert response.status_code == 200, response.text[:500]
+        body: Final = response.json()
+        assert body["isError"] is False, response.text[:500]
+        assert body["content"][0]["text"] == payload

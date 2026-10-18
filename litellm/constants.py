@@ -218,6 +218,7 @@ MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_PER_USER_TO
 
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
+MCP_MAX_SSE_EVENT_SIZE_BYTES: Final = get_env_int("LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES", 64 * 1024 * 1024)
 MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
