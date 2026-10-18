@@ -1,6 +1,6 @@
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import filterfalse
 from typing import Any, Final, cast
 
@@ -13,7 +13,10 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     is_custom_tool_call,
     serialize_tool_call_arguments,
 )
-from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    encode_thinking_blocks,
+    mint_reasoning_item_id,
+)
 from litellm.responses.litellm_completion_transformation.tool_search import (
     build_tool_search_call,
     has_server_tool_search,
@@ -53,13 +56,14 @@ from litellm.types.llms.openai import (
     WebSearchCallInProgressEvent,
     WebSearchCallSearchingEvent,
 )
-from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
+    Choices,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
     TextCompletionResponse,
 )
+from litellm.types.utils import Delta as ChatCompletionDelta
 
 
 def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int | None:
@@ -942,37 +946,37 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             }
         }
         """
-        reasoning_item: Final = (
-            BaseLiteLLMOpenAIResponseObject(
-                id=reasoning_item_id,
-                type="reasoning",
-                status="completed",
-                summary=[
+        item_kwargs: Final = (
+            {
+                "id": reasoning_item_id,
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [
                     {
                         "type": "summary_text",
                         "text": reasoning_content,
                     }
                 ],
-                encrypted_content=encrypted_content,
-            )
+                "encrypted_content": encrypted_content,
+            }
             if encrypted_content
-            else BaseLiteLLMOpenAIResponseObject(
-                id=reasoning_item_id,
-                type="reasoning",
-                status="completed",
-                summary=[
+            else {
+                "id": reasoning_item_id,
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [
                     {
                         "type": "summary_text",
                         "text": reasoning_content,
                     }
                 ],
-            )
+            }
         )
         return OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
             output_index=self._reasoning_index(),
             sequence_number=sequence_number,
-            item=reasoning_item,
+            item=BaseLiteLLMOpenAIResponseObject(**item_kwargs),
         )
 
     def return_default_done_events(
@@ -1104,18 +1108,25 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _extract_streamed_thinking_blocks_encrypted(self) -> str | None:
         if self._cached_encrypted_reasoning_content is not None:
             return self._cached_encrypted_reasoning_content
-        chunks: Final = [c for c in self.collected_chat_completion_chunks if c.get("choices")]
-        if not any((c["choices"][0].get("delta") or {}).get("thinking_blocks") for c in chunks):
+        if not self.collected_chat_completion_chunks:
             return None
-        model_name: Final = self.model or "unknown"
-        prepared_chunks: Final = [c if c.get("model") else {**c, "model": model_name} for c in chunks]
         try:
-            built: Final = stream_chunk_builder(chunks=prepared_chunks)
-            if built and built.choices and hasattr(built.choices[0], "message"):
-                self._cached_encrypted_reasoning_content = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(
-                    built.choices[0].message
-                )
-                return self._cached_encrypted_reasoning_content
+            chunks: Final = [
+                c if c.get("model") else {**c, "model": self.model or "unknown"}
+                for c in self.collected_chat_completion_chunks
+                if c.get("choices")
+            ]
+            if not chunks:
+                return None
+            built: Final = stream_chunk_builder(chunks=chunks)
+            if built and built.choices:
+                choice: Final = built.choices[0]
+                if isinstance(choice, Choices):
+                    thinking_blocks: Final[Sequence[Mapping[str, object]]] = (
+                        getattr(choice.message, "thinking_blocks", None) or ()
+                    )
+                    self._cached_encrypted_reasoning_content = encode_thinking_blocks(thinking_blocks)
+                    return self._cached_encrypted_reasoning_content
         except (KeyError, ValueError, TypeError, AttributeError, IndexError):
             return None
         return None
