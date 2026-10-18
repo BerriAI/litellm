@@ -1959,7 +1959,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
         assert row_metadata["model_map_information"]["model_map_key"] == self.MODEL_MAP_KEY
 
     def test_resumed_responses_stream_spend_log_is_labeled_with_the_streamed_model(self, local_model_cost_map):
-        result = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+        result: Final = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
             litellm_logging_obj=self._logging_obj(),
             passthrough_success_handler_obj=None,
             url_route=f"https://api.openai.com/v1/responses/{self.RESPONSE_ID}?stream=true",
@@ -1970,7 +1970,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
             end_time=self.end_time,
         )
 
-        spend_log_row = get_logging_payload(
+        spend_log_row: Final = get_logging_payload(
             kwargs=result["kwargs"],
             response_obj=result["result"],
             start_time=self.start_time,
@@ -2125,7 +2125,9 @@ class _SpendRowRecorder(CustomLogger):
         super().__init__()
         self.row: Final[asyncio.Future[SpendLogsPayload]] = asyncio.get_running_loop().create_future()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self.row.set_result(
             get_logging_payload(kwargs=kwargs, response_obj=response_obj, start_time=start_time, end_time=end_time)
         )
@@ -2133,9 +2135,14 @@ class _SpendRowRecorder(CustomLogger):
 
 class TestOpenAIPassthroughResponsesSubRouteBilling:
     def _dispatch(
-        self, method: str, sub_route: str, request_body: dict[str, object], response_body: dict[str, object]
+        self,
+        method: str,
+        sub_route: str,
+        request_body: dict[str, object],
+        response_body: dict[str, object],
+        base_url: str = RESPONSES_URL,
     ):
-        url_route: Final = f"{RESPONSES_URL}{sub_route}"
+        url_route: Final = f"{base_url}{sub_route}"
         logging_obj: Final = LiteLLMLoggingObj(
             model="gpt-5.4-mini",
             messages=[],
@@ -2273,10 +2280,15 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert not dispatched["kwargs"].get("response_cost")
         assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
-    @pytest.mark.asyncio
-    async def test_unbilled_retrieve_spend_log_keeps_the_response_model(self, local_model_cost_map):
-        response_body: Final = _stored_response("completed", False, RESPONSES_USAGE)
-        url_route: Final = f"{RESPONSES_URL}/{STORED_RESPONSE_ID}"
+    async def _spend_row(
+        self,
+        method: str,
+        sub_route: str,
+        request_body: dict[str, object],
+        response_body: dict[str, object],
+        litellm_call_id: str,
+    ) -> SpendLogsPayload:
+        url_route: Final = f"{RESPONSES_URL}{sub_route}"
         recorder: Final = _SpendRowRecorder()
         logging_obj: Final = LiteLLMLoggingObj(
             model="unknown",
@@ -2284,7 +2296,7 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             stream=False,
             call_type="pass_through_endpoint",
             start_time=DISPATCH_TIME,
-            litellm_call_id="0f6f3d2e-6a51-4c4e-9a43-6f1b0d1e9c21",
+            litellm_call_id=litellm_call_id,
             function_id="1234",
             dynamic_async_success_callbacks=[recorder],
         )
@@ -2293,7 +2305,7 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         )
 
         await PassThroughEndpointLogging().pass_through_async_success_handler(
-            httpx_response=httpx.Response(200, json=response_body, request=httpx.Request("GET", url_route)),
+            httpx_response=httpx.Response(200, json=response_body, request=httpx.Request(method, url_route)),
             response_body=response_body,
             logging_obj=logging_obj,
             url_route=url_route,
@@ -2301,16 +2313,88 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             start_time=DISPATCH_TIME,
             end_time=DISPATCH_TIME,
             cache_hit=False,
-            request_body={},
+            request_body=request_body,
             passthrough_logging_payload=PassthroughStandardLoggingPayload(
-                url=url_route, request_body={}, request_method="GET"
+                url=url_route, request_body=request_body, request_method=method
             ),
             custom_llm_provider="openai",
         )
-        spend_log_row: Final = await asyncio.wait_for(recorder.row, timeout=5)
+        return await asyncio.wait_for(recorder.row, timeout=5)
+
+    @pytest.mark.asyncio
+    async def test_unbilled_retrieve_spend_log_keeps_the_response_model(self, local_model_cost_map):
+        response_body: Final = _stored_response("completed", False, RESPONSES_USAGE)
+
+        spend_log_row: Final = await self._spend_row(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, response_body, "0f6f3d2e-6a51-4c4e-9a43-6f1b0d1e9c21"
+        )
 
         assert spend_log_row["model"] == response_body["model"]
         assert not spend_log_row["spend"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "sub_route", "response_body"),
+        [
+            pytest.param(
+                "GET",
+                f"/{STORED_RESPONSE_ID}",
+                _stored_response("completed", True, RESPONSES_USAGE),
+                id="background_retrieve_completed",
+            ),
+            pytest.param(
+                "POST",
+                f"/{STORED_RESPONSE_ID}/cancel",
+                _stored_response("cancelled", True, RESPONSES_USAGE),
+                id="background_cancel",
+            ),
+        ],
+    )
+    async def test_billed_background_read_spend_log_survives_next_to_its_create_row(
+        self, local_model_cost_map, method: str, sub_route: str, response_body: dict[str, object]
+    ):
+        create_row: Final = await self._spend_row(
+            "POST",
+            "",
+            {**CREATE_REQUEST, "background": True},
+            _stored_response("queued", True, None),
+            "3a4f0c1e-2b7d-4c55-8e0e-0d7a51d9f6a1",
+        )
+        read_row: Final = await self._spend_row(
+            method, sub_route, {}, response_body, "9b2e6d40-71c3-4f8a-a5d2-4e3c8f0b7d12"
+        )
+
+        assert read_row["request_id"] != create_row["request_id"]
+        assert read_row["request_id"].startswith(STORED_RESPONSE_ID)
+        assert read_row["spend"] > 0
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            pytest.param("https://my-resource.openai.azure.com/openai/v1/responses", id="azure_openai_v1"),
+            pytest.param("https://my-resource.cognitiveservices.azure.com/openai/responses", id="azure_openai_native"),
+        ],
+    )
+    def test_azure_responses_sub_routes_bill_like_openai(self, local_model_cost_map, base_url: str):
+        retrieve: Final = self._dispatch(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, _stored_response("completed", False, RESPONSES_USAGE), base_url
+        )
+        input_tokens: Final = self._dispatch(
+            "POST",
+            "/input_tokens",
+            {"model": "gpt-5.4-mini", "input": "hi"},
+            {"object": "response.input_tokens", "input_tokens": 7},
+            base_url,
+        )
+        background_retrieve: Final = self._dispatch(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, _stored_response("completed", True, RESPONSES_USAGE), base_url
+        )
+        compact: Final = self._dispatch("POST", "/compact", COMPACT_REQUEST, COMPACTION, base_url)
+
+        assert not retrieve["kwargs"].get("response_cost")
+        assert not input_tokens["kwargs"].get("response_cost")
+        assert background_retrieve["kwargs"]["response_cost"] > 0
+        assert compact["kwargs"]["response_cost"] > 0
 
 
 if __name__ == "__main__":

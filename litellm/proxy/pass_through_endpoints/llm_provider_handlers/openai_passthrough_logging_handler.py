@@ -6,7 +6,7 @@ Handles cost tracking and logging for OpenAI passthrough endpoints, specifically
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Final
+from typing import Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
 import httpx
@@ -30,6 +30,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
@@ -101,6 +102,9 @@ def is_openai_compatible_url(url_route: str | None) -> bool:
 
 
 _is_openai_compatible_url: Final = is_openai_compatible_url
+
+
+ResponsesCallBilling: TypeAlias = Literal["unbilled", "billed", "background_settlement"]
 
 
 def _responses_sub_route(path: str) -> tuple[str, ...] | None:
@@ -194,14 +198,18 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         )
 
     @staticmethod
-    def is_billed_openai_responses_call(method: str, url_route: str, response_body: Mapping[str, object]) -> bool:
+    def openai_responses_call_billing(
+        method: str, url_route: str, response_body: Mapping[str, object]
+    ) -> ResponsesCallBilling:
+        if not OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route):
+            return "unbilled"
         match (method, _responses_sub_route(urlparse(url_route).path)):
             case ("POST", ("input_tokens",)) | ("GET", (_, "input_items")) | ("DELETE", (_,)):
-                return False
+                return "unbilled"
             case ("GET", (_,)) | ("POST", (_, "cancel")):
-                return is_background_response(response_body)
+                return "background_settlement" if is_background_response(response_body) else "unbilled"
             case _:
-                return True
+                return "billed"
 
     @staticmethod
     def _label_unbilled_responses_call(
@@ -324,6 +332,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
+        response_id_suffix: str = "",
     ) -> tuple[ResponsesAPIResponse, float]:
         """Transform a Responses API raw response into a ResponsesAPIResponse
         and compute its cost.
@@ -352,7 +361,12 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             custom_llm_provider=custom_llm_provider,
             call_type="responses",
         )
-        return litellm_model_response, response_cost
+        logged_response: Final = (
+            litellm_model_response.model_copy(update={"id": f"{litellm_model_response.id}{response_id_suffix}"})
+            if response_id_suffix
+            else litellm_model_response
+        )
+        return logged_response, response_cost
 
     @staticmethod
     def openai_passthrough_handler(
@@ -375,11 +389,10 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         is_embeddings: Final = OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
         is_image_generation: Final = OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
         is_image_editing: Final = OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
-        is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(
-            url_route
-        ) and OpenAIPassthroughLoggingHandler.is_billed_openai_responses_call(
+        responses_billing: Final = OpenAIPassthroughLoggingHandler.openai_responses_call_billing(
             httpx_response.request.method, url_route, response_body
         )
+        is_responses: Final = responses_billing != "unbilled"
 
         if not (is_chat_completions or is_embeddings or is_image_generation or is_image_editing or is_responses):
             OpenAIPassthroughLoggingHandler._label_unbilled_responses_call(logging_obj, url_route, response_body)
@@ -502,6 +515,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     httpx_response=httpx_response,
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
+                    response_id_suffix=(
+                        BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
+                        if responses_billing == "background_settlement"
+                        else ""
+                    ),
                 )
 
             # Update kwargs with cost information
