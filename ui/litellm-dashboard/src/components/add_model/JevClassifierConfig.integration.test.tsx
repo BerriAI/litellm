@@ -164,6 +164,28 @@ describe("JEV classifier editor", () => {
     },
   );
 
+  it("hides the model and instructions for Nadir and saves it without instructions", async () => {
+    renderWithProviders(<Form />);
+    fireEvent.click(screen.getByRole("radio", { name: /^Decisions Model$/ }));
+    fireEvent.change(screen.getByLabelText("Classifier Instructions"), { target: { value: "Pick carefully" } });
+    await chooseSelectOption(userEvent, screen.getByRole("combobox", { name: "Decision model" }), "Nadir");
+    expect(screen.queryByLabelText("Classifier Model")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Classifier Instructions")).not.toBeInTheDocument();
+    expect(screen.getByText(/Set NADIR_API_KEY on the gateway/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
+    expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveTextContent("Nadir");
+    fireEvent.click(screen.getByRole("button", { name: "Probe current config" }));
+    expect(testAutoRouterRouting).toHaveBeenLastCalledWith(
+      "token",
+      expect.objectContaining({
+        complexity_router_config: expect.objectContaining({
+          classifier_type: "oss_classifier",
+          opensource_classifier_config: { provider: "nadir", model: "bucket", timeout_ms: 3000 },
+        }),
+      }),
+    );
+  });
+
   it("allows licensed instructions and can restore built-in instructions", () => {
     const authorized = useAuthorized();
     vi.mocked(useAuthorized).mockReturnValue({ ...authorized, premiumUser: true });

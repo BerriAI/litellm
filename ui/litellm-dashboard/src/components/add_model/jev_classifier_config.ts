@@ -6,20 +6,27 @@ export const OSS_CLASSIFIER_MODELS = {
   bespoke: ["nimble-latest", "nimble", "bespokelabs/Bespoke-Nimble-9B"],
 } as const;
 
-const OSS_CLASSIFIER_PROVIDERS = ["jev", "laya", "bespoke", "databricks"] as const;
+const OSS_CLASSIFIER_PROVIDERS = ["jev", "laya", "bespoke", "databricks", "nadir"] as const;
 export type OssClassifierProvider = (typeof OSS_CLASSIFIER_PROVIDERS)[number];
 export const isOssClassifierProvider = (value: unknown): value is OssClassifierProvider =>
   OSS_CLASSIFIER_PROVIDERS.some((provider) => provider === value);
 
 const DEFAULT_TIMEOUT_MS = 3000;
 const SERVING_ENDPOINT_NAME = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
-const DATABRICKS_AI_DECIDE_MODEL = "ai_decide";
+const TYPED_MODEL_DEFAULTS: Partial<Record<OssClassifierProvider, string>> = {
+  databricks: "ai_decide",
+  nadir: "bucket",
+};
 
 export const fixedClassifierModels = (provider: OssClassifierProvider | undefined): readonly string[] | undefined =>
   provider === "laya" || provider === "bespoke" ? OSS_CLASSIFIER_MODELS[provider] : undefined;
 
 const defaultClassifierModel = (provider: OssClassifierProvider | undefined): string =>
-  fixedClassifierModels(provider)?.[0] ?? (provider === "databricks" ? DATABRICKS_AI_DECIDE_MODEL : "jev-latest");
+  fixedClassifierModels(provider)?.[0] ?? (provider && TYPED_MODEL_DEFAULTS[provider]) ?? "jev-latest";
+
+// Nadir classifies with its own model, so the gateway rejects custom instructions for it.
+export const acceptsClassifierInstructions = (provider: OssClassifierProvider | undefined): boolean =>
+  provider !== "nadir";
 
 const isSupportedClassifierModel = (provider: OssClassifierProvider | undefined, model: string): boolean => {
   if (provider === "databricks") return SERVING_ENDPOINT_NAME.test(model);
@@ -31,7 +38,7 @@ const jevClassifierConfigFields = {
   deployment_name: z.preprocess((value) => value ?? undefined, z.string().trim().min(1).optional()),
   provider: z.preprocess(
     (value) => (value === "typesafe" ? "jev" : value),
-    z.enum(["jev", "laya", "bespoke", "databricks"]).optional(),
+    z.enum(["jev", "laya", "bespoke", "databricks", "nadir"]).optional(),
   ),
   model: z.string().trim().min(1).optional(),
   timeout_ms: z.number().int().positive().default(DEFAULT_TIMEOUT_MS),
@@ -80,7 +87,8 @@ export const normalizeJevClassifierConfig = (
   provider: config.provider ?? "jev",
   model: config.model.trim(),
   timeout_ms: config.timeout_ms,
-  ...(config.instructions?.trim() && { instructions: config.instructions.trim() }),
+  ...(acceptsClassifierInstructions(config.provider) &&
+    config.instructions?.trim() && { instructions: config.instructions.trim() }),
   ...(config.circuit_breaker_enabled !== undefined && { circuit_breaker_enabled: config.circuit_breaker_enabled }),
   ...(config.circuit_breaker_cooldown_seconds !== undefined && {
     circuit_breaker_cooldown_seconds: config.circuit_breaker_cooldown_seconds,

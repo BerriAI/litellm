@@ -39882,7 +39882,7 @@ export interface components {
              * @default jev
              * @enum {string}
              */
-            provider: "jev" | "laya" | "bespoke" | "databricks";
+            provider: "jev" | "laya" | "bespoke" | "databricks" | "nadir";
             /**
              * Timeout Ms
              * @default 3000
