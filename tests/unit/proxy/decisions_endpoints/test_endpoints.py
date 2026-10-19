@@ -1394,5 +1394,21 @@ def test_the_operator_request_size_limit_applies_to_the_decoded_body(
 
     assert len(compressed) < max_request_size_mb * 1024 * 1024
     assert response.status_code == 413, response.text
-    assert response.json() == {"error": f"Request size is too large. Max size is {max_request_size_mb} MB"}
+    assert response.json()["error"]["message"] == f"Request body is larger than {max_request_size_mb} MB when decoded"
+    assert not upstream.called
+
+
+def test_a_whole_number_request_size_limit_is_named_as_configured_in_the_413(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setitem(litellm.proxy.proxy_server.general_settings, "max_request_size_mb", 1)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post("/v1/systemone", json={**_REQUEST, "state": {"source": "a" * 1024 * 1024}})
+
+    assert response.status_code == 413, response.text
+    assert response.json() == {"error": "Request size is too large. Max size is 1 MB"}
     assert not upstream.called

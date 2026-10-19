@@ -1,7 +1,9 @@
+import asyncio
 import gzip
 import json
 import math
 import random
+import struct
 import sys
 import tracemalloc
 import zlib
@@ -9,6 +11,7 @@ from collections.abc import Callable
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -23,8 +26,8 @@ from litellm.proxy.middleware.request_body_decompression_middleware import (
     RFC_9659_ZSTD_WINDOW_LOG_MAX,
     ZSTD_FRAME_MAGIC,
     RequestBodyDecompressionMiddleware,
+    load_zstd_codec,
 )
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 if sys.version_info >= (3, 14):
     from compression import zstd
@@ -50,7 +53,12 @@ async def _echo_request(request: Request) -> Response:
 
 
 def _client(max_decompressed_body_size_mb: float = CAP_MB, **options: object) -> TestClient:
-    echo_app: Final = Starlette(routes=[Route("/v1/systemone", _echo_request, methods=["POST"])])
+    echo_app: Final = Starlette(
+        routes=[
+            Route("/v1/systemone", _echo_request, methods=["POST"]),
+            Route("/plugin-proxy/{path:path}", _echo_request, methods=["POST"]),
+        ]
+    )
     return TestClient(
         RequestBodyDecompressionMiddleware(
             echo_app,
@@ -64,9 +72,20 @@ def _low_entropy_text(length: int) -> bytes:
     return bytes(random.Random(0).choices(b"abcd", k=length))
 
 
-def _post(client: TestClient, body: bytes, content_encodings: tuple[str, ...]) -> Response:
+def _post(client: TestClient, body: bytes, content_encodings: tuple[str, ...], path: str = "/v1/systemone") -> Response:
     headers: Final = [("content-type", "application/json"), *(("content-encoding", v) for v in content_encodings)]
-    return client.post("/v1/systemone", content=body, headers=headers)
+    return client.post(path, content=body, headers=headers)
+
+
+def _decoded_too_large(max_mb: float) -> dict[str, dict[str, str | None]]:
+    return {
+        "error": {
+            "message": f"Request body is larger than {max_mb:g} MB when decoded",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "413",
+        }
+    }
 
 
 def _zeros_compressed(compress_chunk: Callable[[bytes], bytes], flush: Callable[[], bytes], decoded_mib: int) -> bytes:
@@ -189,7 +208,7 @@ def test_body_decoding_past_the_cap_is_rejected():
 
     assert len(compressed) < CAP_MB * MIB
     assert response.status_code == 413
-    assert response.json() == {"error": f"Request size is too large. Max size is {CAP_MB} MB"}
+    assert response.json() == _decoded_too_large(CAP_MB)
 
 
 @pytest.mark.parametrize(
@@ -206,7 +225,7 @@ def test_operator_request_size_limit_caps_the_decoded_body_when_it_is_lower(
     assert _post(client, within, ("zstd",)).status_code == 200
     over_response: Final = _post(client, over, ("zstd",))
     assert over_response.status_code == 413
-    assert over_response.json() == {"error": f"Request size is too large. Max size is {effective_max_mb} MB"}
+    assert over_response.json() == _decoded_too_large(effective_max_mb)
 
 
 @pytest.mark.parametrize("content_encoding", ["gzip", "zstd"])
@@ -234,6 +253,10 @@ def _zstd_frame_needing_a_window_over_the_rfc_9659_limit() -> bytes:
     return zstd.compress(content, options={zstd.CompressionParameter.window_log: window_log})
 
 
+def _zstd_skippable_frame(content: bytes) -> bytes:
+    return struct.pack("<II", 0x184D2A53, len(content)) + content
+
+
 @pytest.mark.parametrize(
     ("body", "content_encoding", "message"),
     [
@@ -244,6 +267,11 @@ def _zstd_frame_needing_a_window_over_the_rfc_9659_limit() -> bytes:
         (gzip.compress(REQUEST_JSON) + b"{}", "gzip", "Request body has data after the end of its gzip stream"),
         (zstd.compress(REQUEST_JSON) + b"{}", "zstd", "Request body has data after the end of its zstd stream"),
         (_zstd_frame_needing_a_window_over_the_rfc_9659_limit(), "zstd", "Request body is not valid zstd data: "),
+        (
+            _zstd_skippable_frame(b"meta") + zstd.compress(REQUEST_JSON),
+            "zstd",
+            "Request body has data after the end of its zstd stream",
+        ),
     ],
 )
 def test_undecodable_body_is_rejected_with_an_openai_style_400(body: bytes, content_encoding: str, message: str):
@@ -273,20 +301,69 @@ def test_zstd_body_gets_a_415_naming_gzip_when_this_python_cannot_decode_zstd():
     assert gzip_response.status_code == 200
 
 
-def test_middleware_imports_and_keeps_gzip_on_a_python_without_zstd():
-    program: Final = (
-        "import sys\n"
-        "sys.modules['_zstd'] = None\n"
-        "sys.modules['compression.zstd'] = None\n"
-        "sys.modules['backports.zstd'] = None\n"
-        "from litellm.proxy.middleware.request_body_decompression_middleware import AVAILABLE_CODECS\n"
-        "print(sorted(AVAILABLE_CODECS))\n"
+def test_zstd_is_unavailable_without_failing_the_import_on_a_python_without_zstd(monkeypatch: pytest.MonkeyPatch):
+    for module in ("_zstd", "compression.zstd", "backports.zstd"):
+        monkeypatch.setitem(sys.modules, module, None)
+
+    assert load_zstd_codec() is None
+
+
+@pytest.mark.parametrize(
+    ("body", "content_encoding"),
+    [
+        (gzip.compress(REQUEST_JSON), "gzip"),
+        (zstd.compress(REQUEST_JSON), "zstd"),
+        (zstd.compress(_low_entropy_text(int(CAP_MB * MIB) * 2)), "zstd"),
+    ],
+)
+def test_plugin_proxy_bodies_reach_the_plugin_as_sent(body: bytes, content_encoding: str):
+    response: Final = _post(
+        _client(codecs=MappingProxyType({"gzip": GZIP})), body, (content_encoding,), path="/plugin-proxy/notes/v1/run"
     )
 
-    result: Final = run_child_interpreter(program, timeout=120)
+    assert response.status_code == 200
+    assert response.json() == {
+        "body_hex": body.hex(),
+        "content_encoding": [content_encoding],
+        "content_length": str(len(body)),
+    }
 
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().splitlines()[-1] == "['gzip']"
+
+@pytest.mark.asyncio
+async def test_compressed_bodies_past_the_in_flight_budget_get_a_503_until_earlier_ones_finish():
+    compressed: Final = zstd.compress(REQUEST_JSON)
+    app_has_the_first_body: Final = asyncio.Event()
+    let_the_first_request_finish: Final = asyncio.Event()
+
+    async def route_holding_the_first_request(request: Request) -> Response:
+        body: Final = await request.body()
+        if not app_has_the_first_body.is_set():
+            app_has_the_first_body.set()
+            await let_the_first_request_finish.wait()
+        return JSONResponse({"decoded_bytes": len(body)})
+
+    middleware: Final = RequestBodyDecompressionMiddleware(
+        Starlette(routes=[Route("/v1/systemone", route_holding_the_first_request, methods=["POST"])]),
+        max_decompressed_body_size_mb=CAP_MB,
+        max_decoded_bodies_in_flight_mb=1.5 * len(REQUEST_JSON) / MIB,
+    )
+    headers: Final = {"content-type": "application/json", "content-encoding": "zstd"}
+    async with (
+        asyncio.timeout(30),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=middleware), base_url="http://proxy") as client,
+    ):
+        first: Final = asyncio.create_task(client.post("/v1/systemone", content=compressed, headers=headers))
+        await app_has_the_first_body.wait()
+        while_first_is_in_flight: Final = await client.post("/v1/systemone", content=compressed, headers=headers)
+        let_the_first_request_finish.set()
+        first_response: Final = await first
+        after_first_finished: Final = await client.post("/v1/systemone", content=compressed, headers=headers)
+
+    assert first_response.json() == {"decoded_bytes": len(REQUEST_JSON)}
+    assert while_first_is_in_flight.status_code == 503
+    assert while_first_is_in_flight.headers["retry-after"] == "1"
+    assert while_first_is_in_flight.json()["error"]["type"] == "overloaded_error"
+    assert after_first_finished.json() == {"decoded_bytes": len(REQUEST_JSON)}
 
 
 def _http_scope(headers: list[tuple[bytes, bytes]]) -> Scope:
