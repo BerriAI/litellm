@@ -719,6 +719,13 @@ def _observed_all(upstream_url: str) -> tuple[dict[str, JsonValue], ...]:
         return tuple(map(object_value, upstream.get("/__observations").json()["requests"]))
 
 
+def _reset_observations(upstream_url: str) -> None:
+    with httpx.Client(
+        base_url=upstream_url, timeout=5, trust_env=False, verify=not upstream_url.startswith("https://")
+    ) as upstream:
+        upstream.delete("/__observations").raise_for_status()
+
+
 def _belonging(observed: tuple[dict[str, JsonValue], ...], scenario_id: str) -> tuple[dict[str, JsonValue], ...]:
     return tuple(request for request in observed if _belongs(request, scenario_id))
 
@@ -2549,6 +2556,7 @@ def test_worker_kill_then_proxy_restart_keep_transcription_sessions_uninjected(
             before_the_kill: Final = _observed(gateway.upstream_url, handle.scenario_id)
             assert set(_sent_types(before_the_kill)) <= {"session.update", "input_audio_buffer.commit"}, before_the_kill
             assert set(map(json.dumps, _session_updates(before_the_kill))) == {json.dumps(GA_TRANSCRIPTION_UPDATE)}
+            _reset_observations(gateway.upstream_url)
             after_kill: Final = _transcribe(_ws_base(owned_url), f"model={model}&{TRANSCRIPTION_QUERY}", key)
             _assert_transcription_left_alone(
                 after_kill,
@@ -2556,6 +2564,7 @@ def test_worker_kill_then_proxy_restart_keep_transcription_sessions_uninjected(
                 CLEAN_TRANSCRIPT,
                 update=GA_TRANSCRIPTION_UPDATE,
             )
+            _reset_observations(gateway.upstream_url)
             blocked_on_the_survivor: Final = _transcribe_blocked(
                 _ws_base(owned_url), f"model={blocked_model_after_kill}&{TRANSCRIPTION_QUERY}", key
             )

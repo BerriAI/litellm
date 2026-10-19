@@ -4531,7 +4531,7 @@ class MCPServerManager:
                 )
             else:
                 page: Final = (
-                    await client.list_tools_page(params)
+                    await self._fetch_tools_page_with_timeout(client, server, params)
                     if params is not None
                     else ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
                 )
@@ -5620,6 +5620,19 @@ class MCPServerManager:
                 "Error listing tools from %s: %s%s", server_name, type(e).__name__, _upstream_failure_suffix(e)
             )
             raise_classified_list_failure(e, server_name)
+
+    async def _fetch_tools_page_with_timeout(
+        self, client: MCPClient, server: MCPServer, params: PaginatedRequestParams
+    ) -> ListToolsResult:
+        deadline: Final = (
+            MCP_TOOL_LISTING_TIMEOUT if server.timeout is None else max(server.timeout, MCP_TOOL_LISTING_TIMEOUT)
+        )
+        try:
+            with anyio.fail_after(deadline):
+                return await client.list_tools_page(params)
+        except TimeoutError as e:
+            verbose_logger.warning("Timeout while listing tools from %s", server.name)
+            raise MCPServerListError(ServerListFault(tag="timeout"), server.name) from e
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
 
