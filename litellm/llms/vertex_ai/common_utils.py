@@ -1,5 +1,5 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
@@ -1263,6 +1263,46 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         return custom_llm_provider == LlmProviders.VERTEX_AI.value
 
+    async def _count_translated_claude_request(
+        self,
+        model_to_use: str,
+        messages: Sequence[Mapping[str, object]] | None,
+        deployment: Mapping[str, object],
+        request_model: str,
+        tools: Sequence[Mapping[str, object]] | None,
+        system: object | None,
+        messages_format: TokenCountMessagesFormat,
+        output_format: JsonValue,
+        context_management: CountContextManagement | None,
+    ) -> TokenCountResponse | None:
+        from litellm.llms.anthropic.count_tokens.transformation import (
+            AnthropicCountFields,
+            ChatCountTranslationError,
+            anthropic_count_fields,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
+
+        if count_tokens_publisher(model_to_use) != "anthropic":
+            return None
+        match translated := await anthropic_count_fields(model_to_use, messages or [], system, tools, messages_format):
+            case ChatCountTranslationError():
+                return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
+            case AnthropicCountFields():
+                return await self.count_tokens(
+                    model_to_use=model_to_use,
+                    messages=[dict(message) for message in translated.messages],
+                    contents=None,
+                    deployment=dict(deployment),
+                    request_model=request_model,
+                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
+                    system=translated.system,
+                    messages_format="anthropic",
+                    output_format=output_format,
+                    context_management=context_management,
+                )
+            case None:
+                return None
+
     async def count_tokens(
         self,
         model_to_use: str,
@@ -1313,6 +1353,20 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
+            translated_count: Final = await self._count_translated_claude_request(
+                model_to_use=model_to_use,
+                messages=messages,
+                deployment=deployment,
+                request_model=request_model,
+                tools=tools,
+                system=system,
+                messages_format=messages_format,
+                output_format=output_format,
+                context_management=context_management,
+            )
+            if translated_count is not None:
+                return translated_count
+
             # Use partner models token counter
             partner_models_handler: Final = VertexAIPartnerModels()
 

@@ -49,6 +49,37 @@ TOOLS: Final[list[JsonValue]] = [
     }
 ]
 
+WEATHER_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string", "description": "City to look up"}},
+    "required": ["city"],
+}
+RESPONSES_TOOLS: Final[list[JsonValue]] = [
+    {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Look up the current weather for a city",
+        "parameters": WEATHER_SCHEMA,
+    }
+]
+RESPONSES_TOOL_USE: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
+    {
+        "function-tool": {"input": "Count this message", "instructions": "Be terse", "tools": RESPONSES_TOOLS},
+        "tool-round-trip": {
+            "input": [
+                {"role": "user", "content": "What is the weather in Paris?"},
+                {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+                {"type": "function_call_output", "call_id": "call_1", "output": "Sunny, 21C"},
+            ],
+            "tools": RESPONSES_TOOLS,
+        },
+    }
+)
+
+
+def counted_fields(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {field: body[field] for field in ("messages", "system", "tools") if field in body}
+
 
 @dataclass(frozen=True, slots=True)
 class LiftCase:

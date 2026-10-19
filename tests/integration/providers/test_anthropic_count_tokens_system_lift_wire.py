@@ -32,6 +32,7 @@ from integration.providers._count_tokens_system_lift import (
     MID_SYSTEM,
     REJECTION,
     REMINDER,
+    RESPONSES_TOOL_USE,
     STRING_CASE,
     TOKEN_COUNTING_BETA,
     TOOLS,
@@ -43,6 +44,7 @@ from integration.providers._count_tokens_system_lift import (
     async_anthropic_client,
     async_openai_client,
     count_request,
+    counted_fields,
     expected_count_body,
     openai_client,
 )
@@ -573,3 +575,41 @@ def test_chat_completions_on_the_same_deployment_keeps_a_mid_conversation_system
             {"role": "assistant", "content": [{"type": "text", "text": "One."}]},
             {"role": "user", "content": [{"type": "text", "text": "Again"}]},
         ], body
+
+
+_GENERATED: Final[dict[str, JsonValue]] = {
+    "id": "msg_generated",
+    "type": "message",
+    "role": "assistant",
+    "model": _MODEL,
+    "content": [{"type": "text", "text": "done"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 12, "output_tokens": 3},
+}
+
+
+def _generating(provider: _Provider) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.target == provider.target.removesuffix("/count_tokens"):
+            return _json_reply(200, _GENERATED)
+        return _peer(provider)(request)
+
+    return respond
+
+
+@pytest.mark.parametrize("request_body", RESPONSES_TOOL_USE.values(), ids=RESPONSES_TOOL_USE.keys())
+def test_responses_input_tokens_counts_what_responses_inference_sends(
+    deployment: _Deployment, gateway: Gateway, request_body: dict[str, JsonValue]
+) -> None:
+    with wire_server(_generating(deployment.provider), port=deployment.port) as peer:
+        generated: Final = gateway.request(
+            "POST", "/v1/responses", {**request_body, "model": deployment.model, "max_output_tokens": 16}
+        )
+        assert generated.status_code == 200, generated.text
+        response: Final = gateway.request(
+            "POST", "/v1/responses/input_tokens", {**request_body, "model": deployment.model}
+        )
+        assert _payload(response)["input_tokens"] == _COUNT, response.text
+        inference, counted = (counted_fields(JSON_OBJECT.validate_json(request.body)) for request in peer.drain())
+        assert counted == inference, (counted, inference)

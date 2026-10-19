@@ -1628,6 +1628,96 @@ async def test_vertex_ai_token_counter_forwards_system_and_tools_to_partner_requ
     assert without_optional_fields.total_tokens == 37
 
 
+_PARTNER_CHAT_TOOL_TURNS: Final[list[dict[str, object]]] = [
+    {"role": "user", "content": "Weather in SF?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+]
+_PARTNER_RESPONSES_TOOL: Final[dict[str, object]] = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+async def _partner_counted_bodies(model: str) -> tuple[dict[str, object], ...]:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 37}
+
+    class FakeHttpClient:
+        posted_bodies: tuple[dict[str, object], ...] = ()
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float) -> FakeResponse:
+            self.posted_bodies = (*self.posted_bodies, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
+        patch.object(
+            handler.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use=model,
+            messages=copy.deepcopy(_PARTNER_CHAT_TOOL_TURNS),
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            tools=[_PARTNER_RESPONSES_TOOL],
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    return fake_http_client.posted_bodies
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_chat_tool_use_in_the_shape_chat_inference_sends() -> None:
+    assert await _partner_counted_bodies("claude-opus-5-5") == (
+        {
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Weather in SF?"}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]},
+            ],
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "input_schema": {"type": "object", "properties": {}},
+                    "type": "custom",
+                    "description": "",
+                }
+            ],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_llama_count_sends_chat_tool_use_as_sent() -> None:
+    assert await _partner_counted_bodies("meta/llama-4-maverick-17b-128e-instruct-maas") == (
+        {
+            "model": "meta/llama-4-maverick-17b-128e-instruct-maas",
+            "messages": _PARTNER_CHAT_TOOL_TURNS,
+            "tools": [_PARTNER_RESPONSES_TOOL],
+        },
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider_failure", "expected_status", "expected_message"),
