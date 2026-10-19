@@ -1191,7 +1191,11 @@ class TestTenantSampling:
     NAMES = {"POST /v1/chat/completions", "auth /v1/chat/completions", "chat gpt-4"}
 
     @staticmethod
-    def _fan_out(dest_exporter, trace_id=None, global_exporter=None):
+    def _fan_out(
+        dest_exporter: InMemorySpanExporter,
+        trace_id: int | None = None,
+        global_exporter: InMemorySpanExporter | None = None,
+    ) -> TracerProvider:
         provider = TracerProvider() if trace_id is None else TracerProvider(id_generator=_FixedTraceId(trace_id))
         if global_exporter is not None:
             provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "arize"))
@@ -1544,7 +1548,7 @@ class TestTenantSampling:
         [({"arize_success_sampling_rate": "0.5"}, False), ({"arize_error_sampling_rate": "0.5"}, True)],
         ids=["success-rate", "error-rate"],
     )
-    def test_two_processes_serving_one_trace_reach_the_same_verdict(self, rates, failed):
+    def test_two_processes_serving_one_trace_reach_the_same_verdict(self, rates: Mapping[str, str], failed: bool):
         """Two pods behind a load balancer each serve one call of a trace the caller
         continued with its ``traceparent``: the team's space gets both calls or neither,
         and a rate of 0.5 over UUID-shaped trace ids keeps some traces and drops others."""
@@ -1553,7 +1557,7 @@ class TestTenantSampling:
         destinations = (arize_destination(**rates),)
         trace_ids = tuple(uuid.uuid5(uuid.NAMESPACE_URL, f"pod/{index}").int for index in range(32))
 
-        def run(provider):
+        def run(provider: TracerProvider):
             set_request_destinations(destinations)
             tracer = get_tracer(provider, "litellm")
             for trace_id in trace_ids:
@@ -1569,7 +1573,10 @@ class TestTenantSampling:
         for provider in pods:
             in_fresh_context(run, provider)
 
-        first, second = ({s.context.trace_id for s in exporter.get_finished_spans()} for exporter in exporters)
+        first, second = (
+            {s.context.trace_id for s in exporter.get_finished_spans() if s.context is not None}
+            for exporter in exporters
+        )
         assert first == second
         assert 0 < len(first) < len(trace_ids)
 
