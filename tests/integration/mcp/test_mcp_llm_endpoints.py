@@ -698,12 +698,12 @@ def _price(*rounds: tuple[int, int]) -> float:
     return sum(prompt * input_price + completion * output_price for prompt, completion in rounds)
 
 
-def _responses_rows(call_id: str, status: str) -> list[dict[str, JsonValue]]:
+def _spend_rows(call_id: str, call_type: str, status: str) -> list[dict[str, JsonValue]]:
     return eventually(
         lambda: read_rows(
             "SELECT request_id, spend, prompt_tokens, completion_tokens, session_id "
             'FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s AND call_type=%s AND status=%s',
-            (call_id, "aresponses", status),
+            (call_id, call_type, status),
         ),
         lambda found: len(found) >= 1,
         seconds=70,
@@ -736,7 +736,7 @@ def test_nonstream_responses_auto_execute_logs_the_answer_and_bills_both_rounds(
         assert response.status_code == 200, response.text
         body: Final = JSON_OBJECT.validate_json(response.content)
         assert rig.final_text(body) == ANSWER, response.text
-        rows: Final = _responses_rows(response.headers["x-litellm-call-id"], "success")
+        rows: Final = _spend_rows(response.headers["x-litellm-call-id"], "aresponses", "success")
         assert len(rows) == 1, rows
         row: Final = rows[0]
         assert row["request_id"] == body["id"], row
@@ -755,13 +755,33 @@ def test_nonstream_responses_auto_execute_logs_the_answer_and_bills_both_rounds(
         )
 
 
+def test_nonstream_chat_auto_execute_logs_the_answer_and_bills_both_rounds(gateway: Gateway) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND)
+    with _rig(gateway, "chat", billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO])
+        assert response.status_code == 200, response.text
+        body: Final = JSON_OBJECT.validate_json(response.content)
+        assert rig.final_text(body) == ANSWER, response.text
+        rows: Final = _spend_rows(response.headers["x-litellm-call-id"], "acompletion", "success")
+        assert len(rows) == 1, rows
+        row: Final = rows[0]
+        assert row["request_id"] == body["id"], row
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (
+            FIRST_ROUND[0] + FOLLOW_UP_ROUND[0],
+            FIRST_ROUND[1] + FOLLOW_UP_ROUND[1],
+        ), row
+        assert object_value(body["usage"])["prompt_tokens"] == row["prompt_tokens"], body
+        assert float(str(row["spend"])) == pytest.approx(_price(FIRST_ROUND, FOLLOW_UP_ROUND)), row
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(float(str(row["spend"])))
+
+
 def test_nonstream_responses_failed_follow_up_bills_round_one_on_the_failure_row(gateway: Gateway) -> None:
     billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_fails=True)
     with _rig(gateway, "responses", billing=billing, prices=PRICES) as rig:
         response: Final = rig.send(_granted_key(rig), [AUTO])
         assert response.status_code == 500 and FOLLOW_UP_OUTAGE in response.text, response.text
         call_id: Final = response.headers["x-litellm-call-id"]
-        rows: Final = _responses_rows(call_id, "failure")
+        rows: Final = _spend_rows(call_id, "aresponses", "failure")
         assert len(rows) == 1, rows
         assert float(str(rows[0]["spend"])) == pytest.approx(_price(FIRST_ROUND)), rows
         assert (
