@@ -1,6 +1,8 @@
 import { act, fireEvent, render, waitFor, screen } from "@testing-library/react";
+import { useFormContext } from "react-hook-form";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MountedFormHost } from "../../../tests/mounted-form-host";
+import type { MountedFormValues } from "../common_components/MountedFormField";
 import AdvancedSettings from "./advanced_settings";
 
 const mockUsePtuCostAttributionEnabled = vi.fn();
@@ -11,7 +13,16 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
 
 const PTU_LABELS = ["PTU Count", "Calculated Cost per PTU / Hour (USD)", "PTU Effective From (UTC)"];
 
-const renderAdvancedSettings = () =>
+const KubernetesPodDiscoveryValue = () => {
+  const form = useFormContext<MountedFormValues>();
+  return (
+    <output aria-label="Kubernetes pod discovery form value" role="status">
+      {String(form.watch("kubernetes_pod_discovery") === true)}
+    </output>
+  );
+};
+
+const renderAdvancedSettings = (includeDiscoveryValue = false) =>
   render(
     <MountedFormHost>
       <AdvancedSettings
@@ -21,6 +32,7 @@ const renderAdvancedSettings = () =>
         tagsList={{}}
         accessToken="test-token"
       />
+      {includeDiscoveryValue && <KubernetesPodDiscoveryValue />}
     </MountedFormHost>,
   );
 
@@ -32,6 +44,23 @@ describe("AdvancedSettings", () => {
 
   it("should render", () => {
     renderAdvancedSettings();
+  });
+
+  it("updates the Kubernetes pod discovery form value when enabled", async () => {
+    renderAdvancedSettings(true);
+    act(() => {
+      fireEvent.click(screen.getByText("Advanced Settings"));
+    });
+
+    const toggle = await screen.findByRole("switch", { name: "Kubernetes pod discovery" });
+    const formValue = screen.getByRole("status", { name: "Kubernetes pod discovery form value" });
+    expect(toggle).not.toBeChecked();
+    expect(formValue).toHaveTextContent("false");
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toBeChecked();
+    expect(formValue).toHaveTextContent("true");
   });
 
   it("should render tags list", async () => {
