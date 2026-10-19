@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
-from concurrent.futures import Future, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
 from typing import Final
@@ -1057,6 +1057,8 @@ def _deepseek_token_count(text: str) -> int:
         "together_ai/deepseek-ai/DeepSeek-V3.1",
         "deepseek-chat",
         "deepseek/deepseek-reasoner",
+        "openrouter/deepseek/deepseek-chat-v3-0324",
+        "openrouter/deepseek/deepseek-chat:free",
     ],
 )
 def test_token_counter_counts_deepseek_v3_and_v4_with_the_packaged_deepseek_tokenizer(model: str):
@@ -1072,6 +1074,21 @@ def test_token_counter_counts_deepseek_v3_and_v4_with_the_packaged_deepseek_toke
 )
 def test_token_counter_skips_the_deepseek_tokenizer_for_deepseek_models_built_on_other_vocabularies(model: str):
     assert litellm.token_counter(model=model, text=_CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
+
+
+
+def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
+    _load_huggingface_tokenizer.cache_clear()
+    start: Final = threading.Barrier(8)
+
+    def first_tokenizer(_: int) -> object:
+        start.wait()
+        return _select_tokenizer_helper("deepseek/deepseek-v4-flash")["tokenizer"]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        tokenizers: Final = tuple(pool.map(first_tokenizer, range(8)))
+
+    assert len({id(tokenizer) for tokenizer in tokenizers}) == 1
 
 
 def test_token_counter_with_anthropic_tool_use():

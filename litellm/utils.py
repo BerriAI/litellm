@@ -293,7 +293,7 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, get_args, runtime_checkable
 
 from typing_extensions import assert_never
 
@@ -2509,7 +2509,11 @@ def uses_anthropic_tokenizer(model: str) -> bool:
 HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "deepseek", "llama2", "llama3"]
 
 _DEEPSEEK_TOKENIZER_MODEL: Final = re.compile(
-    r"deepseek[-_.]v[34]|(?:^|/)deepseek-(?:chat|reasoner|flash)$", re.IGNORECASE
+    r"deepseek[-_.](?:chat[-_.])?v[34]|(?:^|/)deepseek-(?:chat|reasoner|flash)(?::free)?$", re.IGNORECASE
+)
+
+_HUGGINGFACE_TOKENIZER_LOAD_LOCKS: Final = MappingProxyType(
+    {kind: threading.Lock() for kind in get_args(HuggingFaceTokenizerKind)}
 )
 
 
@@ -2532,10 +2536,9 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     kind: Final = huggingface_tokenizer_kind(model)
     if kind is None:
         return None
-    return {
-        "type": "huggingface_tokenizer",
-        "tokenizer": _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend()),
-    }
+    with _HUGGINGFACE_TOKENIZER_LOAD_LOCKS[kind]:
+        tokenizer: Final = _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend())
+    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
