@@ -8,7 +8,7 @@ import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar, cast
+from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -42,7 +42,6 @@ from litellm.llms.anthropic.wif import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.integrations.anthropic_cache_control_hook import CacheControlInjectionPoint
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
@@ -58,7 +57,7 @@ from litellm.types.llms.anthropic import (
     AnthropicThinkingParam,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionCachedContent
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import LlmProviders
@@ -113,7 +112,7 @@ _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
-_CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -162,34 +161,38 @@ def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None
     )
 
 
-def _is_cacheable_anthropic_tool(tool: object) -> bool:
-    return isinstance(tool, dict) and tool.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+def _tool_config_point_control(points: object) -> Mapping[object, object] | None:
+    point_fields: Final = tuple(validated_object_mapping(point) for point in validated_object_list(points) or ())
+    tool_config_point: Final = next(
+        (fields for fields in point_fields if fields is not None and fields.get("location") == "tool_config"), None
+    )
+    if tool_config_point is None:
+        return None
+    control: Final = tool_config_point.get("control")
+    return {"type": "ephemeral"} if control is None else validated_object_mapping(control)
 
 
-def tools_marked_for_a_tool_config_point(
-    tools: Sequence[object], points: Sequence[CacheControlInjectionPoint]
-) -> tuple[object, ...] | None:
+def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple[object, ...] | None:
     """Put the ``tool_config`` point's breakpoint on the last tool Anthropic caches.
 
     Anthropic caches tools as one prefix ending at the marked tool, so the last one carries
     the mark, skipping tool-search tools whose transform drops cache markers. A client that
     already marked a tool keeps its own breakpoint. Returns ``None`` when nothing is marked.
     """
-    control: Final = next(
-        (
-            point.get("control") or ChatCompletionCachedContent(type="ephemeral")
-            for point in points
-            if point.get("location") == "tool_config" and isinstance(point.get("control"), (dict, type(None)))
-        ),
-        None,
+    control: Final = _tool_config_point_control(points)
+    tool_list: Final = validated_object_list(tools) or ()
+    tool_fields: Final = tuple(validated_object_mapping(tool) for tool in tool_list)
+    if control is None or any(fields is not None and "cache_control" in fields for fields in tool_fields):
+        return None
+    cacheable: Final = tuple(
+        (position, fields)
+        for position, fields in enumerate(tool_fields)
+        if fields is not None and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
     )
-    if control is None or any(isinstance(tool, dict) and "cache_control" in tool for tool in tools):
+    if not cacheable:
         return None
-    position: Final = next((i for i in range(len(tools) - 1, -1, -1) if _is_cacheable_anthropic_tool(tools[i])), None)
-    if position is None:
-        return None
-    fields: Final = cast(dict[str, object], tools[position])  # cast-ok: _is_cacheable_anthropic_tool checked dict
-    return (*tools[:position], {**fields, "cache_control": dict(control)}, *tools[position + 1 :])
+    position, fields = cacheable[-1]
+    return (*tool_list[:position], {**fields, "cache_control": control}, *tool_list[position + 1 :])
 
 
 def is_claude_code_user_agent(user_agent: str) -> bool:
@@ -205,9 +208,9 @@ def validated_object_mapping(value: object) -> dict[object, object] | None:
         return None
 
 
-def _validated_claude_code_list(value: object) -> list[object] | None:
+def validated_object_list(value: object) -> Sequence[object] | None:
     try:
-        return _CLAUDE_CODE_OBJECT_LIST_ADAPTER.validate_python(value)
+        return OBJECT_LIST_ADAPTER.validate_python(value)
     except ValidationError:
         return None
 
@@ -234,7 +237,7 @@ def _claude_code_billing_fields(text: str) -> tuple[tuple[str, str], ...] | None
 def _claude_code_billing_texts(system: object) -> tuple[str, ...] | None:
     if isinstance(system, str):
         return (system,)
-    blocks: Final = _validated_claude_code_list(system)
+    blocks: Final = validated_object_list(system)
     if blocks is None:
         return None
     block_mappings: Final = tuple(validated_object_mapping(block) for block in blocks)
@@ -1995,8 +1998,8 @@ def tool_call_is_rebuilt_as_server_tool_use(
     return (
         find_anthropic_server_tool_result(
             tool_call_id,
-            _validated_claude_code_list(fields.get("web_search_results")),
-            _validated_claude_code_list(fields.get("tool_results")),
+            validated_object_list(fields.get("web_search_results")),
+            validated_object_list(fields.get("tool_results")),
         )
         is not None
     )

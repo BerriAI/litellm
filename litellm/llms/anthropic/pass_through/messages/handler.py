@@ -28,7 +28,6 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.types.integrations.anthropic_cache_control_hook import CacheControlInjectionPoint
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -704,13 +703,13 @@ def anthropic_messages_handler(
             f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
         )
 
-    cache_control_points: Final = cast(
-        "Sequence[CacheControlInjectionPoint] | None", kwargs.pop("cache_control_injection_points", None)
+    request_kwargs: Final = cast(dict[str, object], kwargs)  # cast-ok: **kwargs of the handler is untyped
+    marked_tools: Final = tools_marked_for_a_tool_config_point(
+        local_vars.get("tools"), request_kwargs.pop("cache_control_injection_points", None)
     )
-    marked_tools: Final = tools_marked_for_a_tool_config_point(tools or (), cache_control_points or ())
     if marked_tools is not None:
-        AnthropicCacheControlHook.record_gateway_injection(kwargs, 1)
-    local_vars.update({**kwargs, **({"tools": list(marked_tools)} if marked_tools is not None else {})})
+        AnthropicCacheControlHook.record_gateway_injection(request_kwargs, 1)
+    local_vars.update({**request_kwargs, **({"tools": list(marked_tools)} if marked_tools is not None else {})})
     anthropic_messages_optional_request_params: Final = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             params=local_vars,
