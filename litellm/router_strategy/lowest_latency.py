@@ -3,7 +3,7 @@
 import random
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from math import ceil
+from math import ceil, isfinite
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import Field
@@ -42,6 +42,16 @@ def _percentile_latency(samples: Sequence[float], percentile: float) -> float:
     values: Final = sorted(samples)
     index: Final = ceil(len(values) * percentile) - 1
     return values[index]
+
+
+def _usable_latency_samples(samples: Sequence[float]) -> tuple[float, ...]:
+    """Drop samples that cannot be a real elapsed time.
+
+    ``completion_start_time - start_time`` goes negative when the timestamps invert.
+    A negative or NaN sample pushes ``lowest_latency + buffer`` below every candidate,
+    leaving the deployment filter empty.
+    """
+    return tuple(sample for sample in samples if isfinite(sample) and sample >= 0)
 
 
 def _ttft_seconds(elapsed: timedelta | float) -> float:
@@ -448,16 +458,17 @@ class LowestLatencyLoggingHandler(CustomLogger):
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
+            ttft_samples = _usable_latency_samples(item_ttft_latency)
             use_ttft = (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
-                and len(item_ttft_latency) > 0
+                and len(ttft_samples) > 0
             )
             selected_latency = (
-                _percentile_latency(item_ttft_latency, self.routing_args.ttft_percentile)
+                _percentile_latency(ttft_samples, self.routing_args.ttft_percentile)
                 if use_ttft and self.routing_args.ttft_percentile is not None
-                else _average_latency(item_ttft_latency if use_ttft else item_latency)
+                else _average_latency(ttft_samples if use_ttft else _usable_latency_samples(item_latency))
             )
 
             # -------------- #
@@ -491,10 +502,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # Find deployments within buffer of lowest latency
         buffer: Final = self.routing_args.lowest_latency_buffer * lowest_latency
 
-        valid_deployments: Final = [x for x in sorted_deployments if x[1] <= lowest_latency + buffer]
+        valid_deployments: Final = tuple(x for x in sorted_deployments if x[1] <= lowest_latency + buffer)
 
-        # Pick a random deployment from valid deployments
-        random_valid_deployment: Final = random.choice(valid_deployments)
+        # An empty window means the samples or the buffer are unusable; degrade to all candidates.
+        random_valid_deployment: Final = random.choice(valid_deployments or sorted_deployments)
         deployment = random_valid_deployment[0]
         metadata_field: Final = self._select_metadata_field(request_kwargs)
         if request_kwargs is not None and metadata_field in request_kwargs:
