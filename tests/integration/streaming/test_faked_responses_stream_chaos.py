@@ -41,7 +41,7 @@ from integration.streaming.faked_responses_case import (
 )
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _RESPONSES_MODEL: Final = "faked-stream-chaos"
 _BRIDGE_MODEL: Final = "faked-stream-chaos-bridge"

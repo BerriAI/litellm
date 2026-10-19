@@ -45,9 +45,9 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
-from ..exceptions import OpenAIError
+from ..exceptions import OpenAIError, Timeout
 from .core_helpers import map_finish_reason, process_response_headers
-from .exception_mapping_utils import exception_type
+from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 
@@ -86,6 +86,16 @@ def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming
 def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, object]) -> None:
     for key, value in fields.items():
         setattr(response, key, value)
+
+
+def _is_transport_timeout(error: BaseException) -> bool:
+    return isinstance(error, httpx.TimeoutException) or (
+        isinstance(error, Timeout) and isinstance(error.__cause__, httpx.TimeoutException)
+    )
+
+
+def _skips_stream_fallback(status_code: int | None) -> bool:
+    return status_code is not None and 400 <= status_code < 500 and status_code != 429
 
 
 def is_async_iterable(obj: object) -> bool:
@@ -1579,11 +1589,7 @@ class CustomStreamWrapper:
         except Exception as e:
             traceback.format_exc()
             setattr(e, "message", str(e))
-            raise exception_type(
-                model=self.model,
-                custom_llm_provider=self.custom_llm_provider,
-                original_exception=e,
-            )
+            raise self._map_stream_exception(e)
 
     def set_logging_event_loop(self, loop):
         """
@@ -2370,6 +2376,14 @@ class CustomStreamWrapper:
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
 
+    def _map_stream_exception(self, original_exception: Exception) -> Exception:
+        return exception_type(
+            model=self.model,
+            custom_llm_provider=self.custom_llm_provider,
+            original_exception=original_exception,
+            extra_kwargs=with_deployment_api_base(self.logging_obj.model_call_details.get("litellm_params")),
+        )
+
     def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
         """
         Common error handling for both __next__ and __anext__.
@@ -2380,6 +2394,8 @@ class CustomStreamWrapper:
 
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
+        So is a transport read timeout, which maps to a 408 Timeout, including
+        one an inner Responses stream already mapped for the chat bridge.
 
         An error an inner stream already wrapped (the chat-to-Responses bridge
         consumes a Responses stream) is rebuilt around the provider exception
@@ -2414,13 +2430,7 @@ class CustomStreamWrapper:
             mapped_exception: Exception = e
         else:
             try:
-                mapped_exception = exception_type(
-                    model=self.model,
-                    custom_llm_provider=self.custom_llm_provider,
-                    original_exception=e,
-                    completion_kwargs={},
-                    extra_kwargs={},
-                )
+                mapped_exception = self._map_stream_exception(e)
             except Exception as mapping_error:
                 mapped_exception = mapping_error
         self._restore_consumer_correlation_context()
@@ -2450,9 +2460,9 @@ class CustomStreamWrapper:
         # Raise non-retriable client errors directly (skip fallback).
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
-        if mapped_status_code is not None and 400 <= mapped_status_code < 500 and mapped_status_code != 429:
-            raise mapped_exception
-        if original_status_code is not None and 400 <= original_status_code < 500 and original_status_code != 429:
+        if not _is_transport_timeout(e) and (
+            _skips_stream_fallback(mapped_status_code) or _skips_stream_fallback(original_status_code)
+        ):
             raise mapped_exception
 
         raise MidStreamFallbackError(

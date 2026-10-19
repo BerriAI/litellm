@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 from httpx import Response
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -150,6 +150,7 @@ from litellm.utils import (
     TranscriptionResponse,
     cached_get_model_info_helper,
     token_counter,
+    unmapped_model_generalization,
 )
 
 if TYPE_CHECKING:
@@ -875,6 +876,16 @@ def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | Non
     return own_model_info["litellm_provider"]
 
 
+def _pricing_provider_for_cost_candidate(
+    candidate_provider: str | None,
+    request_provider: str | None,
+    current_provider: object,
+) -> str | None:
+    if candidate_provider != request_provider:
+        return candidate_provider
+    return current_provider if isinstance(current_provider, str) else None
+
+
 def select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -1544,14 +1555,20 @@ def completion_cost(
         )
 
         requested_model: Final = model
-        potential_model_names: Final = [
-            selected_model,
-            _get_response_model(completion_response),
-        ]
-        if model is not None:
-            potential_model_names.append(model)
+        request_pricing_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        raw_candidates: Final = (
+            (
+                selected_model,
+                base_model_provider if base_model_provider is not None else request_pricing_provider,
+            ),
+            (_get_response_model(completion_response), request_pricing_provider),
+            *(((model, request_pricing_provider),) if model is not None else ()),
+        )
+        potential_model_names: Final = (
+            raw_candidates if explicit_pricing else _priced_candidates_before_unpriced_rules(raw_candidates)
+        )
 
-        for idx, model in enumerate(potential_model_names):
+        for idx, (model, pricing_provider) in enumerate(potential_model_names):
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
@@ -1896,13 +1913,6 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
-                pricing_provider: str | None = (
-                    base_model_provider
-                    if base_model_provider is not None and idx == 0
-                    else custom_llm_provider
-                    if isinstance(custom_llm_provider, str)
-                    else None
-                )
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
@@ -1910,7 +1920,11 @@ def completion_cost(
                     model=model,
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
-                    custom_llm_provider=pricing_provider,
+                    custom_llm_provider=_pricing_provider_for_cost_candidate(
+                        candidate_provider=pricing_provider,
+                        request_provider=request_pricing_provider,
+                        current_provider=custom_llm_provider,
+                    ),
                     response_time_ms=response_time_ms,
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
@@ -2009,7 +2023,11 @@ def completion_cost(
                     if cost_per_token_usage_object is not None and model:
                         _token_type_breakdown = get_token_type_cost_breakdown(
                             model=model,
-                            custom_llm_provider=pricing_provider,
+                            custom_llm_provider=_pricing_provider_for_cost_candidate(
+                                candidate_provider=pricing_provider,
+                                request_provider=request_pricing_provider,
+                                current_provider=custom_llm_provider,
+                            ),
                             usage=cost_per_token_usage_object,
                             service_tier=service_tier,
                             data_residency=data_residency,
@@ -2269,6 +2287,25 @@ def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelIn
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
+
+
+_CostCandidate: TypeAlias = tuple[str | None, str | None]
+
+
+def _is_unpriced_generalized_candidate(candidate: _CostCandidate) -> bool:
+    model, pricing_provider = candidate
+    if model is None:
+        return False
+    rule_info: Final = unmapped_model_generalization(model, pricing_provider)
+    return rule_info is not None and not _cost_map_entry_prices_anything(rule_info)
+
+
+def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, ...]) -> tuple[_CostCandidate, ...]:
+    unpriced: Final = tuple(_is_unpriced_generalized_candidate(candidate) for candidate in candidates)
+    return (
+        *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if not is_unpriced),
+        *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if is_unpriced),
+    )
 
 
 def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
@@ -3076,14 +3113,19 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
         return response_ids[-1] if response_ids else None
 
     @staticmethod
-    def create_logging_object(results: Sequence[Mapping[str, object]]) -> LiteLLMRealtimeStreamLoggingObject:
+    def create_logging_object(
+        results: Sequence[Mapping[str, object]], litellm_model_name: str | None = None
+    ) -> LiteLLMRealtimeStreamLoggingObject:
         tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(results)
-        return LiteLLMRealtimeStreamLoggingObject(
+        logging_object: Final = LiteLLMRealtimeStreamLoggingObject(
             id=ResponsesWebSocketTokenUsageProcessor.response_id_from_responses_ws_results(results),
             usage=ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(results),
             results=cast(OpenAIRealtimeStreamList, list(results)),  # cast-ok: raw WS frames, unvalidated field
             service_tier=next(iter(tier_partition)) if len(tier_partition) == 1 else None,
         )
+        if litellm_model_name is not None:
+            logging_object.hidden_params = {"litellm_model_name": litellm_model_name}
+        return logging_object
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"
