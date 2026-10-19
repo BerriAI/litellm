@@ -28,6 +28,7 @@ ENDPOINTS: Final[tuple[Endpoint, ...]] = ("chat", "messages", "responses")
 UNTAGGED: Final = "prefix-untagged"
 REGIONAL: Final = "prefix-regional"
 BATCHED: Final = "prefix-batched"
+FAIL_OPEN_BATCHED: Final = "prefix-fail-open-batched"
 REFUSED: Final = "Not allowed to access model due to tags configuration"
 
 
@@ -45,7 +46,9 @@ def _respond(request: Request) -> Reply:
 
 
 def _config(directory: Path, wire: Wire, prefix: str) -> Path:
-    def deployment(group: str, backend: str, tags: Sequence[str], provider: str = "openai") -> dict[str, JsonValue]:
+    def deployment(
+        group: str, backend: str, tags: Sequence[str], provider: str = "openai", fail_open: bool = False
+    ) -> dict[str, JsonValue]:
         return {
             "model_name": group,
             "litellm_params": {
@@ -54,7 +57,7 @@ def _config(directory: Path, wire: Wire, prefix: str) -> Path:
                 "api_key": "synthetic-tag-prefix-key",
                 **({"tags": list(tags)} if tags else {}),
             },
-            "model_info": {"id": backend},
+            "model_info": {"id": backend, **({"allow_fail_open": True} if fail_open else {})},
         }
 
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
@@ -64,6 +67,7 @@ def _config(directory: Path, wire: Wire, prefix: str) -> Path:
         deployment(REGIONAL, "us-backend", ("region:us",)),
         deployment(BATCHED, "eu-batch-backend", ("region:eu",), "hosted_vllm"),
         deployment(BATCHED, "us-batch-backend", ("region:us",), "hosted_vllm"),
+        deployment(FAIL_OPEN_BATCHED, "eu-fail-open-backend", ("default", "region:eu"), "hosted_vllm", fail_open=True),
     ]
     config["router_settings"] = {
         **config["router_settings"],
@@ -221,47 +225,67 @@ def test_without_a_prefix_an_unknown_caller_tag_still_refuses_an_untagged_group(
     assert backends == ()
 
 
-def _batch_rows(marker: str, count: int) -> bytes:
+def _batch_rows(model: str, marker: str, count: int) -> bytes:
     rows: Final = (
         {
             "custom_id": f"row-{index}",
             "method": "POST",
             "url": "/v1/chat/completions",
-            "body": {"model": BATCHED, "messages": [{"role": "user", "content": f"route this {marker} {index}"}]},
+            "body": {"model": model, "messages": [{"role": "user", "content": f"route this {marker} {index}"}]},
         }
         for index in range(count)
     )
     return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
 
 
+def _run_batch(gateway: Gateway, key: str, model: str, marker: str, count: int) -> Mapping[str, JsonValue]:
+    uploaded: Final = gateway.request_multipart(
+        "/v1/files",
+        {"purpose": "batch", "target_model_names": model},
+        {"file": ("rows.jsonl", _batch_rows(model, marker, count), "application/jsonl")},
+        key=key,
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    created: Final = gateway.request(
+        "POST",
+        "/v1/batches",
+        {
+            "input_file_id": string_value(JSON_OBJECT.validate_json(uploaded.content)["id"]),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+        key=key,
+    )
+    assert created.status_code == 200, created.text
+    batch_id: Final = string_value(JSON_OBJECT.validate_json(created.content)["id"])
+    return eventually(
+        lambda: JSON_OBJECT.validate_json(gateway.request("GET", f"/v1/batches/{batch_id}", key=key).content),
+        lambda batch: batch.get("status") in ("completed", "failed", "expired", "cancelled"),
+        seconds=60,
+    )
+
+
 def test_a_proxy_run_batch_keeps_applying_an_unprefixed_team_tag(prefixed: Gateway, upstream: Wire) -> None:
     marker: Final = f"marker-{uuid.uuid4().hex}"
     with prefixed.scenario() as scenario:
-        key: Final = _team_key(scenario, ["&region:eu"])
-        uploaded: Final = prefixed.request_multipart(
-            "/v1/files",
-            {"purpose": "batch", "target_model_names": BATCHED},
-            {"file": ("rows.jsonl", _batch_rows(marker, 8), "application/jsonl")},
-            key=key,
-        )
-        assert uploaded.status_code == 200, uploaded.text
-        created: Final = prefixed.request(
-            "POST",
-            "/v1/batches",
-            {
-                "input_file_id": string_value(JSON_OBJECT.validate_json(uploaded.content)["id"]),
-                "endpoint": "/v1/chat/completions",
-                "completion_window": "24h",
-            },
-            key=key,
-        )
-        assert created.status_code == 200, created.text
-        batch_id: Final = string_value(JSON_OBJECT.validate_json(created.content)["id"])
-        finished: Final = eventually(
-            lambda: JSON_OBJECT.validate_json(prefixed.request("GET", f"/v1/batches/{batch_id}", key=key).content),
-            lambda batch: batch.get("status") in ("completed", "failed", "expired", "cancelled"),
-            seconds=60,
-        )
+        finished: Final = _run_batch(prefixed, _team_key(scenario, ["&region:eu"]), BATCHED, marker, 8)
 
     assert finished["status"] == "completed", finished
     assert _routed_backends(upstream, marker) == ("eu-batch-backend",) * 8
+
+
+def test_a_proxy_run_batch_cannot_fall_open_past_a_team_exclusion(unprefixed: Gateway, upstream: Wire) -> None:
+    marker: Final = f"marker-{uuid.uuid4().hex}"
+    with unprefixed.scenario() as scenario:
+        key: Final = _team_key(scenario, ["!region:eu"])
+        finished: Final = _run_batch(unprefixed, key, FAIL_OPEN_BATCHED, marker, 2)
+        batch_backends: Final = _routed_backends(upstream, marker)
+        response, chat_backends = _send(unprefixed, upstream, "chat", FAIL_OPEN_BATCHED, [], key=key)
+
+    assert (finished["status"], finished["request_counts"]) == (
+        "completed",
+        {"completed": 0, "failed": 2, "total": 2},
+    ), finished
+    assert batch_backends == ()
+    assert response.status_code == 401, response.text
+    assert chat_backends == ()
