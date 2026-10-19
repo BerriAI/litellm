@@ -7320,6 +7320,65 @@ async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_config
     assert sent == (("bedrock-runtime.us-east-1.amazonaws.com", "Bearer file-token"),)
 
 
+_HUGGINGFACE_EMBEDDING: Final = [[0.1, 0.2]]
+
+
+def _authorizations(calls: respx.models.CallList) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (call.request.url.host, call.request.headers["Authorization"])
+        for call in calls
+        if "Authorization" in call.request.headers
+    )
+
+
+def _huggingface_router(model: str, api_key: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": model, "litellm_params": {"model": model, "api_key": api_key}}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_is_refused_when_a_wildcard_call_names_its_own_url_as_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    router: Final = _huggingface_router("huggingface/*", f"oidc/file/{token}")
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
+            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL):
+                await router.aembedding(
+                    model="huggingface/https://caller.example/embed", input=["hello"], input_type="feature-extraction"
+                )
+    finally:
+        router.discard()
+
+    assert _authorizations(upstream.calls) == ()
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_reaches_the_url_its_deployment_names_as_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    model: Final = "huggingface/https://endpoint.example/embed"
+    router: Final = _huggingface_router(model, f"oidc/file/{token}")
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
+            await router.aembedding(model=model, input=["hello"], input_type="feature-extraction")
+            sent: Final = _authorizations(upstream.calls)
+    finally:
+        router.discard()
+
+    assert sent == (("endpoint.example", "Bearer file-token"),)
+
+
 _CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own api_base"
 
 

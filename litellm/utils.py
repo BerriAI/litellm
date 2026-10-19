@@ -825,7 +825,10 @@ def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
         model=kwargs.get("model"),
         llm_provider=kwargs.get("custom_llm_provider"),
         upstream=MappingProxyType(
-            {key: kwargs.get(key, credential_values.get(key)) for key in API_KEY_UPSTREAM_PARAMS}
+            {
+                "model": kwargs.get("model"),
+                **{key: kwargs.get(key, credential_values.get(key)) for key in API_KEY_UPSTREAM_PARAMS},
+            }
         ),
     )
     return MappingProxyType({**credential_values, "api_key": secret})

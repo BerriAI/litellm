@@ -4197,8 +4197,16 @@ def _origin(url: str) -> str:
     return f"{parts.scheme.lower()}://{parts.netloc.lower()}" if parts.netloc else url.strip().rstrip("/").lower()
 
 
+_URL_IN_MODEL: Final = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _model_url(model: object) -> str | None:
+    found: Final = _URL_IN_MODEL.search(model) if isinstance(model, str) else None
+    return None if found is None else found.group(0)
+
+
 def upstream_origins(params: Mapping[str, object]) -> frozenset[str]:
-    values: Final = (params.get(key) for key in API_KEY_UPSTREAM_PARAMS)
+    values: Final = (*(params.get(key) for key in API_KEY_UPSTREAM_PARAMS), _model_url(params.get("model")))
     return frozenset(_origin(value) for value in values if isinstance(value, str) and value)
 
 

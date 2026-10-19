@@ -22,7 +22,6 @@ from integration._support.client import (
     object_value,
     string_value,
 )
-from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply, openai_error, responses_reply
 from integration._support.process import (
     OwnedProxy,
@@ -679,7 +678,7 @@ def test_team_model_write_carrying_a_reference_is_refused(rig: _Rig, writer: str
         response: Final = rig.owned.gateway.request(
             "POST", "/model/new", _team_body(name, team_id, _team_write_params(rig, shape)), key=key
         )
-        stored: Final = len(read_rows(_MODEL_ROWS, (name,)))
+        stored: Final = len(rig.owned.gateway.rows(_MODEL_ROWS, (name,)))
         _delete_written(scenario, response)
         expected: Final = _TEAM_WRITES[(writer, shape)]
         assert (response.status_code, stored) == (expected, int(expected == 200)), response.text
@@ -769,8 +768,8 @@ def test_wildcard_listing_shows_the_models_the_provider_lists(rig: _Rig) -> None
 
 def _stored_rows(rig: _Rig) -> tuple[list[dict[str, JsonValue]], ...]:
     return (
-        read_rows(_CREDENTIAL_ROW, (rig.stored.credential,)),
-        *(read_rows(_MODEL_ROW, (identity,)) for identity in rig.stored.model_ids.values()),
+        rig.owned.gateway.rows(_CREDENTIAL_ROW, (rig.stored.credential,)),
+        *(rig.owned.gateway.rows(_MODEL_ROW, (identity,)) for identity in rig.stored.model_ids.values()),
     )
 
 
