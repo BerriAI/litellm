@@ -589,7 +589,7 @@ def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
         ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
         ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
         ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
-        ("qwen3-235b-a22b", "deepseek-v3.2"),
+        ("qwen3-235b-a22b", "mistral-large-latest"),
     ],
 )
 def test_token_counter_counts_tools_by_the_models_chat_template_family(model: str, counted_like: str):
@@ -1035,25 +1035,43 @@ class TestTokenizerSelection(unittest.TestCase):
             monkeypatch.undo()
 
 
-@pytest.mark.parametrize("rust", ["true", "false"])
-@pytest.mark.parametrize(
-    "model",
-    ["azure_ai/DeepSeek-V4-Flash-0731", "deepseek/deepseek-v4-pro", "fireworks_ai/deepseek-v4p1-flash"],
-)
-def test_token_counter_counts_deepseek_v4_with_the_packaged_deepseek_tokenizer(
-    model: str, rust: str, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("LITELLM_RUST", rust)
+_CODE_SAMPLE: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
+
+
+def _deepseek_token_count(text: str) -> int:
     deepseek_tokenizer: Final = Tokenizer.from_str(
         importlib.resources.files("litellm.litellm_core_utils.tokenizers")
-        .joinpath("deepseek_v4_tokenizer.json")
+        .joinpath("deepseek_tokenizer.json")
         .read_text(encoding="utf-8")
     )
-    sample: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
-    expected: Final = len(deepseek_tokenizer.encode(sample).ids)
+    return len(deepseek_tokenizer.encode(text).ids)
 
-    assert expected != len(tiktoken.get_encoding("cl100k_base").encode(sample))
-    assert litellm.token_counter(model=model, text=sample) == expected
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "azure_ai/DeepSeek-V4-Flash-0731",
+        "deepseek/deepseek-v4-pro",
+        "fireworks_ai/deepseek-v4p1-flash",
+        "bedrock/us-east-1/deepseek.v3.2",
+        "together_ai/deepseek-ai/DeepSeek-V3.1",
+        "deepseek-chat",
+        "deepseek/deepseek-reasoner",
+    ],
+)
+def test_token_counter_counts_deepseek_v3_and_v4_with_the_packaged_deepseek_tokenizer(model: str):
+    expected: Final = _deepseek_token_count(_CODE_SAMPLE)
+
+    assert expected != len(tiktoken.get_encoding("cl100k_base").encode(_CODE_SAMPLE))
+    assert litellm.token_counter(model=model, text=_CODE_SAMPLE) == expected
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
+)
+def test_token_counter_skips_the_deepseek_tokenizer_for_deepseek_models_built_on_other_vocabularies(model: str):
+    assert litellm.token_counter(model=model, text=_CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
 
 
 def test_token_counter_with_anthropic_tool_use():
