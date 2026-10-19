@@ -144,6 +144,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some(prometheus) = &prometheus {
         observers.push(prometheus.clone());
     }
+    if let Some(s3_log) = litellm_gateway::s3_log::S3Log::from_config(&config, &inference).await? {
+        observers.push(s3_log);
+    }
     litellm_gateway::hooks::install(&inference, &config, hooks, observers).await?;
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
     let address = listener.local_addr()?;

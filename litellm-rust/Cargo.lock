@@ -3754,6 +3754,7 @@ dependencies = [
  "futures-util",
  "http 1.4.2",
  "http-body-util",
+ "litellm-auth-aws",
  "litellm-auth-types",
  "litellm-config",
  "litellm-db",
@@ -3770,11 +3771,13 @@ dependencies = [
  "litellm-router",
  "litellm-secrets",
  "litellm-tracing",
+ "md-5",
  "rand 0.8.7",
  "redis",
  "rstest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "strum",
  "tempfile",
@@ -3785,6 +3788,7 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
