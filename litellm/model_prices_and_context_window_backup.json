@@ -3840,9 +3840,10 @@
         "supports_vision": true
     },
     "azure/container": {
-        "code_interpreter_cost_per_session": 0.03,
+        "code_interpreter_cost_per_session": 0.033,
         "litellm_provider": "azure",
-        "mode": "chat"
+        "mode": "chat",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/"
     },
     "azure_ai/gpt-oss-120b": {
         "input_cost_per_token": 1.5e-07,
