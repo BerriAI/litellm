@@ -2206,26 +2206,17 @@ async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_re
 ) -> None:
     import asyncio
 
-    import httpx
-
     exchange_started: Final = threading.Event()
     loop_ran_during_exchange: Final = threading.Event()
     exchanges: Final[list[bool]] = []
 
-    class TokenEndpoint(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def do_POST(self) -> None:
-            form: Final = parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
+    class TokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            form: Final = parse_qs(request.read().decode())
             assert form["client_assertion"] == ["federated-oidc-token"]
             exchange_started.set()
             exchanges.append(loop_ran_during_exchange.wait(timeout=5))
-            body: Final = json.dumps({"access_token": f"exchanged-{api_version}", "expires_in": 3600}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            return httpx.Response(200, json={"access_token": f"exchanged-{api_version}", "expires_in": 3600})
 
     def echo_authorization(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -2250,9 +2241,7 @@ async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_re
             await asyncio.sleep(0.01)
         loop_ran_during_exchange.set()
 
-    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), TokenEndpoint)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    monkeypatch.setenv("AZURE_AUTHORITY_HOST", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setattr(litellm, "sync_transport", TokenEndpoint(), raising=False)
     monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
     monkeypatch.setattr(
         litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(echo_authorization))
@@ -2275,8 +2264,6 @@ async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_re
         )
     finally:
         loop_watcher.cancel()
-        server.shutdown()
-        server.server_close()
 
     assert response.choices[0].message.content == f"Bearer exchanged-{api_version}"
     assert exchanges == [True]
