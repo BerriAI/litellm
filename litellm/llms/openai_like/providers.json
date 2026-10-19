@@ -249,5 +249,11 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "abstract": {
+    "base_url": "https://api.abstract.inc/v1",
+    "api_key_env": "ABSTRACT_API_KEY",
+    "api_base_env": "ABSTRACT_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }

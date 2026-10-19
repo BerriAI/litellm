@@ -3298,6 +3298,34 @@
     "default_model_placeholder": "reka/reka-flash"
   },
   {
+    "provider": "ABSTRACT",
+    "provider_display_name": "Abstract",
+    "litellm_provider": "abstract",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.abstract.inc/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "abstract/glm-5.3:superfast"
+  },
+  {
     "provider": "Sail",
     "provider_display_name": "Sail",
     "litellm_provider": "sail",

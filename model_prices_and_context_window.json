@@ -77050,5 +77050,56 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "abstract/glm-5.3:superfast": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.19e-06,
+        "litellm_provider": "abstract",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://abstract.inc/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
+    },
+    "abstract/deepseek-v4-flash:superfast": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "abstract",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://abstract.inc/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
+    },
+    "abstract/kimi-k3:superfast": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "abstract",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.275e-05,
+        "source": "https://abstract.inc/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
     }
 }
