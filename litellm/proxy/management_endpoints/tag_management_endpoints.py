@@ -492,7 +492,9 @@ async def _rollback_new_tag(
             await BudgetRepository(prisma_client).table.delete(where={"budget_id": created_budget_id})
         await _evict_tag_cache_keys((tag_cache_key(tag_name), tag_registry_cache_key()))
     except Exception:  # noqa: BLE001 - rollback is best-effort; the caller keeps the original tagging error
-        verbose_proxy_logger.exception("Rollback of failed tag create %s itself failed", tag_name)
+        # CodeQL log-injection: tag_name is user-provided; strip line breaks before logging
+        safe_tag_name: Final = tag_name.replace("\r", " ").replace("\n", " ")
+        verbose_proxy_logger.exception("Rollback of failed tag create %s itself failed", safe_tag_name)
 
 
 @router.post(
