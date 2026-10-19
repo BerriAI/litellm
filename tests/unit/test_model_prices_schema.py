@@ -181,16 +181,23 @@ TOKEN_COUNT_ENTRY: Final = MappingProxyType(
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "token_count_framing": 78,
-        "token_count_fallback_model": "us.anthropic.claude-opus-5-5",
+        "token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": "us-east-1"},
     }
 )
 
 
-@pytest.mark.parametrize("framing", [0, 78])
-def test_generator_classifies_token_count_settings(framing: int):
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"token_count_framing": 0},
+        {"token_count_framing": 78},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5"}},
+    ],
+)
+def test_generator_classifies_token_count_settings(setting: dict):
     generator = load_generator()
     schema = json.loads(generator.render(generator.build_schema({"some-model": dict(TOKEN_COUNT_ENTRY)})))
-    assert build_validator(schema).is_valid({"some-model": {**TOKEN_COUNT_ENTRY, "token_count_framing": framing}})
+    assert build_validator(schema).is_valid({"some-model": {**TOKEN_COUNT_ENTRY, **setting}})
 
 
 @pytest.mark.parametrize(
@@ -199,8 +206,14 @@ def test_generator_classifies_token_count_settings(framing: int):
         {"token_count_framing": -1},
         {"token_count_framing": "78"},
         {"token_count_framing": 1.5},
-        {"token_count_fallback_model": ""},
-        {"token_count_fallback_model": 5},
+        {"token_count_model": {"model": ""}},
+        {"token_count_model": {"model": "   "}},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": ""}},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": "   "}},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": 5}},
+        {"token_count_model": {"region": "us-east-1"}},
+        {"token_count_model": "us.anthropic.claude-opus-5-5"},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "zone": "us-east-1"}},
     ],
 )
 def test_generated_token_count_schema_rejects_malformed_settings(setting: dict):
