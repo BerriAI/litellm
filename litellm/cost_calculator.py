@@ -25,7 +25,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_regional_uplift_multiplier,
     get_service_tier_cost_key,
     get_token_type_cost_breakdown,
+    get_vertex_regional_endpoint_uplift,
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
@@ -676,6 +677,7 @@ def cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             data_residency=data_residency,
+            vertex_location=vertex_location,
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_usage_has_token_details(usage_block):
@@ -1904,6 +1906,15 @@ def completion_cost(
                         )
 
                         prompt_characters = litellm.utils.count_characters(text=prompt_string)
+                    elif call_type in ("embedding", "aembedding") and isinstance(completion_response, ModelResponse):
+                        # Vertex reports billableCharacterCount per embedding; the
+                        # response transformation stashes the summed count here
+                        _hidden_params = get_hidden_params(completion_response) or {}
+                        if isinstance(
+                            _billable := _hidden_params.get("billable_character_count"),
+                            (int, float),
+                        ):
+                            prompt_characters = int(_billable)
                     if completion_response is not None and isinstance(completion_response, ModelResponse):
                         completion_string = litellm.utils.get_response_string(response_obj=completion_response)
                         completion_characters = litellm.utils.count_characters(text=completion_string)
@@ -2783,6 +2794,8 @@ def batch_cost_calculator(
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
     data_residency: str | None = None,
+    *,
+    vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """
     Calculate the cost of a batch job.
@@ -2792,6 +2805,9 @@ def batch_cost_calculator(
             batch pricing (e.g. input_cost_per_token_batches). When provided,
             skips the global litellm.get_model_info() lookup so that
             deployment-specific pricing is used.
+        vertex_location: The Vertex AI location the batch ran on. Non-global
+            locations apply the model's regional-endpoint uplift multiplier,
+            same as the online path.
     """
 
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
@@ -2872,7 +2888,10 @@ def batch_cost_calculator(
         total_prompt_cost *= uplift
         total_completion_cost *= uplift
 
-    return total_prompt_cost, total_completion_cost
+    # Vertex non-global endpoints carry a flat premium over global; a global
+    # location resolves to 1.0, so the multiply is a no-op there.
+    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+    return total_prompt_cost * vertex_uplift, total_completion_cost * vertex_uplift
 
 
 def _batch_prompt_cost(

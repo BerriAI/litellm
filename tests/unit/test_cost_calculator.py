@@ -8506,6 +8506,57 @@ def test_completion_cost_params_gemini_3():
     )
 
 
+def test_cost_router_vertex_embeddings_follow_pricing_entry(monkeypatch):
+    """Vertex embeddings billed per character (text-embedding-005,
+    text-multilingual-embedding-002) route to cost_per_character; per-token
+    embeddings keep the token path (issue #46880)."""
+    from litellm.llms.vertex_ai.cost_calculator import cost_router
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    assert (
+        cost_router(model="text-embedding-005", custom_llm_provider="vertex_ai", call_type="embedding")
+        == "cost_per_character"
+    )
+    assert (
+        cost_router(model="text-multilingual-embedding-002", custom_llm_provider="vertex_ai", call_type="aembedding")
+        == "cost_per_character"
+    )
+    assert (
+        cost_router(model="gemini-embedding-001", custom_llm_provider="vertex_ai", call_type="embedding")
+        == "cost_per_token"
+    )
+
+
+def test_cost_per_token_vertex_embedding_per_character_billing(monkeypatch):
+    """A per-character Vertex embedding is priced from prompt_characters when
+    they are provided, and falls back to token pricing when they are not."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    usage = Usage(prompt_tokens=250, completion_tokens=0, total_tokens=250)
+    model_info = litellm.get_model_info("text-embedding-005")
+
+    pc, cc = cost_per_token(
+        model="text-embedding-005",
+        custom_llm_provider="vertex_ai",
+        call_type="embedding",
+        prompt_characters=1000,
+        usage_object=usage,
+    )
+    assert round(pc, 12) == round(1000 * model_info["input_cost_per_character"], 12)
+    assert cc == 0
+
+    pc_fallback, _ = cost_per_token(
+        model="text-embedding-005",
+        custom_llm_provider="vertex_ai",
+        call_type="embedding",
+        usage_object=usage,
+    )
+    assert round(pc_fallback, 12) == round(250 * model_info["input_cost_per_token"], 12)
+
+
 @pytest.mark.asyncio
 # @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize("stream", [False])  # True,

@@ -287,3 +287,40 @@ async def test_vertex_async_embedding_call_maps_a_malformed_predict_body_to_a_co
         )
 
     assert (failure.value.status_code, "vertex-secret" in str(failure.value)) == (500, False)
+
+
+def test_vertex_embedding_response_stashes_billable_character_count() -> None:
+    """The summed billableCharacterCount must survive the OpenAI transform so
+    per-character-priced Vertex embeddings can be billed per character
+    (issue #46880)."""
+    from litellm.llms.vertex_ai.vertex_embeddings.transformation import VertexAITextEmbeddingConfig
+
+    response = {
+        "predictions": [
+            {"embeddings": {"values": [0.1, 0.2], "statistics": {"token_count": 3, "billableCharacterCount": 12}}},
+            {"embeddings": {"values": [0.3], "statistics": {"token_count": 2, "billableCharacterCount": 8}}},
+        ]
+    }
+    model_response = VertexAITextEmbeddingConfig().transform_vertex_response_to_openai(
+        response=response, model="text-embedding-005", model_response=EmbeddingResponse(model="text-embedding-005")
+    )
+
+    assert model_response.usage.prompt_tokens == 5
+    assert model_response._hidden_params["billable_character_count"] == 20
+
+
+def test_vertex_embedding_response_without_character_count_stashes_nothing() -> None:
+    """Predictions that carry no billableCharacterCount must not set the
+    hidden param, so cost stays on the token path."""
+    from litellm.llms.vertex_ai.vertex_embeddings.transformation import VertexAITextEmbeddingConfig
+
+    response = {
+        "predictions": [
+            {"embeddings": {"values": [0.1], "statistics": {"token_count": 3}}},
+        ]
+    }
+    model_response = VertexAITextEmbeddingConfig().transform_vertex_response_to_openai(
+        response=response, model="gemini-embedding-001", model_response=EmbeddingResponse(model="gemini-embedding-001")
+    )
+
+    assert "billable_character_count" not in model_response._hidden_params
