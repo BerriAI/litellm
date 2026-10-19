@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
 from functools import lru_cache, partial
@@ -140,8 +141,14 @@ def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
 def _async_azure_ad_token_provider(
     provider: Callable[[], str | Awaitable[str]],
 ) -> Callable[[], Awaitable[str]]:
+    single_flight: Final = threading.Lock()
+
+    def fetch_one_at_a_time() -> str | Awaitable[str]:
+        with single_flight:
+            return provider()
+
     async def async_provider() -> str:
-        token: Final = await asyncio.to_thread(provider)
+        token: Final = await asyncio.to_thread(fetch_one_at_a_time)
         return token if isinstance(token, str) else await token
 
     return async_provider
@@ -703,16 +710,18 @@ class BaseAzureLLM(BaseOpenAILLM):
                 scope=scope,
             )
 
-        if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
+        oidc_token: Final = (
+            azure_ad_token if azure_ad_token is not None and azure_ad_token.startswith("oidc/") else None
+        )
+        if oidc_token is not None:
             verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
             azure_ad_token_provider = partial(
                 get_azure_ad_token_from_oidc,
-                azure_ad_token=azure_ad_token,
+                azure_ad_token=oidc_token,
                 azure_client_id=client_id,
                 azure_tenant_id=tenant_id,
                 scope=scope,
             )
-            azure_ad_token = None
         elif not api_key and azure_ad_token_provider is None and litellm.enable_azure_ad_token_refresh is True:
             verbose_logger.debug(
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
@@ -735,7 +744,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             "api_key": api_key,
             "azure_endpoint": api_base,
             "api_version": api_version,
-            "azure_ad_token": azure_ad_token,
+            "azure_ad_token": None if oidc_token is not None else azure_ad_token,
             "azure_ad_token_provider": azure_ad_token_provider,
         }
         # init http client + SSL Verification settings

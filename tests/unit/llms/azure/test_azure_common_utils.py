@@ -2199,6 +2199,25 @@ async def test_non_v1_azure_token_refresh_runs_off_the_event_loop_thread() -> No
     assert token_thread != str(threading.get_ident())
 
 
+def _echo_authorization(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": request.headers["authorization"]},
+                }
+            ],
+        },
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
 async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_request(
@@ -2218,24 +2237,6 @@ async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_re
             exchanges.append(loop_ran_during_exchange.wait(timeout=5))
             return httpx.Response(200, json={"access_token": f"exchanged-{api_version}", "expires_in": 3600})
 
-    def echo_authorization(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "id": "chatcmpl-1",
-                "object": "chat.completion",
-                "created": 0,
-                "model": "gpt",
-                "choices": [
-                    {
-                        "index": 0,
-                        "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": request.headers["authorization"]},
-                    }
-                ],
-            },
-        )
-
     async def mark_loop_running_once_exchange_starts() -> None:
         while not exchange_started.is_set():
             await asyncio.sleep(0.01)
@@ -2244,7 +2245,7 @@ async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_re
     monkeypatch.setattr(litellm, "sync_transport", TokenEndpoint(), raising=False)
     monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
     monkeypatch.setattr(
-        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(echo_authorization))
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
     )
     loop_watcher: Final = asyncio.ensure_future(mark_loop_running_once_exchange_starts())
     try:
@@ -2271,32 +2272,58 @@ async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_re
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+async def test_a_cold_burst_of_oidc_requests_exchanges_the_token_once(
+    monkeypatch: pytest.MonkeyPatch, api_version: str
+) -> None:
+    import asyncio
+
+    second_exchange_started: Final = threading.Event()
+    exchanges: Final[list[str]] = []
+
+    class TokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            exchanges.append(request.url.path)
+            if len(exchanges) == 1:
+                second_exchange_started.wait(timeout=0.5)
+            else:
+                second_exchange_started.set()
+            return httpx.Response(200, json={"access_token": f"burst-{api_version}", "expires_in": 3600})
+
+    monkeypatch.setattr(litellm, "sync_transport", TokenEndpoint(), raising=False)
+    monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
+    monkeypatch.setattr(
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
+    )
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=None,
+        api_base=f"https://oidc-burst-{api_version}.openai.azure.com",
+        api_version=api_version,
+        litellm_params={
+            "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
+            "client_id": f"burst-client-{api_version}",
+            "tenant_id": "oidc-tenant",
+        },
+        _is_async=True,
+    )
+
+    responses: Final = await asyncio.gather(
+        *(client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}]) for _ in range(5))
+    )
+
+    assert [response.choices[0].message.content for response in responses] == [f"Bearer burst-{api_version}"] * 5
+    assert len(exchanges) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
 async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(
     monkeypatch: pytest.MonkeyPatch, api_version: str
 ) -> None:
-    def echo_authorization(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "id": "chatcmpl-1",
-                "object": "chat.completion",
-                "created": 0,
-                "model": "gpt",
-                "choices": [
-                    {
-                        "index": 0,
-                        "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": request.headers["authorization"]},
-                    }
-                ],
-            },
-        )
-
     async def async_token_provider() -> str:
         return "async-token"
 
     monkeypatch.setattr(
-        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(echo_authorization))
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
     )
     client: Final = BaseAzureLLM().get_azure_openai_client(
         api_key=None,
