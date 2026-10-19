@@ -47,6 +47,7 @@ CALLER_CREDENTIAL_CELLS: Final = (
     ("caller-gigachat-access-token", "gigachat_access_token"),
 )
 TOKEN_EXCHANGE_CELLS: Final = ("token-exchange", "token-exchange-credential")
+KEYLESS_CELLS: Final = ("keyless", "messages-keyless")
 TOKEN_EXCHANGE_SETTINGS: Final = {
     "token_exchange_endpoint": "https://login.microsoftonline.com/00000000-0000-4000-8000-0000000c0b01/oauth2/v2.0/token",
     "client_id": "synthetic-obo-client-id",
@@ -136,7 +137,7 @@ class Provider:
 
     def __call__(self, request: Request) -> Reply:
         sent: Final = json.loads(request.body)
-        model: Final = str(sent.get("model") or sent["model_id"])
+        model: Final = str(sent.get("model") or sent.get("model_id") or request.target.split("/")[2])
         if request.headers.get("x-portkey-api-key") == REVOKED_GATEWAY_KEY:
             return _error(401, "Invalid gateway API key", "invalid_request_error", "invalid_api_key")
         if request.headers.get("openai-organization") == UNKNOWN_ORGANIZATION:
@@ -180,6 +181,28 @@ def anthropic_deployment(cell: str, api_base: str) -> dict[str, JsonValue]:
             "api_key": f"sk-ant-api03-deployment-credential-{cell}",
             "api_base": api_base,
         },
+        "model_info": {"id": identity(cell)},
+    }
+
+
+def bedrock_deployment(cell: str, opt_in: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "model_name": name(cell),
+        "litellm_params": {
+            "model": f"bedrock/converse/{REJECTS}",
+            "aws_access_key_id": "AKIADEPLOYMENTCREDENTIAL",
+            "aws_secret_access_key": f"deployment-credential-{cell}",
+            "aws_region_name": "us-east-1",
+            **opt_in,
+        },
+        "model_info": {"id": identity(cell)},
+    }
+
+
+def keyless_anthropic_deployment(cell: str, api_base: str) -> dict[str, JsonValue]:
+    return {
+        "model_name": name(cell),
+        "litellm_params": {"model": f"anthropic/{REJECTS}", "api_base": api_base},
         "model_info": {"id": identity(cell)},
     }
 
@@ -240,6 +263,11 @@ def config(directory: Path, upstream: Wire) -> Path:
         deployment("recovers", RECOVERS, api_base),
         anthropic_deployment("anthropic-own-key", upstream.url),
         anthropic_deployment("caller-oauth", upstream.url),
+        *(keyless_anthropic_deployment(cell, upstream.url) for cell in KEYLESS_CELLS),
+        bedrock_deployment(
+            "deployment-caller-bedrock-endpoint",
+            {"configurable_clientside_auth_params": ["aws_bedrock_runtime_endpoint"]},
+        ),
         azure_deployment("azure-own-token", upstream.url, {"azure_ad_token": "deployment-entra-token-azure-own-token"}),
         *(
             azure_deployment(
@@ -325,7 +353,11 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         wire_server(Provider(released)) as upstream,
         gateway_from_environment() as shared,
         owned_proxy(
-            shared, directory, {"PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2"}, config=config(directory, upstream)
+            shared,
+            directory,
+            {"PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2"},
+            config=config(directory, upstream),
+            remove_environment=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
         ) as owned,
     ):
         yield Rig(owned, upstream)
@@ -339,6 +371,7 @@ def opted_in_config(directory: Path, upstream: Wire) -> Path:
             azure_deployment(caller_azure_cell("proxy-wide", route, inside_extra_body), upstream.url, {})
             for route, inside_extra_body in CALLER_AZURE_CELLS
         ),
+        bedrock_deployment("proxy-wide-caller-bedrock-endpoint", {}),
     ]
     configuration["general_settings"]["allow_client_side_credentials"] = True
     configuration["litellm_settings"]["callbacks"] = ["prometheus"]
@@ -828,6 +861,35 @@ def test_a_token_exchange_deployment_rejecting_a_caller_without_an_identity_toke
     assert {metric: values(samples, metric, model_id=identity(cell)) for metric in DEPLOYMENT_SERIES} == {
         metric: [] for metric in DEPLOYMENT_SERIES
     }, recorded(samples, requested_model=name(cell))
+
+
+@pytest.mark.parametrize("cell", KEYLESS_CELLS)
+def test_a_missing_deployment_key_reported_before_the_provider_is_called_stays_out_of_the_deployment_metrics(
+    rig: Rig, cell: str
+) -> None:
+    rig.upstream.drain()
+    response: Final = send(rig.gateway, cell)
+    assert response.status_code == 401, response.text
+    assert "Missing Anthropic API Key" in response.text, response.text
+    assert rig.upstream.drain() == ()
+    assert_kept_out_of_the_deployment_metrics(rig, cell)
+
+
+@pytest.mark.parametrize("opt_in", ("deployment", "proxy-wide"))
+def test_a_provider_401_at_a_bedrock_endpoint_the_caller_sends_stays_out_of_the_deployment_metrics(
+    request: pytest.FixtureRequest, opt_in: str
+) -> None:
+    opted: Final[Rig] = request.getfixturevalue("rig" if opt_in == "deployment" else "opted_in")
+    cell: Final = f"{opt_in}-caller-bedrock-endpoint"
+    opted.upstream.drain()
+    response: Final = opted.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": name(cell), "messages": messages(cell), "aws_bedrock_runtime_endpoint": opted.upstream.url},
+    )
+    assert response.status_code == 401, response.text
+    assert [reached.target for reached in opted.upstream.drain()] == [f"/model/{REJECTS}/converse"]
+    assert_kept_out_of_the_deployment_metrics(opted, cell)
 
 
 def test_a_provider_401_at_an_api_base_the_caller_sends_counts_against_a_one_off_deployment(rig: Rig) -> None:

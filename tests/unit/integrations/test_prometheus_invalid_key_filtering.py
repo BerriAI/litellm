@@ -7,6 +7,7 @@ the proxy-level failed request counter still records them.
 """
 
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Final
 from unittest.mock import Mock, patch
 
@@ -48,6 +49,14 @@ PROVIDER_CREDENTIAL_FIELDS = [
     "wx_credentials",
     "zen_api_key",
 ]
+PROVIDER_ENDPOINT_FIELDS = [
+    "aws_bedrock_runtime_endpoint",
+    "aws_sts_endpoint",
+    "deployment_url",
+    "s3_endpoint_url",
+    "sagemaker_base_url",
+]
+CALLED_THE_PROVIDER: Final = {"api_call_start_time": datetime(2026, 10, 19, 12, 0, 0)}
 
 
 @pytest.fixture(scope="function")
@@ -201,7 +210,7 @@ class TestSkipMetricsValidation:
     def test_skip_except_for_provider_errors_the_proxy_did_not_raise(
         self, prometheus_logger, exception, proxy_gate, expected
     ):
-        kwargs: Final[dict[str, object]] = {"exception": exception}
+        kwargs: Final[dict[str, object]] = {"exception": exception, **CALLED_THE_PROVIDER}
         if proxy_gate:
             kwargs[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
         assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
@@ -280,10 +289,24 @@ class TestSkipMetricsValidation:
             llm_provider="openai",
             model="gpt-4o-mini",
         )
+        kwargs: Final = {"exception": exception, **CALLED_THE_PROVIDER, **logged_call}
+        assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
+
+    @pytest.mark.parametrize(
+        "logged_call,expected",
+        [(CALLED_THE_PROVIDER, False), ({}, True), ({"api_call_start_time": None}, True)],
+        ids=["provider-401", "401-before-the-provider-call", "blank-provider-call-start"],
+    )
+    def test_skip_a_401_raised_before_the_provider_was_called(self, prometheus_logger, logged_call, expected):
+        exception: Final = litellm.AuthenticationError(
+            message="Missing Anthropic API Key - A call is being made to anthropic but no key is set",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
+        )
         kwargs: Final = {"exception": exception, **logged_call}
         assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
 
-    @pytest.mark.parametrize("field", PROVIDER_CREDENTIAL_FIELDS)
+    @pytest.mark.parametrize("field", PROVIDER_CREDENTIAL_FIELDS + PROVIDER_ENDPOINT_FIELDS)
     @pytest.mark.parametrize("inside_extra_body", [False, True], ids=["body", "extra-body"])
     def test_skip_a_provider_401_on_a_provider_credential_field_the_caller_sent(
         self, prometheus_logger, field, inside_extra_body
@@ -293,13 +316,15 @@ class TestSkipMetricsValidation:
         kwargs: Final = {
             "exception": litellm.AuthenticationError(message="Unauthorized", llm_provider="azure", model="gpt-4o"),
             "litellm_params": {"proxy_server_request": {"body": body}},
+            **CALLED_THE_PROVIDER,
         }
         assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is True
 
-    @pytest.mark.parametrize("field", PROVIDER_CREDENTIAL_FIELDS)
+    @pytest.mark.parametrize("field", PROVIDER_CREDENTIAL_FIELDS + PROVIDER_ENDPOINT_FIELDS)
     def test_count_a_provider_401_on_a_provider_credential_field_the_deployment_owns(self, prometheus_logger, field):
         kwargs: Final = {
             "exception": litellm.AuthenticationError(message="Unauthorized", llm_provider="azure", model="gpt-4o"),
+            **CALLED_THE_PROVIDER,
             "litellm_params": {
                 field: "deployment-credential",
                 "proxy_server_request": {"body": {"model": "shared-deployment"}},
@@ -320,6 +345,7 @@ class TestSkipMetricsValidation:
                 message="Unauthorized", llm_provider="microsoft_365_copilot", model="copilot"
             ),
             "litellm_params": {"token_exchange_endpoint": token_exchange_endpoint, "client_secret": "deployment"},
+            **CALLED_THE_PROVIDER,
         }
         assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
 
@@ -447,6 +473,7 @@ def _provider_auth_failure_kwargs() -> dict[str, object]:
         },
         "exception": exception,
         "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
+        **CALLED_THE_PROVIDER,
     }
 
 

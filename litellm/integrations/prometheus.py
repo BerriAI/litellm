@@ -379,31 +379,35 @@ _CALLER_CREDENTIAL_FIELDS: Final = frozenset(
 )
 
 
+_CALLER_ENDPOINT_FIELDS: Final = frozenset(
+    {"aws_bedrock_runtime_endpoint", "aws_sts_endpoint", "deployment_url", "s3_endpoint_url", "sagemaker_base_url"}
+)
+
+
 _CALLER_TRANSPORT_FIELDS: Final = frozenset(
     {"api_key", "extra_headers", "headers", "organization", "provider_specific_header"}
 )
 
 
-def _sent_a_provider_credential(caller_body: Mapping[str, object]) -> bool:
-    """True when the caller's request body, or its ``extra_body``, carries a provider credential field."""
-    return not (
-        _CALLER_CREDENTIAL_FIELDS.isdisjoint(caller_body)
-        and _CALLER_CREDENTIAL_FIELDS.isdisjoint(_logged_fields(caller_body.get("extra_body")))
-    )
+def _sent_a_provider_credential_or_endpoint(caller_body: Mapping[str, object]) -> bool:
+    """True when the caller's request body, or its ``extra_body``, carries a provider credential field or a
+    provider endpoint field."""
+    sent: Final = {*caller_body, *_logged_fields(caller_body.get("extra_body"))}
+    return not (_CALLER_CREDENTIAL_FIELDS.isdisjoint(sent) and _CALLER_ENDPOINT_FIELDS.isdisjoint(sent))
 
 
 def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
-    """True when the provider was called with a credential that belongs to the caller rather than the
-    deployment: an api_key, header, OpenAI organization or other provider credential field the caller sent with the
-    request, the caller's own Anthropic OAuth token, the caller's own GitHub Copilot connection, or the caller's
-    identity token that a token-exchange deployment trades in on every call."""
+    """True when the provider was called with a credential or at an endpoint that belongs to the caller rather than
+    the deployment: an api_key, header, OpenAI organization or other provider credential or endpoint field the caller
+    sent with the request, the caller's own Anthropic OAuth token, the caller's own GitHub Copilot connection, or the
+    caller's identity token that a token-exchange deployment trades in on every call."""
     litellm_params: Final = _logged_fields(logged_call.get("litellm_params"))
     proxy_server_request: Final = _logged_fields(litellm_params.get("proxy_server_request"))
     credential_fields: Final = proxy_server_request.get("credential_fields")
     logged_metadata: Final = _logged_fields(_logged_fields(logged_call.get("standard_logging_object")).get("metadata"))
     return (
         (isinstance(credential_fields, tuple) and any(field in credential_fields for field in _CALLER_TRANSPORT_FIELDS))
-        or _sent_a_provider_credential(_logged_fields(proxy_server_request.get("body")))
+        or _sent_a_provider_credential_or_endpoint(_logged_fields(proxy_server_request.get("body")))
         or bool(litellm_params.get("token_exchange_endpoint"))
         or logged_metadata.get("used_client_oauth_token") is True
         or github_copilot_user_session_from(litellm_params) is not None
@@ -412,10 +416,12 @@ def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
 
 def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str, object]) -> bool:
     """True for an error raised while calling the deployment with its own credential, on a request the proxy
-    did not reject itself."""
+    did not reject itself. An error LiteLLM raises before it calls the provider, such as a missing deployment key,
+    is not one."""
     return not (
         isinstance(exception, CallerCredentialAuthenticationError)
         or bool(logged_call.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL))
+        or logged_call.get("api_call_start_time") is None
         or _used_a_caller_credential(logged_call)
     )
 
