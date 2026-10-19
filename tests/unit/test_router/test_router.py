@@ -2375,6 +2375,37 @@ def test_model_group_info_description_from_model_info():
     assert result.description == "State-of-the-art language model."
 
 
+@pytest.mark.parametrize("chat_deployment_first", [True, False])
+def test_model_group_info_lists_batch_for_a_mixed_chat_and_batch_group(chat_deployment_first: bool):
+    chat: Final = _azure_sku_deployment(
+        "gpt-mixed", "unmapped-chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]
+    )
+    batch: Final = _azure_sku_deployment("gpt-mixed", "unmapped-batch-sku", "batch")
+    router: Final = Router(model_list=[chat, batch] if chat_deployment_first else [batch, chat])
+
+    info: Final = router.get_model_group_info("gpt-mixed")
+
+    assert info is not None
+    assert sorted(info.supported_endpoints or ()) == ["/v1/batch", "/v1/chat/completions"]
+
+
+def test_model_group_info_lists_no_batch_for_a_chat_only_group():
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment(
+                "gpt-declared", "unmapped-chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]
+            ),
+            _azure_sku_deployment("gpt-undeclared", "unmapped-undeclared-sku", "chat"),
+        ]
+    )
+
+    declared: Final = router.get_model_group_info("gpt-declared")
+    undeclared: Final = router.get_model_group_info("gpt-undeclared")
+
+    assert declared is not None and declared.supported_endpoints == ("/v1/chat/completions",)
+    assert undeclared is not None and undeclared.supported_endpoints is None
+
+
 def _alias_cost_router() -> Router:
     return Router(
         model_list=[
@@ -12909,6 +12940,19 @@ async def test_acreate_batch_still_falls_back_within_the_owning_model_group():
     assert "24h" in str(raised.value)
     assert "quotaExceeded" not in str(raised.value)
     assert attempted_models == ["openai/gpt-4o-mini", "openai/gpt-4o-mini-backup"]
+
+
+def _azure_sku_deployment(model_group: str, sku_host: str, mode: str, **model_info: object) -> dict[str, object]:
+    return {
+        "model_name": model_group,
+        "litellm_params": {
+            "model": f"azure/{sku_host}",
+            "api_base": f"https://{sku_host}.openai.azure.com",
+            "api_key": "dummy-key",
+            "api_version": "2025-04-01-preview",
+        },
+        "model_info": {"mode": mode, **model_info},
+    }
 
 
 @pytest.mark.asyncio
