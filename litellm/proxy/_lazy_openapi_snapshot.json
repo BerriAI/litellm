@@ -16335,6 +16335,12 @@
               "description": "Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.",
               "title": "Client Secret"
             },
+            "compress_latest_turn": {
+              "default": false,
+              "description": "Allow compression of latest user and tool-result text, which can lose instructions or details. System prompts, assistant messages, cached prefixes and retrieved content remain protected. Unsafe rewrites retain the original input.",
+              "title": "Compress Latest Turn",
+              "type": "boolean"
+            },
             "confidence_threshold": {
               "default": 0.5,
               "default_value": 0.5,

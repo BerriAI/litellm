@@ -280,3 +280,14 @@ def test_embedding_scorer(respx_mock: respx.MockRouter) -> None:
         {"role": "user", "content": "Fix auth"},
     ]
     assert result["cache"] == {"message_1": recipe_context}
+
+
+def test_relaxing_latest_turn_protection_retains_system_and_cached_prefix() -> None:
+    messages: Final = [
+        {"role": "system", "content": "instruction"},
+        {"role": "user", "content": "cached", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "latest"},
+    ]
+    assert get_protected_indices(messages, protect_latest_turn=False) == (0, 1)
+    assert set(get_protected_indices(messages)) == {0, 1, 2, 3}

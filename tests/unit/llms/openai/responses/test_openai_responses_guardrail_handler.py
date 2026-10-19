@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import logging
 
 import pytest
+import respx
+import litellm
 
 
 from fastapi import HTTPException
@@ -4174,3 +4176,74 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["hi"]], guardrail.seen_inputs
         tool_calls = guardrail.seen_inputs[0].get("tool_calls") or []
         assert [call["function"]["arguments"] for call in tool_calls] == ['{"city": "Paris"}'], tool_calls
+
+
+@pytest.mark.asyncio
+async def test_headroom_latest_turn_patches_native_tool_result_with_metadata(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
+    items: Final = [
+        {"role": "user", "content": "Summarize this data"},
+        {"type": "function_call", "id": "fc_original", "call_id": "call_original", "name": "read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_original", "output": "data " * 500, "status": "completed"},
+    ]
+    route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(200, json={"messages": [
+        {"role": "user", "content": "Summarize data"},
+        {"role": "tool", "tool_call_id": "call_original", "content": "short data"},
+    ]})
+    result: Final = await OpenAIResponsesHandler().process_input_messages({"input": items}, callback)
+    assert route.called
+    assert result["input"] == [{**items[0], "content": "Summarize data"}, items[1], {**items[2], "output": "short data"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_input", ["long " * 100, [{"role": "user", "content": [
+    {"type": "input_text", "text": "long " * 100, "source": "first"},
+    {"type": "input_text", "text": "long " * 100, "source": "second"},
+]}]])
+async def test_headroom_latest_user_input_preserves_native_text_metadata(
+    raw_input: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
+    route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(
+        200, json={"messages": [{"role": "user", "content": "short"}]}
+    )
+    result: Final = await OpenAIResponsesHandler().process_input_messages({"input": raw_input}, callback)
+    assert route.called
+    assert result["input"] == ([{"role": "user", "content": "short"}] if isinstance(raw_input, str) else [
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "short", "source": "first"},
+            {"type": "input_text", "text": "", "source": "second"},
+        ]},
+    ])
+
+
+@pytest.mark.asyncio
+async def test_headroom_unsafe_native_mapping_preserves_request_and_tools(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
+    items: Final = [
+        {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "read", "arguments": "{}"},
+        {"role": "assistant", "content": "Reading now"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "long " * 100},
+    ]
+    original: Final = {"input": items}
+    route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(200, json={
+        "messages": [{"role": "tool", "tool_call_id": "call_1", "content": "short"}],
+        "ccr_hashes": ["abcdefabcdef"],
+    })
+    result: Final = await OpenAIResponsesHandler().process_input_messages(original, callback)
+    assert route.called
+    assert result == {"input": items}
+    assert "tools" not in result

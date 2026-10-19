@@ -12,13 +12,15 @@ therefore only be written back over a run of text parts, never across a
 non-text part, which is what ``is_all_text_parts`` gates.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.prompt_templates.factory import get_attribute_or_key
 
 
-def content_to_text(content: object) -> str:
+def content_to_text(content: object, *, ignore_empty: bool = False) -> str:
     """Collapse a message ``content`` (str or list-of-parts) to plain text.
 
     For the multimodal list shape, joins ``{type: "text", text: ...}`` parts
@@ -31,7 +33,7 @@ def content_to_text(content: object) -> str:
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
                 text = part.get("text")
-                if isinstance(text, str):
+                if isinstance(text, str) and (text or not ignore_empty):
                     parts.append(text)
         return "\n\n".join(parts)
     return ""
@@ -94,3 +96,23 @@ def assistant_text_from_response(response: object) -> str | None:
         if output_parts:
             return "".join(output_parts)
     return None
+
+
+_TEXT_PARTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def replace_text_content(content: object, text: str) -> object:
+    if isinstance(content, str):
+        return text
+    if not isinstance(content, list) or not content:
+        return None
+    try:
+        parts: Final = _TEXT_PARTS_ADAPTER.validate_python(content)
+    except ValidationError:
+        return None
+    if any(
+        part.get("type") not in ("text", "input_text", "output_text") or not isinstance(part.get("text"), str)
+        for part in parts
+    ):
+        return None
+    return [{**part, "text": text if index == 0 else ""} for index, part in enumerate(parts)]

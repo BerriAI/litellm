@@ -36420,6 +36420,12 @@ export interface components {
              */
             client_secret?: string | null;
             /**
+             * Compress Latest Turn
+             * @description Allow compression of latest user and tool-result text, which can lose instructions or details. System prompts, assistant messages, cached prefixes and retrieved content remain protected. Unsafe rewrites retain the original input.
+             * @default false
+             */
+            compress_latest_turn: boolean;
+            /**
              * Confidence Threshold
              * @description Only block or mask when detection confidence >= this value; below threshold, allow or log_only.
              * @default 0.5

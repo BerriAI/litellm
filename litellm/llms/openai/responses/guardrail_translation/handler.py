@@ -266,13 +266,23 @@ def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
     return _PATCHABLE_ITEM_FIELDS.get(item_type)
 
 
-def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+def _rewritten_input_item(
+    item: Mapping[str, object], rewritten: object, *, preserve_text_metadata: bool = False
+) -> Mapping[str, object] | None:
     field: Final = _item_rewrite_field(item)
     if field is None or not isinstance(rewritten, Mapping):
         return None
     rewritten_content: Final = rewritten.get("content")
     if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
         return {**item, field: rewritten_content}
+    if preserve_text_metadata:
+        from litellm.proxy.guardrails.guardrail_hooks.content_text import content_to_text, replace_text_content
+
+        typed_rewritten: Final = _item_fields_adapter.validate_python(rewritten)
+        replaced: Final = replace_text_content(
+            item.get(field), content_to_text(typed_rewritten.get("content"), ignore_empty=True)
+        )
+        return {**item, field: replaced} if replaced is not None else None
     rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
     converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
         [rewritten_row]
@@ -493,12 +503,22 @@ def _input_item_role(item: object) -> str:
     return role.lower() if isinstance(role, str) else ""
 
 
-def _patched_request_fields(
+def patch_response_request_fields(
     raw_input: object,
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[object],
+    *,
+    preserve_text_metadata: bool = False,
 ) -> _RequestFields | None:
+    if isinstance(raw_input, str) and preserve_text_metadata:
+        return patch_response_request_fields(
+            [{"role": "user", "content": raw_input}],
+            instructions,
+            original_messages,
+            structured_messages,
+            preserve_text_metadata=True,
+        )
     if not isinstance(raw_input, list) or len(original_messages) != len(structured_messages):
         return None
     offset: Final = 1 if instructions else 0
@@ -528,6 +548,7 @@ def _patched_request_fields(
             item_for_message[message_index]: _rewritten_input_item(
                 cast("Mapping[str, object]", raw_input[item_for_message[message_index]]),  # cast-ok: checked Mappings
                 rewritten,
+                preserve_text_metadata=preserve_text_metadata,
             )
             for message_index, rewritten in body_changes
         }
@@ -545,11 +566,15 @@ def _patch_or_convert_request_fields(
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[AllMessageValues],
+    *,
+    preserve_text_metadata: bool = False,
 ) -> _RequestFields | None:
     if not isinstance(structured_messages, list):
         return None
-    patched: Final = _patched_request_fields(raw_input, instructions, original_messages, structured_messages)
-    if patched is not None:
+    patched: Final = patch_response_request_fields(
+        raw_input, instructions, original_messages, structured_messages, preserve_text_metadata=preserve_text_metadata
+    )
+    if patched is not None or preserve_text_metadata:
         return patched
     input_items, converted_instructions = (
         LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
@@ -762,7 +787,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         )
         return _patch_or_convert_request_fields(
-            data.get("input"), data.get("instructions"), structured_messages, merged
+            data.get("input"),
+            data.get("instructions"),
+            structured_messages,
+            merged,
+            preserve_text_metadata=guardrail_to_apply.preserve_request_text_metadata(),
         )
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:

@@ -31,6 +31,15 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
         description="Inject the Headroom retrieval tool for hashes declared by the compression service.",
     )
 
+    compress_latest_turn: bool = Field(
+        default=False,
+        description=(
+            "Allow compression of latest user and tool-result text, which can lose instructions or details. "
+            "System prompts, assistant messages, "
+            "cached prefixes and retrieved content remain protected. Unsafe rewrites retain the original input."
+        ),
+    )
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "Headroom"
