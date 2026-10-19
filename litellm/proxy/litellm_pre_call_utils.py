@@ -447,6 +447,7 @@ _ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
         "original_model_group",
+        "previous_models",
         "request_retry_count",
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
