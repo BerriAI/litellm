@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Hashable, Mapping
 from contextlib import closing
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, cast
+from typing import Final, Literal, NamedTuple, TypeVar, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -94,6 +94,9 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
+_Token = TypeVar("_Token")
+
+
 @lru_cache(maxsize=128)
 def _cached_entra_id_token_provider(
     tenant_id: str,
@@ -131,7 +134,7 @@ def _cached_username_password_token_provider(
 
 @lru_cache(maxsize=128)
 def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
-    return get_azure_ad_token_provider(azure_scope=scope)
+    return _single_flight_azure_ad_token_provider(get_azure_ad_token_provider(azure_scope=scope))
 
 
 def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
@@ -168,14 +171,20 @@ def _shared_async_azure_ad_token_provider(
     return _single_flight_async_azure_ad_token_provider(provider)
 
 
+def _single_flight_azure_ad_token_provider(provider: Callable[[], _Token]) -> Callable[[], _Token]:
+    single_flight: Final = threading.Lock()
+
+    def fetch_one_at_a_time() -> _Token:
+        with single_flight:
+            return provider()
+
+    return fetch_one_at_a_time
+
+
 def _single_flight_async_azure_ad_token_provider(
     provider: Callable[[], str | Awaitable[str]],
 ) -> Callable[[], Awaitable[str]]:
-    single_flight: Final = threading.Lock()
-
-    def fetch_one_at_a_time() -> str | Awaitable[str]:
-        with single_flight:
-            return provider()
+    fetch_one_at_a_time: Final = _single_flight_azure_ad_token_provider(provider)
 
     async def async_provider() -> str:
         token: Final = await asyncio.to_thread(fetch_one_at_a_time)

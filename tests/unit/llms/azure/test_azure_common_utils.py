@@ -1568,8 +1568,7 @@ def test_get_azure_ad_token_fallback_to_default_azure_credential(
         # If called with azure_credential=DefaultAzureCredential, return a working provider
         if kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential:
             return lambda: "mock-default-azure-credential-token"
-        # Otherwise (service principal call), return None to simulate failure
-        return None
+        raise ValueError("service principal credentials are not configured")
 
     setup_mocks["token_provider"].side_effect = mock_token_provider_side_effect
 

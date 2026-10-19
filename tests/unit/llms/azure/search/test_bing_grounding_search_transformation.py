@@ -132,6 +132,47 @@ def test_default_entra_minter_reuses_provider(monkeypatch: pytest.MonkeyPatch) -
         common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
 
 
+def test_a_cold_burst_of_searches_fetches_the_entra_token_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from azure.core.credentials import AccessToken
+    from azure.identity import get_bearer_token_provider
+
+    from litellm.llms.azure import common_utils
+
+    second_fetch_started: Final = threading.Event()
+    fetches: Final[list[tuple[str, ...]]] = []
+
+    class SlowCredential:
+        def get_token(self, *scopes: str, **_: object) -> AccessToken:
+            fetches.append(scopes)
+            if len(fetches) == 1:
+                second_fetch_started.wait(timeout=0.5)
+            else:
+                second_fetch_started.set()
+            return AccessToken("entra-token", int(time.time()) + 3600)
+
+    def provider_factory(azure_scope: str) -> object:
+        return get_bearer_token_provider(SlowCredential(), azure_scope)
+
+    provider_module: Final = importlib.import_module("litellm.secret_managers.get_azure_ad_token_provider")
+    common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
+    monkeypatch.setattr(common_utils, "get_azure_ad_token_provider", provider_factory)
+    monkeypatch.setattr(provider_module, "get_azure_ad_token_provider", provider_factory)
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            headers: Final = tuple(pool.map(lambda _: _config().validate_environment({}), range(4)))
+    finally:
+        common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
+
+    assert [h["Authorization"] for h in headers] == ["Bearer entra-token"] * 4
+    assert fetches == [("https://ai.azure.com/.default",)]
+
+
 def test_validate_environment_does_not_mutate_and_is_idempotent():
     config = _config()
     caller_headers = {"X-Custom": "keep-me"}
