@@ -119,7 +119,10 @@ from litellm.llms.base_llm.base_model_iterator import (
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
+    NativeOutputFallback,
     bedrock_route_for_request,
+    deployment_model_info,
+    without_bedrock_native_output_opt_in,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
@@ -228,6 +231,9 @@ from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
+from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig
+from .llms.bedrock.chat.native_output_fallback import NativeOutputAttemptResult, call_with_native_output_fallback
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
@@ -238,6 +244,7 @@ from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
+from .llms.databricks.common_utils import DatabricksBase
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha
 from .llms.gdc.chat.transformation import GDCGeminiConfig
@@ -3360,8 +3367,8 @@ def _complete_oobabooga(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
-    api_base = ctx.api_base
-    api_key = ctx.api_key
+    api_base: Final = DatabricksBase.resolve_api_base(ctx.api_base)
+    api_key: Final = DatabricksBase.resolve_api_key(ctx.api_key)
     client: Final = _dispatch_client_http(ctx)
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3372,20 +3379,6 @@ def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchR
     optional_params: Final = ctx.optional_params
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
-
-    api_base = (
-        api_base  # for databricks we check in get_llm_provider and pass in the api base from there
-        or litellm.api_base
-        or os.getenv("DATABRICKS_API_BASE")
-    )
-
-    # set API KEY
-    api_key = (
-        api_key
-        or litellm.api_key  # for databricks we check in get_llm_provider and pass in the api key from there
-        or litellm.databricks_key
-        or get_secret("DATABRICKS_API_KEY")
-    )
 
     headers = headers or litellm.headers
 
@@ -4205,6 +4198,53 @@ _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
 
+_AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS: Final = (
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+)
+
+
+def _native_output_fallback(
+    ctx: CompletionDispatchContext,
+    first_attempt_params: Mapping[str, object],
+    first_attempt_litellm_params: Mapping[str, object],
+) -> NativeOutputFallback:
+    litellm_params: Final = without_bedrock_native_output_opt_in(first_attempt_litellm_params)
+    remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
+    return NativeOutputFallback(
+        optional_params={
+            **{key: value for key, value in remapped_params.items() if key != "aws_bedrock_client"},
+            **{
+                key: first_attempt_params[key]
+                for key in _AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS
+                if key in first_attempt_params
+            },
+        },
+        litellm_params=litellm_params,
+    )
+
+
+def _converse_native_output_fallback(
+    ctx: CompletionDispatchContext,
+    first_attempt_params: Mapping[str, object],
+    first_attempt_litellm_params: Mapping[str, object],
+) -> NativeOutputFallback | None:
+    fallback: Final = _native_output_fallback(ctx, first_attempt_params, first_attempt_litellm_params)
+    return None if AmazonConverseConfig.sends_native_text_format(fallback.optional_params) else fallback
+
+
+def _native_output_attempt_timeout(
+    ctx: CompletionDispatchContext, fallback: NativeOutputFallback | None
+) -> float | str | httpx.Timeout | None:
+    if fallback is None:
+        return ctx.timeout
+    retry_timeout: Final = ctx.timeout_for_optional_params(fallback.optional_params)
+    ctx.logging.record_applied_timeout(retry_timeout)
+    return retry_timeout
+
+
 def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -4276,22 +4316,36 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
         )
     elif bedrock_route == "converse":
         model = without_bedrock_route_prefix(model)
-        response = bedrock_converse_chat_completion.completion(
-            model=model,
-            messages=messages,
-            custom_prompt_dict=custom_prompt_dict,
-            model_response=model_response,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            logger_fn=logger_fn,
-            encoding=_get_encoding(),
-            logging_obj=logging,
-            extra_headers=headers,  # Use merged headers instead of original extra_headers
-            timeout=timeout,
-            acompletion=acompletion,
-            client=client,
-            api_base=api_base,
-            api_key=api_key,
+        converse_model: Final = model
+
+        def converse_attempt(fallback: NativeOutputFallback | None) -> NativeOutputAttemptResult:
+            return bedrock_converse_chat_completion.completion(
+                model=converse_model,
+                messages=messages,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                optional_params=optional_params if fallback is None else dict(fallback.optional_params),
+                litellm_params=litellm_params if fallback is None else dict(fallback.litellm_params),
+                logger_fn=logger_fn,
+                encoding=_get_encoding(),
+                logging_obj=logging,
+                extra_headers=headers,  # Use merged headers instead of original extra_headers
+                timeout=_native_output_attempt_timeout(ctx, fallback),
+                acompletion=acompletion,
+                client=client,
+                api_base=api_base,
+                api_key=api_key,
+            )
+
+        converse_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        response = call_with_native_output_fallback(
+            converse_attempt,
+            (
+                partial(_converse_native_output_fallback, ctx, converse_params, dict(litellm_params))
+                if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
+                else None
+            ),
+            converse_model,
         )
     elif bedrock_route == "converse_like":
         model = model.replace("converse_like/", "")
@@ -4313,22 +4367,36 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             client=client,
         )
     else:
-        response = base_llm_http_handler.completion(
-            model=model,
-            stream=stream,
-            messages=messages,
-            acompletion=acompletion,
-            api_base=api_base,
-            model_response=model_response,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            custom_llm_provider="bedrock",
-            timeout=timeout,
-            headers=headers,
-            encoding=_get_encoding(),
-            api_key=api_key,
-            logging_obj=logging,
-            client=client,
+
+        def invoke_attempt(fallback: NativeOutputFallback | None) -> NativeOutputAttemptResult:
+            return base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params if fallback is None else dict(fallback.optional_params),
+                litellm_params=litellm_params if fallback is None else dict(fallback.litellm_params),
+                custom_llm_provider="bedrock",
+                timeout=_native_output_attempt_timeout(ctx, fallback),
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
+
+        invoke_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        response = call_with_native_output_fallback(
+            invoke_attempt,
+            (
+                partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
+                if isinstance(provider_config, AmazonAnthropicClaudeConfig)
+                and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
+                else None
+            ),
+            model,
         )
 
     return response
@@ -5791,37 +5859,41 @@ def completion(
             accepts_summary=provider_config is not None
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
-        optional_params = get_optional_params(
-            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort},
-            model_info=_MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
-            **provider_params,
-        )
-        stream_kind: Final = (
-            (
-                StreamKind.FAKED
-                if _completion_fakes_stream(
-                    model,
-                    custom_llm_provider,
-                    provider_config,
-                    optional_params,
-                    base_model=base_model if isinstance(base_model, str) else None,
-                    bridges_to_responses_api=bridges_to_responses_api is True,
-                )
-                else StreamKind.LIVE
-            )
-            if stream is True
-            else StreamKind.NOT_STREAMED
-        )
 
-        ### TIMEOUT LOGIC ###
-        timeout = CompletionTimeout.resolve(
+        mapping_args: Final = MappingProxyType({**optional_param_args, "reasoning_effort": provider_reasoning_effort})
+        mapping_special_params: Final = MappingProxyType(dict(provider_params))
+
+        def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
+            return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
+
+        optional_params = optional_params_for_model_info(
+            _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
+        )
+        fakes_stream: Final = partial(
+            _completion_fakes_stream,
+            model,
+            custom_llm_provider,
+            provider_config,
+            base_model=base_model if isinstance(base_model, str) else None,
+            bridges_to_responses_api=bridges_to_responses_api is True,
+        )
+        resolve_timeout: Final = partial(
+            CompletionTimeout.resolve,
             timeout,
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
             supports_httpx_timeout=supports_httpx_timeout,
-            stream_kind=stream_kind,
         )
+        streams: Final = stream is True
+
+        def timeout_for_optional_params(attempt_params: Mapping[str, object]) -> float | httpx.Timeout:
+            if not streams:
+                return resolve_timeout(stream_kind=StreamKind.NOT_STREAMED)
+            return resolve_timeout(stream_kind=StreamKind.FAKED if fakes_stream(attempt_params) else StreamKind.LIVE)
+
+        ### TIMEOUT LOGIC ###
+        timeout = timeout_for_optional_params(optional_params)
         logging.record_applied_timeout(timeout)
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
@@ -6059,6 +6131,7 @@ def completion(
             model=model,
             model_response=model_response,
             optional_params=optional_params,
+            optional_params_for_model_info=optional_params_for_model_info,
             organization=organization,
             provider_config=provider_config,
             request_params=MappingProxyType(
@@ -6069,6 +6142,7 @@ def completion(
             temperature=temperature,
             text_completion=text_completion,
             timeout=timeout,
+            timeout_for_optional_params=timeout_for_optional_params,
             top_p=top_p,
         )
         if custom_llm_provider == "azure":
@@ -6784,7 +6858,7 @@ def embedding(
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
 
             # set API KEY
-            api_key = api_key or litellm.api_key or litellm.databricks_key or get_secret("DATABRICKS_API_KEY")
+            api_key = DatabricksBase.resolve_api_key(api_key)
 
             ## EMBEDDING CALL
             response = databricks_embedding.embedding(

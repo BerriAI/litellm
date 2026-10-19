@@ -5832,7 +5832,8 @@ export interface paths {
         };
         /**
          * Latest Release Info
-         * @description Latest stable LiteLLM GitHub release with its PR count split into new features, bug fixes and other updates.
+         * @description Latest stable LiteLLM GitHub release with the PR count of its whole minor line (e.g. v1.105.0 + v1.105.1)
+         *     split into new features, bug fixes and other updates.
          *     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
@@ -30278,6 +30279,11 @@ export interface components {
              * @default false
              */
             vector_store_deny_by_default: boolean;
+            /**
+             * Vertex Ai Pass Through Drop Anthropic Betas
+             * @description anthropic-beta header values the Vertex AI pass-through routes (/vertex_ai/* and /vertex-ai/*) remove before calling Vertex, for a beta a Vertex Claude model rejects, whether the client sent them as anthropic-beta or x-pass-anthropic-beta. Every other value the client sent is forwarded unchanged, and the header is left out when no value remains. Unset forwards the header as sent.
+             */
+            vertex_ai_pass_through_drop_anthropic_betas?: string[] | null;
         };
         /** ConfigList */
         ConfigList: {
@@ -46846,9 +46852,17 @@ export interface components {
          * @description Response structure for token count details with modality breakdown.
          *
          *     Example:
-         *         {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+         *         {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+         *          'litellm_count_source': 'provider'}
          */
         TokenCountDetailsResponse: {
+            /** Litellm Count Model */
+            litellm_count_model?: string;
+            /**
+             * Litellm Count Source
+             * @enum {string}
+             */
+            litellm_count_source?: "provider" | "token_count_model" | "local_estimate";
             /** Prompttokensdetails */
             promptTokensDetails: components["schemas"]["PromptTokensDetails"][];
             /** Totaltokens */
@@ -46877,6 +46891,8 @@ export interface components {
         };
         /** TokenCountResponse */
         TokenCountResponse: {
+            /** Count Source */
+            count_source?: ("provider" | "token_count_model" | "local_estimate") | null;
             /**
              * Error
              * @default false

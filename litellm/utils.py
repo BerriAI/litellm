@@ -6292,11 +6292,13 @@ def get_provider_info(model: str, custom_llm_provider: str | None) -> ProviderSp
             model=model, provider=LlmProviders(custom_llm_provider)
         )
 
-    model_info: ProviderSpecificModelInfo | None = None
     if provider_config:
-        model_info = provider_config.get_provider_info(model=model)
+        return provider_config.get_provider_info(model=model)
 
-    return model_info
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    return json_provider.provider_info if json_provider is not None and json_provider.provider_info else None
 
 
 def _is_potential_model_name_in_model_cost(
@@ -6719,6 +6721,9 @@ def get_model_info_helper(
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
                 supported_audio_formats=_model_info.get("supported_audio_formats", None),
+                token_count_framing=_model_info.get("token_count_framing", None),
+                token_count_model=_model_info.get("token_count_model", None),
+                token_count_tokenizer=_model_info.get("token_count_tokenizer", None),
                 vertex_ai_audio_api=_model_info.get("vertex_ai_audio_api", None),
             )
             for cost_key, cost_value in _model_info.items():
@@ -6753,7 +6758,7 @@ def _build_model_info(
     provider_info: Final = get_provider_info(model=model, custom_llm_provider=custom_llm_provider)
     if provider_info:
         for key, value in provider_info.items():
-            if value is not None:
+            if value is not None and _model_info.get(key) is None:
                 _model_info[key] = value
 
     # if verbose_logger.isEnabledFor(logging.DEBUG):
@@ -8328,8 +8333,8 @@ def get_base_model_from_metadata(model_call_details: Mapping[str, object] | None
     litellm_params: Final = cast(Mapping[str, object], model_call_details.get("litellm_params", {}))
     if litellm_params is not None:
         base_model: Final = litellm_params.get("base_model", None)
-        if base_model is not None:
-            return cast(str | None, base_model)
+        if isinstance(base_model, str):
+            return base_model
         metadata: Final = cast(Mapping[str, object], litellm_params.get("metadata") or {})
         base_model_metadata_getter: Final[_BaseModelFromMetadataGetter] = (
             litellm_utils.get_base_model_from_litellm_call_metadata
@@ -9389,6 +9394,15 @@ class ProviderConfigManager:
                 )
 
                 return AzureAnthropicMessagesConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            from litellm.llms.databricks.common_utils import DatabricksBase
+
+            if DatabricksBase.serves_native_anthropic_messages(model):
+                from litellm.llms.databricks.messages.transformation import (
+                    DatabricksAnthropicMessagesConfig,
+                )
+
+                return DatabricksAnthropicMessagesConfig()
         elif litellm.LlmProviders.MINIMAX == provider:
             from litellm.llms.minimax.messages.transformation import (
                 MinimaxMessagesConfig,

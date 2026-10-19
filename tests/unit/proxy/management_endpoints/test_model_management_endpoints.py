@@ -4184,6 +4184,39 @@ class TestModelInfoCostMapEchoFilter:
         assert "litellm_provider" not in info
         assert "supported_openai_params" not in info
 
+    @pytest.mark.parametrize(
+        ("model", "field", "edited"),
+        [
+            ("bedrock/us.anthropic.claude-sonnet-5-5", "token_count_model", {}),
+            ("bedrock/us.moonshotai.kimi-k3", "token_count_framing", 0),
+        ],
+    )
+    def test_token_count_setting_is_stored_only_when_the_operator_changed_it(
+        self, model: str, field: str, edited: object
+    ) -> None:
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        entry: Final = litellm.get_model_info(model)
+        assert entry[field] not in (None, edited), entry
+        db_model: Final = Deployment(
+            model_name="count-settings",
+            litellm_params=LiteLLM_Params(model=model),
+            model_info=ModelInfo(id="dep-echo-count"),
+        )
+
+        echoed: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**{**entry, "id": "dep-echo-count"})),
+        )
+        changed: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**{**entry, "id": "dep-echo-count", field: edited})),
+        )
+
+        assert field not in json.loads(echoed["model_info"])
+        assert json.loads(changed["model_info"])[field] == edited
+
     def test_metadata_without_a_cost_map_key_is_persisted(self):
         import litellm
 
