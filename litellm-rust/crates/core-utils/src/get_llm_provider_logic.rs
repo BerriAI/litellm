@@ -12,6 +12,9 @@ pub enum LlmProviders {
     Anthropic,
     #[strum(serialize = "aws_textract")]
     AwsTextract,
+    /// Azure OpenAI (`azure/<deployment>`), distinct from Azure AI Foundry's `azure_ai`.
+    #[strum(serialize = "azure")]
+    Azure,
     #[strum(serialize = "azure_ai")]
     AzureAi,
     #[strum(serialize = "bedrock")]

@@ -446,7 +446,7 @@ fn status(record: &Record) -> &'static str {
 }
 
 /// The model as the proxy logs it: the deployment's model without its provider route.
-fn logged_model(record: &Record) -> String {
+pub(crate) fn logged_model(record: &Record) -> String {
     match &record.outcome.deployment {
         Some(deployment) => match (deployment.provider(), deployment.model.split_once('/')) {
             (Some(provider), Some((prefix, rest))) if prefix == provider => rest.to_owned(),
@@ -597,7 +597,7 @@ fn metadata(record: &Record) -> Value {
 
 /// `spend_logs_metadata` as the proxy merges it: the team's, then the key's, then what hooks
 /// attached for the request, later keys winning.
-fn spend_logs_metadata(record: &Record) -> Value {
+pub(crate) fn spend_logs_metadata(record: &Record) -> Value {
     let mut merged = Map::new();
     if let Some(key) = record.key() {
         for metadata in [&key.team_metadata, &key.metadata] {
@@ -617,7 +617,7 @@ fn spend_logs_metadata(record: &Record) -> Value {
 
 /// The proxy's usage object for a response, and its `additional_usage_values`: everything but
 /// the three totals.
-fn usage_values(usage: &Usage) -> (Value, Value) {
+pub(crate) fn usage_values(usage: &Usage) -> (Value, Value) {
     let mut additional = Map::new();
     additional.insert(
         "prompt_tokens_details".into(),

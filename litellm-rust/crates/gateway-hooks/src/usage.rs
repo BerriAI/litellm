@@ -142,6 +142,8 @@ impl AnthropicUsage {
     }
 }
 
+/// OpenAI's usage, with the fields LiteLLM adds when it translates another provider's:
+/// cache writes by lifetime and server tool counts.
 #[derive(Deserialize)]
 struct OpenAiUsage {
     #[serde(default)]
@@ -149,23 +151,38 @@ struct OpenAiUsage {
     #[serde(default)]
     completion_tokens: u64,
     prompt_tokens_details: Option<OpenAiPromptDetails>,
+    server_tool_use: Option<ServerToolUse>,
 }
 
 #[derive(Deserialize, Default)]
 struct OpenAiPromptDetails {
     cached_tokens: Option<u64>,
     cache_creation_tokens: Option<u64>,
+    cache_creation_token_details: Option<CacheCreation>,
 }
 
 impl OpenAiUsage {
     fn usage(self) -> Usage {
         let details = self.prompt_tokens_details.unwrap_or_default();
-        Usage::from_prompt_counts(
+        let mut usage = Usage::from_prompt_counts(
             self.prompt_tokens,
             self.completion_tokens,
             details.cached_tokens.unwrap_or(0),
             details.cache_creation_tokens.unwrap_or(0),
-        )
+        );
+        if let Some(tokens) = details
+            .cache_creation_token_details
+            .and_then(|cache| cache.ephemeral_1h_input_tokens)
+        {
+            usage.cache_write_1h_tokens = tokens.min(usage.cache_write_tokens);
+        }
+        if let Some(requests) = self
+            .server_tool_use
+            .and_then(|tools| tools.web_search_requests)
+        {
+            usage.web_search_requests = requests;
+        }
+        usage
     }
 }
 
@@ -197,6 +214,7 @@ pub struct StreamUsage {
     line: Vec<u8>,
     state: Line,
     usage: Option<Usage>,
+    model: Option<String>,
 }
 
 impl StreamUsage {
@@ -206,6 +224,7 @@ impl StreamUsage {
             line: Vec::new(),
             state: Line::Reading,
             usage: None,
+            model: None,
         }
     }
 
@@ -264,6 +283,11 @@ impl StreamUsage {
         self.usage
     }
 
+    /// The model named by the chunk that carried an OpenAI stream's usage.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
     fn may_carry_usage(&self) -> bool {
         let line = &self.line;
         if line.len() > MAX_LINE_BYTES {
@@ -304,8 +328,13 @@ impl StreamUsage {
                 if !contains(data, b"\"usage\":{") && !contains(data, b"\"usage\": {") {
                     return;
                 }
-                if let Ok(OpenAiChunk { usage: Some(usage) }) = serde_json::from_slice(data) {
+                if let Ok(OpenAiChunk {
+                    usage: Some(usage),
+                    model,
+                }) = serde_json::from_slice(data)
+                {
                     self.usage = Some(usage.usage());
+                    self.model = model.filter(|model| !model.is_empty());
                 }
             }
         }
@@ -326,6 +355,7 @@ struct AnthropicMessage {
 #[derive(Deserialize)]
 struct OpenAiChunk {
     usage: Option<OpenAiUsage>,
+    model: Option<String>,
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -398,7 +428,7 @@ mod tests {
     fn openai_usage_comes_from_the_last_chunk() {
         let stream = concat!(
             "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}],\"usage\":null}\n\n",
-            "data: {\"id\":\"c\",\"choices\":[],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":5,\"total_tokens\":35,\"prompt_tokens_details\":{\"cached_tokens\":10}}}\n\n",
+            "data: {\"id\":\"c\",\"model\":\"gpt-4o-2024-11-20\",\"choices\":[],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":5,\"total_tokens\":35,\"prompt_tokens_details\":{\"cached_tokens\":10}}}\n\n",
             "data: [DONE]\n\n",
         );
         let mut meter = StreamUsage::new(StreamFormat::OpenAi);
@@ -414,6 +444,7 @@ mod tests {
                 ..Usage::default()
             })
         );
+        assert_eq!(meter.model(), Some("gpt-4o-2024-11-20"));
     }
 
     #[rstest]
@@ -429,6 +460,18 @@ mod tests {
         assert_eq!(usage, Some(anthropic_usage()));
         assert_eq!(anthropic_usage().prompt_tokens(), 36);
         assert_eq!(anthropic_usage().total_tokens(), 78);
+    }
+
+    #[rstest]
+    fn translated_openai_usage_keeps_cache_lifetimes_and_server_tools() {
+        let usage = Usage::from_openai(&json!({
+            "prompt_tokens": 36,
+            "completion_tokens": 42,
+            "prompt_tokens_details": {"cached_tokens": 20, "cache_creation_tokens": 6,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 2, "ephemeral_1h_input_tokens": 4}},
+            "server_tool_use": {"web_search_requests": 2},
+        }));
+        assert_eq!(usage, Some(anthropic_usage()));
     }
 
     #[rstest]

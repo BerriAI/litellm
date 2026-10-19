@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_sigv4::http_request::{
-    SignableBody, SignableRequest, SigningParams, SigningSettings, sign,
+    PercentEncodingMode, SignableBody, SignableRequest, SigningParams, SigningSettings,
+    UriPathNormalizationMode, sign,
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
@@ -465,20 +466,72 @@ pub fn sign_post(
     credentials: &Credentials,
     signing_time: SystemTime,
 ) -> Result<BTreeMap<String, String>, Error> {
+    sign_request(
+        "POST",
+        url,
+        body,
+        headers,
+        region,
+        service,
+        credentials,
+        signing_time,
+        SigningSettings::default(),
+    )
+}
+
+/// Signs an S3 request as botocore's `S3SigV4Auth` does: the path is signed as sent, encoded
+/// once and not normalized, and every header given is covered.
+pub fn sign_s3(
+    method: &str,
+    url: &str,
+    body: &[u8],
+    headers: &BTreeMap<String, String>,
+    region: &str,
+    credentials: &Credentials,
+    signing_time: SystemTime,
+) -> Result<BTreeMap<String, String>, Error> {
+    let mut settings = SigningSettings::default();
+    settings.percent_encoding_mode = PercentEncodingMode::Single;
+    settings.uri_path_normalization_mode = UriPathNormalizationMode::Disabled;
+    sign_request(
+        method,
+        url,
+        body,
+        headers,
+        region,
+        "s3",
+        credentials,
+        signing_time,
+        settings,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_request(
+    method: &str,
+    url: &str,
+    body: &[u8],
+    headers: &BTreeMap<String, String>,
+    region: &str,
+    service: &str,
+    credentials: &Credentials,
+    signing_time: SystemTime,
+    settings: SigningSettings,
+) -> Result<BTreeMap<String, String>, Error> {
     let identity: Identity = credentials.clone().into();
     let params = v4::SigningParams::builder()
         .identity(&identity)
         .region(region)
         .name(service)
         .time(signing_time)
-        .settings(SigningSettings::default())
+        .settings(settings)
         .build()
         .map(SigningParams::from)
         .map_err(|error| Error::AwsSigningParameters(error.to_string()))?;
     let header_refs = headers
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()));
-    let request = SignableRequest::new("POST", url, header_refs, SignableBody::Bytes(body))
+    let request = SignableRequest::new(method, url, header_refs, SignableBody::Bytes(body))
         .map_err(|error| Error::AwsSignableRequest(error.to_string()))?;
     let (instructions, _) = sign(request, &params)
         .map_err(|error| Error::AwsSigning(error.to_string()))?
@@ -932,6 +985,49 @@ mod tests {
         assert_eq!(
             Some(other_identity.access_key_id()),
             different.access_key_id.as_deref()
+        );
+    }
+
+    /// The PUT Object example of the S3 SigV4 guide, "Signature Calculations for the
+    /// Authorization Header: Transferring Payload in a Single Chunk" (checked 2026-10).
+    #[test]
+    fn s3_requests_are_signed_like_the_s3_guide_example() {
+        let headers = BTreeMap::from([
+            (
+                "Date".to_string(),
+                "Fri, 24 May 2013 00:00:00 GMT".to_string(),
+            ),
+            (
+                "x-amz-content-sha256".to_string(),
+                "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072".to_string(),
+            ),
+            (
+                "x-amz-storage-class".to_string(),
+                "REDUCED_REDUNDANCY".to_string(),
+            ),
+        ]);
+        let signed = sign_s3(
+            "PUT",
+            "https://examplebucket.s3.amazonaws.com/test%24file.text",
+            b"Welcome to Amazon S3.",
+            &headers,
+            "us-east-1",
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                None,
+                None,
+                "test",
+            ),
+            UNIX_EPOCH + Duration::from_secs(1_369_353_600),
+        )
+        .unwrap();
+
+        assert_eq!(
+            signed["Authorization"],
+            "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, \
+             SignedHeaders=date;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class, \
+             Signature=98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd"
         );
     }
 

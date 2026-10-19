@@ -3750,14 +3750,17 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "bytes",
  "envy",
  "futures-util",
  "http 1.4.2",
  "http-body-util",
+ "litellm-auth-aws",
  "litellm-auth-types",
  "litellm-config",
  "litellm-db",
  "litellm-db-testing",
+ "litellm-framer",
  "litellm-gateway-auth",
  "litellm-gateway-hooks",
  "litellm-gateway-inference",
@@ -3770,11 +3773,13 @@ dependencies = [
  "litellm-router",
  "litellm-secrets",
  "litellm-tracing",
+ "md-5",
  "rand 0.8.7",
  "redis",
  "rstest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "strum",
  "tempfile",
@@ -3785,6 +3790,7 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -4055,6 +4061,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-framer",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",
@@ -4068,7 +4075,9 @@ dependencies = [
  "rstest",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
+ "uuid",
  "wiremock",
 ]
 

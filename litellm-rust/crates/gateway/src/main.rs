@@ -128,11 +128,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ),
         ));
     }
+    if let Some(capacity) =
+        litellm_gateway::model_capacity::ModelCapacity::for_gateway(&config, coordination.clone())
+    {
+        hooks.push(Arc::new(capacity));
+    }
+    hooks.extend(litellm_gateway::request_hooks::from_config(&config)?);
     let mut observers: Vec<Arc<dyn litellm_gateway_hooks::Observer>> = Vec::new();
     let spend = database.zip(litellm_gateway::spend::SpendSettings::from_config(&config));
     let spend_tracking = spend.is_some();
     if let Some((pool, settings)) = spend {
         observers.push(litellm_gateway::spend::SpendWriter::start(pool, settings));
+    }
+    let prometheus = litellm_gateway::prometheus::Prometheus::from_config(&config)?.map(Arc::new);
+    if let Some(prometheus) = &prometheus {
+        observers.push(prometheus.clone());
+    }
+    if let Some(s3_log) = litellm_gateway::s3_log::S3Log::from_config(&config, &inference).await? {
+        observers.push(s3_log);
     }
     litellm_gateway::hooks::install(&inference, &config, hooks, observers).await?;
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
@@ -148,7 +161,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing::info!(%address, models = config.model_list.len(), virtual_keys, shared_state, spend_tracking, log_level = %level, "gateway listening");
 
     let draining = litellm_gateway::health::Draining::default();
-    let metrics = litellm_gateway::metrics::Metrics::new(&config, draining.flag());
+    let metrics =
+        litellm_gateway::metrics::Metrics::new(&config, draining.flag()).serve(prometheus);
     let metrics_auth = litellm_gateway::metrics_auth(&config, inference.secrets.clone());
     let app = litellm_gateway::with_ops(
         litellm_gateway::router_with_key_cache(inference.clone(), &config, ui, mcp_router, keys),

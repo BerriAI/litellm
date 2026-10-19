@@ -85,17 +85,7 @@ impl OpenAiChatConfig {
         body: Map<String, Value>,
     ) -> Result<Map<String, Value>, Error> {
         let mut body = body;
-        let extra_body = match body.remove(EXTRA_BODY) {
-            None | Some(Value::Null) => Map::new(),
-            Some(Value::Object(extra)) => extra,
-            Some(other) => {
-                return Err(Error::InvalidRequest(ErrorDetail::InvalidValue {
-                    field: EXTRA_BODY,
-                    expected: "an object",
-                    actual: other,
-                }));
-            }
-        };
+        let extra_body = take_extra_body(&mut body)?;
         let mut body: Map<String, Value> = body
             .into_iter()
             .chain(extra_body)
@@ -120,7 +110,21 @@ pub fn is_stream(body: &Map<String, Value>) -> Result<bool, Error> {
     }
 }
 
-fn is_litellm_owned(name: &str) -> bool {
+/// Removes the body's `extra_body`, which the OpenAI SDK merges over the body it sends.
+pub fn take_extra_body(body: &mut Map<String, Value>) -> Result<Map<String, Value>, Error> {
+    match body.remove(EXTRA_BODY) {
+        None | Some(Value::Null) => Ok(Map::new()),
+        Some(Value::Object(extra)) => Ok(extra),
+        Some(other) => Err(Error::InvalidRequest(ErrorDetail::InvalidValue {
+            field: EXTRA_BODY,
+            expected: "an object",
+            actual: other,
+        })),
+    }
+}
+
+/// Whether Python consumes `name` before the provider call, so it never reaches the wire.
+pub fn is_litellm_owned(name: &str) -> bool {
     LITELLM_OWNED_PARAMS.contains(&name) || name.starts_with(INTERNAL_PARAM_PREFIX)
 }
 

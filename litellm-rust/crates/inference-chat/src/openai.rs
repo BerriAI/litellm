@@ -1,4 +1,4 @@
-use std::{convert::Infallible, time::Duration};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures_util::{StreamExt, stream::BoxStream};
@@ -15,7 +15,10 @@ use litellm_host::{
 use litellm_http::{outbound::OutboundRequest, request::truncate_error_body, transport};
 use litellm_inference::{CallOptions, context::CallContext, provider::resolve_llm_provider};
 use litellm_llms::{
-    base_llm::auth::resolve_auth,
+    base_llm::{
+        auth::{Headers, resolve_auth},
+        model_info::ModelInfo,
+    },
     openai::chat::transformation::{OPENAI_CHAT_COMPLETIONS_CONFIG, is_stream},
 };
 use serde_json::{Map, Value};
@@ -39,8 +42,10 @@ impl Protocol for OpenAiChatCompletions {
 
 pub type OpenAiChatOutput = CallOutput<Bytes, (), Bytes, Error>;
 
-/// A Chat Completions body bound for an OpenAI deployment. `body` is the caller's request;
-/// `model` is the deployment's, with or without its `openai/` prefix.
+/// A Chat Completions body bound for an OpenAI or Azure OpenAI deployment. `body` is the
+/// caller's request; `model` is the deployment's, with or without its `openai/` or `azure/`
+/// prefix.
+#[derive(Default)]
 pub struct OpenAiChatCall {
     pub model: String,
     pub body: Map<String, Value>,
@@ -49,12 +54,35 @@ pub struct OpenAiChatCall {
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    /// The deployment's other `litellm_params`: Azure reads its `api_version`, `base_model`
+    /// and Entra ID credentials from them.
+    pub litellm_params: Map<String, Value>,
+    /// `drop_params` from the deployment or the proxy settings.
+    pub drop_params: bool,
+    /// The model cost map, which Azure's param rules read.
+    pub model_info: Option<Arc<dyn ModelInfo>>,
+}
+
+/// A provider request ready to go out: where, with which headers and body, and who serves it.
+pub(crate) struct PreparedCall {
+    pub(crate) model: String,
+    pub(crate) provider: &'static str,
+    pub(crate) url: String,
+    pub(crate) headers: Headers,
+    pub(crate) body: Map<String, Value>,
+    pub(crate) api_key: Option<String>,
 }
 
 impl ChatCompletionsRoute {
+    /// Whether the deployment is served by the OpenAI wire passthrough: OpenAI itself, or
+    /// Azure OpenAI.
     pub fn serves_openai(model: &str, custom_llm_provider: Option<&str>) -> bool {
-        resolve_llm_provider(model, custom_llm_provider, "chat completions")
-            .is_ok_and(|resolved| resolved.provider == LlmProviders::Openai)
+        resolve_llm_provider(model, custom_llm_provider, "chat completions").is_ok_and(|resolved| {
+            matches!(
+                resolved.provider,
+                LlmProviders::Openai | LlmProviders::Azure
+            )
+        })
     }
 
     pub fn openai_machine(
@@ -106,39 +134,35 @@ impl ChatCompletionsRoute {
         stream,
         outcome
     ))]
-    async fn run_openai(
+    pub(crate) async fn run_openai(
         &self,
         call: OpenAiChatCall,
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<OpenAiChatOutput, Error> {
+        let timeout = call
+            .timeout
+            .unwrap_or(Duration::from_secs(CHAT_COMPLETIONS_TIMEOUT_SECS));
         litellm_inference::diagnostic::call(async {
             let resolved = resolve_llm_provider(
                 &call.model,
                 call.custom_llm_provider.as_deref(),
                 "chat completions",
             )?;
-            if resolved.provider != LlmProviders::Openai {
-                return Err(Error::InvalidProvider(
-                    <&str>::from(resolved.provider).to_string(),
-                ));
-            }
             let model = resolved.model.to_string();
-            let provider = <&str>::from(LlmProviders::Openai);
+            let prepared = match resolved.provider {
+                LlmProviders::Openai => self.prepare_openai(model, call).await?,
+                LlmProviders::Azure => self.prepare_azure(model, call).await?,
+                other => return Err(Error::InvalidProvider(<&str>::from(other).to_string())),
+            };
+            let PreparedCall {
+                model,
+                provider,
+                url,
+                headers,
+                body,
+                api_key,
+            } = prepared;
             litellm_inference::diagnostic::provider(&model, provider);
-            let config = &OPENAI_CHAT_COMPLETIONS_CONFIG;
-            let secrets = self
-                .secrets
-                .resolve(config.secret_names(call.api_key.as_deref(), call.api_base.as_deref()))
-                .await?;
-            let lookup = |key: &str| secrets.get(key);
-            let body = config.transform_request(&model, call.body)?;
-            let environment = config.validate_environment(
-                string_headers(call.extra_headers)?,
-                call.api_key.as_deref(),
-                &lookup,
-            )?;
-            let url = config.get_complete_url(call.api_base.as_deref(), &lookup);
-            let authenticated = resolve_auth(&self.auth, environment, &lookup).await?;
             let request_context = RequestContext {
                 model: model.clone(),
                 custom_llm_provider: provider.to_string(),
@@ -149,18 +173,16 @@ impl ChatCompletionsRoute {
                         .collect(),
                 ),
                 secret_fields: Vec::new(),
-                api_key: call.api_key.map(litellm_auth::SecretValue::new),
+                api_key: api_key.map(litellm_auth::SecretValue::new),
+            };
+            let wire = WireRequest {
+                url,
+                headers,
+                body: Value::Object(body),
             };
             let wire = context
                 .interceptors
-                .before_provider_request(
-                    WireRequest {
-                        url,
-                        headers: authenticated.headers,
-                        body: Value::Object(body),
-                    },
-                    request_context,
-                )
+                .before_provider_request(wire, request_context)
                 .await?;
             let stream = wire
                 .body
@@ -168,9 +190,6 @@ impl ChatCompletionsRoute {
                 .map(is_stream)
                 .transpose()?
                 .unwrap_or(false);
-            let timeout = call
-                .timeout
-                .unwrap_or(Duration::from_secs(CHAT_COMPLETIONS_TIMEOUT_SECS));
             let response = send(&self.http, wire, stream, timeout).await?;
             let output = if stream {
                 CallOutput::Stream {
@@ -197,6 +216,37 @@ impl ChatCompletionsRoute {
             Ok(output)
         })
         .await
+    }
+}
+
+impl ChatCompletionsRoute {
+    async fn prepare_openai(
+        &self,
+        model: String,
+        call: OpenAiChatCall,
+    ) -> Result<PreparedCall, Error> {
+        let config = &OPENAI_CHAT_COMPLETIONS_CONFIG;
+        let secrets = self
+            .secrets
+            .resolve(config.secret_names(call.api_key.as_deref(), call.api_base.as_deref()))
+            .await?;
+        let lookup = |key: &str| secrets.get(key);
+        let body = config.transform_request(&model, call.body)?;
+        let environment = config.validate_environment(
+            string_headers(call.extra_headers)?,
+            call.api_key.as_deref(),
+            &lookup,
+        )?;
+        let url = config.get_complete_url(call.api_base.as_deref(), &lookup);
+        let authenticated = resolve_auth(&self.auth, environment, &lookup).await?;
+        Ok(PreparedCall {
+            model,
+            provider: <&str>::from(LlmProviders::Openai),
+            url,
+            headers: authenticated.headers,
+            body,
+            api_key: call.api_key,
+        })
     }
 }
 
@@ -254,11 +304,10 @@ fn silent_provider(timeout: Duration) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use futures_util::TryStreamExt;
-    use litellm_host::interceptors::RawResponse;
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::{
@@ -267,46 +316,10 @@ mod tests {
     };
 
     use super::*;
+    use crate::test_support::{Recording, route, run};
 
     const COMPLETION: &str = r#"{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-6-astra","system_fingerprint":"fp","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}"#;
     const STREAM: &str = "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"id\":\"c\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1,\"total_tokens\":4}}\n\ndata: [DONE]\n\n";
-
-    #[derive(Default)]
-    struct Recording {
-        contexts: Mutex<Vec<RequestContext>>,
-        raw: Mutex<Vec<String>>,
-        results: Mutex<Vec<ExecutionFacts>>,
-    }
-
-    impl Interceptors<Error> for Recording {
-        async fn before_provider_request(
-            &self,
-            wire: WireRequest,
-            context: RequestContext,
-        ) -> Result<WireRequest, Error> {
-            self.contexts.lock().unwrap().push(context);
-            Ok(wire)
-        }
-
-        async fn after_provider_response(&self, raw: RawResponse) -> Result<(), Error> {
-            self.raw.lock().unwrap().push(raw.body);
-            Ok(())
-        }
-
-        async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
-            self.results.lock().unwrap().push(facts);
-            Ok(())
-        }
-    }
-
-    #[fixture]
-    fn route() -> ChatCompletionsRoute {
-        ChatCompletionsRoute::new(
-            litellm_http::Client::plain_for_test(),
-            Arc::new(litellm_auth::AuthServices::default()),
-            litellm_inference_testing::no_secrets(),
-        )
-    }
 
     fn call(api_base: &str, body: Value) -> OpenAiChatCall {
         let Value::Object(body) = body else {
@@ -320,17 +333,8 @@ mod tests {
             custom_llm_provider: None,
             extra_headers: None,
             timeout: Some(Duration::from_secs(5)),
+            ..OpenAiChatCall::default()
         }
-    }
-
-    async fn run(
-        route: &ChatCompletionsRoute,
-        call: OpenAiChatCall,
-        interceptors: &Recording,
-    ) -> Result<OpenAiChatOutput, Error> {
-        route
-            .run_openai(call, CallContext::new(interceptors, CallOptions::default()))
-            .await
     }
 
     async fn drain(chunks: BoxStream<'static, Result<Bytes, Error>>) -> Result<Vec<u8>, Error> {
@@ -347,6 +351,8 @@ mod tests {
     #[rstest]
     #[case::openai_prefix("openai/gpt-6-astra", None, true)]
     #[case::explicit_provider("gpt-6-astra", Some("openai"), true)]
+    #[case::azure("azure/gpt-4o", None, true)]
+    #[case::azure_ai("azure_ai/gpt-4o", None, false)]
     #[case::openai_like("openai_like/gpt-6-astra", None, false)]
     #[case::anthropic("anthropic/claude", None, false)]
     #[case::unprefixed("gpt-6-astra", None, false)]

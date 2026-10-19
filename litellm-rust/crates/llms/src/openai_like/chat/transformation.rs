@@ -173,7 +173,9 @@ impl BaseConfig for OpenAILikeChatConfig {
                         .and_then(|d| d.get("text_tokens"))
                         .and_then(Value::as_u64)
                         .unwrap_or(0),
+                    ..PromptTokensDetails::default()
                 },
+                ..ChatCompletionsUsage::default()
             },
         })
     }

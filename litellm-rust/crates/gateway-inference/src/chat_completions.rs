@@ -12,6 +12,7 @@ use litellm_host_http::Sse;
 use litellm_inference_chat::{
     ChatCompletionsRoute,
     openai::{OpenAiChatCall, OpenAiChatCompletions},
+    stream::{ChatCompletionsStream, ChatStreamCall, ReportedUsage},
     types::ChatCompletionsCall,
 };
 use serde_json::{Map, Value};
@@ -93,6 +94,18 @@ async fn handle(
         None => route,
     };
 
+    // Chat forwards no client headers of its own; hooks may set some.
+    let extra_headers = tracking
+        .as_ref()
+        .and_then(|tracking| tracking.edit_headers(Vec::new()))
+        .filter(|headers| !headers.is_empty())
+        .map(|headers| {
+            headers
+                .into_iter()
+                .map(|(name, value)| (name, Value::from(value)))
+                .collect::<Map<String, Value>>()
+        });
+    let extra_headers = &extra_headers;
     let cache_headers = crate::caching::CacheHeaders::default();
     let mut body = Some(body);
     let routed = gateway
@@ -120,9 +133,10 @@ async fn handle(
                         &deployment.model,
                         deployment.custom_llm_provider.as_deref(),
                     ) {
-                        return openai(gateway, deployment, body).await;
+                        return openai(gateway, deployment, body, extra_headers.clone()).await;
                     }
                     let (messages, optional_params) = split(body);
+                    let stream = ChatCompletionsRoute::is_stream(&optional_params);
                     let call = ChatCompletionsCall {
                         model: deployment.model.clone(),
                         messages,
@@ -130,9 +144,12 @@ async fn handle(
                         api_key: deployment.api_key.clone(),
                         api_base: deployment.api_base.clone(),
                         custom_llm_provider: deployment.custom_llm_provider.clone(),
-                        extra_headers: None,
+                        extra_headers: extra_headers.clone(),
                         timeout: deployment.timeout,
                     };
+                    if stream {
+                        return translated_stream(route, call, name).await;
+                    }
                     Ok(litellm_host_http::serve_unary(
                         route.machine(call, cache_options.policy),
                         (),
@@ -162,10 +179,29 @@ fn split(mut body: Map<String, Value>) -> (Value, Map<String, Value>) {
     (messages, body)
 }
 
+/// The deployment's `litellm_params` a provider reads beyond its connection: its
+/// `api_version`, `base_model` and every key the config adds.
+fn provider_params(deployment: &Deployment) -> Map<String, Value> {
+    let params = &deployment.litellm_params;
+    let mut provider_params: Map<String, Value> = params
+        .extra
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    if let Some(api_version) = &params.api_version {
+        provider_params.insert("api_version".into(), api_version.clone().into());
+    }
+    if let Some(base_model) = &deployment.base_model {
+        provider_params.insert("base_model".into(), base_model.clone().into());
+    }
+    provider_params
+}
+
 async fn openai(
     gateway: &Gateway,
     deployment: &Deployment,
     body: Map<String, Value>,
+    extra_headers: Option<Map<String, Value>>,
 ) -> Result<Response, Error> {
     let machine = gateway.chat_completions.clone().openai_machine(
         OpenAiChatCall {
@@ -174,8 +210,16 @@ async fn openai(
             api_key: deployment.api_key.clone(),
             api_base: deployment.api_base.clone(),
             custom_llm_provider: deployment.custom_llm_provider.clone(),
-            extra_headers: None,
+            extra_headers,
             timeout: deployment.timeout,
+            litellm_params: provider_params(deployment),
+            drop_params: gateway.drop_params()
+                || deployment
+                    .litellm_params
+                    .drop_params
+                    .as_ref()
+                    .is_some_and(|flag| flag.is_set()),
+            model_info: gateway.model_info(),
         },
         None,
     );
@@ -184,4 +228,30 @@ async fn openai(
         |error| Bytes::from(Error::from(error).openai_sse_frame()),
     );
     Ok(litellm_host_http::serve(machine, (), (), encoder, None).await?)
+}
+
+/// A stream from a provider chat translates (Anthropic, Bedrock), sent as OpenAI chunks. The
+/// usage it ends with rides on the response for the hooks, even when the client did not ask
+/// to see it.
+async fn translated_stream(
+    route: ChatCompletionsRoute,
+    call: ChatCompletionsCall,
+    model: &str,
+) -> Result<Response, Error> {
+    let usage = ReportedUsage::default();
+    let machine = route.stream_machine(
+        ChatStreamCall {
+            call,
+            response_model: model.to_owned(),
+            usage: usage.clone(),
+        },
+        None,
+    );
+    let encoder = Sse::<ChatCompletionsStream, _, _>::new(
+        |body: Bytes| ([(CONTENT_TYPE, "application/json")], body),
+        |error| Bytes::from(Error::from(error).openai_sse_frame()),
+    );
+    let mut response = litellm_host_http::serve(machine, (), (), encoder, None).await?;
+    response.extensions_mut().insert(usage);
+    Ok(response)
 }

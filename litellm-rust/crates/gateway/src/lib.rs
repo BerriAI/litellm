@@ -9,7 +9,11 @@ pub mod hooks;
 mod key_status;
 mod keys;
 pub mod metrics;
+pub mod model_capacity;
+pub mod prometheus;
 pub mod rate_limits;
+pub mod request_hooks;
+pub mod s3_log;
 mod secrets;
 pub mod spend;
 pub use error::Error;
@@ -75,7 +79,14 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     let resources = CoreResources::new(pool);
     Ok(Arc::new(
         Gateway::new(resources, http, secrets, ModelRouter::from_config(config)?)?
-            .with_client_side_credentials(allows_client_side_credentials(config)),
+            .with_client_side_credentials(allows_client_side_credentials(config))
+            .with_drop_params(
+                config
+                    .litellm_settings
+                    .drop_params
+                    .as_ref()
+                    .is_some_and(|flag| flag.is_set()),
+            ),
     ))
 }
 

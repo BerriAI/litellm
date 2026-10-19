@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 490" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1000" height="490" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">s3_v2 observer: each request's logging payload as an S3 object, off the request path</text>
+
+  <rect x="24" y="60" width="290" height="190" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="38" y="84" font-weight="600" fill="#1e3a8a">At startup</text>
+  <text x="38" y="106" fill="#1e293b" font-size="13">on when callbacks lists s3_v2 (or s3_log);</text>
+  <text x="38" y="124" fill="#1e293b" font-size="13">   success_callback / failure_callback</text>
+  <text x="38" y="142" fill="#1e293b" font-size="13">   log only successes / only failures</text>
+  <text x="38" y="164" fill="#1e293b" font-size="13">s3_callback_params, os.environ/ resolved;</text>
+  <text x="38" y="182" fill="#1e293b" font-size="13">   bad numbers and flags warn, use defaults</text>
+  <text x="38" y="204" fill="#1e293b" font-size="13">credentials: keys, profile, role, web</text>
+  <text x="38" y="222" fill="#1e293b" font-size="13">   identity or the default chain</text>
+  <text x="38" y="242" fill="#64748b" font-size="13">no s3_bucket_name stops startup</text>
+
+  <rect x="350" y="60" width="300" height="190" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="364" y="84" font-weight="600" fill="#92400e">Request finishes (observe)</text>
+  <text x="364" y="106" fill="#1e293b" font-size="13">StandardLoggingPayload: key, team,</text>
+  <text x="364" y="124" fill="#1e293b" font-size="13">   deployment, usage, cost, timings,</text>
+  <text x="364" y="142" fill="#1e293b" font-size="13">   messages, response (streams rebuilt)</text>
+  <text x="364" y="164" fill="#1e293b" font-size="13">turn_off_message_logging, strip_base64,</text>
+  <text x="364" y="182" fill="#1e293b" font-size="13">   log_prompts_only applied here</text>
+  <text x="364" y="204" fill="#1e293b" font-size="13">queued; past s3_max_queue_size the</text>
+  <text x="364" y="222" fill="#1e293b" font-size="13">   oldest are dropped with a warning</text>
+  <text x="364" y="242" fill="#64748b" font-size="13">nothing awaits S3 here</text>
+  <line x1="314" y1="155" x2="346" y2="155" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="686" y="60" width="290" height="190" rx="8" fill="#f0fdf4" stroke="#22c55e"/>
+  <text x="700" y="84" font-weight="600" fill="#14532d">Every 10 s, and at shutdown</text>
+  <text x="700" y="106" fill="#1e293b" font-size="13">the whole queue, s3_max_concurrent_uploads</text>
+  <text x="700" y="124" fill="#1e293b" font-size="13">   PUTs at a time (16), SigV4 signed</text>
+  <text x="700" y="146" fill="#1e293b" font-size="13">s3_batch_file_upload: one .jsonl per</text>
+  <text x="700" y="164" fill="#1e293b" font-size="13">   folder instead of one .json per request</text>
+  <text x="700" y="186" fill="#1e293b" font-size="13">failed for now: back at the front, sent</text>
+  <text x="700" y="204" fill="#1e293b" font-size="13">   after newer ones on the next flush</text>
+  <text x="700" y="242" fill="#64748b" font-size="13">DEFAULT_S3_FLUSH_INTERVAL_SECONDS</text>
+  <line x1="650" y1="155" x2="682" y2="155" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="280" width="460" height="186" rx="8" fill="#f8fafc" stroke="#94a3b8"/>
+  <text x="38" y="304" font-weight="600" fill="#0f172a">Object key</text>
+  <text x="38" y="328" fill="#1e293b" font-size="13" font-family="ui-monospace, Menlo, monospace">{s3_path}/[team_alias/][key_alias/]</text>
+  <text x="38" y="348" fill="#1e293b" font-size="13" font-family="ui-monospace, Menlo, monospace">  YYYY-MM-DD[/HH]/time-HH-MM-SS-ffffff_{id}.json</text>
+  <text x="38" y="372" fill="#1e293b" font-size="13">prefixes with s3_use_team_prefix / s3_use_key_prefix</text>
+  <text x="38" y="392" fill="#1e293b" font-size="13">/HH with s3_partition_granularity: hour</text>
+  <text x="38" y="412" fill="#1e293b" font-size="13">id: the response's id, else the request's call id</text>
+  <text x="38" y="432" fill="#1e293b" font-size="13">past S3's 1024 / 255 byte limits: head + sha256</text>
+  <text x="38" y="454" fill="#64748b" font-size="13">path style, or s3_use_virtual_hosted_style</text>
+
+  <rect x="516" y="280" width="460" height="186" rx="8" fill="#fef2f2" stroke="#ef4444"/>
+  <text x="530" y="304" font-weight="600" fill="#7f1d1d">Upload and retries</text>
+  <text x="530" y="328" fill="#1e293b" font-size="13">3 attempts; transport error, 403, 429, 500, 503</text>
+  <text x="530" y="348" fill="#1e293b" font-size="13">   retried after 0.5-1.5 s, then 1-3 s</text>
+  <text x="530" y="370" fill="#1e293b" font-size="13">400 / 403 with an object error code (EntityTooLarge,</text>
+  <text x="530" y="390" fill="#1e293b" font-size="13">   BadDigest, ...) dropped (s3_drop_on_terminal_error)</text>
+  <text x="530" y="412" fill="#1e293b" font-size="13">kept until s3_max_retry_age_seconds (3600)</text>
+  <text x="530" y="432" fill="#1e293b" font-size="13">nothing delivered: all kept, the bucket is down</text>
+  <text x="530" y="454" fill="#64748b" font-size="13">Content-MD5, SSE and Content-Disposition as the proxy</text>
+</svg>

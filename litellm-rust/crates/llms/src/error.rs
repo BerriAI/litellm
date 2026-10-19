@@ -15,6 +15,10 @@ pub enum Error {
     Unsupported(&'static str),
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
+    /// An error the provider reported inside a response it had already started, such as an
+    /// `error` event on a stream, with the HTTP status the provider gives that error.
+    #[error("provider error {status}: {body}")]
+    Provider { status: u16, body: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -59,6 +63,14 @@ pub enum ErrorDetail {
         param: String,
         value: String,
         hint: String,
+    },
+    #[error(
+        "{provider} does not support parameters: {params:?}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={params:?} in your request."
+    )]
+    UnsupportedParams {
+        provider: &'static str,
+        params: Vec<String>,
+        model: String,
     },
     #[error(
         "{provider} does not support the server-side tool '{tool}' (model '{model}'). {guidance}"
