@@ -554,7 +554,25 @@ class DBSpendUpdateWriter:
                 end_time=end_time,
                 llm_router=get_llm_router(),
             )
-            payload["spend"] = response_cost or 0.0
+            
+            from litellm.proxy.spend_tracking.savings import classifier_cost_from_decision
+            import json
+
+            # Safely extract metadata from the payload (it is often a JSON string at this stage)
+            _raw_metadata = payload.get("metadata", {})
+            if isinstance(_raw_metadata, str):
+                try:
+                    _parsed_metadata = json.loads(_raw_metadata)
+                except Exception:
+                    _parsed_metadata = {}
+            else:
+                _parsed_metadata = _raw_metadata or {}
+
+            # Extract classifier cost and fold it into the total spend
+            classifier_cost = classifier_cost_from_decision(_parsed_metadata.get("routing_decision")) or 0.0
+            payload["spend"] = (response_cost or 0.0) + classifier_cost
+
+            
             if isinstance(payload["startTime"], datetime):
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):

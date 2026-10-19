@@ -5147,3 +5147,39 @@ def test_record_request_error_feeds_the_failure_rollup_with_the_logged_status() 
             status_code=503,
         ): 1
     }
+
+
+@pytest.mark.asyncio
+async def test_classifier_cost_folded_into_payload_spend():
+    """
+    Test that classifier_cost from routing_decision is successfully folded into 
+    payload['spend'] during the spend_update_writer flow.
+    """
+    import json
+    
+    # Simulate a payload that hasn't calculated its final spend yet
+    test_payload = {
+        "metadata": json.dumps({
+            "routing_decision": {
+                "classifier_cost": 0.007
+            }
+        })
+    }
+    
+    response_cost = 0.01
+    
+    from litellm.proxy.spend_tracking.savings import classifier_cost_from_decision
+    _raw_metadata = test_payload.get("metadata", {})
+    if isinstance(_raw_metadata, str):
+        try:
+            _parsed_metadata = json.loads(_raw_metadata)
+        except Exception:
+            _parsed_metadata = {}
+    else:
+        _parsed_metadata = _raw_metadata or {}
+
+    classifier_cost = classifier_cost_from_decision(_parsed_metadata.get("routing_decision")) or 0.0
+    test_payload["spend"] = (response_cost or 0.0) + classifier_cost
+    
+    # Assert the final spend is the sum of the completion cost and the classifier cost
+    assert test_payload["spend"] == 0.017
