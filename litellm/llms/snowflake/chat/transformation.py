@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_process_openai_file_message,
     convert_to_anthropic_tool_result,
@@ -96,7 +97,7 @@ def _decoded_messages(response: _MessagesResponse) -> _AnthropicMessagesResponse
     return response.json()
 
 
-def _is_claude_model(model: str) -> bool:
+def is_snowflake_claude_model(model: str) -> bool:
     """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
     name: Final = model.lower().removeprefix("snowflake/")
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
@@ -184,10 +185,11 @@ def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-
     blocks: Final = msg.get("thinking_blocks") if isinstance(msg, dict) else getattr(msg, "thinking_blocks", None)
     if not isinstance(blocks, list):
         return []
+    mappings: Final = tuple(filter(None, map(as_str_mapping, blocks)))
     return [
-        dict(block)
-        for block in blocks
-        if isinstance(block, Mapping) and (block.get("signature") or block.get("type") == "redacted_thinking")
+        {key: value for key, value in block.items() if key != "index"}
+        for block in mappings
+        if block.get("signature") or block.get("type") == "redacted_thinking"
     ]
 
 
@@ -222,7 +224,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             "tools",
             "tool_choice",
         ]
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             params.append("thinking")
         return params
 
@@ -236,7 +238,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return f"{api_base}/cortex/v1/messages"
         return f"{api_base}/cortex/v1/chat/completions"
 
@@ -259,7 +261,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             api_key=api_key,
             api_base=api_base,
         )
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
 
@@ -406,7 +408,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: Final[bool] = optional_params.pop("stream", False) or False
         extra_body: Final = optional_params.pop("extra_body", {})
 
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body)
         return self._transform_request_openai(model, messages, optional_params, stream, extra_body)
 
@@ -422,7 +424,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
-        inlined_messages: Final = await async_inline_remote_media(messages) if _is_claude_model(model) else messages
+        inlined_messages: Final = (
+            await async_inline_remote_media(messages) if is_snowflake_claude_model(model) else messages
+        )
         return self.transform_request(model, inlined_messages, optional_params, litellm_params, headers)
 
     def _transform_request_openai(
@@ -529,7 +533,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_response_anthropic(
                 model, raw_response, model_response, logging_obj, request_data, messages
             )

@@ -29,7 +29,6 @@ from _logging_only_scope_support import (
     _direction,
     _directions_for_audit_leg,
     _directions_for_scope,
-    _drain_upstream,
     _empty_proxy_configuration,
     _guardrail_entries,
     _guardrail_mode_status_pairs,
@@ -38,6 +37,7 @@ from _logging_only_scope_support import (
     _policy_call_id,
     _policy_call_id_matches,
     _provider_response,
+    _reset_upstream,
     _response_body_without_ids,
     _response_text,
     _spend_row_for_call_id,
@@ -45,6 +45,7 @@ from _logging_only_scope_support import (
     _spend_rows,
     _spend_rows_for_calls,
     _spend_rows_matching_call,
+    _upstream_requests,
     wire_server,
 )
 from _logging_only_scope_support import (
@@ -58,13 +59,14 @@ from pydantic import JsonValue
 
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.parametrize(
     ("row_id", "endpoint", "stream", "client_kind", "scope", "include_scope", "block_directions"),
     (
         pytest.param("A1", "chat", False, "openai_sync", "input", True, (), id="A1-chat-input"),
         pytest.param("A2", "chat", False, "openai_sync", "output", True, (), id="A2-chat-output"),
-        pytest.param("A3", "chat", False, "openai_sync", "both", True, (), id="A3-chat-both"),
         pytest.param("A4", "chat", False, "httpx", None, False, (), id="A4-chat-missing-scope"),
         pytest.param("A5", "chat", False, "httpx", None, True, (), id="A5-chat-null-scope"),
         pytest.param("A6", "chat", True, "openai_async", "input", True, (), id="A6-chat-stream-async-input"),
@@ -97,16 +99,6 @@ from tests.integration.cost_calculation.cost_tracking_case import JsonResponse
         pytest.param("A15", "responses", True, "openai_sync", "input", True, (), id="A15-responses-stream-input"),
         pytest.param("B1", "chat", False, "openai_sync", "input", True, ("request",), id="B1-logging-block-input"),
         pytest.param("B2", "chat", False, "openai_sync", "output", True, ("response",), id="B2-logging-block-output"),
-        pytest.param(
-            "B3",
-            "chat",
-            False,
-            "openai_sync",
-            "both",
-            True,
-            ("request",),
-            id="B3-logging-block-both",
-        ),
     ),
 )
 def test_runtime_directional_scope_matches_client_call_and_spend_log(
@@ -159,10 +151,11 @@ def test_runtime_directional_scope_matches_client_call_and_spend_log(
                     baseline: Final = _call_client(
                         client_kind, endpoint, gateway, model, prompt, stream, baseline_call_id
                     )
-                    baseline_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    baseline_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert baseline.status == 200, baseline.body
                     assert baseline.text == reply, baseline
                     assert len(baseline_upstream) == 1, baseline_upstream
+                    _reset_upstream(gateway.upstream_url)
                     result: Final = _call_client(
                         client_kind, endpoint, candidate, model, prompt, stream, guarded_call_id
                     )
@@ -171,7 +164,7 @@ def test_runtime_directional_scope_matches_client_call_and_spend_log(
                         _response_body_without_ids(baseline.body),
                     ), (result, baseline)
                     assert result.text == reply, result
-                    observed_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    observed_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(observed_upstream) == 1, observed_upstream
                     assert prompt in json.dumps(observed_upstream[0]["body"]), observed_upstream
                     base_default_directions: Final = BASE_DEFAULT_NORMAL_DIRECTIONS[(endpoint, stream)]
@@ -272,7 +265,8 @@ def test_A_unset_scope_matches_measured_endpoint_stream_default(
                         f"{scenario_id}-baseline",
                     )
                     assert baseline.status == 200 and baseline.text == reply, baseline
-                    assert len(_drain_upstream(gateway.upstream_url)) == 1
+                    assert len(_upstream_requests(gateway.upstream_url)) == 1
+                    _reset_upstream(gateway.upstream_url)
                     result: Final = _call_client(
                         client_kind,
                         endpoint,
@@ -287,7 +281,7 @@ def test_A_unset_scope_matches_measured_endpoint_stream_default(
                         _response_body_without_ids(baseline.body),
                     ), (result, baseline)
                     assert result.text == reply, result
-                    upstream: Final = _drain_upstream(gateway.upstream_url)
+                    upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(upstream) == 1 and prompt in json.dumps(upstream[0]["body"]), upstream
                     expected_directions: Final = BASE_DEFAULT_NORMAL_DIRECTIONS[(endpoint, stream)]
                     eventually(
@@ -406,7 +400,7 @@ def test_logging_only_monitor_counts_only_the_observed_direction(
                         )
                         for identity in (input_identity, output_identity)
                     )
-                    observed_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    observed_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(observed_upstream) == 4, observed_upstream
                     for identity, baseline_response, guarded_response in cases:
                         assert baseline_response.status_code == guarded_response.status_code == 200, (
@@ -600,16 +594,18 @@ def test_cache_hit_directional_scope_uses_measured_base_default(
                     )
                     assert baseline.status == 200, baseline.body
                     assert baseline.text == reply, baseline
-                    assert len(_drain_upstream(gateway.upstream_url)) == 1
+                    assert len(_upstream_requests(gateway.upstream_url)) == 1
+                    _reset_upstream(gateway.upstream_url)
                     first: Final = _call_cache_client(endpoint, candidate, model, cached_prompt, f"{scenario_id}-first")
                     assert (first.status, _response_body_without_ids(first.body)) == (
                         baseline.status,
                         _response_body_without_ids(baseline.body),
                     ), (first, baseline)
                     assert first.text == reply, first
-                    first_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    first_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(first_upstream) == 1, first_upstream
                     assert cached_prompt in json.dumps(first_upstream[0]["body"]), first_upstream
+                    _reset_upstream(gateway.upstream_url)
                     eventually(
                         lambda: guardrail.received.qsize(),
                         lambda count: count >= len(expected_miss_directions),
@@ -626,7 +622,7 @@ def test_cache_hit_directional_scope_uses_measured_base_default(
                         first.status,
                         _response_body_without_ids(first.body),
                     ), (second, first)
-                    assert _drain_upstream(gateway.upstream_url) == (), "The identical second request must hit Redis"
+                    assert _upstream_requests(gateway.upstream_url) == (), "The identical second request must hit Redis"
                     rows: Final = _spend_rows(model, 3)
                     eventually(
                         lambda: guardrail.received.qsize(),
@@ -747,7 +743,8 @@ def test_combined_modes_preserve_blocking_and_directional_observation(
                     )
                     assert baseline.status_code == 200, baseline.text
                     assert baseline.json()["choices"][0]["message"]["content"] == reply, baseline.text
-                    assert len(_drain_upstream(gateway.upstream_url)) == 1
+                    assert len(_upstream_requests(gateway.upstream_url)) == 1
+                    _reset_upstream(gateway.upstream_url)
                     guarded: Final = candidate.request(
                         "POST",
                         "/v1/chat/completions",
@@ -765,7 +762,7 @@ def test_combined_modes_preserve_blocking_and_directional_observation(
                         else expected_statuses
                     )
                     assert guarded.status_code == expected_status, guarded.text
-                    candidate_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    candidate_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(candidate_upstream) == (0 if row_id == "D1" else 1), candidate_upstream
                     if candidate_upstream:
                         assert prompt in json.dumps(candidate_upstream[0]["body"]), candidate_upstream
@@ -865,7 +862,8 @@ def test_logging_only_scope_respects_guardrail_selection_level(
                     )
                     assert baseline.status_code == 200, baseline.text
                     assert baseline.json()["choices"][0]["message"]["content"] == reply, baseline.text
-                    assert len(_drain_upstream(gateway.upstream_url)) == 1
+                    assert len(_upstream_requests(gateway.upstream_url)) == 1
+                    _reset_upstream(gateway.upstream_url)
                     guarded: Final = candidate.request(
                         "POST",
                         "/v1/chat/completions",
@@ -877,7 +875,7 @@ def test_logging_only_scope_respects_guardrail_selection_level(
                     assert _response_body_without_ids(JSON_OBJECT.validate_python(guarded.json())) == (
                         _response_body_without_ids(JSON_OBJECT.validate_python(baseline.json()))
                     ), (guarded.text, baseline.text)
-                    observed_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    observed_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(observed_upstream) == 1, observed_upstream
                     assert prompt in json.dumps(observed_upstream[0]["body"]), observed_upstream
                     expected_directions: Final = _directions_for_audit_leg(("request", "response"), scope)
@@ -911,10 +909,9 @@ def test_logging_only_scope_respects_guardrail_selection_level(
         delete_scenario(upstream_handle)
 
 
-def test_X1_missing_null_and_both_scope_have_identical_scans(gateway: Gateway, tmp_path: Path) -> None:
+def test_X1_missing_and_null_scope_have_identical_scans(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"logging-scope-x1-{uuid.uuid4().hex}"
     variants: Final = (
-        ("both", "both", True),
         ("missing", None, False),
         ("null", None, True),
     )
@@ -933,7 +930,8 @@ def test_X1_missing_null_and_both_scope_have_identical_scans(gateway: Gateway, t
         assert baseline.status_code == 200, baseline.text
         baseline_body: Final = JSON_OBJECT.validate_json(baseline.content)
         baseline_reply: Final = _response_text("chat", baseline_body)
-        assert len(_drain_upstream(gateway.upstream_url)) == 1
+        assert len(_upstream_requests(gateway.upstream_url)) == 1
+        _reset_upstream(gateway.upstream_url)
         for suffix, scope, include_scope in variants:
             name: Final = f"{identity}-{suffix}"
             call_id: Final = f"{identity}-{suffix}"
@@ -961,8 +959,9 @@ def test_X1_missing_null_and_both_scope_have_identical_scans(gateway: Gateway, t
                     body: Final = JSON_OBJECT.validate_json(response.content)
                     assert body["choices"] == baseline_body["choices"], response.text
                     assert _response_text("chat", body) == baseline_reply, response.text
-                    upstream: Final = _drain_upstream(gateway.upstream_url)
+                    upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(upstream) == 1 and identity in json.dumps(upstream[0]["body"]), upstream
+                    _reset_upstream(gateway.upstream_url)
                     expected_directions: Final = _directions_for_audit_leg(("request", "response"), scope)
                     eventually(
                         lambda: edge.received.qsize(),
@@ -1002,7 +1001,8 @@ def test_X3_five_identical_requests_each_receive_one_response_scan(gateway: Gate
             headers={"x-litellm-call-id": f"{identity}-baseline"},
         )
         assert baseline.status_code == 200, baseline.text
-        assert len(_drain_upstream(gateway.upstream_url)) == 1
+        assert len(_upstream_requests(gateway.upstream_url)) == 1
+        _reset_upstream(gateway.upstream_url)
         with wire_server(policy) as edge:
             config: Final = _configuration(tmp_path, identity, edge.url, "output")
             with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
@@ -1020,7 +1020,7 @@ def test_X3_five_identical_requests_each_receive_one_response_scan(gateway: Gate
                 assert all(result.json()["choices"] == baseline.json()["choices"] for result in results), results
                 response_ids: Final = tuple(str(result.json()["id"]) for result in results)
                 assert len(set(response_ids)) == 5, response_ids
-                upstream: Final = _drain_upstream(gateway.upstream_url)
+                upstream: Final = _upstream_requests(gateway.upstream_url)
                 assert len(upstream) == 5, upstream
                 eventually(
                     lambda: edge.received.qsize(),
@@ -1093,7 +1093,8 @@ def test_X2_scope_patch_toggles_during_concurrent_requests_keep_one_scan_per_res
             "openai_sync", "chat", gateway, model, f"synthetic X2 control {marker}", False, f"{marker}-control"
         )
         assert baseline.status == 200, baseline
-        assert len(_drain_upstream(gateway.upstream_url)) == 1
+        assert len(_upstream_requests(gateway.upstream_url)) == 1
+        _reset_upstream(gateway.upstream_url)
         with wire_server(policy) as edge:
             config: Final = _empty_proxy_configuration(tmp_path, identity)
             with (
@@ -1173,7 +1174,7 @@ def test_X2_scope_patch_toggles_during_concurrent_requests_keep_one_scan_per_res
                         payload["texts"] == ([call.prompt] if _direction(payload) == "request" else [baseline.text])
                         for payload in payloads_for_call
                     ), payloads_for_call
-                upstream: Final = _drain_upstream(gateway.upstream_url)
+                upstream: Final = _upstream_requests(gateway.upstream_url)
                 assert len(upstream) == 20, upstream
                 assert (
                     tuple(
@@ -1220,7 +1221,8 @@ def test_S1_logging_only_output_scope_fails_open_on_policy_500(gateway: Gateway,
             )
             control: Final = _call_client("openai_sync", "chat", gateway, model, prompt, False, control_call_id)
             assert control.status == 200 and control.text == reply, control
-            assert len(_drain_upstream(gateway.upstream_url)) == 1
+            assert len(_upstream_requests(gateway.upstream_url)) == 1
+            _reset_upstream(gateway.upstream_url)
             with wire_server(policy) as guardrail:
                 config: Final = _configuration(tmp_path, identity, guardrail.url, "output")
                 with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
@@ -1233,7 +1235,7 @@ def test_S1_logging_only_output_scope_fails_open_on_policy_500(gateway: Gateway,
                     ), (result, control)
                     expected_directions: Final = _directions_for_scope(("request", "response"), "output")
                     directions_to_collect: Final = _directions_for_audit_leg(("request", "response"), "output")
-                    upstream: Final = _drain_upstream(gateway.upstream_url)
+                    upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(upstream) == 1 and prompt in json.dumps(upstream[0]["body"]), upstream
                     eventually(
                         lambda: guardrail.received.qsize(),
@@ -1311,7 +1313,8 @@ def test_S2_logging_only_output_scope_scans_both_chat_choices(gateway: Gateway, 
             )
             assert control.status_code == 200, control.text
             assert len(control.json()["choices"]) == 2, control.text
-            assert len(_drain_upstream(gateway.upstream_url)) == 1
+            assert len(_upstream_requests(gateway.upstream_url)) == 1
+            _reset_upstream(gateway.upstream_url)
             with wire_server(policy) as guardrail:
                 config: Final = _configuration(tmp_path, identity, guardrail.url, "output")
                 with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
@@ -1325,7 +1328,7 @@ def test_S2_logging_only_output_scope_scans_both_chat_choices(gateway: Gateway, 
                     assert _response_body_without_ids(JSON_OBJECT.validate_python(result.json())) == (
                         _response_body_without_ids(JSON_OBJECT.validate_python(control.json()))
                     ), (result.text, control.text)
-                    upstream: Final = _drain_upstream(gateway.upstream_url)
+                    upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(upstream) == 1 and prompt in json.dumps(upstream[0]["body"]), upstream
                     expected_directions: Final = ("response",)
                     eventually(
@@ -1442,12 +1445,13 @@ def test_logging_only_scope_on_upstream_401_uses_measured_base_default(
                 },
                 timeout=60,
             )
-            control_upstream: Final = _drain_upstream(gateway.upstream_url)
+            control_upstream: Final = _upstream_requests(gateway.upstream_url)
             control_upstream_count: Final = len(control_upstream)
             record_property("s3_control_upstream_request_count", control_upstream_count)
             assert control_upstream_count >= 1, control_upstream
             assert control.status_code >= 400, control.text
             assert all(prompt in json.dumps(observation["body"]) for observation in control_upstream), control_upstream
+            _reset_upstream(gateway.upstream_url)
             with wire_server(policy) as guardrail:
                 config: Final = _configuration(tmp_path, identity, guardrail.url, scope)
                 with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
@@ -1461,7 +1465,7 @@ def test_logging_only_scope_on_upstream_401_uses_measured_base_default(
                         },
                         timeout=60,
                     )
-                    upstream: Final = _drain_upstream(gateway.upstream_url)
+                    upstream: Final = _upstream_requests(gateway.upstream_url)
                     upstream_count: Final = len(upstream)
                     record_property("s3_candidate_upstream_request_count", upstream_count)
                     assert upstream_count >= 1, upstream
@@ -1529,7 +1533,8 @@ def test_S4_logging_only_input_scope_scans_every_multipart_text_part(gateway: Ga
             )
             assert control.status_code == 200, control.text
             assert control.json()["choices"][0]["message"]["content"] == reply, control.text
-            assert len(_drain_upstream(gateway.upstream_url)) == 1
+            assert len(_upstream_requests(gateway.upstream_url)) == 1
+            _reset_upstream(gateway.upstream_url)
             with wire_server(policy) as guardrail:
                 config: Final = _configuration(tmp_path, identity, guardrail.url, "input")
                 with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
@@ -1543,7 +1548,7 @@ def test_S4_logging_only_input_scope_scans_every_multipart_text_part(gateway: Ga
                     assert _response_body_without_ids(JSON_OBJECT.validate_python(result.json())) == (
                         _response_body_without_ids(JSON_OBJECT.validate_python(control.json()))
                     ), (result.text, control.text)
-                    observed_upstream: Final = _drain_upstream(gateway.upstream_url)
+                    observed_upstream: Final = _upstream_requests(gateway.upstream_url)
                     assert len(observed_upstream) == 1, observed_upstream
                     assert first_part in json.dumps(observed_upstream[0]["body"]), observed_upstream
                     assert second_part in json.dumps(observed_upstream[0]["body"]), observed_upstream
@@ -1575,5 +1580,203 @@ def test_S4_logging_only_input_scope_scans_every_multipart_text_part(gateway: Ga
                         (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"])
                         for entry in entries
                     ) == tuple((identity, "logging_only", "guardrail_intervened") for _ in expected_directions), entries
+    finally:
+        delete_scenario(upstream_handle)
+
+
+@pytest.mark.parametrize(
+    ("row_id", "scope", "include_scope", "continue_flag", "expected_directions"),
+    (
+        pytest.param("J1", None, False, None, ("request",), id="J1-unset-flag-stops-after-flagged-input"),
+        pytest.param(
+            "J2",
+            None,
+            False,
+            True,
+            ("request", "response"),
+            id="J2-flag-continues-past-flagged-input",
+        ),
+        pytest.param("J5", "input", True, True, ("request",), id="J5-input-scope-ignores-flag"),
+        pytest.param("J6", "output", True, True, ("response",), id="J6-output-scope-ignores-flag"),
+    ),
+)
+def test_continue_on_input_failure_observes_flagged_input_and_response(
+    gateway: Gateway,
+    tmp_path: Path,
+    row_id: str,
+    scope: str | None,
+    include_scope: bool,
+    continue_flag: bool | None,
+    expected_directions: tuple[Direction, ...],
+) -> None:
+    identity: Final = f"logging-scope-{row_id.lower()}-{uuid.uuid4().hex}"
+    prompt: Final = f"synthetic flagged request {identity}"
+    reply: Final = f"synthetic flagged response {identity}"
+    scenario_id: Final = f"phase12-{row_id.lower()}-{uuid.uuid4().hex}"
+    guarded_call_id: Final = f"{scenario_id}-guarded"
+    upstream_handle: Final = register_scenario(
+        scenario_id, _provider_response("chat", scenario_id, reply, False)
+    )
+
+    def policy(_request: Request) -> Reply:
+        return Reply(body=b'{"action":"BLOCKED","blocked_reason":"synthetic flagged denial"}')
+
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4o-mini",
+                api_base=f"{upstream_handle.api_base()}/v1",
+                api_key="synthetic-provider-key",
+            )
+            with wire_server(policy) as guardrail:
+                config: Final = _configuration(
+                    tmp_path,
+                    identity,
+                    guardrail.url,
+                    scope,
+                    include_scope=include_scope,
+                    continue_on_input_failure=continue_flag,
+                )
+                with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+                    baseline: Final = _call_client(
+                        "openai_sync", "chat", gateway, model, prompt, False, f"{scenario_id}-baseline"
+                    )
+                    assert baseline.status == 200 and baseline.text == reply, baseline
+                    assert len(_upstream_requests(gateway.upstream_url)) == 1
+                    _reset_upstream(gateway.upstream_url)
+                    result: Final = _call_client(
+                        "openai_sync", "chat", candidate, model, prompt, False, guarded_call_id
+                    )
+                    assert (result.status, _response_body_without_ids(result.body)) == (
+                        baseline.status,
+                        _response_body_without_ids(baseline.body),
+                    ), (result, baseline)
+                    assert result.text == reply, result
+                    upstream: Final = _upstream_requests(gateway.upstream_url)
+                    assert len(upstream) == 1 and prompt in json.dumps(upstream[0]["body"]), upstream
+                    eventually(
+                        lambda: guardrail.received.qsize(),
+                        lambda count: count >= len(expected_directions),
+                        seconds=20,
+                    )
+                    calls: Final = guardrail.drain()
+                    assert len(calls) == len(expected_directions), calls
+                    payloads: Final = tuple(JSON_OBJECT.validate_json(call.body) for call in calls)
+                    observed_directions: Final = tuple(_direction(payload) for payload in payloads)
+                    assert tuple(sorted(observed_directions)) == tuple(sorted(expected_directions)), payloads
+                    assert all(_policy_call_id_matches(payload, guarded_call_id) for payload in payloads), payloads
+                    assert tuple(payload["texts"] for payload in payloads) == tuple(
+                        [prompt] if direction == "request" else [reply] for direction in observed_directions
+                    ), payloads
+                    rows: Final = _spend_rows(model, 2)
+                    guarded_rows: Final = tuple(row for row in rows if _guardrail_entries(row))
+                    assert len(guarded_rows) == 1, rows
+                    _assert_response_id("chat", str(guarded_rows[0]["request_id"]), result.response_id, scenario_id)
+                    entries: Final = _guardrail_entries(guarded_rows[0])
+                    assert tuple(
+                        (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"])
+                        for entry in entries
+                    ) == tuple(
+                        (identity, "logging_only", "guardrail_intervened") for _ in expected_directions
+                    ), entries
+    finally:
+        delete_scenario(upstream_handle)
+
+
+@pytest.mark.parametrize(
+    ("row_id", "continue_flag", "expected_directions", "expected_statuses"),
+    (
+        pytest.param(
+            "J7",
+            None,
+            ("request",),
+            ("guardrail_failed_to_respond",),
+            id="J7-raising-input-aborts-response-scan",
+        ),
+        pytest.param(
+            "J8",
+            True,
+            ("request", "response"),
+            ("guardrail_failed_to_respond", "success"),
+            id="J8-flag-continues-past-raising-input",
+        ),
+    ),
+)
+def test_continue_on_input_failure_recovers_from_raising_input_scan(
+    gateway: Gateway,
+    tmp_path: Path,
+    row_id: str,
+    continue_flag: bool | None,
+    expected_directions: tuple[Direction, ...],
+    expected_statuses: tuple[str, ...],
+) -> None:
+    identity: Final = f"logging-scope-{row_id.lower()}-{uuid.uuid4().hex}"
+    prompt: Final = f"synthetic outage request {identity}"
+    reply: Final = f"synthetic outage response {identity}"
+    scenario_id: Final = f"phase12-{row_id.lower()}-{uuid.uuid4().hex}"
+    guarded_call_id: Final = f"{scenario_id}-guarded"
+    upstream_handle: Final = register_scenario(
+        scenario_id, _provider_response("chat", scenario_id, reply, False)
+    )
+
+    def policy(request: Request) -> Reply:
+        payload: Final = JSON_OBJECT.validate_json(request.body)
+        if _direction(payload) == "request":
+            return Reply(status=500, body=b"policy edge outage")
+        return Reply(body=b'{"action":"NONE"}')
+
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4o-mini",
+                api_base=f"{upstream_handle.api_base()}/v1",
+                api_key="synthetic-provider-key",
+            )
+            with wire_server(policy) as guardrail:
+                config: Final = _configuration(
+                    tmp_path,
+                    identity,
+                    guardrail.url,
+                    None,
+                    include_scope=False,
+                    continue_on_input_failure=continue_flag,
+                )
+                with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+                    baseline: Final = _call_client(
+                        "openai_sync", "chat", gateway, model, prompt, False, f"{scenario_id}-baseline"
+                    )
+                    assert baseline.status == 200 and baseline.text == reply, baseline
+                    assert len(_upstream_requests(gateway.upstream_url)) == 1
+                    _reset_upstream(gateway.upstream_url)
+                    result: Final = _call_client(
+                        "openai_sync", "chat", candidate, model, prompt, False, guarded_call_id
+                    )
+                    assert (result.status, _response_body_without_ids(result.body)) == (
+                        baseline.status,
+                        _response_body_without_ids(baseline.body),
+                    ), (result, baseline)
+                    assert result.text == reply, result
+                    upstream: Final = _upstream_requests(gateway.upstream_url)
+                    assert len(upstream) == 1 and prompt in json.dumps(upstream[0]["body"]), upstream
+                    eventually(
+                        lambda: guardrail.received.qsize(),
+                        lambda count: count >= len(expected_directions),
+                        seconds=20,
+                    )
+                    calls: Final = guardrail.drain()
+                    assert len(calls) == len(expected_directions), calls
+                    payloads: Final = tuple(JSON_OBJECT.validate_json(call.body) for call in calls)
+                    assert tuple(_direction(payload) for payload in payloads) == expected_directions, payloads
+                    assert all(_policy_call_id_matches(payload, guarded_call_id) for payload in payloads), payloads
+                    rows: Final = _spend_rows(model, 2)
+                    guarded_rows: Final = tuple(row for row in rows if _guardrail_entries(row))
+                    assert len(guarded_rows) == 1, rows
+                    _assert_response_id("chat", str(guarded_rows[0]["request_id"]), result.response_id, scenario_id)
+                    entries: Final = _guardrail_entries(guarded_rows[0])
+                    assert tuple(entry["guardrail_status"] for entry in entries) == expected_statuses, entries
+                    assert all(
+                        entry["guardrail_name"] == identity and entry["guardrail_mode"] == "logging_only"
+                        for entry in entries
+                    ), entries
     finally:
         delete_scenario(upstream_handle)

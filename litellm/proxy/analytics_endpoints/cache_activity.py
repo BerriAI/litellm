@@ -7,6 +7,7 @@ from typing import Final, Protocol
 from pydantic import TypeAdapter
 
 from litellm.proxy._types import LiteLLMRoutes
+from litellm.proxy.auth.authorization import ReadScope, read_scope_bind_params
 from litellm.types.llms.base import LiteLLMBaseModel
 
 UNKNOWN_CALL_TYPE: Final = "Unknown"
@@ -84,6 +85,9 @@ GROUPS_SQL: Final = """
         AND ($4::jsonb = '[]'::jsonb
             OR sl."model" IN (SELECT jsonb_array_elements_text($4::jsonb)))
         AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($5::jsonb))
+        AND ($6::boolean
+            OR sl."user" = $7
+            OR sl."team_id" IN (SELECT jsonb_array_elements_text($8::jsonb)))
     GROUP BY 1
     ORDER BY (COUNT(*)) DESC
 """
@@ -105,6 +109,9 @@ ERROR_BREAKDOWN_SQL: Final = """
         AND ($4::jsonb = '[]'::jsonb
             OR sl."model" IN (SELECT jsonb_array_elements_text($4::jsonb)))
         AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($5::jsonb))
+        AND ($6::boolean
+            OR sl."user" = $7
+            OR sl."team_id" IN (SELECT jsonb_array_elements_text($8::jsonb)))
     GROUP BY 1, 2, 3
     ORDER BY (COUNT(*)) DESC
 """
@@ -117,6 +124,9 @@ KEY_ALIAS_OPTIONS_SQL: Final = """
         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
         AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
+        AND ($4::boolean
+            OR sl."user" = $5
+            OR sl."team_id" IN (SELECT jsonb_array_elements_text($6::jsonb)))
     ORDER BY 1
 """
 
@@ -128,6 +138,9 @@ MODEL_OPTIONS_SQL: Final = """
         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
         AND sl."model" != ''
         AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
+        AND ($4::boolean
+            OR sl."user" = $5
+            OR sl."team_id" IN (SELECT jsonb_array_elements_text($6::jsonb)))
     ORDER BY 1
 """
 
@@ -162,6 +175,7 @@ def compute_totals(groups: Sequence[CacheActivityGroup]) -> CacheActivityTotals:
 
 async def get_cache_activity(
     prisma_client: _SupportsRawQueryDb,
+    read_scope: ReadScope,
     start_date: datetime,
     end_date: datetime,
     key_aliases: Sequence[str],
@@ -169,13 +183,16 @@ async def get_cache_activity(
 ) -> CacheActivityResponse:
     key_aliases_json: Final = json.dumps(list(key_aliases))
     models_json: Final = json.dumps(list(models))
+    scope_params: Final = read_scope_bind_params(read_scope)
     group_rows, error_rows, key_alias_rows, model_rows = await asyncio.gather(
-        prisma_client.db.query_raw(GROUPS_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON),
         prisma_client.db.query_raw(
-            ERROR_BREAKDOWN_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON
+            GROUPS_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON, *scope_params
         ),
-        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
-        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
+        prisma_client.db.query_raw(
+            ERROR_BREAKDOWN_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON, *scope_params
+        ),
+        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON, *scope_params),
+        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON, *scope_params),
     )
     groups: Final = _groups_adapter.validate_python(group_rows or [])
     return CacheActivityResponse(

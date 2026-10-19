@@ -22,8 +22,8 @@ fn run_chat_completions(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let host = InferenceHost::new(
-        call.resolved()?.unbind(),
-        "litellm.rust_bridge.chat_completions.route_host",
+        call.view()?,
+        "litellm.rust_bridge.host.routes.chat_completions",
     );
     run_inference::<ChatCompletionsRoute, _>(
         py,

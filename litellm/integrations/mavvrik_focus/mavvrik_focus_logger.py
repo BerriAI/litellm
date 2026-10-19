@@ -24,6 +24,8 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
+from typing_extensions import TypedDict, Unpack
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAVVRIK_FOCUS_EXPORT_JOB_NAME
@@ -82,10 +84,16 @@ def _is_empty_metrics_marker(marker: object | None) -> bool:
     return False
 
 
+class _CustomLoggerOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class MavvrikFocusLogger(FocusLogger):
     """FOCUS-based export logger that routes to the Mavvrik destination."""
 
-    def __init__(self, *, clock: Callable[[], datetime] = get_utc_datetime, **kwargs: Any) -> None:
+    def __init__(
+        self, *, clock: Callable[[], datetime] = get_utc_datetime, **kwargs: Unpack[_CustomLoggerOptions]
+    ) -> None:
         self._clock: Final = clock
         frequency: Final = os.getenv("MAVVRIK_FOCUS_FREQUENCY", "daily").lower()
         if frequency != "daily":

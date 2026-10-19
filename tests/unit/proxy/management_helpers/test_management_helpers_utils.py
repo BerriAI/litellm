@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -817,6 +818,10 @@ async def test_add_new_member_with_user_email_links_default_budget():
     mock_prisma_client.db.litellm_budgettable.create.assert_not_called()
 
 
+def _as_stored(data: Mapping[str, object]) -> dict[str, object]:
+    return {k: json.loads(v) if k == "model_max_budget" and isinstance(v, str) else v for k, v in data.items()}
+
+
 class _FakeBudgetTable:
     def __init__(self) -> None:
         self.rows: dict[str, dict[str, object]] = {}
@@ -829,14 +834,14 @@ class _FakeBudgetTable:
         self, *, data: Mapping[str, object], include: Mapping[str, bool] | None = None
     ) -> LiteLLM_BudgetTable:
         budget_id: Final = str(data.get("budget_id") or uuid.uuid4())
-        self.rows[budget_id] = {**data, "budget_id": budget_id}
+        self.rows[budget_id] = {**_as_stored(data), "budget_id": budget_id}
         return self._record(budget_id)
 
     async def find_unique(self, *, where: Mapping[str, str]) -> LiteLLM_BudgetTable | None:
         return self._record(where["budget_id"]) if where["budget_id"] in self.rows else None
 
     async def update(self, *, where: Mapping[str, str], data: Mapping[str, object]) -> LiteLLM_BudgetTable:
-        self.rows[where["budget_id"]] = {**self.rows[where["budget_id"]], **data}
+        self.rows[where["budget_id"]] = {**self.rows[where["budget_id"]], **_as_stored(data)}
         return self._record(where["budget_id"])
 
 

@@ -55,7 +55,6 @@ SONNET_5_5_VARIANTS = (
     "vertex_ai/claude-sonnet-5-5",
     "vertex_ai/claude-sonnet-5-5@default",
     "azure_ai/claude-sonnet-5-5",
-    "openrouter/anthropic/claude-sonnet-5.5",
 )
 
 
