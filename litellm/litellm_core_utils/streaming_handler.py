@@ -24,7 +24,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, stored_attribute
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -112,16 +112,6 @@ def _delta_from_upstream(upstream_delta: BaseModel | None) -> Delta | None:
         return Delta(**dict(iter(upstream_delta)))
     except Exception:
         return None
-
-
-def _stored_attribute(obj: object, name: str) -> object:
-    if not isinstance(obj, BaseModel):
-        return getattr(obj, name, None)
-    values: Final[Mapping[str, object]] = vars(obj)
-    if name in values:
-        return values[name]
-    extras: Final[Mapping[str, object]] = obj.__pydantic_extra__ or {}
-    return extras.get(name)
 
 
 def _is_transport_timeout(error: BaseException) -> bool:
@@ -1056,7 +1046,7 @@ class CustomStreamWrapper:
         """
         Check if delta has a specific attribute and it's not None.
         """
-        return delta is not None and _stored_attribute(delta, attribute_name) is not None
+        return delta is not None and stored_attribute(delta, attribute_name) is not None
 
     def _copy_delta_attribute(self, source_delta, target_delta, attribute_name: str) -> None:
         """
@@ -1160,7 +1150,7 @@ class CustomStreamWrapper:
                     setattr(
                         model_response,
                         "citations",
-                        _stored_attribute(original_chunk, "citations"),
+                        stored_attribute(original_chunk, "citations"),
                     )
                     preserve_upstream_non_openai_attributes(
                         model_response=model_response,
@@ -1610,7 +1600,7 @@ class CustomStreamWrapper:
                 # enter this branch when no content has been passed in response
                 if hasattr(original_chunk, "id"):
                     model_response = self.set_model_id(original_chunk.id, model_response)
-                if _stored_attribute(original_chunk, "provider_specific_fields") is not None:
+                if stored_attribute(original_chunk, "provider_specific_fields") is not None:
                     model_response = self.copy_model_response_level_provider_specific_fields(
                         original_chunk, model_response
                     )

@@ -49,13 +49,22 @@ class HiddenParamsModelView(MutableMapping[str, object]):
         return frozenset(self._hidden_params.model_fields_set) | frozenset(self._hidden_params.model_extra or {})
 
 
+def stored_attribute(obj: object, name: str) -> object:
+    if not isinstance(obj, BaseModel):
+        return getattr(obj, name, None)
+    values: Final[Mapping[str, object]] = vars(obj)
+    if name in values:
+        return values[name]
+    extras: Final[Mapping[str, object]] = obj.__pydantic_extra__ or {}
+    return extras.get(name)
+
+
 def _get_hidden_params_storage(obj: object) -> object | None:
     if isinstance(obj, dict):
         return obj.get(_HIDDEN_PARAMS_ATTR)
-    if isinstance(obj, BaseModel) and _HIDDEN_PARAMS_ATTR not in type(obj).__private_attributes__:
-        instance_values: Final[Mapping[str, object]] = vars(obj)
-        return instance_values.get(_HIDDEN_PARAMS_ATTR)
-    return getattr(obj, _HIDDEN_PARAMS_ATTR, None)
+    if isinstance(obj, BaseModel) and _HIDDEN_PARAMS_ATTR in type(obj).__private_attributes__:
+        return getattr(obj, _HIDDEN_PARAMS_ATTR, None)
+    return stored_attribute(obj, _HIDDEN_PARAMS_ATTR)
 
 
 def get_hidden_params_storage(obj: object) -> dict[str, object] | HiddenParams | None:
