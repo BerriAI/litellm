@@ -195,10 +195,7 @@ def _focus_transformer() -> _Transformer:
 
 def focus_rows_for(data: _Frame) -> _Frame:
     """The FOCUS rows Ternary receives for `data`, with token counts merged into Tags."""
-    transformed: Final = _focus_transformer().transform(data)
-    if transformed.is_empty():
-        return transformed
-    return _merge_token_tags(transformed, data)
+    return _merge_token_tags(_focus_transformer().transform(data), data)
 
 
 def usage_days(data: _Frame) -> tuple[str, ...]:
