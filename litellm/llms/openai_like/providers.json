@@ -249,5 +249,15 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "oceantoken": {
+    "base_url": "https://api.oceantoken.ai/v1",
+    "api_key_env": "OCEANTOKEN_API_KEY",
+    "api_base_env": "OCEANTOKEN_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
+    ]
   }
 }
