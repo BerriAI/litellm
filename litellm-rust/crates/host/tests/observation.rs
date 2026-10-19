@@ -75,6 +75,7 @@ fn snapshots_do_not_retain_runtime_objects(capacity: NonZeroUsize, #[case] faile
 #[rstest]
 fn provider_snapshots_own_the_response_body(capacity: NonZeroUsize) {
     let mut raw = RawResponse {
+        headers: Vec::new(),
         body: "provider response".into(),
     };
     let event: CallEvent<(), (), &RawResponse> =

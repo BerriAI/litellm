@@ -53,6 +53,13 @@ pub async fn execute_http_request(
     client.execute(request).await
 }
 
+pub fn response_headers(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_owned())))
+        .collect()
+}
+
 pub fn truncate_error_body(body: &str) -> String {
     if body.chars().count() <= UPSTREAM_ERROR_BODY_MAX_CHARS {
         return body.to_string();

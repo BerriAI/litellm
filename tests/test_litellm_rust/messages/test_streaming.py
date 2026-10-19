@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
 from typing import Final
 
 import pytest
@@ -71,3 +72,14 @@ async def test_stream_closed_early_logs_success_once(server: RecordingServer) ->
     assert len(await recorder.wait_for_async("async_log_success_event")) == 1
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_provider_response_headers_reach_stream_logging(server: RecordingServer) -> None:
+    server.enqueue(replace(STREAM, headers={"request-id": "req_native"}))
+    recorder: Final = RecordingLogger()
+
+    await consume(await call(server, stream=True, callbacks=[recorder]))
+
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert success[0].kwargs["response_headers"]["request-id"] == "req_native"
