@@ -3,13 +3,14 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -36,6 +37,16 @@ class _AzureAdTokenJson(TypedDict, total=False):
 
 class _AzureV1ClientParams(TypedDict, total=False, extra_items=object):
     base_url: ReadOnly[str]
+
+
+class _AsyncAzureClientParams(TypedDict, total=False, extra_items=object):
+    api_key: ReadOnly[str | None]
+    azure_ad_token: ReadOnly[str | None]
+    azure_ad_token_provider: ReadOnly[Callable[[], str | Awaitable[str]] | None]
+
+
+_ASYNC_AZURE_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AsyncAzureClientParams)
+_AZURE_TOKEN_PROVIDER_ADAPTER: Final = TypeAdapter(Callable[[], str])
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -99,8 +110,38 @@ def _cached_entra_id_token_provider(
 
 
 @lru_cache(maxsize=128)
+def _cached_username_password_token_provider(
+    client_id: str,
+    azure_username: str,
+    azure_password: str,
+    scope: str,
+) -> Callable[[], str]:
+    from azure.identity import UsernamePasswordCredential, get_bearer_token_provider
+
+    credential: Final = UsernamePasswordCredential(
+        client_id=client_id,
+        username=azure_username,
+        password=azure_password,
+    )
+    return get_bearer_token_provider(credential, scope)
+
+
+@lru_cache(maxsize=128)
 def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=scope)
+
+
+def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
+    return _cached_azure_ad_token_refresh_provider(scope)
+
+
+def _async_azure_ad_token_provider(
+    sync_provider: Callable[[], str],
+) -> Callable[[], Awaitable[str]]:
+    async def async_provider() -> str:
+        return await asyncio.to_thread(sync_provider)
+
+    return async_provider
 
 
 def get_azure_ad_token_from_entra_id(
@@ -177,21 +218,18 @@ def get_azure_ad_token_from_username_password(
     Returns:
         callable that returns a bearer token.
     """
-    from azure.identity import UsernamePasswordCredential, get_bearer_token_provider
-
     verbose_logger.debug(
         "client_id=%s, azure_username=[set=%s], azure_password=[set=%s]",
         client_id,
         azure_username is not None,
         azure_password is not None,
     )
-    credential: Final = UsernamePasswordCredential(
+    token_provider: Final = _cached_username_password_token_provider(
         client_id=client_id,
-        username=azure_username,
-        password=azure_password,
+        azure_username=azure_username,
+        azure_password=azure_password,
+        scope=scope,
     )
-
-    token_provider: Final = get_bearer_token_provider(credential, scope)
 
     verbose_logger.debug("token_provider %s", token_provider)
 
@@ -560,22 +598,19 @@ class BaseAzureLLM(BaseOpenAILLM):
             # on every request (via `_refresh_api_key`), so passing
             # `azure_ad_token_provider` directly preserves Azure AD token refresh
             # behavior that the regular AzureOpenAI client provides.
-            v1_api_key: str | Callable[[], object] | None = (
-                azure_client_params.get("api_key")
-                or azure_client_params.get("azure_ad_token_provider")
-                or azure_client_params.get("azure_ad_token")
+            v1_client_params: Final[_AsyncAzureClientParams] = _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER.validate_python(
+                azure_client_params
             )
-            if _is_async is True and callable(v1_api_key):
-                # AsyncOpenAI expects an async provider; wrap the sync provider
-                # returned by azure-identity. Offload to a thread so a token
-                # refresh (blocking HTTP call to AAD on cache miss) does not
-                # stall the event loop.
-                _sync_provider: Final = v1_api_key
-
-                async def _async_v1_api_key() -> str:
-                    return await asyncio.to_thread(_sync_provider)
-
-                v1_api_key = _async_v1_api_key
+            v1_token_provider: Final = (
+                v1_client_params.get("api_key")
+                or v1_client_params.get("azure_ad_token_provider")
+                or v1_client_params.get("azure_ad_token")
+            )
+            v1_api_key: Final[str | Callable[[], str | Awaitable[str]] | None] = (
+                _async_azure_ad_token_provider(_AZURE_TOKEN_PROVIDER_ADAPTER.validate_python(v1_token_provider))
+                if _is_async is True and callable(v1_token_provider)
+                else v1_token_provider
+            )
 
             v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
@@ -597,7 +632,21 @@ class BaseAzureLLM(BaseOpenAILLM):
         else:
             # Traditional Azure API uses AzureOpenAI client
             if _is_async is True:
-                openai_client = AsyncAzureOpenAI(**azure_client_params)
+                async_azure_client_params: Final[_AsyncAzureClientParams] = (
+                    _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER.validate_python(azure_client_params)
+                )
+                async_token_provider_candidate: Final = async_azure_client_params.get("azure_ad_token_provider")
+                async_azure_client_params_with_threaded_provider: Final[_AsyncAzureClientParams] = (
+                    {
+                        **async_azure_client_params,
+                        "azure_ad_token_provider": _async_azure_ad_token_provider(
+                            _AZURE_TOKEN_PROVIDER_ADAPTER.validate_python(async_token_provider_candidate)
+                        ),
+                    }
+                    if callable(async_token_provider_candidate)
+                    else async_azure_client_params
+                )
+                openai_client = AsyncAzureOpenAI(**async_azure_client_params_with_threaded_provider)
             else:
                 openai_client = AzureOpenAI(**azure_client_params)
 

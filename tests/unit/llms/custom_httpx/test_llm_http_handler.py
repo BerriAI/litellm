@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import inspect
+import itertools
 import json
 import logging
 import threading
@@ -474,6 +475,55 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_validates_environment_off_the_event_loop():
+    validation_started: Final = threading.Event()
+    validation_finished: Final = threading.Event()
+    ticks: Final = itertools.count()
+
+    def validate_environment(**_kwargs: object) -> dict[str, str]:
+        validation_started.set()
+        time.sleep(0.3)
+        validation_finished.set()
+        return {}
+
+    config = Mock()
+    config.validate_environment.side_effect = validate_environment
+    config.get_complete_url.return_value = "https://responses.example.com/v1/responses"
+    config.async_transform_responses_api_request = AsyncMock(return_value={"model": "model", "input": "hi"})
+    config.sign_request.return_value = ({}, None)
+    client = AsyncMock(spec=AsyncHTTPHandler)
+    client.post.return_value = httpx.Response(
+        200,
+        request=httpx.Request("POST", "https://responses.example.com/v1/responses"),
+    )
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = None
+
+    async def call_handler() -> None:
+        await BaseLLMHTTPHandler().async_response_api_handler(
+            model="model",
+            input="hi",
+            responses_api_provider_config=config,
+            response_api_optional_request_params={},
+            custom_llm_provider="test",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=logging_obj,
+            client=client,
+        )
+
+    async def ticker() -> None:
+        while not validation_finished.is_set():
+            if validation_started.is_set():
+                next(ticks)
+            await asyncio.sleep(0.01)
+
+    await asyncio.gather(call_handler(), ticker())
+
+    assert next(ticks) > 0
+    client.post.assert_awaited_once()
 
 
 _CHATGPT_SSE_BODY = (

@@ -1,7 +1,10 @@
+import asyncio
+import itertools
 import json
 import os
+import time
 import traceback
-from typing import Callable, Optional
+from typing import Callable, Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +16,7 @@ from litellm.llms.azure.common_utils import (
     _cached_entra_id_token_provider,
     get_azure_ad_token,
     get_azure_ad_token_from_entra_id,
+    get_azure_ad_token_from_username_password,
 )
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -2139,6 +2143,78 @@ class TestEntraIdTokenProviderCache:
 
         assert first is not second
         assert mock_credential.call_count == 2
+
+
+def test_username_password_token_provider_reuses_same_credentials_and_separates_passwords():
+    with (
+        patch("azure.identity.UsernamePasswordCredential") as mock_credential,
+        patch(
+            "azure.identity.get_bearer_token_provider",
+            side_effect=lambda credential, scope: lambda: "token",
+        ),
+    ):
+        first = get_azure_ad_token_from_username_password(
+            client_id="client",
+            azure_username="user",
+            azure_password="password",
+            scope="https://cognitiveservices.azure.com/.default",
+        )
+        second = get_azure_ad_token_from_username_password(
+            client_id="client",
+            azure_username="user",
+            azure_password="password",
+            scope="https://cognitiveservices.azure.com/.default",
+        )
+        changed_password = get_azure_ad_token_from_username_password(
+            client_id="client",
+            azure_username="user",
+            azure_password="different-password",
+            scope="https://cognitiveservices.azure.com/.default",
+        )
+
+    assert first() == second() == changed_password() == "token"
+    assert mock_credential.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_non_v1_azure_token_refresh_does_not_block_the_event_loop():
+    from openai import AsyncAzureOpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base: Final = "https://test.openai.azure.com"
+
+    def slow_token_provider() -> str:
+        time.sleep(0.3)
+        return "slow-token"
+
+    client: Final = base_llm.get_azure_openai_client(
+        api_key=None,
+        api_base=api_base,
+        api_version="2024-02-01",
+        litellm_params={"azure_ad_token_provider": slow_token_provider},
+        _is_async=True,
+    )
+
+    assert isinstance(client, AsyncAzureOpenAI)
+    ticks: Final = itertools.count()
+    token_resolved: Final = asyncio.Event()
+
+    async def resolve_token() -> None:
+        try:
+            assert await client._get_azure_ad_token() == "slow-token"
+        finally:
+            token_resolved.set()
+
+    async def ticker() -> None:
+        while not token_resolved.is_set():
+            next(ticks)
+            await asyncio.sleep(0.01)
+
+    try:
+        await asyncio.gather(resolve_token(), ticker())
+        assert next(ticks) > 0
+    finally:
+        await client.close()
 
 
 def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):
