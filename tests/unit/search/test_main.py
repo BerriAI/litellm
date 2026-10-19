@@ -8,6 +8,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.search.cost_calculator import search_provider_cost_per_query
 
@@ -28,8 +29,6 @@ SEARCH_MODE_PRICES: Final = {
 
 @pytest.fixture
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-
     monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
 
 
@@ -165,6 +164,95 @@ def test_a_registered_search_model_keeps_its_own_price_for_an_advanced_search() 
         model="tavily/negotiated-search", custom_llm_provider="tavily", optional_params={"search_depth": "advanced"}
     )
     assert cost == pytest.approx((0.004, 0.0))
+
+
+@pytest.fixture
+def _loaded_catalog_prices(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {key: dict(entry) for key, entry in GetModelCostMap.loaded_model_cost_map().items()},
+    )
+
+
+MODE_CASES: Final = (
+    pytest.param("tavily", "tavily/search", {"search_depth": "advanced"}, id="tavily"),
+    pytest.param("tavily", "tavily/tavily/search", {"search_depth": "advanced"}, id="tavily-sdk-spelling"),
+    pytest.param("linkup", "linkup/search", {"depth": "deep"}, id="linkup"),
+)
+
+
+def _register(monkeypatch: pytest.MonkeyPatch, entry: str, price: float) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        entry,
+        {"input_cost_per_query": price, "litellm_provider": entry.split("/", 1)[0], "mode": "search"},
+    )
+
+
+def _mode_entry(provider: str, optional_params: Mapping[str, object]) -> str:
+    return f"{provider}/search-{next(iter(optional_params.values()))}"
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+@pytest.mark.parametrize(("provider", "model", "optional_params"), MODE_CASES)
+def test_the_catalog_mode_price_applies_when_nothing_is_registered_at_runtime(
+    provider: str, model: str, optional_params: Mapping[str, object]
+) -> None:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    mode_price: Final = catalog[_mode_entry(provider, optional_params)]["input_cost_per_query"]
+    assert mode_price != catalog[f"{provider}/search"]["input_cost_per_query"]
+    cost: Final = search_provider_cost_per_query(
+        model=model, custom_llm_provider=provider, optional_params=optional_params
+    )
+    assert cost == pytest.approx((mode_price, 0.0))
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+@pytest.mark.parametrize(
+    ("provider", "optional_params"),
+    [
+        ("tavily", {"search_depth": "ultra-fast"}),
+        ("tavily", {"search_depth": 7}),
+        ("tavily", {"search_depth": ["advanced"]}),
+        ("linkup", {"depth": "standard"}),
+        ("linkup", {"depth": "DEEP"}),
+    ],
+    ids=["tavily-ultra-fast", "tavily-int", "tavily-list", "linkup-standard", "linkup-uppercase"],
+)
+def test_a_mode_without_its_own_catalog_entry_gets_the_catalog_base_price(
+    provider: str, optional_params: Mapping[str, object]
+) -> None:
+    cost: Final = search_provider_cost_per_query(
+        model=f"{provider}/search", custom_llm_provider=provider, optional_params=optional_params
+    )
+    base_price: Final = GetModelCostMap.loaded_model_cost_map()[f"{provider}/search"]["input_cost_per_query"]
+    assert cost == pytest.approx((base_price, 0.0))
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+@pytest.mark.parametrize(("provider", "model", "optional_params"), MODE_CASES)
+def test_a_runtime_price_on_the_generic_entry_keeps_applying_to_a_mode_without_a_runtime_price(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, optional_params: Mapping[str, object]
+) -> None:
+    _register(monkeypatch, f"{provider}/search", 0.004)
+    cost: Final = search_provider_cost_per_query(
+        model=model, custom_llm_provider=provider, optional_params=optional_params
+    )
+    assert cost == pytest.approx((0.004, 0.0))
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+@pytest.mark.parametrize(("provider", "model", "optional_params"), MODE_CASES)
+def test_a_runtime_price_on_the_mode_entry_wins_over_a_runtime_price_on_the_generic_entry(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, optional_params: Mapping[str, object]
+) -> None:
+    _register(monkeypatch, f"{provider}/search", 0.004)
+    _register(monkeypatch, _mode_entry(provider, optional_params), 0.011)
+    cost: Final = search_provider_cost_per_query(
+        model=model, custom_llm_provider=provider, optional_params=optional_params
+    )
+    assert cost == pytest.approx((0.011, 0.0))
 
 
 @pytest.mark.usefixtures("_search_mode_prices")
