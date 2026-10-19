@@ -42,7 +42,7 @@ def test_native_suite_requires_execution(
 ) -> None:
     pytester.path.joinpath("test_suite.py").write_text("import pytest\n" + source)
     result: Final = pytester.inline_run(  # pyright: ignore[reportUnknownMemberType]  # pytester leaves plugins untyped
-        *arguments, plugins=(NativeSuite(pytester.path, available),)
+        "-p", "no:pytest-retry", *arguments, plugins=(NativeSuite(pytester.path, available),)
     )
 
     assert result.ret == expected
@@ -55,7 +55,7 @@ def test_native_suite_requires_execution(
 def test_missing_extension_fails_before_test_collection(pytester: Pytester) -> None:
     pytester.path.joinpath("test_suite.py").write_text("raise AssertionError('must not collect without native')")
     result: Final = pytester.inline_run(  # pyright: ignore[reportUnknownMemberType]  # pytester leaves plugins untyped
-        plugins=(NativeSuite(pytester.path, unavailable),)
+        "-p", "no:pytest-retry", plugins=(NativeSuite(pytester.path, unavailable),)
     )
 
     assert result.ret == pytest.ExitCode.USAGE_ERROR
@@ -78,7 +78,7 @@ def test_controller_requires_a_passing_native_worker_report(
     pytester.path.joinpath("test_suite.py").write_text("import pytest\n" + source)
     root: Final = pytester.path if inside_root else pytester.path / "native"
     result: Final = pytester.inline_run(  # pyright: ignore[reportUnknownMemberType]  # pytester leaves plugins untyped
-        plugins=(NativeSuite(root, available),)
+        "-p", "no:pytest-retry", plugins=(NativeSuite(root, available),)
     )
     controller: Final = NativeSuite(root, available)
     for report in result.getreports("pytest_runtest_logreport"):
