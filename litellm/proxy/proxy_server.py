@@ -831,6 +831,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
@@ -21429,6 +21430,7 @@ app.add_middleware(
     get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
     is_request_size_limit_enabled=lambda: premium_user is True,
 )
+app.add_middleware(RequestBodyDecompressionMiddleware)
 app.add_middleware(
     AdmissionControlMiddleware,
     get_settings=lambda: get_admission_control_settings(general_settings),
