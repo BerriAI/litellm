@@ -105,3 +105,119 @@ async def test_delete_batch_survives_witnessed_lock_past_transaction_default(cap
                 await database.disconnect()
         finally:
             setup.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+async def test_size_rule_deletes_the_oldest_rows_in_steps_until_the_live_estimate_is_under_the_target(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Deleting rows never shrinks the table file, so the size pass must stop on the live-bytes estimate from
+    pg_stat_user_tables, not on pg_total_relation_size, and it must take the oldest rows first and keep the
+    tool index on the same cutoff.
+    """
+    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
+    schema: Final = f"integration_{uuid.uuid4().hex}"
+    url: Final = os.environ["DATABASE_URL"]
+    parsed: Final = urlsplit(url)
+    scoped_url: Final = urlunsplit(
+        parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "schema": schema}))
+    )
+    logs: Final = sql.Identifier(schema, "LiteLLM_SpendLogs")
+    index: Final = sql.Identifier(schema, "LiteLLM_SpendLogToolIndex")
+    seeded: Final = 6000
+    now: Final = datetime.now(timezone.utc).replace(tzinfo=None)
+    stats_sql: Final = (
+        "SELECT sum(n_live_tup)::int AS live, sum(n_dead_tup)::int AS dead FROM pg_stat_user_tables "
+        "WHERE schemaname = %s AND relname IN ('LiteLLM_SpendLogs', 'LiteLLM_SpendLogToolIndex')"
+    )
+    with psycopg.connect(url, autocommit=True) as setup:
+        setup.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        try:
+            setup.execute(
+                sql.SQL(
+                    'CREATE TABLE {} (request_id text, "startTime" timestamp NOT NULL, payload text, '
+                    'PRIMARY KEY (request_id, "startTime"))'
+                ).format(logs)
+            )
+            setup.execute(
+                sql.SQL(
+                    "CREATE TABLE {} (request_id text, tool_name text, start_time timestamp NOT NULL, "
+                    "PRIMARY KEY (request_id, tool_name))"
+                ).format(index)
+            )
+            setup.execute(
+                sql.SQL(
+                    "INSERT INTO {} SELECT 'req-' || lpad(i::text, 6, '0'), %s - (%s - i) * interval '1 minute', "
+                    "repeat('x', 1000) FROM generate_series(1, %s) AS i"
+                ).format(logs),
+                (now, seeded, seeded),
+            )
+            setup.execute(
+                sql.SQL(
+                    "INSERT INTO {} SELECT request_id, 'tool', \"startTime\" FROM {} WHERE right(request_id, 1) = '0'"
+                ).format(index, logs)
+            )
+            setup.execute(sql.SQL("ANALYZE {}").format(logs))
+            setup.execute(sql.SQL("ANALYZE {}").format(index))
+            index_rows: Final = seeded // 10
+            stats_deadline: Final = time.monotonic() + 10
+            while True:
+                (stats,) = read_rows(stats_sql, (schema,))
+                if stats["live"] == seeded + index_rows:
+                    break
+                assert time.monotonic() < stats_deadline, f"row statistics never caught up with ANALYZE: {stats}"
+                await asyncio.sleep(0.1)
+            (allocated,) = read_rows(
+                "SELECT (pg_total_relation_size(%s::regclass) + pg_total_relation_size(%s::regclass))::bigint "
+                "AS allocated",
+                (logs.as_string(setup), index.as_string(setup)),
+            )
+            allocated_before: Final = int(str(allocated["allocated"]))
+            assert allocated_before > 0
+
+            database: Final = Prisma(datasource={"url": scoped_url})
+            await database.connect()
+            try:
+                cleanup: Final = SpendLogCleanup(
+                    general_settings={
+                        # trigger below what is there, clean down to half of it: three steps of
+                        # 10 batches x 100 rows take out the oldest 3000 of the 6000 rows
+                        "maximum_spend_logs_size": str(allocated_before * 3 // 4),
+                        "maximum_spend_logs_cleanup_target_size": str(allocated_before // 2),
+                        "maximum_spend_logs_cleanup_batch_size": 100,
+                    }
+                )
+                cleanup.pod_lock_manager = None
+                await cleanup.cleanup_spend_logs_by_size(PartitionConnection(database))
+            finally:
+                await database.disconnect()
+
+            remaining: Final = read_rows(
+                f'SELECT request_id FROM {logs.as_string(setup)} ORDER BY "startTime"',
+                (),
+            )
+            # oldest first, in whole steps of 1000 rows; the row counters can lag one step behind the
+            # deletes before the stats collector flushes, which only ever costs one extra step
+            assert len(remaining) in (3000, 2000), len(remaining)
+            assert remaining[0]["request_id"] == f"req-{seeded - len(remaining) + 1:06d}"
+            assert remaining[-1]["request_id"] == f"req-{seeded:06d}"
+            (orphans,) = read_rows(
+                f"SELECT count(*)::int AS n FROM {index.as_string(setup)} i "
+                f"WHERE NOT EXISTS (SELECT 1 FROM {logs.as_string(setup)} l WHERE l.request_id = i.request_id)",
+                (),
+            )
+            assert orphans["n"] == 0
+            (kept_index,) = read_rows(f"SELECT count(*)::int AS n FROM {index.as_string(setup)}", ())
+            assert kept_index["n"] == len(remaining) // 10
+            summary: Final = next(
+                record.getMessage()
+                for record in caplog.records
+                if "Spend log cleanup run finished" in record.getMessage()
+            )
+            assert "target_reached=true" in summary
+            assert f"allocated_before={allocated_before}" in summary
+            # the file did not shrink: that is the whole reason the estimate exists
+            assert f"allocated_after={allocated_before}" in summary
+            assert "VACUUM FULL or pg_repack" in summary
+        finally:
+            setup.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))

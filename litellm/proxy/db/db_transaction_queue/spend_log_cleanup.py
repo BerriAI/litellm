@@ -1,11 +1,13 @@
 import asyncio
+import re
 import time
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, TypeAlias
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -18,6 +20,7 @@ from litellm.constants import (
     SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP,
     SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS,
     SPEND_LOG_RUN_LOOPS,
+    SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.db.db_span import db_span
@@ -34,7 +37,66 @@ from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
 from litellm.proxy.utils import PrismaClient
 from litellm.types.llms.base import LiteLLMBaseModel
 
-StopReason: TypeAlias = Literal["exhausted", "budget_exhausted", "batch_cap_reached", "aborted"]
+StopReason: TypeAlias = Literal["exhausted", "target_reached", "budget_exhausted", "batch_cap_reached", "aborted"]
+
+_SIZE_RE: Final = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([KMGT]?)I?B?\s*$", re.IGNORECASE)
+_SIZE_UNITS: Final = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+
+
+def size_in_bytes(value: str | int) -> int:
+    """
+    Parse a storage size such as '180GB', '512 MiB' or '1.5TB' into bytes; a bare int is bytes already.
+
+    Units are powers of 1024, the same convention pg_size_pretty uses, so the number an operator reads
+    off `SELECT pg_size_pretty(pg_total_relation_size(...))` is the number they can put in the config.
+    """
+    if isinstance(value, int):
+        if value <= 0:
+            raise ValueError(f"size must be positive, got {value}")
+        return value
+    match: Final = _SIZE_RE.match(value)
+    if match is None:
+        raise ValueError(f"invalid size {value!r}, expected a number with a unit such as '180GB'")
+    size: Final = int(float(match.group(1)) * _SIZE_UNITS[match.group(2).upper()])
+    if size <= 0:
+        raise ValueError(f"size must be positive, got {value!r}")
+    return size
+
+
+@dataclass(frozen=True, slots=True)
+class SizeRule:
+    """The size cleanup rule as configured: start cleaning above `limit_bytes`, stop under `target_bytes`."""
+
+    limit_bytes: int
+    target_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class SpendLogStorage:
+    """
+    What the spend-log tables weigh, read from the catalog without scanning them.
+
+    `allocated_bytes` is what the files take on disk (heap, indexes and TOAST of LiteLLM_SpendLogs and
+    LiteLLM_SpendLogToolIndex, partitions included). Deleting rows does not shrink it: deleted rows become dead
+    tuples that autovacuum later makes reusable, and only VACUUM FULL or pg_repack hands the bytes back to the
+    filesystem. The size rule therefore compares `estimated_live_bytes`, the allocated size scaled by the live
+    share of rows, which moves as soon as a DELETE commits because pg_stat_user_tables counts dead tuples
+    from the DELETE itself, not from vacuum.
+    """
+
+    allocated_bytes: int
+    live_rows: int
+    dead_rows: int
+
+    @property
+    def estimated_live_bytes(self) -> int:
+        return self.allocated_bytes * self.live_rows // max(self.live_rows + self.dead_rows, 1)
+
+    @property
+    def stats_are_stale(self) -> bool:
+        """No row counters at all while the files hold data: the statistics were reset, e.g. by a crash."""
+        return self.allocated_bytes > 0 and self.live_rows + self.dead_rows == 0
+
 
 Cutoff: TypeAlias = datetime | str
 """Rows strictly older than this are expired: a timestamp, or an ISO calendar day for tables keyed by day"""
@@ -55,6 +117,43 @@ class TableCleanupResult:
     table_name: str
     rows_deleted: int
     stop_reason: StopReason
+
+
+@dataclass(frozen=True, slots=True)
+class _SizeStepState:
+    """Progress of the size pass across its re-check steps."""
+
+    logs_deleted: int
+    index_deleted: int
+    batches_left: int
+    stop_reason: StopReason | None
+
+    def stopped(self, reason: StopReason) -> "_SizeStepState":
+        return _SizeStepState(
+            logs_deleted=self.logs_deleted,
+            index_deleted=self.index_deleted,
+            batches_left=self.batches_left,
+            stop_reason=reason,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SizePassReport:
+    """What one size pass measured and achieved, for the run summary and the storage gauges."""
+
+    rule: SizeRule
+    before: SpendLogStorage
+    after: SpendLogStorage
+    partitions_dropped: tuple[str, ...]
+    results: tuple[TableCleanupResult, ...]
+
+    @property
+    def target_reached(self) -> bool:
+        return self.after.estimated_live_bytes <= self.rule.target_bytes
+
+    @property
+    def above_target_bytes(self) -> int:
+        return max(0, self.after.estimated_live_bytes - self.rule.target_bytes)
 
 
 class _RunProgress:
@@ -86,6 +185,46 @@ class _RemainingRow(LiteLLMBaseModel):
 
 
 _REMAINING_ROWS: Final = TypeAdapter(list[_RemainingRow])
+
+
+class _StorageRow(LiteLLMBaseModel):
+    """One row of the storage probe, validated out of prisma's untyped result."""
+
+    model_config = ConfigDict(frozen=True)
+    allocated_bytes: int
+    live_rows: int
+    dead_rows: int
+
+
+_STORAGE_ROWS: Final = TypeAdapter(list[_StorageRow])
+
+
+class _OffsetRow(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+    startTime: datetime
+
+
+_OFFSET_ROWS: Final = TypeAdapter(list[_OffsetRow])
+
+_SPEND_LOG_TABLES: Final = ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex")
+
+# Partition children are counted with their parent: a partitioned parent has no storage of its own.
+_STORAGE_SQL: Final = """
+    SELECT coalesce(sum(pg_total_relation_size(s.relid)), 0)::bigint AS allocated_bytes,
+           coalesce(sum(s.n_live_tup), 0)::bigint AS live_rows,
+           coalesce(sum(s.n_dead_tup), 0)::bigint AS dead_rows
+    FROM pg_stat_user_tables s
+    WHERE s.schemaname = current_schema()
+      AND (
+        s.relname = ANY($1::text[])
+        OR s.relid IN (
+          SELECT i.inhrelid FROM pg_inherits i
+          JOIN pg_class p ON p.oid = i.inhparent
+          JOIN pg_namespace n ON n.oid = p.relnamespace
+          WHERE p.relname = ANY($1::text[]) AND n.nspname = current_schema()
+        )
+      )
+    """
 
 SPEND_LOG_CLEANUP_BOUND_SETTINGS: Final = (
     "maximum_spend_logs_cleanup_batch_size",
@@ -244,6 +383,96 @@ class SpendLogCleanup:
         self.retention_seconds = self._retention_seconds_for("maximum_spend_logs_retention_period")
         return self.retention_seconds is not None
 
+    def _size_bytes_setting(self, setting_name: str) -> int | None:
+        """Parse one size setting into bytes, or None when unset or unusable."""
+        raw: Final = self.general_settings.get(setting_name)
+        if raw is None:
+            return None
+        if not isinstance(raw, (str, int)):
+            verbose_proxy_logger.warning("Invalid %s value: %r, ignoring it", setting_name, raw)
+            return None
+        try:
+            return size_in_bytes(raw)
+        except ValueError as e:
+            verbose_proxy_logger.warning("Invalid %s value: %r (%s), ignoring it", setting_name, raw, e)
+            return None
+
+    def _size_rule(self) -> SizeRule | None:
+        """
+        The size rule from settings, or None when maximum_spend_logs_size is unset.
+
+        A target at or above the limit cannot be what the operator meant, so it is reported and the run
+        cleans only until it is back under the limit, which is also what an unset target means.
+        """
+        limit_bytes: Final = self._size_bytes_setting("maximum_spend_logs_size")
+        if limit_bytes is None:
+            return None
+        target_bytes: Final = self._size_bytes_setting("maximum_spend_logs_cleanup_target_size")
+        if target_bytes is None:
+            return SizeRule(limit_bytes=limit_bytes, target_bytes=limit_bytes)
+        if target_bytes >= limit_bytes:
+            verbose_proxy_logger.error(
+                "maximum_spend_logs_cleanup_target_size (%s bytes) must be below maximum_spend_logs_size (%s bytes); "
+                "cleaning down to maximum_spend_logs_size instead",
+                target_bytes,
+                limit_bytes,
+            )
+            return SizeRule(limit_bytes=limit_bytes, target_bytes=limit_bytes)
+        return SizeRule(limit_bytes=limit_bytes, target_bytes=target_bytes)
+
+    def _size_pass_runs_with_age_pass(self) -> bool:
+        """
+        With maximum_spend_logs_cleanup_cron set there is one schedule for both rules, so the age run carries
+        the size pass; otherwise the size pass has its own job on maximum_spend_logs_size_check_interval.
+        """
+        return bool(self.general_settings.get("maximum_spend_logs_cleanup_cron"))
+
+    async def _measure_storage(self, prisma_client: PrismaClient, deadline: float) -> SpendLogStorage | None:
+        """Read what the spend-log tables weigh from the catalog, or None when the probe fails or has no budget."""
+        if time.monotonic() >= deadline:
+            return None
+        timeout_ms: Final = self._timeout_ms(deadline)
+        try:
+            async with db_span("measure_storage", "LiteLLM_SpendLogs"), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                rows: Final = _STORAGE_ROWS.validate_python(
+                    await tx.query_raw(trusted_sql(_STORAGE_SQL), list(_SPEND_LOG_TABLES))
+                )
+        except Exception as e:  # noqa: BLE001 - a failed measurement skips the size pass, it must not fail the run
+            verbose_proxy_logger.warning("Could not measure spend-log storage: %s: %s", type(e).__name__, e)
+            return None
+        if not rows:
+            return None
+        row: Final = rows[0]
+        return SpendLogStorage(allocated_bytes=row.allocated_bytes, live_rows=row.live_rows, dead_rows=row.dead_rows)
+
+    async def _size_step_cutoff(self, prisma_client: PrismaClient, deadline: float) -> datetime | None:
+        """
+        The startTime that puts one re-check step's worth of the oldest rows behind it.
+
+        Expressing a size step as a cutoff lets the size pass reuse the retention DELETE unchanged, including
+        the tool-index rows that expire with their spend logs. When fewer rows than a step remain, the step is
+        everything up to now.
+        """
+        if time.monotonic() >= deadline:
+            return None
+        offset: Final = self.batch_size * SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES
+        timeout_ms: Final = self._timeout_ms(deadline)
+        async with db_span("size_step_cutoff", "LiteLLM_SpendLogs"), bounded_tx(prisma_client, timeout_ms) as tx:
+            await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+            rows: Final = _OFFSET_ROWS.validate_python(
+                await tx.query_raw(
+                    trusted_sql(
+                        'SELECT "startTime" FROM "LiteLLM_SpendLogs" ORDER BY "startTime" ASC OFFSET $1 LIMIT 1'
+                    ),
+                    offset,
+                )
+            )
+        if not rows:
+            return datetime.now(timezone.utc)
+        found: Final = rows[0].startTime
+        return found if found.tzinfo is not None else found.replace(tzinfo=timezone.utc)
+
     def _timeout_ms(self, deadline: float) -> int:
         """
         The per-statement bound in milliseconds: the batch timeout, or whatever
@@ -357,14 +586,17 @@ class SpendLogCleanup:
         key_columns: tuple[str, ...],
         time_column: str,
         deadline: float,
+        batch_cap: int | None = None,
     ) -> TableCleanupResult:
         """
         Delete a table's rows older than the cutoff in batches.
 
         Stops at whichever bound is reached first: the backlog running out, the
-        shared wall-clock deadline, the per-table batch cap, or too many
-        consecutive batch failures.
+        shared wall-clock deadline, the per-table batch cap (`batch_cap` when a
+        caller spreads one table's cap over several calls, else the configured
+        one), or too many consecutive batch failures.
         """
+        max_batches: Final = self.max_batches if batch_cap is None else batch_cap
         key_list: Final = ", ".join(f'"{col}"' for col in key_columns)
         delete_sql: Final = f"""
             DELETE FROM "{table_name}"
@@ -387,7 +619,7 @@ class SpendLogCleanup:
                 return await self._finish_table(
                     prisma_client, cutoff_date, table_name, time_column, total_deleted, "budget_exhausted", deadline
                 )
-            if run_count >= self.max_batches:
+            if run_count >= max_batches:
                 verbose_proxy_logger.info(
                     "Max batches reached for %s cleanup, remaining rows will be deleted in next run", table_name
                 )
@@ -627,6 +859,163 @@ class SpendLogCleanup:
         verbose_proxy_logger.info("Deleted %s expired tool index rows", index_result.rows_deleted)
         return (logs_result, index_result)
 
+    async def _clean_spend_logs_by_size(
+        self, prisma_client: PrismaClient, rule: SizeRule, deadline: float
+    ) -> SizePassReport | None:
+        """
+        Bring the spend-log tables under the size target, oldest rows first.
+
+        A partitioned table gives its oldest fully elapsed partitions back first, because a DROP returns disk
+        at once. Then rows go in steps: each step turns the next SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES batches
+        of the oldest rows into a cutoff and runs the same bounded DELETE the age rule uses, for the spend logs
+        and the tool index rows derived from them, then re-measures. The run's batch cap and budget apply to
+        the whole pass, so a pass that stops short reports how far above the target it still is and the next
+        check continues from there.
+        """
+        before: Final = await self._measure_storage(prisma_client, deadline)
+        if before is None:
+            return None
+        SpendLogCleanupMetrics.set_storage_bytes("allocated", before.allocated_bytes)
+        SpendLogCleanupMetrics.set_storage_bytes("estimated_live", before.estimated_live_bytes)
+        if before.stats_are_stale:
+            verbose_proxy_logger.warning(
+                "Spend-log row statistics are stale (allocated=%s bytes, live_rows=0, dead_rows=0); skipping the "
+                'size pass until pg_stat_user_tables is repopulated, ANALYZE "LiteLLM_SpendLogs" refreshes it',
+                before.allocated_bytes,
+            )
+            return None
+        if before.estimated_live_bytes <= rule.limit_bytes:
+            verbose_proxy_logger.info(
+                "Spend-log storage is under maximum_spend_logs_size (estimated_live=%s allocated=%s limit=%s bytes)",
+                before.estimated_live_bytes,
+                before.allocated_bytes,
+                rule.limit_bytes,
+            )
+            SpendLogCleanupMetrics.set_storage_bytes("above_target", 0)
+            return SizePassReport(rule=rule, before=before, after=before, partitions_dropped=(), results=())
+        verbose_proxy_logger.warning(
+            "Spend-log storage is over maximum_spend_logs_size (estimated_live=%s allocated=%s limit=%s bytes); "
+            "deleting the oldest spend logs down to %s bytes",
+            before.estimated_live_bytes,
+            before.allocated_bytes,
+            rule.limit_bytes,
+            rule.target_bytes,
+        )
+        latest: Final[list[SpendLogStorage]] = [before]  # mutable-ok: last measurement, rewritten per re-check
+
+        async def still_over_target() -> bool:
+            measured: Final = await self._measure_storage(prisma_client, deadline)
+            if measured is None:
+                return False
+            latest[0] = measured
+            return measured.estimated_live_bytes > rule.target_bytes
+
+        partitions_dropped: Final = await self._drop_oldest_partitions_for_size(
+            prisma_client, deadline, still_over_target
+        )
+        results: Final = await self._delete_oldest_rows_for_size(
+            prisma_client, deadline, still_over_target, over_target=latest[0].estimated_live_bytes > rule.target_bytes
+        )
+        after: Final = latest[0]
+        report: Final = SizePassReport(
+            rule=rule, before=before, after=after, partitions_dropped=partitions_dropped, results=results
+        )
+        SpendLogCleanupMetrics.set_storage_bytes("allocated", after.allocated_bytes)
+        SpendLogCleanupMetrics.set_storage_bytes("estimated_live", after.estimated_live_bytes)
+        SpendLogCleanupMetrics.set_storage_bytes("above_target", report.above_target_bytes)
+        return report
+
+    async def _drop_oldest_partitions_for_size(
+        self, prisma_client: PrismaClient, deadline: float, still_over_target: Callable[[], Awaitable[bool]]
+    ) -> tuple[str, ...]:
+        remaining_timeout_ms: Final = self._remaining_timeout_ms(deadline)
+        if time.monotonic() >= deadline or not self.general_settings.get("use_spend_logs_partitioning", False):
+            return ()
+        if not await self.partition_manager.is_partitioned(prisma_client, remaining_timeout_ms):
+            return ()
+        dropped: Final = await self.partition_manager.drop_oldest_partitions_while(
+            prisma_client, datetime.now(timezone.utc), remaining_timeout_ms, still_over_target
+        )
+        verbose_proxy_logger.info("Dropped %d oldest spend-log partitions for the size rule: %s", len(dropped), dropped)
+        return tuple(dropped)
+
+    async def _delete_oldest_rows_for_size(
+        self,
+        prisma_client: PrismaClient,
+        deadline: float,
+        still_over_target: Callable[[], Awaitable[bool]],
+        over_target: bool,
+    ) -> tuple[TableCleanupResult, ...]:
+        state = _SizeStepState(  # rebind-ok: one value threaded through the bounded step loop
+            logs_deleted=0,
+            index_deleted=0,
+            batches_left=self.max_batches,
+            stop_reason=None if over_target else "target_reached",
+        )
+        for _ in range(self.max_batches // SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES + 2):
+            if state.stop_reason is not None:
+                break
+            state = await self._run_size_step(prisma_client, deadline, still_over_target, state)
+        final_reason: Final[StopReason] = state.stop_reason or "batch_cap_reached"
+        return (
+            TableCleanupResult(
+                table_name="LiteLLM_SpendLogs (size rule)", rows_deleted=state.logs_deleted, stop_reason=final_reason
+            ),
+            TableCleanupResult(
+                table_name="LiteLLM_SpendLogToolIndex (size rule)",
+                rows_deleted=state.index_deleted,
+                stop_reason=final_reason,
+            ),
+        )
+
+    async def _run_size_step(
+        self,
+        prisma_client: PrismaClient,
+        deadline: float,
+        still_over_target: Callable[[], Awaitable[bool]],
+        state: "_SizeStepState",
+    ) -> "_SizeStepState":
+        """One re-check step: delete up to SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES batches of the oldest rows, then re-measure."""
+        if time.monotonic() >= deadline:
+            return state.stopped("budget_exhausted")
+        if state.batches_left <= 0:
+            return state.stopped("batch_cap_reached")
+        cutoff: Final = await self._size_step_cutoff(prisma_client, deadline)
+        if cutoff is None:
+            return state.stopped("budget_exhausted")
+        step_cap: Final = min(SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES, state.batches_left)
+        logs_result: Final = await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff,
+            table_name="LiteLLM_SpendLogs",
+            key_columns=("request_id", "startTime"),
+            time_column="startTime",
+            deadline=deadline,
+            batch_cap=step_cap,
+        )
+        index_result: Final = await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff,
+            table_name="LiteLLM_SpendLogToolIndex",
+            key_columns=("request_id", "tool_name"),
+            time_column="start_time",
+            deadline=deadline,
+            batch_cap=step_cap,
+        )
+        advanced: Final = _SizeStepState(
+            logs_deleted=state.logs_deleted + logs_result.rows_deleted,
+            index_deleted=state.index_deleted + index_result.rows_deleted,
+            batches_left=state.batches_left - step_cap,
+            stop_reason=None,
+        )
+        if logs_result.stop_reason in ("aborted", "budget_exhausted") or index_result.stop_reason == "aborted":
+            return advanced.stopped(logs_result.stop_reason if logs_result.stop_reason != "exhausted" else "aborted")
+        if logs_result.rows_deleted == 0:
+            return advanced.stopped("exhausted")
+        if not await still_over_target():
+            return advanced.stopped("target_reached")
+        return advanced
+
     async def _clean_session_rollup(
         self, prisma_client: PrismaClient, retention_seconds: int, deadline: float
     ) -> tuple[TableCleanupResult, ...]:
@@ -704,22 +1093,60 @@ class SpendLogCleanup:
         return "completed"
 
     @staticmethod
-    def _log_run_summary(outcome: RunOutcome, results: tuple[TableCleanupResult, ...], elapsed_seconds: float) -> None:
+    def _storage_summary(report: SizePassReport | None) -> str:
+        """
+        The size pass in one clause: what was measured, where it ended against the target, and whether the
+        operator still has to act to get the disk back.
+        """
+        if report is None:
+            return ""
+        rows_deleted: Final = sum(result.rows_deleted for result in report.results)
+        reclaim_note: Final = (
+            "; allocated bytes stay until autovacuum reuses them, only VACUUM FULL or pg_repack on the spend-log "
+            "tables returns them to the filesystem"
+            if rows_deleted > 0 and report.after.allocated_bytes >= report.before.allocated_bytes
+            else ""
+        )
+        return (
+            f" storage: allocated_before={report.before.allocated_bytes} "
+            f"estimated_live_before={report.before.estimated_live_bytes} "
+            f"allocated_after={report.after.allocated_bytes} estimated_live_after={report.after.estimated_live_bytes} "
+            f"limit={report.rule.limit_bytes} target={report.rule.target_bytes} "
+            f"target_reached={str(report.target_reached).lower()} above_target={report.above_target_bytes} "
+            f"partitions_dropped={len(report.partitions_dropped)}{reclaim_note}"
+        )
+
+    @classmethod
+    def _log_run_summary(
+        cls,
+        outcome: RunOutcome,
+        results: tuple[TableCleanupResult, ...],
+        elapsed_seconds: float,
+        size_report: SizePassReport | None = None,
+    ) -> None:
         per_table: Final = ", ".join(
             f"{result.table_name}: deleted={result.rows_deleted} stop_reason={result.stop_reason}" for result in results
         )
-        message: Final = "Spend log cleanup run finished: outcome=%s elapsed=%.1fs [%s]"
-        if outcome == "completed":
-            verbose_proxy_logger.info(message, outcome, elapsed_seconds, per_table)
+        message: Final = "Spend log cleanup run finished: outcome=%s elapsed=%.1fs [%s]%s"
+        storage: Final = cls._storage_summary(size_report)
+        if outcome == "completed" and (size_report is None or size_report.target_reached):
+            verbose_proxy_logger.info(message, outcome, elapsed_seconds, per_table, storage)
             return
-        verbose_proxy_logger.warning(message, outcome, elapsed_seconds, per_table)
+        verbose_proxy_logger.warning(message, outcome, elapsed_seconds, per_table, storage)
 
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
-        Main cleanup function. Deletes old spend logs in batches.
+        The scheduled retention run: every age rule, plus the size rule when one cron drives both.
         If pod_lock_manager is available, ensures only one pod runs cleanup.
         If no pod_lock_manager, runs cleanup without distributed locking.
         """
+        await self._run(prisma_client, age_rules=True, size_rule=self._size_pass_runs_with_age_pass())
+
+    async def cleanup_spend_logs_by_size(self, prisma_client: PrismaClient) -> None:
+        """The size-check run scheduled on maximum_spend_logs_size_check_interval: the size rule only."""
+        await self._run(prisma_client, age_rules=False, size_rule=True)
+
+    async def _run(self, prisma_client: PrismaClient, age_rules: bool, size_rule: bool) -> None:
         lock_acquired = False
         run_started_at: Final = time.monotonic()
         progress: Final = _RunProgress()
@@ -728,19 +1155,23 @@ class SpendLogCleanup:
             verbose_proxy_logger.info("Cleanup job triggered at %s", datetime.now())
             self._refresh_bounds()
 
-            delete_spend_logs: Final = self._should_delete_spend_logs()
-            autorouter_retention_seconds: Final = self._retention_seconds_for(
-                "maximum_autorouter_session_retention_period"
+            delete_spend_logs: Final = age_rules and self._should_delete_spend_logs()
+            active_size_rule: Final = self._size_rule() if size_rule else None
+            autorouter_retention_seconds: Final = (
+                self._retention_seconds_for("maximum_autorouter_session_retention_period") if age_rules else None
             )
-            health_check_retention_seconds: Final = self._retention_seconds_for("maximum_health_check_retention_period")
-            daily_tag_spend_retention_seconds: Final = self._retention_seconds_for(
-                "maximum_daily_tag_spend_retention_period"
+            health_check_retention_seconds: Final = (
+                self._retention_seconds_for("maximum_health_check_retention_period") if age_rules else None
+            )
+            daily_tag_spend_retention_seconds: Final = (
+                self._retention_seconds_for("maximum_daily_tag_spend_retention_period") if age_rules else None
             )
             if (
                 not delete_spend_logs
                 and autorouter_retention_seconds is None
                 and health_check_retention_seconds is None
                 and daily_tag_spend_retention_seconds is None
+                and active_size_rule is None
             ):
                 SpendLogCleanupMetrics.record_run("skipped_disabled")
                 return
@@ -768,11 +1199,13 @@ class SpendLogCleanup:
                     return
 
             deadline: Final = time.monotonic() + self.run_budget_seconds
+            size_group: Final = int(active_size_rule is not None)
             configured_group_count: Final = (
                 int(delete_spend_logs and self.retention_seconds is not None)
                 + int(autorouter_retention_seconds is not None)
                 + int(health_check_retention_seconds is not None)
                 + int(daily_tag_spend_retention_seconds is not None)
+                + size_group
             )
 
             spend_log_results: Final = (
@@ -787,9 +1220,12 @@ class SpendLogCleanup:
                 int(autorouter_retention_seconds is not None)
                 + int(health_check_retention_seconds is not None)
                 + int(daily_tag_spend_retention_seconds is not None)
+                + size_group
             )
-            remaining_groups_after_sessions: Final = int(health_check_retention_seconds is not None) + int(
-                daily_tag_spend_retention_seconds is not None
+            remaining_groups_after_sessions: Final = (
+                int(health_check_retention_seconds is not None)
+                + int(daily_tag_spend_retention_seconds is not None)
+                + size_group
             )
             session_results: Final = (
                 await self._clean_session_rollup(
@@ -810,15 +1246,27 @@ class SpendLogCleanup:
                 else ()
             )
             daily_tag_spend_results: Final = (
-                await self._clean_daily_tag_spend(prisma_client, daily_tag_spend_retention_seconds, deadline)
+                await self._clean_daily_tag_spend(
+                    prisma_client,
+                    daily_tag_spend_retention_seconds,
+                    self._group_deadline(deadline, 1 + size_group),
+                )
                 if daily_tag_spend_retention_seconds is not None
                 else ()
             )
+            size_report: Final = (
+                await self._clean_spend_logs_by_size(prisma_client, active_size_rule, deadline)
+                if active_size_rule is not None
+                else None
+            )
+            size_results: Final = size_report.results if size_report is not None else ()
 
-            results: Final = spend_log_results + session_results + health_check_results + daily_tag_spend_results
+            results: Final = (
+                spend_log_results + session_results + health_check_results + daily_tag_spend_results + size_results
+            )
             outcome: Final = self._run_outcome(results)
             SpendLogCleanupMetrics.record_run(outcome)
-            self._log_run_summary(outcome, results, time.monotonic() - run_started_at)
+            self._log_run_summary(outcome, results, time.monotonic() - run_started_at, size_report)
 
         except asyncio.CancelledError:
             verbose_proxy_logger.error(
