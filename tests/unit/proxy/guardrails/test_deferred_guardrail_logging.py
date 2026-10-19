@@ -1442,10 +1442,10 @@ class TestResponsesIteratorDeferredLogging:
         logging_obj._on_deferred_stream_complete = MagicMock()
         iterator = self._iterator(logging_obj)
 
-        with patch("asyncio.create_task") as mock_create_task:
+        with patch("litellm.responses.streaming_iterator._spawn_logging_task") as mock_spawn_logging_task:
             iterator._log_completed_response(is_async=True)
 
-        mock_create_task.assert_not_called()
+        mock_spawn_logging_task.assert_not_called()
         args = logging_obj._deferred_stream_complete_args
         assert isinstance(args, tuple) and len(args) == 1
         assert "dispatched" not in recorded
@@ -1458,15 +1458,20 @@ class TestResponsesIteratorDeferredLogging:
         logging_obj._on_deferred_stream_complete = None
         iterator = self._iterator(logging_obj)
 
-        created = []
-        real_create_task = asyncio.create_task
+        from litellm.responses import streaming_iterator
 
-        def tracking_create_task(coro):
-            task = real_create_task(coro)
+        created = []
+        real_spawn_logging_task = streaming_iterator._spawn_logging_task
+
+        def tracking_spawn_logging_task(*args, **kwargs):
+            task = real_spawn_logging_task(*args, **kwargs)
             created.append(task)
             return task
 
-        with patch("asyncio.create_task", side_effect=tracking_create_task):
+        with patch(
+            "litellm.responses.streaming_iterator._spawn_logging_task",
+            side_effect=tracking_spawn_logging_task,
+        ):
             iterator._log_completed_response(is_async=True)
 
         assert len(created) == 1
