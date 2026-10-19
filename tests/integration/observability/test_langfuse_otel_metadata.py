@@ -1451,7 +1451,7 @@ def _limit_sweep(
     return {size: record for size, record in observed.items() if record is not None}
 
 
-def test_langfuse_otel_identity_is_evicted_before_any_other_attribute_of_a_full_span(
+def test_langfuse_otel_identity_never_evicts_or_drops_another_attribute_of_a_full_span(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     marker: Final = "lf-limit-" + uuid.uuid4().hex
@@ -1488,17 +1488,20 @@ def test_langfuse_otel_identity_is_evicted_before_any_other_attribute_of_a_full_
         identity_count: Final = len(_identity_attributes(reference))
         assert reference_dropped == 0, reference_dropped
         assert identity_count == len(_chat_identity_fields(identity)) + 1, sorted(reference)
+        kept_by_size: Final[dict[int, tuple[int, int]]] = {}  # mutable-ok: filled once per swept span below
         for tool_count, (attrs, dropped) in spans.items():
-            kept = _identity_attributes(attrs)
-            assert len(kept) == identity_count - min(dropped, identity_count), (tool_count, dropped, sorted(kept))
-            if dropped <= identity_count:
+            kept = len(_identity_attributes(attrs))
+            kept_by_size[tool_count] = (kept, dropped)
+            if kept:
+                assert dropped == 0, (tool_count, kept, dropped)
                 expected = {"openinference.span.kind", "metadata", "llm.model_name", "llm.request.type"}
-                assert expected <= set(attrs), (tool_count, dropped, sorted(expected - set(attrs)))
+                assert expected <= set(attrs), (tool_count, sorted(expected - set(attrs)))
                 tools = {f"llm.tools.{n}.name" for n in range(tool_count)}
-                assert tools <= set(attrs), (tool_count, dropped, sorted(tools - set(attrs)))
-        assert [tool_count for tool_count, (_, dropped) in spans.items() if 0 < dropped <= identity_count], {
-            tool_count: dropped for tool_count, (_, dropped) in spans.items()
-        }
+                assert tools <= set(attrs), (tool_count, sorted(tools - set(attrs)))
+        assert [size for size, (kept, dropped) in kept_by_size.items() if kept < identity_count and not dropped], (
+            kept_by_size
+        )
+        assert [size for size, (_, dropped) in kept_by_size.items() if dropped], kept_by_size
 
 
 def test_otel_v2_langfuse_identity_sheds_before_any_message_attribute(gateway: Gateway, tmp_path: Path) -> None:
@@ -1550,3 +1553,168 @@ def test_otel_v2_langfuse_identity_sheds_before_any_message_attribute(gateway: G
             size for size, (shed_identity, shed_messages) in shed_by_size.items() if shed_identity and not shed_messages
         ], shed_by_size
         assert [size for size, (_, shed_messages) in shed_by_size.items() if shed_messages], shed_by_size
+
+
+_APP_SPAN_HOOK: Final = """
+from opentelemetry import trace
+
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class AppSpanHook(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        with trace.get_tracer("lit8283-app").start_as_current_span("app.audit") as span:
+            span.set_attributes(
+                {
+                    "app.response_id": response_obj.id,
+                    "langfuse.observation.metadata": '{"source": "app"}',
+                    "langfuse.trace.metadata.user_api_key_alias": "app-set-alias",
+                }
+            )
+
+
+instance = AppSpanHook()
+"""
+
+
+def test_otel_v2_span_another_tracer_wrote_keeps_its_langfuse_metadata_keys_at_the_collector(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "lf-v2-app-" + uuid.uuid4().hex
+    (tmp_path / "lit8283_app_span.py").write_text(_APP_SPAN_HOOK)
+    with (
+        wire_server(lambda _request: Reply()) as generic,
+        _langfuse_rig(
+            gateway,
+            tmp_path,
+            {"callbacks": ["langfuse_otel", "otel", "lit8283_app_span.instance"]},
+            marker,
+            overrides={"LITELLM_OTEL_V2": "1", "OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": generic.url},
+        ) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key, identity = _scenario_identity(scenario, rig.provider)
+        response: Final = rig.candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": identity["model"],
+                "messages": [{"role": "user", "content": marker}],
+                "cache": {"no-cache": True},
+            },
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+
+        response_id: Final = response.json()["id"]
+
+        def app(span: Mapping[str, object]) -> bool:
+            return span.get("app.response_id") == response_id
+
+        def llm(span: Mapping[str, object]) -> bool:
+            return _response_id(span.get("gen_ai.response.id")) == _response_id(response_id)
+
+        spans: Final = eventually(
+            _watched_spans(generic), lambda seen: any(map(app, seen)) and any(map(llm, seen)), seconds=25
+        )
+        app_span: Final = next(span for span in spans if app(span))
+        assert app_span["langfuse.observation.metadata"] == '{"source": "app"}', app_span
+        assert app_span["langfuse.trace.metadata.user_api_key_alias"] == "app-set-alias", app_span
+        collector_llm: Final = next(span for span in spans if llm(span))
+        assert not _identity_attributes(collector_llm), sorted(collector_llm)
+
+
+def _chat_span_drops(body: bytes) -> tuple[tuple[int, int, int], ...]:
+    request: Final = ExportTraceServiceRequest.FromString(body)
+    return tuple(
+        (span.dropped_attributes_count, span.dropped_events_count, span.dropped_links_count)
+        for resource in request.resource_spans
+        for scope in resource.scope_spans
+        for span in scope.spans
+        if span.name.startswith("chat ")
+    )
+
+
+def test_otel_v2_collector_keeps_the_dropped_counts_of_a_span_without_langfuse_request_metadata(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "lf-v2-drops-" + uuid.uuid4().hex
+    with (
+        wire_server(lambda _request: Reply()) as generic,
+        _langfuse_rig(
+            gateway,
+            tmp_path,
+            {"callbacks": ["langfuse_otel", "otel"]},
+            marker,
+            overrides={
+                "LITELLM_OTEL_V2": "1",
+                "OTEL_EXPORTER": "otlp_http",
+                "OTEL_ENDPOINT": generic.url,
+                "OTEL_SPAN_EVENT_COUNT_LIMIT": "0",
+            },
+        ) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key, identity = _scenario_identity(scenario, rig.provider)
+        response: Final = rig.candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": identity["model"],
+                "messages": [{"role": "user", "content": f"{marker} scripted -fail- upstream"}],
+                "cache": {"no-cache": True},
+            },
+            key=key,
+        )
+        assert response.status_code >= 500, response.text
+
+        drops: Final[dict[str, list[tuple[int, int, int]]]] = {"langfuse": [], "generic": []}  # mutable-ok: drained
+
+        def observed() -> dict[str, list[tuple[int, int, int]]]:
+            for name, wire in (("langfuse", rig.collector), ("generic", generic)):
+                drops[name].extend(drop for batch in wire.drain() for drop in _chat_span_drops(batch.body))
+            return drops
+
+        settled: Final = eventually(
+            observed, lambda seen: bool(seen["langfuse"]) and len(seen["generic"]) == len(seen["langfuse"]), seconds=25
+        )
+        assert any(events for _, events, _ in settled["langfuse"]), settled
+        assert sorted(settled["generic"]) == sorted(settled["langfuse"]), settled
+
+
+def test_otel_v2_langfuse_mapper_sends_no_langfuse_request_metadata_to_a_plain_collector(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "lf-v2-mapper-" + uuid.uuid4().hex
+    with (
+        _langfuse_rig(
+            gateway,
+            tmp_path,
+            {"callbacks": ["otel"]},
+            marker,
+            overrides={
+                "LITELLM_OTEL_V2": "1",
+                "MAPPER_NAMES": "genai,langfuse",
+                "OTEL_EXPORTER": "otlp_http",
+                "OTEL_ENDPOINT": "__collector__",
+            },
+        ) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key, identity = _scenario_identity(scenario, rig.provider)
+        response: Final = rig.candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": identity["model"],
+                "messages": [{"role": "user", "content": marker}],
+                "user": identity["end_user"],
+                "cache": {"no-cache": True},
+            },
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+
+        collector: Final = _v2_llm_span(rig.collector, response.json()["id"])
+        assert collector["langfuse.trace.metadata.team_id"] == identity["team_id"], collector
+        assert not _identity_attributes(collector), sorted(collector)

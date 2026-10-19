@@ -1,7 +1,9 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -700,9 +702,24 @@ class TestLangfuseOtelIntegration:
             assert json.loads(actual["langfuse.observation.metadata"]) == {"user_api_key_alias": "prod-key"}
             assert json.loads(actual["langfuse.observation.output"]) == {"role": "assistant", "content": "hello"}
 
+    # What ``OpenTelemetry._record_exception_on_span`` adds to a failed call's span after its attributes.
+    _FAILED_CALL_ATTRIBUTES: Final = MappingProxyType(
+        {
+            "error.code": "429",
+            "http.response.status_code": 429,
+            "error.type": "RateLimitError",
+            "error.message": "rate limited",
+            "error.llm_provider": "openai",
+            "error.stack_trace": "Traceback",
+        }
+    )
+
     @staticmethod
     def _exported_span(
-        kwargs: dict[str, object], max_span_attributes: int | None, carried: dict[str, str] | None = None
+        kwargs: dict[str, object],
+        max_span_attributes: int | None,
+        carried: dict[str, str] | None = None,
+        added_after: Mapping[str, str | int] = MappingProxyType({}),
     ) -> ReadableSpan:
         exporter: Final = InMemorySpanExporter()
         provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=max_span_attributes))
@@ -710,6 +727,7 @@ class TestLangfuseOtelIntegration:
         span: Final = provider.get_tracer("langfuse-otel-test").start_span("litellm_request", attributes=carried)
         response_obj: Final = {"id": "chatcmpl-1", "choices": [{"message": {"role": "assistant", "content": "hello"}}]}
         LangfuseOtelLogger.set_langfuse_otel_attributes(span, kwargs, response_obj)
+        span.set_attributes(added_after)
         span.end()
         (finished,) = exporter.get_finished_spans()
         return finished
@@ -739,14 +757,16 @@ class TestLangfuseOtelIntegration:
             },
         }
 
-    def test_request_metadata_never_evicts_another_attribute_at_the_span_limit(
+    def test_request_metadata_never_evicts_or_drops_another_attribute_at_the_span_limit(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         kwargs: Final = self._tool_call_kwargs()
+        failed: Final = self._FAILED_CALL_ATTRIBUTES
         monkeypatch.setattr(litellm, "redact_user_api_key_info", True)
-        plain: Final = dict(self._exported_span(kwargs, SpanLimits.UNSET).attributes or {})
+        plain: Final = dict(self._exported_span(kwargs, SpanLimits.UNSET, added_after=failed).attributes or {})
+        succeeded: Final = dict(self._exported_span(kwargs, SpanLimits.UNSET).attributes or {})
         monkeypatch.setattr(litellm, "redact_user_api_key_info", False)
-        full: Final = dict(self._exported_span(kwargs, SpanLimits.UNSET).attributes or {})
+        full: Final = dict(self._exported_span(kwargs, SpanLimits.UNSET, added_after=failed).attributes or {})
         identity_keys: Final = set(full) - set(plain)
         assert identity_keys == {
             "langfuse.observation.metadata",
@@ -754,12 +774,17 @@ class TestLangfuseOtelIntegration:
             "langfuse.trace.metadata.user_api_key_team_id",
         }
 
-        at_limit: Final = self._exported_span(kwargs, len(plain))
-        assert dict(at_limit.attributes or {}) == plain
-
-        one_spare: Final = dict(self._exported_span(kwargs, len(plain) + 1).attributes or {})
-        assert {key: one_spare.get(key) for key in plain} == plain
-        assert len(set(one_spare) & identity_keys) == 1
+        kept_identity: list[int] = []  # mutable-ok: one count per limit
+        for limit in range(len(plain), len(full) + 1):
+            failed_span = self._exported_span(kwargs, limit, added_after=failed)
+            succeeded_span = self._exported_span(kwargs, limit - len(failed))
+            for span, expected in ((failed_span, plain), (succeeded_span, succeeded)):
+                attributes = dict(span.attributes or {})
+                assert span.dropped_attributes == 0
+                assert {key: attributes.get(key) for key in expected} == expected
+                assert set(attributes) - set(expected) <= identity_keys
+            kept_identity.append(len(set(failed_span.attributes or {}) & identity_keys))
+        assert kept_identity == list(range(len(identity_keys) + 1))
 
     def test_request_metadata_skips_a_span_that_already_carries_attributes(self) -> None:
         attributes: Final = dict(
