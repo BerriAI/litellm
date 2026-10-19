@@ -157,7 +157,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import Logging, _deployment_model_info
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -1063,6 +1063,19 @@ def _failure_usage_to_lift(
     return estimated_usage, _estimated_input_cost(model_call_details, estimated_usage.prompt_tokens, litellm_params)
 
 
+def _deployment_model_info_rates(params: Mapping[str, object]) -> Mapping[str, object]:
+    """The router-stamped deployment ``model_info`` from whichever metadata field carries it
+    (``metadata`` for chat, ``litellm_metadata`` for the generic_api_call routes)."""
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = params.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        model_info = cast("Mapping[str, object]", metadata).get("model_info")  # cast-ok: untyped router dict
+        if isinstance(model_info, dict):
+            return cast("Mapping[str, object]", model_info)  # cast-ok: untyped router dict, rates checked by caller
+    return {}
+
+
 def _deployment_cost_per_token(raw_params: Mapping[str, object] | None) -> CostPerToken | None:
     """The deployment's own rates (``input_cost_per_token`` and ``output_cost_per_token``),
     read from the top level of the logging object's ``litellm_params`` first and then from
@@ -1073,7 +1086,7 @@ def _deployment_cost_per_token(raw_params: Mapping[str, object] | None) -> CostP
     if not isinstance(raw_params, dict):
         return None
     params: Final = cast("Mapping[str, object]", raw_params)  # cast-ok: untyped router dict, rates checked below
-    model_info: Final = _deployment_model_info(raw_params)
+    model_info: Final = _deployment_model_info_rates(params)
     input_rate: Final = params.get("input_cost_per_token") or model_info.get("input_cost_per_token")
     output_rate: Final = params.get("output_cost_per_token") or model_info.get("output_cost_per_token")
     if not isinstance(input_rate, (int, float)):
