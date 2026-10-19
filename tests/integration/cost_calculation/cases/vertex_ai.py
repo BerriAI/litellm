@@ -776,6 +776,69 @@ GEMINI_3_1_PRO_FALLBACK_VIDEO_TOKENS_AT_INPUT_RATE: Final = CostTrackingTestCase
     ),
 )
 
+GEMINI_3_1_PRO_FALLBACK_VIDEO_TOKENS_ABOVE_200K: Final = CostTrackingTestCase(
+    name="gemini-3.1-pro-fallback_video_tokens_above_200k",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gemini-3.1-pro",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "a7c1e02d9b44 summarize the attached hour-long recording in one line",
+                    },
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": "data:video/mp4;base64,AAAAGGZ0eXBpc29tAAACAGlzb21pc282AAACCG1kYXQNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8/oBCA8WHSQrMjlAR05VXGNqcXh/ho2Um6KpsLe+xczT2uHo7/b9BAsSGSAnLjU8Q0pRWF9mbXR7gomQl56lrLO6wcjP1t3k6/L5AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4+rx+P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+Lp8Pf+BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2/QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy+QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI+WnaSrsrnAx87V3OPq8fj/Bg==",
+                            "format": "mp4",
+                        },
+                    },
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "scripted answer a7c1e02d9b44"}], "role": "model"},
+                    "finishReason": "STOP",
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 250000,
+                "candidatesTokenCount": 300,
+                "totalTokenCount": 250300,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 10000},
+                    {"modality": "VIDEO", "tokenCount": 240000},
+                ],
+            },
+            "modelVersion": "gemini-3.1-pro",
+        },
+    ),
+    expected=ExactExpected(
+        spend=1.05567, input_cost=1.05, output_cost=0.00567, prompt_tokens=250000, completion_tokens=300
+    ),
+)
+
 GEMINI_3_1_PRO_STREAM: Final = CostTrackingTestCase(
     name="gemini-3.1-pro-stream",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
@@ -3095,6 +3158,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_WEB_SEARCH_MEDIUM,
     GEMINI_3_1_PRO_GOOGLE_MAPS_GROUNDING,
     GEMINI_3_1_PRO_FALLBACK_VIDEO_TOKENS_AT_INPUT_RATE,
+    GEMINI_3_1_PRO_FALLBACK_VIDEO_TOKENS_ABOVE_200K,
     GEMINI_3_1_PRO_STREAM,
     GEMINI_3_1_PRO_STREAM_NO_USAGE,
     GEMINI_3_1_PRO_STREAM_NO_USAGE_TOOL_CALL,
