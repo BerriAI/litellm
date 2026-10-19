@@ -59,7 +59,7 @@ from integration.management._batch_file_caps import (
 from pydantic import JsonValue
 from redis import Redis
 
-pytestmark = pytest.mark.timeout(600)
+pytestmark: Final = [pytest.mark.timeout(600), pytest.mark.shares_worker_state]
 
 YAML_RECORDS: Final = 3
 YAML_UPLOADS: Final = 4

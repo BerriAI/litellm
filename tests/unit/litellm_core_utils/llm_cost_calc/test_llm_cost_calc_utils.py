@@ -450,6 +450,66 @@ def test_video_tokens_fallback_to_base_cost():
     assert round(completion_cost, 12) == round((600 + 1120) * 2e-6, 12)
 
 
+def test_prompt_audio_and_video_tokens_without_modality_rates_bill_at_tiered_input_rate():
+    """Prompt audio/video tokens with no modality rate are prompt tokens, so a >200k prompt bills them above-200k."""
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_token_above_200k_tokens": 4e-6,
+        "output_cost_per_token": 1.2e-5,
+        "output_cost_per_token_above_200k_tokens": 1.8e-5,
+    }
+
+    usage = Usage(
+        prompt_tokens=816032,
+        completion_tokens=4559,
+        total_tokens=820591,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=9033, audio_tokens=14999, video_tokens=792000),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=4559),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="test-model", usage=usage, custom_llm_provider="vertex_ai"
+        )
+
+    assert round(prompt_cost, 9) == round(816032 * 4e-6, 9)
+    assert round(completion_cost, 9) == round(4559 * 1.8e-5, 9)
+
+
+def test_prompt_modality_rates_still_win_over_tiered_input_rate():
+    """An explicit input_cost_per_audio_token / input_cost_per_video_token beats the fallback, even above 200k."""
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_token_above_200k_tokens": 4e-6,
+        "input_cost_per_audio_token": 3e-6,
+        "input_cost_per_video_token": 1e-6,
+        "output_cost_per_token": 1.2e-5,
+    }
+
+    usage = Usage(
+        prompt_tokens=300000,
+        completion_tokens=10,
+        total_tokens=300010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=100000, audio_tokens=100000, video_tokens=100000),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=10),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, _ = generic_cost_per_token(model="test-model", usage=usage, custom_llm_provider="vertex_ai")
+
+    assert round(prompt_cost, 9) == round(100000 * 4e-6 + 100000 * 3e-6 + 100000 * 1e-6, 9)
+
+
 def test_generic_cost_per_token_above_200k_tokens(_local_model_cost_map):
     # gemini-2.5-pro-exp-03-25 was removed; gemini-2.5-pro has same above-200k pricing
     model = "gemini-2.5-pro"
@@ -3996,3 +4056,60 @@ def test_get_batch_cost_rates_claude_haiku_5_5_prompt_length_tiers(
     )
 
     assert (rates.input, rates.output, rates.cache_read, rates.cache_creation) == expected
+
+
+@pytest.mark.parametrize(("speed", "multiplier"), (("fast", 6.0), ("standard", 1.0), (None, 1.0)))
+def test_token_type_cost_breakdown_bills_cache_tokens_at_the_provider_speed_multiplier(
+    monkeypatch: pytest.MonkeyPatch, speed: str | None, multiplier: float
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fast-cache-model",
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 1e-7,
+            "cache_creation_input_token_cost": 1.25e-6,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "provider_specific_entry": {"fast": 6.0},
+        },
+    )
+    usage = Usage(
+        prompt_tokens=800,
+        completion_tokens=50,
+        total_tokens=850,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400, cache_creation_tokens=300),
+        speed=speed,
+    )
+
+    breakdown = get_token_type_cost_breakdown(model="fast-cache-model", custom_llm_provider="anthropic", usage=usage)
+
+    assert breakdown.cache_read_cost == pytest.approx(multiplier * 400 * 1e-7)
+    assert breakdown.cache_creation_cost == pytest.approx(multiplier * 300 * 1.25e-6)
+
+
+GEMINI_4_ARGON_TOKEN_PRICE_KEYS: Final = (
+    "input_cost_per_token",
+    "input_cost_per_token_batches",
+    "input_cost_per_token_flex",
+    "input_cost_per_token_priority",
+    "output_cost_per_token",
+    "output_cost_per_token_batches",
+    "output_cost_per_token_flex",
+    "output_cost_per_token_priority",
+    "output_cost_per_reasoning_token",
+    "cache_read_input_token_cost",
+    "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_flex",
+    "cache_read_input_token_cost_priority",
+)
+
+
+def test_vertex_gemini_4_argon_matches_gemini_api_global_pricing(_local_model_cost_map: None) -> None:
+    vertex_row: Final = litellm.model_cost["vertex_ai/gemini-4-argon"]
+    gemini_row: Final = litellm.model_cost["gemini/gemini-4-argon"]
+    assert {key: vertex_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS} == {
+        key: gemini_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS
+    }
+    assert vertex_row["litellm_provider"].startswith("vertex_ai")

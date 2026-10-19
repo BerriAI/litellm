@@ -104,6 +104,27 @@ const OPTIONS: OptionConfig[] = [
     adminOnly: true,
   },
 ];
+const visibleOptions = (userRole: string | null, canViewTagUsage: boolean, isOrgAdmin: boolean): OptionConfig[] => {
+  const isAdmin = all_admin_roles.includes(userRole ?? "");
+  return OPTIONS.filter((option) => {
+    if (option.capability) {
+      return hasCapability(userRole, option.capability, isOrgAdmin);
+    }
+    if (option.value === "tag" && canViewTagUsage) {
+      return true;
+    }
+    return !(option.adminOnly && !isAdmin);
+  });
+};
+
+export const USAGE_OPTIONS: readonly UsageOption[] = OPTIONS.map((option) => option.value);
+
+export const allowedUsageOptions = (
+  userRole: string | null,
+  canViewTagUsage: boolean,
+  isOrgAdmin: boolean,
+): readonly UsageOption[] => visibleOptions(userRole, canViewTagUsage, isOrgAdmin).map((option) => option.value);
+
 export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
@@ -116,18 +137,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
 }) => {
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
-    return OPTIONS.filter((option) => {
-      if (option.capability) {
-        return hasCapability(userRole, option.capability, isOrgAdmin);
-      }
-      if (option.value === "tag" && canViewTagUsage) {
-        return true;
-      }
-      if (option.adminOnly && !isAdmin) {
-        return false;
-      }
-      return true;
-    }).map((option) => {
+    return visibleOptions(userRole, canViewTagUsage, isOrgAdmin).map((option) => {
       let label = option.label;
       let desc = option.description;
       if (option.showForAdmin && option.showForNonAdmin) {

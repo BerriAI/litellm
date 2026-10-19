@@ -1088,6 +1088,25 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
     )
 
 
+def _modality_token_cost(
+    model_info: ModelInfo,
+    modality_cost_key: str,
+    tokens: int,
+    prompt_base_cost: float,
+    service_tier: str | None,
+) -> float:
+    """
+    Audio, image and video prompt tokens bill at their modality rate when the model has one.
+    Without one they are ordinary prompt tokens, so they bill at `prompt_base_cost`, which
+    `_get_token_base_cost` has already resolved for the service tier and long-context tier.
+    """
+    tiered_key: Final = get_service_tier_cost_key(modality_cost_key, service_tier)
+    cost_key: Final = tiered_key if model_info.get(tiered_key) is not None else modality_cost_key
+    if model_info.get(cost_key) is None:
+        return float(tokens) * prompt_base_cost
+    return calculate_cost_component(model_info, cost_key, tokens)
+
+
 def _calculate_input_cost(
     prompt_tokens_details: PromptTokensDetailsResult,
     model_info: ModelInfo,
@@ -1118,28 +1137,37 @@ def _calculate_input_cost(
     if prompt_tokens_details["audio_tokens"] and not (
         prompt_tokens_details["audio_length_seconds"] and model_info.get("input_cost_per_audio_per_second") is not None
     ):
-        audio_cost_key: Final = get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
-        prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
+        prompt_cost += _modality_token_cost(
+            model_info,
+            "input_cost_per_audio_token",
+            prompt_tokens_details["audio_tokens"],
+            prompt_base_cost,
+            service_tier,
+        )
 
     ### IMAGE TOKEN COST
     if prompt_tokens_details["image_tokens"] and not (
         prompt_tokens_details["image_count"] and model_info.get("input_cost_per_image") is not None
     ):
-        # For image token costs:
-        # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
-        image_token_cost_key = "input_cost_per_image_token"
-        if model_info.get(image_token_cost_key) is None:
-            image_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, image_token_cost_key, prompt_tokens_details["image_tokens"])
+        prompt_cost += _modality_token_cost(
+            model_info,
+            "input_cost_per_image_token",
+            prompt_tokens_details["image_tokens"],
+            prompt_base_cost,
+            service_tier,
+        )
 
     ### VIDEO TOKEN COST
     if prompt_tokens_details["video_tokens"] and not (
         prompt_tokens_details["video_length_seconds"] and model_info.get("input_cost_per_video_per_second") is not None
     ):
-        video_token_cost_key = "input_cost_per_video_token"
-        if model_info.get(video_token_cost_key) is None:
-            video_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, video_token_cost_key, prompt_tokens_details["video_tokens"])
+        prompt_cost += _modality_token_cost(
+            model_info,
+            "input_cost_per_video_token",
+            prompt_tokens_details["video_tokens"],
+            prompt_base_cost,
+            service_tier,
+        )
 
     ### CACHE WRITING COST - Now uses tiered pricing
     if (
@@ -1267,6 +1295,13 @@ def get_provider_specific_geo_multiplier(model_info: ModelInfo, usage: Usage) ->
         return 1.0
     provider_specific_entry: Final[dict[str, float]] = model_info.get("provider_specific_entry") or {}
     return float(provider_specific_entry.get(inference_geo.lower(), 1.0))
+
+
+def get_provider_specific_speed_multiplier(model_info: ModelInfo, usage: Usage) -> float:
+    provider_specific_entry: Final = model_info.get("provider_specific_entry")
+    if getattr(usage, "speed", None) != "fast" or not provider_specific_entry:
+        return 1.0
+    return float(provider_specific_entry.get("fast", 1.0))
 
 
 def _resolve_reasoning_token_cost(
@@ -1633,6 +1668,7 @@ def _cost_map_billed_rates(
         get_regional_uplift_multiplier(model_info, data_residency)
         * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
         * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
+        * get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
     )
     return BilledTokenRates(
         input_cost_per_token=prompt_base_cost,

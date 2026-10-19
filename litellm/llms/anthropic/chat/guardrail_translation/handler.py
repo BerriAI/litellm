@@ -24,11 +24,17 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    keep_non_string_tool_result_texts,
+    scannable_tool_result_request,
+)
+from litellm.llms.anthropic.pass_through.messages.utils import filtered_safeguard_results, redacted_stop_details
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
@@ -44,6 +50,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    list_field,
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     scoped_structured_message_indices,
@@ -225,6 +232,7 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
 
 
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_SSE_DATA: Final = TypeAdapter(object)
 _RELEASED_TOOL_USE_STOP: Final = (
     b"event: message_delta\n"
     b'data: {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, '
@@ -358,8 +366,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     def build_stream_error_items(
         self,
         exc: "HTTPException",
-        responses_so_far: Sequence[Any] | None = None,
-    ) -> Sequence[Any] | None:
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
         from litellm.proxy.common_request_processing import (
             serialize_http_exception_detail,
         )
@@ -473,12 +481,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not line.startswith("data:"):
             return ()
         try:
-            parsed: Final[object] = json.loads(line[len("data:") :].strip())
+            parsed: Final = _DECODED_SSE_DATA.validate_python(json.loads(line[len("data:") :].strip()))
         except json.JSONDecodeError:
             return ()
-        if not isinstance(parsed, dict):
+        event: Final = as_str_mapping(parsed)
+        if event is None:
             return ()
-        return (_as_str_mapping(parsed),)
+        return (event,)
 
     @staticmethod
     def _iter_sse_events(item: object) -> Sequence[Mapping[str, object]]:
@@ -488,8 +497,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         ``get_streaming_string_so_far``): raw SSE ``bytes`` -- which may bundle
         several events separated by a blank line -- and an already-parsed event
         ``dict``."""
-        if isinstance(item, dict):
-            return (_as_str_mapping(item),)
+        if (event := as_str_mapping(item)) is not None:
+            return (event,)
         if not isinstance(item, (bytes, bytearray)):
             return ()
         return tuple(
@@ -505,7 +514,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             chat_completion_compatible_request,
             _tool_name_mapping,
         ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy()),
+            anthropic_message_request=cast(AnthropicMessagesRequest, scannable_tool_result_request(data)),
             preserve_midturn_system=True,
         )
         return chat_completion_compatible_request
@@ -827,7 +836,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _write_back_structured_messages(
-        data: dict,  # mutable-ok: API message payload
+        data: dict[str, object],  # mutable-ok: API message payload
         structured_messages: list,  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
@@ -894,7 +903,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "thinking":
                         block.pop("cache_control", None)
-        data["messages"] = converted
+        data["messages"] = keep_non_string_tool_result_texts(converted, data.get("messages"))
 
     @staticmethod
     def _extract_midturn_system_text(
@@ -921,10 +930,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             images=(),
         )
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
+    def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract every tool name in an Anthropic messages request: tools[].name, plus
         tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
-        return [name for tool in data.get("tools") or [] for name in anthropic_tool_names(tool)]
+        return [name for tool in list_field(data, "tools") for name in anthropic_tool_names(tool)]
 
     @classmethod
     def _extract_input_text_and_images(
@@ -1452,6 +1461,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             return _SSEFieldRewrite("delta", "text", next(replacements))
 
         cls._rewrite_ended_stream_events(responses_so_far, rewrite_text_delta)
+        cls._redact_ended_stream_message_delta(
+            responses_so_far, kept_tool_use_ids=frozenset(cls._streamed_tool_use_ids(responses_so_far).values())
+        )
 
     @classmethod
     def _write_ended_stream_tool_call_rewrites(
@@ -1519,6 +1531,64 @@ class AnthropicMessagesHandler(BaseTranslation):
                     return None
 
         cls._rewrite_ended_stream_events(responses_so_far, rewrite_tool_use)
+        streamed_tool_use_ids: Final = cls._streamed_tool_use_ids(responses_so_far)
+        cls._redact_ended_stream_message_delta(
+            responses_so_far,
+            kept_tool_use_ids=frozenset(
+                tool_use_id for index, tool_use_id in streamed_tool_use_ids.items() if index not in rewrites_by_block
+            ),
+        )
+
+    @classmethod
+    def _streamed_tool_use_ids(cls, responses_so_far: Sequence[object]) -> Mapping[int, str]:
+        """The id of each buffered ``tool_use`` block, by its content block index."""
+        events: Final = chain.from_iterable(cls._iter_sse_events(item) for item in responses_so_far)
+        tool_use_blocks: Final = (
+            (event.get("index"), block)
+            for event in events
+            if event.get("type") == "content_block_start"
+            and (block := as_str_mapping(event.get("content_block"))) is not None
+            and block.get("type") == "tool_use"
+        )
+        return MappingProxyType(
+            {
+                index: tool_use_id
+                for index, block in tool_use_blocks
+                if isinstance(index, int) and isinstance(tool_use_id := block.get("id"), str)
+            }
+        )
+
+    @classmethod
+    def _redact_ended_stream_message_delta(
+        cls,
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
+        *,
+        kept_tool_use_ids: frozenset[str],
+    ) -> None:
+        """Hold the buffered ``message_delta`` to the rules a re-emitted rewrite follows: a verdict survives
+        only for a tool call delivered unchanged, and no free-text ``explanation`` describes the text the
+        guardrail rewrote."""
+
+        def rewrite_stop_details(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
+            delta: Final = as_str_mapping(event.get("delta")) if event.get("type") == "message_delta" else None
+            if delta is None or "stop_details" not in delta:
+                return None
+            return _SSEFieldRewrite(
+                "delta", "stop_details", redacted_stop_details(delta["stop_details"], keep_explanations=False)
+            )
+
+        def rewrite_safeguard_results(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
+            delta: Final = as_str_mapping(event.get("delta")) if event.get("type") == "message_delta" else None
+            if delta is None or "safeguard_results" not in delta:
+                return None
+            return _SSEFieldRewrite(
+                "delta",
+                "safeguard_results",
+                filtered_safeguard_results(delta["safeguard_results"], kept_tool_use_ids, keep_explanations=False),
+            )
+
+        cls._rewrite_ended_stream_events(responses_so_far, rewrite_stop_details)
+        cls._rewrite_ended_stream_events(responses_so_far, rewrite_safeguard_results)
 
     @staticmethod
     def _rewrite_ended_stream_events(
@@ -1535,8 +1605,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _rewrite_buffered_item(item: object, rewrite_event: _SSEEventRewriter) -> object:
-        if isinstance(item, dict):
-            return _rewritten_event(_as_str_mapping(item), rewrite_event)
+        if (event := as_str_mapping(item)) is not None:
+            return _rewritten_event(event, rewrite_event)
         if isinstance(item, (bytes, bytearray)):
             return AnthropicMessagesHandler._rewrite_sse_events(bytes(item), rewrite_event)
         return item
