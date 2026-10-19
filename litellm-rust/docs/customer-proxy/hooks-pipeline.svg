@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#dc2626"/></marker>
+  </defs>
+  <rect width="1000" height="640" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Hooks and observers around one /v1/messages or chat request</text>
+
+  <!-- auth -->
+  <rect x="24" y="60" width="210" height="104" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="38" y="84" font-weight="600" fill="#1e3a8a">Auth</text>
+  <text x="38" y="106" fill="#1e293b" font-size="13">key store row now also gives</text>
+  <text x="38" y="124" fill="#1e293b" font-size="13">alias, user, team alias,</text>
+  <text x="38" y="142" fill="#1e293b" font-size="13">key and team metadata</text>
+
+  <!-- facts -->
+  <rect x="270" y="60" width="300" height="104" rx="8" fill="#f8fafc" stroke="#64748b"/>
+  <text x="284" y="84" font-weight="600" fill="#0f172a">Request facts (built only if read)</text>
+  <text x="284" y="106" fill="#334155" font-size="13">key, end user, client headers, model,</text>
+  <text x="284" y="124" fill="#334155" font-size="13">stream, max_tokens, raw body (shared),</text>
+  <text x="284" y="142" fill="#334155" font-size="13">input estimate (bytes / 4, made once)</text>
+  <line x1="234" y1="112" x2="266" y2="112" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- hooks -->
+  <rect x="606" y="60" width="370" height="140" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="620" y="84" font-weight="600" fill="#065f46">Hooks, in config order</text>
+  <text x="620" y="106" fill="#1e293b" font-size="13">each declares reads (facts) and writes (targets):</text>
+  <text x="620" y="124" fill="#1e293b" font-size="13">admission, upstream headers, upstream body,</text>
+  <text x="620" y="142" fill="#1e293b" font-size="13">response headers, annotations</text>
+  <text x="620" y="160" fill="#1e293b" font-size="13">same target twice: later hook wins</text>
+  <text x="620" y="178" fill="#1e293b" font-size="13">undeclared write: dropped with a warning</text>
+  <line x1="570" y1="112" x2="602" y2="112" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- refusal -->
+  <rect x="606" y="230" width="370" height="76" rx="8" fill="#fef2f2" stroke="#dc2626"/>
+  <text x="620" y="254" font-weight="600" fill="#991b1b">Refusal</text>
+  <text x="620" y="274" fill="#1e293b" font-size="13">status, proxy error body, hook headers (retry-after)</text>
+  <text x="620" y="292" fill="#1e293b" font-size="13">earlier hooks settle; observers still get a record</text>
+  <line x1="790" y1="200" x2="790" y2="226" stroke="#dc2626" stroke-width="1.5" marker-end="url(#r)"/>
+
+  <!-- routing -->
+  <rect x="24" y="230" width="546" height="76" rx="8" fill="#f8fafc" stroke="#64748b"/>
+  <text x="38" y="254" font-weight="600" fill="#0f172a">Routing and provider call (unchanged)</text>
+  <text x="38" y="274" fill="#334155" font-size="13">body edits applied to every attempt; each attempt notes its deployment id</text>
+  <text x="38" y="292" fill="#334155" font-size="13">(model_info.id, or the router's derived id)</text>
+  <path d="M606 180 L300 180 L300 226" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- tap -->
+  <rect x="24" y="340" width="546" height="122" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="38" y="364" font-weight="600" fill="#92400e">Response tap</text>
+  <text x="38" y="386" fill="#1e293b" font-size="13">stream: scans SSE lines; Anthropic decides from the first 96 bytes,</text>
+  <text x="38" y="404" fill="#1e293b" font-size="13">so content lines are never copied; OpenAI keeps only usage chunks</text>
+  <text x="38" y="422" fill="#1e293b" font-size="13">JSON: parses only the top-level "usage" object; Content-Length kept</text>
+  <text x="38" y="440" fill="#1e293b" font-size="13">ends on last chunk or client drop (recorded as interrupted)</text>
+  <line x1="297" y1="306" x2="297" y2="336" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- cost -->
+  <rect x="606" y="340" width="370" height="122" rx="8" fill="#f8fafc" stroke="#64748b"/>
+  <text x="620" y="364" font-weight="600" fill="#0f172a">Cost (litellm-cost)</text>
+  <text x="620" y="386" fill="#334155" font-size="13">prices per deployment id, built at startup:</text>
+  <text x="620" y="404" fill="#334155" font-size="13">cost map entry overlaid by config prices</text>
+  <text x="620" y="422" fill="#334155" font-size="13">_above_Nk_tokens thresholds, _priority/_flex,</text>
+  <text x="620" y="440" fill="#334155" font-size="13">cache read / 5m / 1h write rates</text>
+  <line x1="570" y1="400" x2="602" y2="400" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- observers -->
+  <rect x="24" y="496" width="952" height="116" rx="8" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="38" y="520" font-weight="600" fill="#5b21b6">Settle, then observers (off the request path)</text>
+  <text x="38" y="542" fill="#1e293b" font-size="13">hooks that asked are told how the request ended (to release reservations)</text>
+  <text x="38" y="560" fill="#1e293b" font-size="13">one record (facts, deployment, status, usage, cost, timings, annotations) per request</text>
+  <text x="38" y="578" fill="#1e293b" font-size="13">each observer: own tokio task behind a bounded queue; full queue drops and counts; shutdown drains then flushes</text>
+  <text x="38" y="596" fill="#64748b" font-size="13">nothing configured: none of this runs and requests take the old path</text>
+  <line x1="297" y1="462" x2="297" y2="492" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="790" y1="462" x2="790" y2="492" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+</svg>

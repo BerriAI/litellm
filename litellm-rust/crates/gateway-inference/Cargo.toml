@@ -12,6 +12,7 @@ base64.workspace = true
 bytes.workspace = true
 litellm-auth.workspace = true
 litellm-gateway-auth.workspace = true
+litellm-gateway-hooks.workspace = true
 litellm-inference.workspace = true
 litellm-inference-transcription.workspace = true
 litellm-inference-responses.workspace = true
@@ -30,6 +31,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
+memchr = "2"
+uuid.workspace = true
 
 [dev-dependencies]
 litellm-cache-memory.workspace = true

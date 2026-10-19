@@ -32,6 +32,7 @@ pub struct VerificationToken {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Team {
+    pub alias: Option<String>,
     pub blocked: bool,
     pub models: Vec<String>,
     pub spend: f64,
@@ -108,6 +109,7 @@ pub async fn find_verification_token(
                   (v.agent_id IS NOT NULL) AS "key_agent!",
                   v.team_id,
                   t.team_id AS "team_row_id?",
+                  t.team_alias AS "team_alias?",
                   t.blocked AS "team_blocked?",
                   t.models AS "team_models?",
                   t.spend AS "team_spend?",
@@ -174,6 +176,7 @@ pub async fn find_verification_token(
         },
         team_id: row.team_id,
         team: row.team_row_id.map(|_| Team {
+            alias: row.team_alias,
             blocked: row.team_blocked.unwrap_or(false),
             models: row.team_models.unwrap_or_default(),
             spend: row.team_spend.unwrap_or(0.0),

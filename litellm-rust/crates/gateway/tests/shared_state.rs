@@ -191,6 +191,7 @@ fn on_team() -> KeyStatus {
             models,
             allowed_routes,
             team_id: Some("team-1".into()),
+            profile: Default::default(),
         },
         status => status,
     }

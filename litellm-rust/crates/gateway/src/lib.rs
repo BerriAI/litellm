@@ -3,6 +3,7 @@ pub mod coordination;
 pub mod drain;
 mod error;
 pub mod health;
+pub mod hooks;
 mod key_status;
 mod keys;
 pub mod metrics;
