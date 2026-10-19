@@ -70,7 +70,7 @@ def resolve_llm_passthrough_timeout(
     stream_candidates: Final = (
         (
             request.get("stream_timeout"),
-            get_service_tier_timeout(service_tier, deployment.get("stream_timeout_by_service_tier")),
+            get_service_tier_timeout(service_tier, deployment, "stream_timeout_by_service_tier"),
             deployment.get("stream_timeout"),
             router_stream_timeout,
         )
@@ -81,7 +81,7 @@ def resolve_llm_passthrough_timeout(
         *stream_candidates,
         request.get("timeout"),
         request.get("request_timeout"),
-        get_service_tier_timeout(service_tier, deployment.get("timeout_by_service_tier")),
+        get_service_tier_timeout(service_tier, deployment, "timeout_by_service_tier"),
         deployment.get("timeout"),
         deployment.get("request_timeout"),
         router_timeout,

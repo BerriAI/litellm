@@ -13,7 +13,7 @@ tell "user asked for this" from "nobody set it". This resolver answers that:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Literal, Protocol
 
 from pydantic import TypeAdapter
 
@@ -34,9 +34,17 @@ def get_configured_request_timeout() -> float | None:
     return None
 
 
-def get_service_tier_timeout(service_tier: object, timeouts_by_service_tier: object) -> float | None:
-    """Return the deployment's timeout for the request's ``service_tier``, else ``None``."""
+class _DeploymentParams(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def get_service_tier_timeout(
+    service_tier: object,
+    litellm_params: _DeploymentParams,
+    key: Literal["timeout_by_service_tier", "stream_timeout_by_service_tier"],
+) -> float | None:
+    """Return the deployment's ``key`` timeout for the request's ``service_tier``, else ``None``."""
     if not isinstance(service_tier, str):
         return None
-    timeouts: Final = _TIMEOUTS_BY_SERVICE_TIER.validate_python(timeouts_by_service_tier)
+    timeouts: Final = _TIMEOUTS_BY_SERVICE_TIER.validate_python(litellm_params.get(key))
     return None if timeouts is None else timeouts.get(service_tier)
