@@ -1165,6 +1165,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     #########################################################
     ########## COMPACT RESPONSE API TRANSFORMATION ##########
     #########################################################
+    def compact_url(self, api_base: str) -> str:
+        # Preserve query params (e.g., api-version) while appending /compact.
+        parsed_url: Final = httpx.URL(api_base)
+        return str(parsed_url.copy_with(path=parsed_url.path.rstrip("/") + "/compact"))
+
     def transform_compact_response_api_request(
         self,
         model: str,
@@ -1180,10 +1185,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - POST /v1/responses/compact
         """
-        # Preserve query params (e.g., api-version) while appending /compact.
-        parsed_url: Final = httpx.URL(api_base)
-        compact_path: Final = parsed_url.path.rstrip("/") + "/compact"
-        url: Final = str(parsed_url.copy_with(path=compact_path))
+        url: Final = self.compact_url(api_base)
 
         request_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
             "Mapping[str, object]", response_api_optional_request_params

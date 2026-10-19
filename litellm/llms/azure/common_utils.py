@@ -711,7 +711,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             )
 
         oidc_token: Final = (
-            azure_ad_token if azure_ad_token is not None and azure_ad_token.startswith("oidc/") else None
+            azure_ad_token if isinstance(azure_ad_token, str) and azure_ad_token.startswith("oidc/") else None
         )
         if oidc_token is not None:
             verbose_logger.debug("Using Azure OIDC Token for Azure Auth")

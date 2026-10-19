@@ -2084,10 +2084,10 @@ class BaseLLMHTTPHandler:
         if provider_config is None:
             raise ValueError(f"No provider config found for provider: {custom_llm_provider}")
 
-        def validate_environment() -> dict[str, object]:
+        def validate_environment() -> Mapping[str, object]:
             return provider_config.validate_environment(api_key=api_key, api_base=api_base, headers=headers or {})
 
-        validated_headers: Final = await asyncio.to_thread(validate_environment)
+        validated_headers: Final = dict(await asyncio.to_thread(validate_environment))
 
         # Transform the request first
         data: Final = provider_config.transform_search_request(

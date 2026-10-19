@@ -251,24 +251,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Azure sends the model in the response.create body, not the URL
         return False
 
-    def transform_compact_response_api_request(
-        self,
-        model: str,
-        input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
-        api_base: str,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+    def compact_url(self, api_base: str) -> str:
         # Azure serves compaction only on the v1 route; the dated api-version route answers 500 or 404
-        return super().transform_compact_response_api_request(
-            model=model,
-            input=input,
-            response_api_optional_request_params=response_api_optional_request_params,
-            api_base=str(_v1_responses_url(api_base)),
-            litellm_params=litellm_params,
-            headers=headers,
-        )
+        return super().compact_url(str(_v1_responses_url(api_base)))
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
