@@ -1115,12 +1115,23 @@ def _is_safe_preset_route_transition(
     return existing != _READ_ONLY_ALLOWED_ROUTES_PRESET or incoming == existing
 
 
+def _resends_stored_routes(
+    data: UpdateKeyRequest | RegenerateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> bool:
+    return (
+        "allowed_routes" in data.model_fields_set
+        and data.allowed_routes is not None
+        and list(data.allowed_routes) == list(existing_key_row.allowed_routes or ())
+    )
+
+
 def _enforce_allowed_routes_update_permission(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    if data.allowed_routes is not None and list(data.allowed_routes) == list(existing_key_row.allowed_routes or ()):
+    if _resends_stored_routes(data, existing_key_row):
         return
     if _is_safe_preset_route_transition(
         incoming_allowed_routes=data.allowed_routes,
@@ -2813,6 +2824,8 @@ async def prepare_key_update_data(
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
+    if _resends_stored_routes(data, existing_key_row):
+        data_json.pop("allowed_routes", None)
     if (
         data.metadata is not None
         and data.metadata.get("service_account_id") is not None

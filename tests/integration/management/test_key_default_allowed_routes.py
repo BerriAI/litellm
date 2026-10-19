@@ -27,11 +27,22 @@ pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 DEFAULT_ROUTES: Final = ("llm_api_routes", "/key/spend/report")
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _PROBE_PREFIX: Final = "route-probe-"
+_RACE_PREFIX: Final = "route-race-"
+_ROUTES_AFTER_ADMIN_REMOVAL: Final = ["llm_api_routes"]
 _POLICY_SOURCE: Final = f'''import json
 
+from litellm.proxy import proxy_server
 
-async def report_routes_for_probes(request):
-    if not (request.request.key_alias or "").startswith("{_PROBE_PREFIX}"):
+
+async def route_policy(request):
+    alias = request.request.key_alias or ""
+    if request.operation == "update" and alias.startswith("{_RACE_PREFIX}"):
+        await proxy_server.prisma_client.db.litellm_verificationtoken.update(
+            where={{"token": request.existing_key.token}},
+            data={{"allowed_routes": {_ROUTES_AFTER_ADMIN_REMOVAL!r}}},
+        )
+        return {{"decision": True}}
+    if not alias.startswith("{_PROBE_PREFIX}"):
         return {{"decision": True}}
     return {{"decision": False, "message": "routes=" + json.dumps(request.effective_key.allowed_routes or [])}}
 '''
@@ -57,9 +68,9 @@ def _config_with_default_routes(
 @pytest.fixture(scope="module")
 def defaults(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
     directory: Final = tmp_path_factory.mktemp("default-allowed-routes")
-    (directory / "route_probe.py").write_text(_POLICY_SOURCE)
+    (directory / "route_policy.py").write_text(_POLICY_SOURCE)
     config: Final = _config_with_default_routes(
-        directory, list(DEFAULT_ROUTES), {"custom_key_policy": "route_probe.report_routes_for_probes"}
+        directory, list(DEFAULT_ROUTES), {"custom_key_policy": "route_policy.route_policy"}
     )
     with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=config) as candidate:
         yield candidate
@@ -294,3 +305,23 @@ def test_non_owner_resending_unchanged_routes_is_refused(gateway: Gateway) -> No
 
         assert response.status_code == 403, response.text
         assert _stored_alias_and_routes(gateway, target) == before
+
+
+def test_owner_resend_keeps_an_admin_route_removal_made_mid_update(defaults: Gateway) -> None:
+    with defaults.scenario() as scenario:
+        owner_key: Final = _full_access_key(scenario, user_id=scenario.user(user_role="internal_user"))
+        created: Final = defaults.request("POST", "/key/generate", {}, key=owner_key)
+        assert created.status_code == 200, created.text
+        target: Final = _created_key(scenario, JSON_OBJECT.validate_json(created.content))
+        assert _stored_routes(defaults, target) == list(DEFAULT_ROUTES)
+        alias: Final = f"{_RACE_PREFIX}{uuid.uuid4().hex}"
+
+        response: Final = defaults.request(
+            "POST",
+            "/key/update",
+            {"key": target, "key_alias": alias, "allowed_routes": list(DEFAULT_ROUTES)},
+            key=owner_key,
+        )
+
+        assert response.status_code == 200, response.text
+        assert _stored_alias_and_routes(defaults, target) == (alias, _ROUTES_AFTER_ADMIN_REMOVAL)

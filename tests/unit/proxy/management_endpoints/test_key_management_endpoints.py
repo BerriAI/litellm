@@ -19844,6 +19844,30 @@ def test_owner_cannot_change_the_routes_a_key_got_from_default_key_generate_para
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("incoming", "written"),
+    [
+        (["llm_api_routes", "/key/spend/report"], None),
+        (["/key/spend/report", "llm_api_routes"], ["/key/spend/report", "llm_api_routes"]),
+        (["llm_api_routes"], ["llm_api_routes"]),
+    ],
+    ids=["unchanged_resend", "reordered", "changed"],
+)
+async def test_key_update_writes_allowed_routes_only_when_they_change(
+    incoming: list[str], written: list[str] | None
+) -> None:
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="hashed", allowed_routes=["llm_api_routes", "/key/spend/report"]
+    )
+
+    update_values: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", key_alias="renamed", allowed_routes=incoming), existing_key_row=existing_key
+    )
+
+    assert (update_values["key_alias"], update_values.get("allowed_routes")) == ("renamed", written)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("request_data", "expected_routes"),
     [(GenerateKeyRequest(), []), (GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API), ["llm_api_routes"])],
     ids=["no_key_type", "ai_apis"],
