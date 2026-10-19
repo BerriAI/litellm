@@ -20,7 +20,6 @@ from tests.integration._support.client import (
     string_value,
     team_admin_permissions,
 )
-from tests.integration._support.database import read_rows
 from tests.integration._support.process import graceful_stop_seconds, owned_proxy
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
@@ -78,8 +77,8 @@ def _hash(key: str) -> str:
     return sha256(key.encode()).hexdigest()
 
 
-def _stored_routes(key: str) -> JsonValue:
-    rows: Final = read_rows('SELECT allowed_routes FROM "LiteLLM_VerificationToken" WHERE token = %s', (_hash(key),))
+def _stored_routes(gateway: Gateway, key: str) -> JsonValue:
+    rows: Final = gateway.rows('SELECT allowed_routes FROM "LiteLLM_VerificationToken" WHERE token = %s', (_hash(key),))
     assert len(rows) == 1, rows
     return rows[0]["allowed_routes"]
 
@@ -114,7 +113,7 @@ def test_admin_created_key_routes(defaults: Gateway, body: dict[str, JsonValue],
         created: Final = defaults.post("/key/generate", {"user_id": user, **body})
         token: Final = _created_key(scenario, created)
 
-        assert (created["allowed_routes"], _stored_routes(token)) == (expected, expected)
+        assert (created["allowed_routes"], _stored_routes(defaults, token)) == (expected, expected)
 
 
 @pytest.mark.parametrize(
@@ -130,7 +129,7 @@ def test_default_with_a_non_string_route_is_ignored(
         created: Final = non_string_default.post("/key/generate", {"user_id": user, **body})
         token: Final = _created_key(scenario, created)
 
-        assert (created["allowed_routes"], _stored_routes(token)) == (expected, expected)
+        assert (created["allowed_routes"], _stored_routes(non_string_default, token)) == (expected, expected)
 
 
 def test_default_routes_open_own_spend_report_and_nothing_wider(defaults: Gateway) -> None:
@@ -143,7 +142,7 @@ def test_default_routes_open_own_spend_report_and_nothing_wider(defaults: Gatewa
         other: Final = _full_access_key(scenario, user_id=scenario.user(user_role="internal_user"))
         defaults.chat(model, key=token, text=f"default routes {uuid.uuid4().hex}")
         logged: Final = eventually(
-            lambda: read_rows(
+            lambda: defaults.rows(
                 """SELECT to_char("startTime", 'YYYY-MM-DD') AS day FROM "LiteLLM_SpendLogs" WHERE api_key = %s""",
                 (_hash(token),),
             ),
@@ -176,7 +175,7 @@ def test_internal_user_own_key_routes(defaults: Gateway, body: dict[str, JsonVal
         assert created.status_code == 200, created.text
         token: Final = _created_key(scenario, JSON_OBJECT.validate_json(created.content))
 
-        assert read_rows(
+        assert defaults.rows(
             'SELECT user_id, allowed_routes FROM "LiteLLM_VerificationToken" WHERE token = %s', (_hash(token),)
         ) == [{"user_id": user, "allowed_routes": list(DEFAULT_ROUTES)}]
 
@@ -185,12 +184,12 @@ def test_service_account_skips_default_and_its_team_key_gets_it(defaults: Gatewa
     with defaults.scenario() as scenario:
         team: Final = scenario.team()
         account: Final = _created_key(scenario, defaults.post("/key/service-account/generate", {"team_id": team}))
-        assert _stored_routes(account) == []
+        assert _stored_routes(defaults, account) == []
 
         defaults.post("/team/permissions_update", {"team_id": team, "team_member_permissions": ["/key/generate"]})
         team_key: Final = _created_key(scenario, defaults.post("/key/generate", {"team_id": team}, key=account))
 
-        assert read_rows(
+        assert defaults.rows(
             'SELECT user_id, team_id, allowed_routes FROM "LiteLLM_VerificationToken" WHERE token = %s',
             (_hash(team_key),),
         ) == [{"user_id": None, "team_id": team, "allowed_routes": list(DEFAULT_ROUTES)}]
@@ -222,7 +221,7 @@ def test_custom_key_policy_sees_stored_routes(defaults: Gateway, team_admin: boo
         assert created.status_code == 200, created.text
         token: Final = _created_key(scenario, JSON_OBJECT.validate_json(created.content))
 
-        assert _policy_seen_routes(probe.text) == _stored_routes(token) == list(DEFAULT_ROUTES)
+        assert _policy_seen_routes(probe.text) == _stored_routes(defaults, token) == list(DEFAULT_ROUTES)
 
 
 _ADMIN_SET_ROUTES: Final = ("llm_api_routes", "/key/spend/report")
@@ -235,8 +234,8 @@ def _owner_key_with_admin_set_routes(gateway: Gateway, scenario: Scenario) -> tu
     return owner_key, target
 
 
-def _stored_alias_and_routes(key: str) -> tuple[JsonValue, list[str]]:
-    rows: Final = read_rows(
+def _stored_alias_and_routes(gateway: Gateway, key: str) -> tuple[JsonValue, list[str]]:
+    rows: Final = gateway.rows(
         'SELECT key_alias, allowed_routes FROM "LiteLLM_VerificationToken" WHERE token = %s', (_hash(key),)
     )
     assert len(rows) == 1, rows
@@ -255,7 +254,7 @@ def test_owner_resends_unchanged_routes(gateway: Gateway) -> None:
         )
 
         assert response.status_code == 200, response.text
-        assert _stored_alias_and_routes(target) == (alias, list(_ADMIN_SET_ROUTES))
+        assert _stored_alias_and_routes(gateway, target) == (alias, list(_ADMIN_SET_ROUTES))
 
 
 @pytest.mark.parametrize(
@@ -272,20 +271,20 @@ def test_owner_resends_unchanged_routes(gateway: Gateway) -> None:
 def test_owner_cannot_change_admin_set_routes(gateway: Gateway, routes: list[JsonValue]) -> None:
     with gateway.scenario() as scenario:
         owner_key, target = _owner_key_with_admin_set_routes(gateway, scenario)
-        before: Final = _stored_alias_and_routes(target)
+        before: Final = _stored_alias_and_routes(gateway, target)
         response: Final = gateway.request(
             "POST", "/key/update", {"key": target, "allowed_routes": routes}, key=owner_key
         )
 
         assert response.status_code == 403, response.text
-        assert _stored_alias_and_routes(target) == before
+        assert _stored_alias_and_routes(gateway, target) == before
 
 
 def test_non_owner_resending_unchanged_routes_is_refused(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         _owner_key, target = _owner_key_with_admin_set_routes(gateway, scenario)
         outsider_key: Final = scenario.key(user_id=scenario.user(user_role="internal_user"))
-        before: Final = _stored_alias_and_routes(target)
+        before: Final = _stored_alias_and_routes(gateway, target)
         response: Final = gateway.request(
             "POST",
             "/key/update",
@@ -294,4 +293,4 @@ def test_non_owner_resending_unchanged_routes_is_refused(gateway: Gateway) -> No
         )
 
         assert response.status_code == 403, response.text
-        assert _stored_alias_and_routes(target) == before
+        assert _stored_alias_and_routes(gateway, target) == before
