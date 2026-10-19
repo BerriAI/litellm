@@ -426,8 +426,6 @@ class TestErrorLogCarriesCallId:
 
     @pytest.mark.asyncio
     async def test_count_tokens_failure_log_carries_callers_call_id(self, caplog: pytest.LogCaptureFixture):
-        from fastapi import HTTPException
-
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
@@ -446,11 +444,10 @@ class TestErrorLogCarriesCallId:
                 proxy_server, "count_request_tokens", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))
             ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
-            pytest.raises(HTTPException) as raised,
         ):
-            await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
-        assert raised.value.status_code == 500
+        assert response.status_code == 500
         record = self._error_record(caplog)
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()

@@ -7,6 +7,7 @@ from typing import Any, Final
 
 from pydantic import JsonValue
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -58,14 +59,22 @@ class AnthropicTokenCounter(BaseTokenCounter):
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
 
-        # Get Anthropic API key from deployment config or environment
-        api_key = litellm_params.get("api_key")
+        api_key: Final = (
+            litellm_params.get("api_key") or litellm.anthropic_key or litellm.api_key or os.getenv("ANTHROPIC_API_KEY")
+        )
         if not api_key:
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-
-        if not api_key:
-            verbose_logger.warning("No Anthropic API key found for token counting")
-            return None
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="anthropic_api",
+                error=True,
+                error_message=(
+                    f"No Anthropic API key is set for model {request_model or model_to_use}, so tokens can't be "
+                    "counted. Set api_key on the deployment or ANTHROPIC_API_KEY in the proxy environment."
+                ),
+                status_code=401,
+            )
 
         try:
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
