@@ -2,7 +2,6 @@
 Tests for the Reco guardrail integration.
 """
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -95,7 +94,8 @@ class TestRecoGuardrailInitializer:
         """Guardrails reconciled from the DB can carry `optional_params` as a
         plain dict rather than a pydantic object; attribute-only access would
         silently read None for every field."""
-        litellm_params = SimpleNamespace(
+        litellm_params = LitellmParams.model_construct(
+            guardrail="reco",
             optional_params={
                 "reco_tenant_id": "33333333-3333-3333-3333-333333333333",
                 "api_base": "https://edge3.eu.reco.ai",
@@ -111,7 +111,8 @@ class TestRecoGuardrailInitializer:
 
     def test_initialize_guardrail_resolves_env_var_reference(self, monkeypatch):
         monkeypatch.setenv("RECO_TEST_TENANT_ID", "44444444-4444-4444-4444-444444444444")
-        litellm_params = SimpleNamespace(
+        litellm_params = LitellmParams(
+            guardrail="reco",
             optional_params={
                 "reco_tenant_id": "os.environ/RECO_TEST_TENANT_ID",
                 "api_base": "https://edge4.eu.reco.ai",
