@@ -90,7 +90,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
+from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, CostPerToken, ModelInfo, Usage
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -1059,12 +1059,42 @@ def _failure_usage_to_lift(
         return None
     if not provider_billed:
         return estimated_usage, 0.0
-    estimated_input_cost, _ = litellm.cost_per_token(
-        model=str(model_call_details.get("model") or ""),
-        custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
-        prompt_tokens=estimated_usage.prompt_tokens,
+    return estimated_usage, _estimated_input_cost(model_call_details, estimated_usage.prompt_tokens)
+
+
+def _deployment_cost_per_token(model_call_details: Mapping[str, object]) -> CostPerToken | None:
+    """The deployment's own rates from ``litellm_params`` (``input_cost_per_token`` and
+    ``output_cost_per_token`` in the model_list entry), so a billed failure is priced like
+    a success on the same deployment instead of from the public cost map."""
+    litellm_params: Final = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return None
+    input_rate: Final = litellm_params.get("input_cost_per_token")  # pyright: ignore[reportUnknownMemberType]  # untyped litellm_params dict
+    output_rate: Final = litellm_params.get("output_cost_per_token")  # pyright: ignore[reportUnknownMemberType]  # untyped litellm_params dict
+    if not isinstance(input_rate, (int, float)):
+        return None
+    return CostPerToken(
+        input_cost_per_token=float(input_rate),
+        output_cost_per_token=float(output_rate) if isinstance(output_rate, (int, float)) else 0.0,
     )
-    return estimated_usage, estimated_input_cost
+
+
+def _estimated_input_cost(model_call_details: Mapping[str, object], prompt_tokens: int) -> float:
+    """Input price for the estimated prompt; an unpriceable model (not in the cost map and no
+    deployment rate) keeps the row at $0 rather than dropping the failure row."""
+    try:
+        estimated_input_cost, _ = litellm.cost_per_token(
+            model=str(model_call_details.get("model") or ""),
+            custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
+            prompt_tokens=prompt_tokens,
+            custom_cost_per_token=_deployment_cost_per_token(model_call_details),
+        )
+    except Exception as exc:
+        verbose_proxy_logger.debug(
+            "failure spend estimate: could not price %s: %s", model_call_details.get("model"), exc
+        )
+        return 0.0
+    return estimated_input_cost
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})
