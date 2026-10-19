@@ -4,9 +4,13 @@ The handler module sits on the proxy layer and needs the optional ``mcp`` packag
 neither, so ordinary tools must never make ``completion()`` or ``responses()`` import it.
 """
 
+import json
 import sys
 from collections import deque
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from importlib.abc import MetaPathFinder
+from importlib.machinery import ModuleSpec
+from types import ModuleType
 from typing import Final
 
 import httpx
@@ -16,6 +20,7 @@ import respx
 import litellm
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 
+GATEWAY_REGISTRY_MODULE: Final = "litellm.proxy._experimental.mcp_server.mcp_server_manager"
 GATEWAY_HANDLER_MODULES: Final = (
     "litellm.responses.mcp.litellm_proxy_mcp_handler",
     "litellm.responses.mcp.chat_completions_handler",
@@ -88,6 +93,35 @@ def gateway_handler_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """Importing any gateway handler module raises, as it does on an install without proxy extras."""
     for module_name in GATEWAY_HANDLER_MODULES:
         monkeypatch.setitem(sys.modules, module_name, None)
+
+
+class _FailingImport(MetaPathFinder):
+    def __init__(self, module_name: str, error: ImportError) -> None:
+        self.module_name: Final = module_name
+        self.error: Final = error
+
+    def find_spec(
+        self, fullname: str, path: Sequence[str] | None, target: ModuleType | None = None
+    ) -> ModuleSpec | None:
+        if fullname == self.module_name:
+            raise self.error
+        return None
+
+
+@pytest.fixture(
+    params=[
+        ModuleNotFoundError("No module named 'mcp'"),
+        ImportError("cannot import name 'CacheableResult' from 'mcp.types'"),
+        ModuleNotFoundError("No module named 'fastapi'"),
+    ],
+    ids=["mcp-missing", "mcp-1x", "proxy-extras-missing"],
+)
+def gateway_registry_unavailable(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, gateway_handler_unavailable: None
+) -> None:
+    """The gateway's server registry fails to import the ways it does on installs without the proxy extras."""
+    monkeypatch.delitem(sys.modules, GATEWAY_REGISTRY_MODULE, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_FailingImport(GATEWAY_REGISTRY_MODULE, request.param), *sys.meta_path])
 
 
 class _ToolList(list[Mapping[str, object]]):
@@ -224,6 +258,49 @@ async def test_anthropic_messages_with_function_tool_does_not_import_the_gateway
 )
 def test_may_name_litellm_mcp_gateway_matches_only_gateway_mcp_tools(tools: list[object] | None, expected: bool):
     assert may_name_litellm_mcp_gateway(tools) is expected
+
+
+@pytest.mark.parametrize(
+    "tools, expected",
+    [
+        ([GATEWAY_PATH_MCP_TOOL], False),
+        ([FUNCTION_TOOL, GATEWAY_PATH_MCP_TOOL], False),
+        ([GATEWAY_MCP_TOOL], True),
+        ([GATEWAY_SERVER_MCP_TOOL, GATEWAY_PATH_MCP_TOOL], True),
+    ],
+    ids=["gateway-path-url", "gateway-path-among-functions", "litellm-proxy", "litellm-proxy-server-and-path-url"],
+)
+@pytest.mark.usefixtures("gateway_registry_unavailable")
+def test_proxy_path_url_names_the_gateway_only_when_its_registry_loads(tools: list[object], expected: bool):
+    assert may_name_litellm_mcp_gateway(tools) is expected
+
+
+@pytest.mark.usefixtures("gateway_registry_unavailable")
+def test_responses_sends_a_proxy_path_mcp_url_to_the_provider_without_the_gateway_registry(
+    respx_mock: respx.MockRouter,
+):
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=RESPONSES_PAYLOAD)
+    )
+
+    response: Final = litellm.responses(
+        model="openai/gpt-4o-mini", input="hi", tools=[GATEWAY_PATH_MCP_TOOL], api_key="sk-test"
+    )
+
+    assert response.output[0].content[0].text == "Done."
+    assert json.loads(upstream.calls.last.request.content)["tools"] == [GATEWAY_PATH_MCP_TOOL]
+
+
+@pytest.mark.usefixtures("gateway_registry_unavailable")
+def test_completion_sends_a_proxy_path_mcp_url_to_the_provider_without_the_gateway_registry():
+    response: Final = litellm.completion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[GATEWAY_PATH_MCP_TOOL],
+        mock_response="ok",
+    )
+
+    assert response.choices[0].message.content == "ok"
 
 
 class _ToolTuple(tuple[Mapping[str, object], ...]):
