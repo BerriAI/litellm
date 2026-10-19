@@ -945,6 +945,7 @@ from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -1237,6 +1238,19 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         )
     except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
+
+
+async def _flush_spend_on_shutdown() -> None:
+    await flush_spend_counters_on_shutdown()
+    await _flush_spend_logs_queue_on_shutdown()
+
+
+async def _flush_spend_around_logging_drain_on_shutdown(
+    flush_spend: Callable[[], Awaitable[None]] = _flush_spend_on_shutdown,
+) -> None:
+    await flush_spend()
+    await drain_logging_tasks()
+    await flush_spend()
 
 
 async def _drain_audit_tasks_on_shutdown() -> None:
@@ -1843,9 +1857,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-            await flush_spend_counters_on_shutdown()
-
-            await _flush_spend_logs_queue_on_shutdown()
+            await _flush_spend_around_logging_drain_on_shutdown()
 
             await proxy_config.stop_config_sync_subscriber()
 
