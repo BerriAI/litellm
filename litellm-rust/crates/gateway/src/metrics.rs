@@ -9,7 +9,7 @@ use std::{
     collections::HashMap,
     fmt::Write as _,
     sync::{
-        Arc, RwLock,
+        Arc, OnceLock, RwLock,
         atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -25,6 +25,8 @@ use axum::{
 use http_body_util::BodyExt;
 use litellm_config::Config;
 use litellm_gateway_inference::observe;
+
+use crate::prometheus::Prometheus;
 
 /// Upper bounds, in seconds, shared by the latency and time to first byte histograms. They reach
 /// 30 minutes because streams that long are normal here.
@@ -123,6 +125,8 @@ struct Inner {
     failures: RwLock<HashMap<FailureKey, AtomicU64>>,
     in_flight: AtomicI64,
     draining: Arc<AtomicBool>,
+    /// The `prometheus` callback's metrics, served after these.
+    prometheus: OnceLock<Arc<Prometheus>>,
 }
 
 impl Metrics {
@@ -164,7 +168,17 @@ impl Metrics {
             failures: RwLock::default(),
             in_flight: AtomicI64::new(0),
             draining,
+            prometheus: OnceLock::new(),
         }))
+    }
+
+    /// Serves `prometheus`'s metrics too. The ones it shares a name with are then served from it
+    /// alone, with the proxy's labels.
+    pub fn serve(self, prometheus: Option<Arc<Prometheus>>) -> Self {
+        if let Some(prometheus) = prometheus {
+            let _ = self.0.prometheus.set(prometheus);
+        }
+        self
     }
 
     fn series(&self, route: &str, key: SeriesKey) -> Arc<Series> {
@@ -249,21 +263,24 @@ impl Metrics {
             })
             .collect();
 
-        out.push_str("# HELP litellm_proxy_total_requests_metric Total requests the proxy answered, by route, requested model and status code\n");
-        out.push_str("# TYPE litellm_proxy_total_requests_metric counter\n");
-        for ((_, _, series), labels) in series.iter().zip(&labels) {
-            let _ = writeln!(
-                out,
-                "litellm_proxy_total_requests_metric_total{{{labels}}} {}",
-                series.latency.count.load(Ordering::Relaxed)
-            );
-        }
-        out.push_str("# HELP litellm_request_total_latency_metric Seconds from request start to the end of the response body\n");
-        out.push_str("# TYPE litellm_request_total_latency_metric histogram\n");
-        for ((_, _, series), labels) in series.iter().zip(&labels) {
-            series
-                .latency
-                .render(&mut out, "litellm_request_total_latency_metric", labels);
+        let replaced = inner.prometheus.get().is_some();
+        if !replaced {
+            out.push_str("# HELP litellm_proxy_total_requests_metric Total requests the proxy answered, by route, requested model and status code\n");
+            out.push_str("# TYPE litellm_proxy_total_requests_metric counter\n");
+            for ((_, _, series), labels) in series.iter().zip(&labels) {
+                let _ = writeln!(
+                    out,
+                    "litellm_proxy_total_requests_metric_total{{{labels}}} {}",
+                    series.latency.count.load(Ordering::Relaxed)
+                );
+            }
+            out.push_str("# HELP litellm_request_total_latency_metric Seconds from request start to the end of the response body\n");
+            out.push_str("# TYPE litellm_request_total_latency_metric histogram\n");
+            for ((_, _, series), labels) in series.iter().zip(&labels) {
+                series
+                    .latency
+                    .render(&mut out, "litellm_request_total_latency_metric", labels);
+            }
         }
         out.push_str("# HELP litellm_request_time_to_first_byte_metric Seconds from request start to the first response body byte\n");
         out.push_str("# TYPE litellm_request_time_to_first_byte_metric histogram\n");
@@ -275,25 +292,27 @@ impl Metrics {
             );
         }
 
-        out.push_str("# HELP litellm_deployment_failure_responses Upstream calls that failed with 429 or 5xx, by model group and deployment api_base\n");
-        out.push_str("# TYPE litellm_deployment_failure_responses counter\n");
-        let mut failures: Vec<(FailureKey, u64)> = inner
-            .failures
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .map(|(key, count)| (*key, count.load(Ordering::Relaxed)))
-            .collect();
-        failures.sort_by_key(|(key, _)| *key);
-        for (key, count) in failures {
-            let deployment = &inner.deployments[key.deployment as usize];
-            let _ = writeln!(
-                out,
-                "litellm_deployment_failure_responses_total{{requested_model=\"{}\",api_base=\"{}\",exception_status=\"{}\"}} {count}",
-                escape(&inner.model_labels[deployment.model as usize]),
-                escape(&deployment.api_base),
-                key.status
-            );
+        if !replaced {
+            out.push_str("# HELP litellm_deployment_failure_responses Upstream calls that failed with 429 or 5xx, by model group and deployment api_base\n");
+            out.push_str("# TYPE litellm_deployment_failure_responses counter\n");
+            let mut failures: Vec<(FailureKey, u64)> = inner
+                .failures
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .map(|(key, count)| (*key, count.load(Ordering::Relaxed)))
+                .collect();
+            failures.sort_by_key(|(key, _)| *key);
+            for (key, count) in failures {
+                let deployment = &inner.deployments[key.deployment as usize];
+                let _ = writeln!(
+                    out,
+                    "litellm_deployment_failure_responses_total{{requested_model=\"{}\",api_base=\"{}\",exception_status=\"{}\"}} {count}",
+                    escape(&inner.model_labels[deployment.model as usize]),
+                    escape(&deployment.api_base),
+                    key.status
+                );
+            }
         }
 
         out.push_str("# HELP litellm_in_flight_requests Requests whose response has not finished, streams included\n");
@@ -310,6 +329,9 @@ impl Metrics {
             "litellm_gateway_draining {}",
             u8::from(inner.draining.load(Ordering::Relaxed))
         );
+        if let Some(prometheus) = inner.prometheus.get() {
+            prometheus.render(&mut out);
+        }
         out
     }
 }
@@ -327,7 +349,7 @@ fn api_base_label(api_base: &str) -> String {
     }
 }
 
-fn escape(value: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn escape(value: &str) -> std::borrow::Cow<'_, str> {
     if value.contains(['\\', '"', '\n']) {
         value
             .replace('\\', "\\\\")
