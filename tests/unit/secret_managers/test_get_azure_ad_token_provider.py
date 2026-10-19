@@ -6,9 +6,11 @@ from unittest.mock import MagicMock, patch
 # Adds the grandparent directory to sys.path to allow importing project modules
 
 import pytest
+from azure.core.credentials import AccessTokenInfo
 from azure.core.exceptions import ClientAuthenticationError
 
 from litellm.secret_managers.get_azure_ad_token_provider import (
+    RefreshAheadTokenProvider,
     get_azure_ad_token_provider,
     infer_credential_type_from_environment,
 )
@@ -423,3 +425,166 @@ class TestGetAzureAdTokenProvider:
         # Test that the returned callable works
         token = result()
         assert token == "mock-default-token"
+
+
+_SCOPE = "https://cognitiveservices.azure.com/.default"
+_NOW = 1_800_000_000
+_FAR_FUTURE = 4_102_444_800
+
+
+def _token(name: str, expires_in: int, refresh_in: int | None = None) -> AccessTokenInfo:
+    return AccessTokenInfo(
+        name,
+        _NOW + expires_in,
+        refresh_on=None if refresh_in is None else _NOW + refresh_in,
+    )
+
+
+class _ScriptedCredential:
+    def __init__(self, *answers: AccessTokenInfo | Exception) -> None:
+        self._answers = iter(answers)
+        self.requested_scopes: list[str] = []
+
+    def get_token_info(self, *scopes: str, options: object = None) -> AccessTokenInfo:
+        self.requested_scopes.extend(scopes)
+        answer = next(self._answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = float(_NOW)
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class TestRefreshAheadTokenProvider:
+    @staticmethod
+    def _provider(credential: _ScriptedCredential, clock=lambda: float(_NOW)):
+        scheduled: list = []
+        provider = RefreshAheadTokenProvider(
+            credential,
+            _SCOPE,
+            clock=clock,
+            start_background=scheduled.append,
+        )
+        return provider, scheduled
+
+    @pytest.mark.parametrize(
+        ("cached_token", "expect_background_refresh", "second_answer"),
+        [
+            pytest.param(_token("first", 3600), False, "first", id="fresh"),
+            pytest.param(_token("first", 301), False, "first", id="just-outside-refresh-window"),
+            pytest.param(_token("first", 300), True, "first", id="refresh-window-starts"),
+            pytest.param(_token("first", 31), True, "first", id="still-usable"),
+            pytest.param(_token("first", 3600, refresh_in=0), True, "first", id="refresh-on-reached"),
+            pytest.param(_token("first", 3600, refresh_in=1), False, "first", id="refresh-on-ahead"),
+            pytest.param(_token("first", 30), False, "second", id="too-close-to-expiry"),
+        ],
+    )
+    def test_second_call_by_remaining_lifetime(self, cached_token, expect_background_refresh, second_answer):
+        credential = _ScriptedCredential(cached_token, _token("second", 3600))
+        provider, scheduled = self._provider(credential)
+
+        assert provider() == "first"
+        assert provider() == second_answer
+        assert len(scheduled) == (1 if expect_background_refresh else 0)
+
+    def test_background_refresh_serves_the_new_token_to_later_calls(self):
+        credential = _ScriptedCredential(_token("first", 200), _token("second", 3600))
+        provider, scheduled = self._provider(credential)
+
+        assert provider() == "first"
+        assert provider() == "first"
+        assert credential.requested_scopes == [_SCOPE]
+
+        scheduled[0]()
+
+        assert provider() == "second"
+        assert credential.requested_scopes == [_SCOPE, _SCOPE]
+
+    def test_calls_while_a_refresh_is_pending_start_no_second_refresh(self):
+        credential = _ScriptedCredential(_token("first", 200), _token("second", 3600))
+        provider, scheduled = self._provider(credential)
+
+        tokens = [provider() for _ in range(5)]
+
+        assert tokens == ["first"] * 5
+        assert len(scheduled) == 1
+
+    def test_failed_background_refresh_keeps_the_token_and_retries_after_30_seconds(self):
+        credential = _ScriptedCredential(
+            _token("first", 200),
+            ClientAuthenticationError("token endpoint unavailable"),
+            _token("second", 3600),
+        )
+        clock = _Clock()
+        provider, scheduled = self._provider(credential, clock=clock)
+
+        provider()
+        provider()
+        scheduled[0]()
+        assert provider() == "first"
+
+        clock.now += 29
+        assert provider() == "first"
+        assert len(scheduled) == 1
+
+        clock.now += 1
+        assert provider() == "first"
+        assert len(scheduled) == 2
+
+        scheduled[1]()
+        assert provider() == "second"
+
+    def test_a_cold_start_error_reaches_the_caller(self):
+        provider, _ = self._provider(_ScriptedCredential(ClientAuthenticationError("bad secret")))
+
+        with pytest.raises(ClientAuthenticationError, match="bad secret"):
+            provider()
+
+
+class TestGetAzureAdTokenProviderReuse:
+    @staticmethod
+    def _fake_client_secret_credential(monkeypatch: pytest.MonkeyPatch):
+        built: list[str] = []
+        token_requests: list[tuple[str, ...]] = []
+
+        class FakeClientSecretCredential:
+            def __init__(self, client_id: str, client_secret: str, tenant_id: str) -> None:
+                built.append(client_secret)
+
+            def get_token_info(self, *scopes: str, options: object = None) -> AccessTokenInfo:
+                token_requests.append(scopes)
+                return AccessTokenInfo(f"token-{len(token_requests)}", _FAR_FUTURE)
+
+        monkeypatch.setattr("azure.identity.ClientSecretCredential", FakeClientSecretCredential)
+        monkeypatch.delenv("AZURE_CREDENTIAL", raising=False)
+        return built, token_requests
+
+    def test_repeated_lookups_share_one_credential_and_one_token_request(self, monkeypatch):
+        monkeypatch.setenv("AZURE_CLIENT_ID", "reuse-client-id")
+        monkeypatch.setenv("AZURE_CLIENT_SECRET", "reuse-client-secret")
+        monkeypatch.setenv("AZURE_TENANT_ID", "reuse-tenant-id")
+        built, token_requests = self._fake_client_secret_credential(monkeypatch)
+
+        tokens = [get_azure_ad_token_provider(azure_scope="https://ai.azure.com/.default")() for _ in range(3)]
+
+        assert tokens == ["token-1"] * 3
+        assert built == ["reuse-client-secret"]
+        assert token_requests == [("https://ai.azure.com/.default",)]
+
+    def test_a_rotated_client_secret_gets_a_new_credential(self, monkeypatch):
+        monkeypatch.setenv("AZURE_CLIENT_ID", "rotation-client-id")
+        monkeypatch.setenv("AZURE_CLIENT_SECRET", "rotation-secret-before")
+        monkeypatch.setenv("AZURE_TENANT_ID", "rotation-tenant-id")
+        built, _ = self._fake_client_secret_credential(monkeypatch)
+
+        get_azure_ad_token_provider(azure_scope=_SCOPE)()
+        monkeypatch.setenv("AZURE_CLIENT_SECRET", "rotation-secret-after")
+        get_azure_ad_token_provider(azure_scope=_SCOPE)()
+
+        assert built == ["rotation-secret-before", "rotation-secret-after"]

@@ -2085,6 +2085,36 @@ def test_azure_traditional_api_uses_azure_openai_client():
         ), f"Expected AsyncAzureOpenAI client for api_version={api_version}"
 
 
+def test_username_password_requests_share_one_credential_and_one_token_request(monkeypatch):
+    from azure.core.credentials import AccessTokenInfo
+
+    built: list[str] = []
+    token_requests: list[tuple[str, ...]] = []
+
+    class FakeUsernamePasswordCredential:
+        def __init__(self, client_id: str, username: str, password: str) -> None:
+            built.append(username)
+
+        def get_token_info(self, *scopes: str, options: object = None) -> AccessTokenInfo:
+            token_requests.append(scopes)
+            return AccessTokenInfo("user-token", 4_102_444_800)
+
+    monkeypatch.setattr("azure.identity.UsernamePasswordCredential", FakeUsernamePasswordCredential)
+    for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_SECRET", "AZURE_AD_TOKEN", "AZURE_SCOPE"):
+        monkeypatch.delenv(name, raising=False)
+    params = GenericLiteLLMParams(
+        client_id="reuse-ropc-client-id",
+        azure_username="reuse-ropc-user@example.com",
+        azure_password="reuse-ropc-password",
+    )
+
+    tokens = [get_azure_ad_token(params) for _ in range(3)]
+
+    assert tokens == ["user-token"] * 3
+    assert built == ["reuse-ropc-user@example.com"]
+    assert token_requests == [("https://cognitiveservices.azure.com/.default",)]
+
+
 class TestEntraIdTokenProviderCache:
     def setup_method(self):
         _cached_entra_id_token_provider.cache_clear()
