@@ -16,7 +16,7 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, SSOUserDefinedValues
+from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, ProxyException, SSOUserDefinedValues
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -5886,7 +5886,6 @@ class TestPKCEFunctionality:
     @pytest.mark.asyncio
     async def test_pkce_token_exchange_http200_with_error_body(self):
         """Provider returns HTTP 200 but with an error field instead of tokens."""
-        from litellm.proxy._types import ProxyException
 
         error_body = {
             "error": "invalid_grant",
@@ -5983,7 +5982,6 @@ class TestPKCEFunctionality:
     @pytest.mark.asyncio
     async def test_pkce_userinfo_raises_when_both_sources_unavailable(self):
         """When userinfo endpoint fails AND no id_token, raise ProxyException."""
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         with patch(
@@ -6010,7 +6008,6 @@ class TestPKCEFunctionality:
     async def test_pkce_userinfo_http200_empty_body_no_id_token_raises(self):
         """When userinfo returns HTTP 200 with an empty/null body and no id_token is
         available, _get_pkce_userinfo raises ProxyException."""
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         mock_resp = MagicMock()
@@ -6048,7 +6045,6 @@ class TestPKCEFunctionality:
 
         from starlette.requests import Request
 
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         mock_cache = MagicMock(redis_cache=None)
@@ -6173,7 +6169,6 @@ class TestPKCEFunctionality:
 
         from starlette.requests import Request
 
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Cache returns an integer — unexpected format
@@ -6261,7 +6256,6 @@ class TestPKCEFunctionality:
         returns a non-200 status (e.g. 401 Unauthorized from provider)."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         mock_response = MagicMock()
@@ -6381,7 +6375,6 @@ class TestPKCEFunctionality:
     async def test_pkce_token_exchange_null_json_body_raises_proxy_exception(self):
         """HTTP 200 with JSON body `null` raises a clean ProxyException instead of
         AttributeError when .get() is called on the None return value."""
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         with patch(
@@ -6415,7 +6408,6 @@ class TestPKCEFunctionality:
     async def test_pkce_token_exchange_http200_no_error_field_no_access_token(self):
         """HTTP 200 with no error field and no access_token raises ProxyException
         with a descriptive message showing the actual response keys."""
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         body_without_token = {"token_type": "Bearer", "scope": "openid"}
@@ -7801,7 +7793,6 @@ class TestCliSsoAttributionMetadata:
     @pytest.mark.asyncio
     async def test_cli_sso_callback_rejects_restricted_sso_group(self):
         """CLI SSO must enforce restricted_sso_group before upserting the user."""
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints import ui_sso
         from litellm.proxy.management_endpoints.types import CustomOpenID
 
@@ -8504,7 +8495,6 @@ class TestPKCEStateCookieBinding:
         """When PKCE is enabled and a code_verifier is in the cache, the
         callback must reject a request that has no ``litellm_oauth_state``
         cookie (browser-to-server binding missing)."""
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import (
             SSOAuthenticationHandler,
             get_generic_sso_response,
@@ -8557,7 +8547,6 @@ class TestPKCEStateCookieBinding:
     async def test_pkce_callback_rejects_state_cookie_mismatch(self):
         """The Login-CSRF shape: attacker mints state ``A``, victim's browser
         carries cookie state ``B``.  The callback must reject."""
-        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import (
             SSOAuthenticationHandler,
             get_generic_sso_response,
@@ -9096,7 +9085,6 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
     """An IdP-initiated assertion must not bypass the >5 free-SSO-user Enterprise gate
     that /sso/key/generate enforces; the ACS re-checks it after validating the assertion,
     so the entitlement DB query never runs on unvalidated input."""
-    from litellm.proxy._types import ProxyException
     from litellm.proxy.management_endpoints.types import CustomOpenID
     from litellm.proxy.management_endpoints.ui_sso import saml_callback
 
@@ -9188,7 +9176,6 @@ def _sso_login(user_id: str) -> tuple[CustomOpenID, SSOUserDefinedValues]:
 async def test_free_tier_sso_refuses_the_sixth_user_instead_of_locking_everyone_out(
     premium_user: bool, existing_users: int, refused: bool
 ) -> None:
-    from litellm.proxy._types import ProxyException
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
@@ -9609,7 +9596,6 @@ async def test_non_json_userinfo_falls_back_to_id_token_claims():
 async def test_non_json_userinfo_without_id_token_raises_401():
     """Same unreadable userinfo but no decodable id_token in the token response:
     the login must fail closed with a 401 ProxyException naming the userinfo endpoint."""
-    from litellm.proxy._types import ProxyException
     from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
 
     request = _generic_sso_callback_request()
