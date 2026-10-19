@@ -24,6 +24,7 @@ pub(crate) fn route_error_to_pyerr(error: RouteError) -> PyErr {
         RouteError::Transport(TransportError::Http { status, body }) => {
             RustUpstreamError::new_err((status, body))
         }
+        RouteError::Unsupported(reason) => RustBridgeDeclined::new_err(reason),
         other => by_fault(other.is_request(), other.to_string()),
     }
 }
@@ -42,7 +43,24 @@ mod tests {
     use super::*;
 
     #[rstest::rstest]
-    #[case::unsupported(RouteError::Unsupported("test capability"), true)]
+    fn unsupported_before_the_call_declines_so_the_host_falls_back() {
+        Python::initialize();
+        Python::attach(|py| {
+            let declined = route_error_to_pyerr(RouteError::Unsupported("test capability"));
+            assert!(declined.is_instance_of::<RustBridgeDeclined>(py));
+            assert_eq!(
+                declined
+                    .value(py)
+                    .getattr("args")
+                    .unwrap()
+                    .extract::<(String,)>()
+                    .unwrap(),
+                ("test capability".into(),)
+            );
+        });
+    }
+
+    #[rstest::rstest]
     #[case::invalid_provider(RouteError::InvalidProvider("unknown".into()), true)]
     #[case::invalid_request(RouteError::InvalidRequest("empty messages".into()), true)]
     #[case::connection(TransportError::Connect("unreachable".into()).into(), false)]

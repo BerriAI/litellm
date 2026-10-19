@@ -132,7 +132,8 @@ impl BaseConfig for AnthropicConfig {
             })?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.
-        // Decline rather than silently dropping it; the host falls back.
+        // The provider has already answered, so the handler re-tags this as a
+        // terminal response error instead of letting the host retry.
         if body
             .content
             .iter()

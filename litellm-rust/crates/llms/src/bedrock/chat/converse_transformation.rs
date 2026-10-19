@@ -170,7 +170,9 @@ impl BaseConfig for AmazonConverseConfig {
             Error::InvalidResponse(format!("invalid Converse response: {error}").into())
         })?;
         // The route declines tool requests, so anything other than a text block
-        // is something this path never asked for. Decline; the host falls back.
+        // is something this path never asked for. The provider has already
+        // answered, so the handler re-tags this as a terminal response error
+        // instead of letting the host retry.
         if response.message_content_is_non_text() {
             return Err(Error::Unsupported("non-text response content block"));
         }

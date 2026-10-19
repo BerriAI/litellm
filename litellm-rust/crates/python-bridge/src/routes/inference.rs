@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 
 use super::{NativeCall, RequestView};
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
+    errors::{RustBridgeDeclined, RustUpstreamError, route_error_to_pyerr},
     marshal::{RouteOptions, optional_timeout, public_response, python_timeout_seconds},
 };
 
@@ -135,6 +135,9 @@ impl InferenceHost {
             }
             other => route_error_to_pyerr(other),
         };
+        if native.is_instance_of::<RustBridgeDeclined>(py) {
+            return Ok(native);
+        }
         let mapped = py
             .import(self.module)?
             .getattr("map_failure")?
