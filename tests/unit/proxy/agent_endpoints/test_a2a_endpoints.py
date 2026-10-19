@@ -418,6 +418,124 @@ def _base_patches(
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("identity_managed", "requires_fresh_policy", "strict"),
+    [(True, False, True), (False, True, True), (False, False, False)],
+)
+async def test_invoke_agent_a2a_passes_billed_auth_to_common_processing(
+    monkeypatch: pytest.MonkeyPatch,
+    identity_managed: bool,
+    requires_fresh_policy: bool,
+    strict: bool,
+) -> None:
+    import litellm
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, LiteLLM_UserTable
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
+
+    agent: Final = _make_agent_mock()
+    agent.identity_managed = identity_managed
+    request: Final = _make_request_mock("message/send", _HELLO_MESSAGE_PARAMS)
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-personal",
+        user_id="alice",
+        team_id=None,
+    )
+    auth.requires_fresh_policy = requires_fresh_policy
+    processed_metadata: Final[dict[str, object]] = {}
+    processed_request_data: Final[dict[str, object]] = {"metadata": processed_metadata}
+
+    async def _common_processing(
+        *, user_api_key_dict: UserAPIKeyAuth, **_: object
+    ) -> tuple[dict[str, object], MagicMock]:
+        add_guardrails_from_auth_metadata(
+            user_api_key_dict=user_api_key_dict,
+            data=processed_request_data,
+            metadata_variable_name="metadata",
+        )
+        return {}, MagicMock()
+
+    common_processing: Final = AsyncMock(side_effect=_common_processing)
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        team: Final = LiteLLM_TeamTable(
+            team_id=team_id,
+            object_permission_id=f"perm-{team_id}",
+            organization_id=f"org-{team_id}",
+            metadata={"guardrails": ["team-guardrail"]} if team_id == "team-b" else None,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"perm-{team_id}",
+                agents=["test-agent"] if team_id == "team-b" else [],
+                agent_access_groups=["billing-group"] if team_id == "team-b" else [],
+            ),
+        )
+        return team
+
+    database: Final = MagicMock()
+    database.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    database.writer_db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    team_loader: Final = AsyncMock(side_effect=_get_team_object)
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr("litellm.proxy.utils.premium_user_check", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(agent_registry, "global_agent_registry", AgentRegistry())
+    monkeypatch.setattr(
+        auth_checks,
+        "get_user_object",
+        AsyncMock(return_value=LiteLLM_UserTable(user_id="alice", teams=["team-a", "team-b"])),
+    )
+    monkeypatch.setattr(auth_checks, "get_team_object", team_loader)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+
+    with ExitStack() as stack:
+        for patcher in _base_patches(agent):
+            stack.enter_context(patcher)
+        stack.enter_context(
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "common_processing_pre_call_logic",
+                new=common_processing,
+            )
+        )
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", False))
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response: Final = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=auth,
+        )
+
+    assert json.loads(response.body.decode())["error"]["code"] == -32603
+    billed_auth: Final = common_processing.await_args.kwargs["user_api_key_dict"]
+    assert billed_auth is not auth
+    assert (billed_auth.team_id, billed_auth.org_id) == ("team-b", "org-team-b")
+    assert billed_auth.team_metadata == {"guardrails": ["team-guardrail"]}
+    assert processed_metadata["guardrails"] == ["team-guardrail"]
+    assert (auth.team_id, auth.org_id) == (None, None)
+    assert auth.team_metadata is None
+    assert len(team_loader.await_args_list) == 2
+    assert all(call.kwargs["check_db_only"] is strict for call in team_loader.await_args_list)
+    if strict:
+        database.writer_db.litellm_agentstable.find_many.assert_awaited_once()
+        database.db.litellm_agentstable.find_many.assert_not_awaited()
+    else:
+        database.db.litellm_agentstable.find_many.assert_awaited_once()
+        database.writer_db.litellm_agentstable.find_many.assert_not_awaited()
+
+
 async def _add_proxy_data(data: dict[str, object], **kwargs: object) -> dict[str, object]:
     return {
         **data,

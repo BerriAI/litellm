@@ -731,6 +731,10 @@ async def invoke_agent_a2a(
             )
 
         user_api_key_dict.invoked_agent_id = agent.agent_id
+        strict_policy: Final = agent.identity_managed or bool(user_api_key_dict.requires_fresh_policy)
+        user_api_key_auth_for_call: Final = await AgentRequestHandler.personal_key_agent_billing_auth(
+            user_api_key_dict, agent.agent_id, strict=strict_policy
+        )
 
         _enforce_inbound_trace_id(agent, request)
 
@@ -790,7 +794,7 @@ async def invoke_agent_a2a(
         data, logging_obj = await processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
+            user_api_key_dict=user_api_key_auth_for_call,
             proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
             route_type="asend_message",
@@ -889,7 +893,7 @@ async def invoke_agent_a2a(
 
             try:
                 response = await proxy_logging_obj.post_call_success_hook(
-                    user_api_key_dict=user_api_key_dict,
+                    user_api_key_dict=user_api_key_auth_for_call,
                     data=data,
                     response=response,
                 )
@@ -924,7 +928,7 @@ async def invoke_agent_a2a(
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
                 agent_extra_headers=agent_extra_headers,
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
                 served_version=served_version,
@@ -990,7 +994,7 @@ async def invoke_agent_a2a(
 
             response = LiteLLMSendMessageResponse.from_dict(result, request_id=request_id)
             response = await proxy_logging_obj.post_call_success_hook(
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_dict=user_api_key_auth_for_call,
                 data=data,
                 response=response,
             )
@@ -1017,7 +1021,7 @@ async def invoke_agent_a2a(
                 request_id=request_id,
                 extra_headers=agent_extra_headers,
                 proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 served_version=served_version,
             )

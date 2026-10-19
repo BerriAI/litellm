@@ -19,6 +19,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     Member,
+    UserAPIKeyAuth,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -72,6 +73,91 @@ class TeamGrants(TypedDict, total=False):
     team_member_spend: ReadOnly[float | None]
     team_member_tpm_limit: ReadOnly[int | None]
     team_member_rpm_limit: ReadOnly[int | None]
+
+
+_TEAM_GRANT_AUTH_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "team_alias",
+        "team_tpm_limit",
+        "team_rpm_limit",
+        "team_tpd_limit",
+        "team_max_budget",
+        "team_soft_budget",
+        "team_spend",
+        "team_metadata",
+        "team_member",
+        "team_member_spend",
+        "team_member_tpm_limit",
+        "team_member_rpm_limit",
+    }
+)
+
+
+def team_grant_auth_update(
+    team_object: LiteLLM_TeamTable,
+    team_membership: LiteLLM_TeamMembership | None,
+    user_id: str | None,
+    *,
+    key_org_id: str | None,
+) -> Mapping[str, object]:
+    grant_values: Final = team_grants(team_object, team_membership, user_id)
+    return MappingProxyType(
+        {
+            "team_id": team_object.team_id,
+            "org_id": key_org_id or team_object.organization_id,
+            **{field: value for field, value in grant_values.items() if field in _TEAM_GRANT_AUTH_FIELDS},
+        }
+    )
+
+
+async def team_grant_billing_auth_update(
+    auth: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable,
+    team_membership: LiteLLM_TeamMembership | None,
+) -> Mapping[str, object]:
+    team_auth_update: Final = team_grant_auth_update(
+        team_object,
+        team_membership,
+        auth.user_id,
+        key_org_id=auth.org_id,
+    )
+    if auth.org_id is not None or team_object.organization_id is None:
+        return team_auth_update
+
+    organization_auth_fields: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            "organization_alias": None,
+            "organization_metadata": None,
+            "organization_max_budget": None,
+            "organization_tpm_limit": None,
+            "organization_rpm_limit": None,
+        }
+    )
+    from litellm.proxy.auth.auth_checks import get_org_object_for_request
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    if prisma_client is None:
+        return MappingProxyType({**team_auth_update, **organization_auth_fields})
+    org_object: Final = await get_org_object_for_request(
+        org_id=team_object.organization_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=auth.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if org_object is None:
+        return MappingProxyType({**team_auth_update, **organization_auth_fields})
+    budget: Final = org_object.litellm_budget_table
+    return MappingProxyType(
+        {
+            **team_auth_update,
+            "organization_alias": org_object.organization_alias,
+            "organization_metadata": org_object.metadata,
+            "organization_max_budget": budget.max_budget if budget is not None else None,
+            "organization_tpm_limit": budget.tpm_limit if budget is not None else None,
+            "organization_rpm_limit": budget.rpm_limit if budget is not None else None,
+        }
+    )
 
 
 def _json_columns(team_object: LiteLLM_TeamTable) -> _TeamJsonColumns:
