@@ -15,11 +15,11 @@ import base64
 import builtins
 import struct
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal, TypedDict
+from typing import Final, Literal
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

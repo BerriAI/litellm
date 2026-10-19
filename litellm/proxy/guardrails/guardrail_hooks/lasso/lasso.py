@@ -9,7 +9,7 @@ import json
 import os
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 try:
     import ulid
@@ -29,7 +29,7 @@ except ImportError:
 
 from fastapi import HTTPException
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm import DualCache
