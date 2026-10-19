@@ -22,6 +22,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.types.utils import LiteLLMBatch
 
@@ -359,6 +360,17 @@ async def test_aretrieve_batch_wif_exchange_does_not_block_event_loop(handler, p
 
 ANTHROPIC_BATCH_URL = "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
 SEVEN_SECONDS = {"connect": 7.0, "read": 7.0, "write": 7.0, "pool": 7.0}
+# The cached client's own default: 600s, with a 5s connect timeout
+CLIENT_DEFAULT = {"connect": 5.0, "read": 600.0, "write": 600.0, "pool": 600.0}
+
+TIMEOUT_CASES = [
+    pytest.param({"timeout": 7.0}, None, SEVEN_SECONDS, id="callers-timeout"),
+    pytest.param({"request_timeout": 7.0}, None, SEVEN_SECONDS, id="legacy-request-timeout"),
+    pytest.param({}, None, CLIENT_DEFAULT, id="no-timeout-keeps-client-default"),
+    pytest.param(
+        {}, 30.0, {"connect": 5.0, "read": 30.0, "write": 30.0, "pool": 30.0}, id="no-timeout-uses-configured-timeout"
+    ),
+]
 
 
 @pytest.fixture
@@ -374,22 +386,41 @@ def anthropic_batch_route(respx_mock, monkeypatch):
     return respx_mock.get(ANTHROPIC_BATCH_URL).mock(return_value=httpx.Response(200, json=in_progress))
 
 
+def _configure_request_timeout(monkeypatch, configured_request_timeout):
+    if configured_request_timeout is None:
+        # No global timeout configured, so a REQUEST_TIMEOUT in the environment cannot move the default
+        monkeypatch.setattr(litellm, "request_timeout", DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
+    else:
+        monkeypatch.setattr(litellm, "request_timeout", configured_request_timeout)
+
+
+@pytest.mark.parametrize("kwargs, configured_request_timeout, expected_timeout", TIMEOUT_CASES)
 @pytest.mark.respx(assert_all_called=True)
-def test_retrieve_batch_sends_the_callers_timeout(anthropic_batch_route):
+def test_retrieve_batch_sends_the_callers_timeout_or_keeps_the_client_default(
+    anthropic_batch_route, monkeypatch, kwargs, configured_request_timeout, expected_timeout
+):
+    _configure_request_timeout(monkeypatch, configured_request_timeout)
+
     batch = litellm.retrieve_batch(
-        batch_id="msgbatch_abc", custom_llm_provider="anthropic", api_key="sk-ant-test", timeout=7.0
+        batch_id="msgbatch_abc", custom_llm_provider="anthropic", api_key="sk-ant-test", **kwargs
     )
 
     assert (batch.id, batch.status) == ("msgbatch_abc", "in_progress")
-    assert anthropic_batch_route.calls[0].request.extensions["timeout"] == SEVEN_SECONDS
+    assert anthropic_batch_route.calls[0].request.extensions["timeout"] == expected_timeout
 
 
+@pytest.mark.parametrize("kwargs, configured_request_timeout, expected_timeout", TIMEOUT_CASES)
 @pytest.mark.asyncio
 @pytest.mark.respx(assert_all_called=True)
-async def test_aretrieve_batch_sends_the_callers_timeout(anthropic_batch_route):
+async def test_aretrieve_batch_sends_the_callers_timeout_or_keeps_the_client_default(
+    anthropic_batch_route, monkeypatch, kwargs, configured_request_timeout, expected_timeout
+):
+    _configure_request_timeout(monkeypatch, configured_request_timeout)
+
     batch = await litellm.aretrieve_batch(
-        batch_id="msgbatch_abc", custom_llm_provider="anthropic", api_key="sk-ant-test", timeout=7.0
+        batch_id="msgbatch_abc", custom_llm_provider="anthropic", api_key="sk-ant-test", **kwargs
     )
 
     assert (batch.id, batch.status) == ("msgbatch_abc", "in_progress")
-    assert anthropic_batch_route.calls[0].request.extensions["timeout"] == SEVEN_SECONDS
+    assert anthropic_batch_route.calls[0].request.extensions["timeout"] == expected_timeout

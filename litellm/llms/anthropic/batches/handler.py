@@ -39,7 +39,7 @@ class AnthropicBatchesHandler:
         batch_id: str,
         api_base: str | None,
         api_key: str | None,
-        timeout: float | httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
         litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
@@ -128,7 +128,7 @@ class AnthropicBatchesHandler:
         batch_id: str,
         api_base: str | None,
         api_key: str | None,
-        timeout: float | httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
         litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
