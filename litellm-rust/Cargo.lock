@@ -3820,6 +3820,7 @@ dependencies = [
  "futures-util",
  "http 1.4.2",
  "litellm-cost",
+ "litellm-gateway-auth",
  "litellm-model-catalog",
  "memchr",
  "rstest",

@@ -1,9 +1,11 @@
+mod end_user;
 mod error;
 mod failure;
 mod pool;
 mod spend;
 mod verification_token;
 
+pub use end_user::{EndUser, find_end_user};
 pub use error::Error;
 pub use failure::DbFailure;
 pub use pool::{PoolSettings, connect_lazy};

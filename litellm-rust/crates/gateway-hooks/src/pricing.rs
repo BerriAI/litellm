@@ -17,12 +17,16 @@ use crate::usage::{ServiceTier, Usage};
 #[derive(Debug, Default)]
 pub struct Prices {
     plans: HashMap<Arc<str>, PricingPlan>,
+    max_output_tokens: HashMap<Arc<str>, u64>,
 }
 
 impl Prices {
     /// Adds a deployment's prices from its cost map fields. A deployment whose fields hold no
     /// usable prices is left out, and its cost is unknown.
     pub fn insert(&mut self, id: Arc<str>, fields: &Map<String, Value>) {
+        if let Some(limit) = fields.get("max_output_tokens").and_then(Value::as_u64) {
+            self.max_output_tokens.insert(id.clone(), limit);
+        }
         let parsed = ParsedRates::parse(fields);
         if parsed.standard == Rates::EMPTY && parsed.thresholds.is_empty() {
             return;
@@ -41,6 +45,11 @@ impl Prices {
 
     pub fn is_empty(&self) -> bool {
         self.plans.is_empty()
+    }
+
+    /// The most output tokens the deployment's model can return, when the cost map says.
+    pub fn max_output_tokens(&self, deployment: &str) -> Option<u64> {
+        self.max_output_tokens.get(deployment).copied()
     }
 
     /// The cost in dollars of `usage` on a deployment, or `None` when its prices are unknown.

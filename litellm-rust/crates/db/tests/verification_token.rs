@@ -1,7 +1,8 @@
 use std::time::{Duration, SystemTime};
 
 use litellm_db::{
-    Restrictions, Team, TeamMembership, User, VerificationToken, find_verification_token,
+    EndUser, Restrictions, Team, TeamMembership, User, VerificationToken, find_end_user,
+    find_verification_token,
 };
 use litellm_db_testing::MigratedPostgres;
 use rstest::rstest;
@@ -21,9 +22,12 @@ INSERT INTO "LiteLLM_BudgetTable" (budget_id, max_budget, rpm_limit, model_max_b
   VALUES ('b-1', 5.0, NULL, NULL, ARRAY['gpt-a'], 'x', 'x'),
          ('b-2', NULL, 3, NULL, ARRAY[]::text[], 'x', 'x'),
          ('b-3', NULL, NULL, '{"gpt-a": {"tpm_limit": 7}}', ARRAY[]::text[], 'x', 'x');
-INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, budget_id)
-  VALUES ('user-2', 'team-2', 'b-1'),
-         ('user-1', 'team-1', 'b-2');
+INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, budget_id, spend)
+  VALUES ('user-2', 'team-2', 'b-1', 0.75),
+         ('user-1', 'team-1', 'b-2', 0);
+INSERT INTO "LiteLLM_EndUserTable" (user_id, spend, budget_id, blocked)
+  VALUES ('end-1', 1.5, 'b-1', false),
+         ('end-2', 0.25, NULL, true);
 INSERT INTO "LiteLLM_OrganizationTable" (organization_id, organization_alias, budget_id, created_by, updated_by)
   VALUES ('org-1', 'org', 'b-1', 'x', 'x');
 INSERT INTO "LiteLLM_ProjectTable" (project_id, created_by, updated_by) VALUES ('project-1', 'x', 'x');
@@ -58,19 +62,20 @@ INSERT INTO "LiteLLM_VerificationToken"
           '{"gpt-a": {"budget_limit": 1.0, "rpm_limit": 2}}');
 "#;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixture rows; the lookups under test use the checked macro"
+)]
+async fn setup(pool: &sqlx::PgPool) {
+    sqlx::raw_sql(FIXTURES).execute(pool).await.unwrap();
+}
+
 #[rstest]
 #[tokio::test]
 async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
     let postgres = MigratedPostgres::start().await.unwrap();
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "test fixture rows; the lookup under test uses the checked macro"
-    )]
-    sqlx::raw_sql(FIXTURES)
-        .execute(postgres.pool())
-        .await
-        .unwrap();
     let pool = postgres.pool();
+    setup(pool).await;
     let find = |token: &'static str| async move {
         find_verification_token(pool, token).await.unwrap().unwrap()
     };
@@ -125,11 +130,16 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
                 },
             }),
             team_membership: TeamMembership {
+                spend: Some(0.0),
+                max_budget: None,
+                default_max_budget: None,
                 rate_limits: true,
                 allowed_models: vec![],
             },
             user_id: Some("user-1".into()),
             user: Some(User {
+                spend: 0.0,
+                max_budget: Some(1.0),
                 models: vec!["gpt-b".into()],
                 restrictions: Restrictions {
                     rate_limits: true,
@@ -175,10 +185,16 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
     assert_eq!(
         member.team_membership,
         TeamMembership {
+            spend: Some(0.75),
+            max_budget: Some(5.0),
+            default_max_budget: None,
             rate_limits: false,
             allowed_models: vec!["gpt-a".into()],
         }
     );
+    // A key without its own budget takes its budget row's.
+    assert_eq!(find("restricted").await.max_budget, Some(5.0));
+    assert_eq!(find("budgeted").await.max_budget, Some(4.0));
     assert_eq!(member.team.unwrap().restrictions, Restrictions::default());
     assert_eq!(member.user.unwrap().restrictions, Restrictions::default());
     let orphan = find("orphan").await;
@@ -191,5 +207,41 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
     assert_eq!(
         find_verification_token(pool, "missing").await.unwrap(),
         None
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn reads_end_user_budgets_with_their_default() {
+    let postgres = MigratedPostgres::start().await.unwrap();
+    let pool = postgres.pool();
+    setup(pool).await;
+    let find =
+        async |id: &str, default: Option<&str>| find_end_user(pool, id, default).await.unwrap();
+
+    assert_eq!(
+        find("end-1", Some("b-2")).await,
+        EndUser {
+            spend: Some(1.5),
+            blocked: false,
+            max_budget: Some(5.0)
+        }
+    );
+    assert_eq!(
+        find("end-2", Some("b-1")).await,
+        EndUser {
+            spend: Some(0.25),
+            blocked: true,
+            max_budget: Some(5.0)
+        }
+    );
+    assert_eq!(find("end-2", None).await.max_budget, None);
+    assert_eq!(
+        find("unknown", Some("b-1")).await,
+        EndUser {
+            spend: None,
+            blocked: false,
+            max_budget: Some(5.0)
+        }
     );
 }

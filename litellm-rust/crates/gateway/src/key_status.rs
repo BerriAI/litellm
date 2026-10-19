@@ -2,7 +2,8 @@ use litellm_db::{Restrictions, VerificationToken};
 use std::sync::Arc;
 
 use litellm_gateway_auth::keys::{
-    AllowedRoutes, KeyModels, KeyProfile, KeyStatus, ModelAccess, Owner, Refusal, Restriction,
+    AllowedRoutes, KeyBudgets, KeyModels, KeyProfile, KeyStatus, MemberSpend, ModelAccess, Owner,
+    Refusal, Restriction, Spend,
 };
 use serde_json::Value;
 
@@ -37,6 +38,7 @@ pub(crate) fn status(row: VerificationToken, personal_keys_use_teams: bool) -> K
         Value::Object(fields) => Arc::new(fields),
         _ => Arc::default(),
     };
+    let budgets = budgets(&row);
     let (team_models, team_alias, team_metadata) = match row.team {
         Some(team) => (
             Some(ModelAccess::new(team.models)),
@@ -59,7 +61,38 @@ pub(crate) fn status(row: VerificationToken, personal_keys_use_teams: bool) -> K
             team_alias,
             metadata: object(row.metadata),
             team_metadata,
+            budgets,
         }),
+    }
+}
+
+/// The spend and budgets the budgets hook checks for this key.
+fn budgets(row: &VerificationToken) -> KeyBudgets {
+    let membership = &row.team_membership;
+    KeyBudgets {
+        key: Spend {
+            spend: row.spend,
+            max_budget: row.max_budget,
+        },
+        key_name: row.key_name.clone(),
+        team: row.team.as_ref().map(|team| Spend {
+            spend: team.spend,
+            max_budget: team.max_budget,
+        }),
+        user: row.user.as_ref().map(|user| Spend {
+            spend: user.spend,
+            max_budget: user.max_budget,
+        }),
+        team_member: membership.spend.map(|spend| MemberSpend {
+            spend,
+            max_budget: membership.max_budget,
+            default_max_budget: membership.default_max_budget,
+        }),
+        end_user_budget_id: row
+            .metadata
+            .get("end_user_budget_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     }
 }
 
@@ -79,29 +112,6 @@ fn refusal(row: &VerificationToken, personal_keys_use_teams: bool) -> Option<Ref
         return Some(Refusal::TeamBlocked {
             team_id: team_id.clone(),
         });
-    }
-    // Budgets pass: the gateway does not record spend for its own traffic, so it refuses only a
-    // key or team whose stored spend has already reached its budget.
-    if let Some(max_budget) = row.max_budget
-        && max_budget.is_finite()
-        && row.spend >= max_budget
-    {
-        return Some(budget_exceeded(
-            format!("Key={}", key_label(row)),
-            row.spend,
-            max_budget,
-        ));
-    }
-    if let Some((team_id, team)) = team
-        && let Some(max_budget) = team.max_budget
-        && max_budget.is_finite()
-        && team.spend > max_budget
-    {
-        return Some(budget_exceeded(
-            format!("Team={team_id}"),
-            team.spend,
-            max_budget,
-        ));
     }
     unsupported(row, personal_keys_use_teams)
         .map(|(restriction, owner)| Refusal::Unsupported { restriction, owner })
@@ -197,57 +207,6 @@ fn is_set(value: &Value) -> bool {
     }
 }
 
-fn budget_exceeded(label: String, spend: f64, max_budget: f64) -> Refusal {
-    Refusal::BudgetExceeded {
-        owner: label,
-        spend: python_float(spend),
-        max_budget: python_float(max_budget),
-    }
-}
-
-/// The proxy names a key by its alias, adding `key_name` only while it still looks masked.
-fn key_label(row: &VerificationToken) -> String {
-    let alias = row
-        .key_alias
-        .as_deref()
-        .filter(|alias| !alias.is_empty())
-        .unwrap_or("key");
-    match row.key_name.as_deref().filter(|name| is_masked(name)) {
-        Some(name) => format!("{alias} ({name})"),
-        None => alias.to_owned(),
-    }
-}
-
-/// The proxy's `_MASKED_KEY_NAME_RE`, `sk-\.\.\.(?:[^\s\x00-\x1f\x7f-\x9f]{4})?`.
-fn is_masked(name: &str) -> bool {
-    name.strip_prefix("sk-...").is_some_and(|rest| {
-        rest.is_empty()
-            || (rest.chars().count() == 4
-                && rest
-                    .chars()
-                    .all(|character| !character.is_whitespace() && !character.is_control()))
-    })
-}
-
-/// Python's `repr` of a float.
-fn python_float(value: f64) -> String {
-    if value.is_nan() {
-        return "nan".into();
-    }
-    if value.is_infinite() {
-        return if value > 0.0 { "inf" } else { "-inf" }.into();
-    }
-    let magnitude = value.abs();
-    if magnitude != 0.0 && !(1e-4..1e16).contains(&magnitude) {
-        let scientific = format!("{value:e}");
-        let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-        let exponent: i32 = exponent.parse().unwrap_or(0);
-        let sign = if exponent < 0 { '-' } else { '+' };
-        return format!("{mantissa}e{sign}{:02}", exponent.abs());
-    }
-    format!("{value:?}")
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::SystemTime;
@@ -307,7 +266,13 @@ mod tests {
             },
             allowed_routes: AllowedRoutes::new(strings(&["llm_api_routes"])),
             team_id: team.then(|| "team-1".to_owned()),
-            profile: Default::default(),
+            profile: Arc::new(KeyProfile {
+                budgets: KeyBudgets {
+                    team: team.then(Spend::default),
+                    ..KeyBudgets::default()
+                },
+                ..KeyProfile::default()
+            }),
         }
     }
 
@@ -316,14 +281,6 @@ mod tests {
             expires_at: Some(SystemTime::UNIX_EPOCH),
             refusal,
         }
-    }
-
-    fn exceeded(owner: &str, spend: &str, max_budget: &str) -> KeyStatus {
-        refused(Refusal::BudgetExceeded {
-            owner: owner.into(),
-            spend: spend.into(),
-            max_budget: max_budget.into(),
-        })
     }
 
     fn unsupported(restriction: Restriction, owner: Owner) -> KeyStatus {
@@ -357,57 +314,6 @@ mod tests {
         None,
         0.0,
         refused(Refusal::TeamBlocked { team_id: "team-1".into() })
-    )]
-    #[case::key_at_budget(
-        false,
-        None,
-        None,
-        Some(10.0),
-        10.0,
-        exceeded("Key=key", "10.0", "10.0")
-    )]
-    #[case::key_under_budget(false, None, None, Some(10.0), 9.5, active(false))]
-    #[case::key_zero_budget(false, None, None, Some(0.0), 0.0, exceeded("Key=key", "0.0", "0.0"))]
-    #[case::key_infinite_budget(false, None, None, Some(f64::INFINITY), 1e20, active(false))]
-    #[case::team_over_budget(
-        false,
-        Some("team-1"),
-        team(false, Some(5.0), 5.25),
-        None,
-        0.0,
-        exceeded("Team=team-1", "5.25", "5.0")
-    )]
-    #[case::team_at_budget(
-        false,
-        Some("team-1"),
-        team(false, Some(5.0), 5.0),
-        None,
-        0.0,
-        active(true)
-    )]
-    #[case::team_over_budget_under_key_budget(
-        false,
-        Some("team-1"),
-        team(false, Some(5.0), 9.0),
-        Some(10.0),
-        2.0,
-        exceeded("Team=team-1", "9.0", "5.0")
-    )]
-    #[case::key_and_team_under_budget(
-        false,
-        Some("team-1"),
-        team(false, Some(5.0), 1.0),
-        Some(10.0),
-        2.0,
-        active(true)
-    )]
-    #[case::key_budget_checked_before_team(
-        false,
-        Some("team-1"),
-        team(false, Some(5.0), 9.0),
-        Some(1.0),
-        2.0,
-        exceeded("Key=key", "2.0", "1.0")
     )]
     fn refuses_like_the_proxy(
         row: VerificationToken,
@@ -467,6 +373,8 @@ mod tests {
             team: team_id.and_then(|_| team(false, None, 0.0)),
             user_id: Some("user-1".into()),
             user: Some(User {
+                spend: 0.0,
+                max_budget: None,
                 models: strings(models),
                 restrictions,
             }),
@@ -483,6 +391,7 @@ mod tests {
             team_membership: TeamMembership {
                 rate_limits,
                 allowed_models: strings(allowed_models),
+                ..TeamMembership::default()
             },
             ..on_team(NONE, json!({}), row)
         }
@@ -691,7 +600,7 @@ mod tests {
                 models,
                 allowed_routes,
                 team_id,
-                ..
+                profile,
             } => KeyStatus::Active {
                 expires_at,
                 models,
@@ -699,7 +608,7 @@ mod tests {
                 team_id,
                 profile: Arc::new(KeyProfile {
                     user_id: user_id.map(str::to_owned),
-                    ..KeyProfile::default()
+                    ..(*profile).clone()
                 }),
             },
             other => other,
@@ -713,43 +622,5 @@ mod tests {
                 expected
             }
         );
-    }
-
-    #[rstest]
-    #[case::no_alias(None, None, "key")]
-    #[case::empty_alias(Some(""), None, "key")]
-    #[case::alias(Some("prod"), None, "prod")]
-    #[case::masked_name(Some("prod"), Some("sk-...abcd"), "prod (sk-...abcd)")]
-    #[case::bare_masked_name(None, Some("sk-..."), "key (sk-...)")]
-    #[case::unmasked_name(Some("prod"), Some("sk-unmasked90"), "prod")]
-    #[case::name_with_space(Some("prod"), Some("sk-...ab d"), "prod")]
-    #[case::name_too_long(Some("prod"), Some("sk-...abcde"), "prod")]
-    fn labels_keys_like_the_proxy(
-        row: VerificationToken,
-        #[case] alias: Option<&str>,
-        #[case] name: Option<&str>,
-        #[case] expected: &str,
-    ) {
-        let row = VerificationToken {
-            key_alias: alias.map(str::to_owned),
-            key_name: name.map(str::to_owned),
-            ..row
-        };
-        assert_eq!(key_label(&row), expected);
-    }
-
-    #[rstest]
-    #[case::whole(10.0, "10.0")]
-    #[case::fraction(0.1, "0.1")]
-    #[case::zero(0.0, "0.0")]
-    #[case::small(0.0001, "0.0001")]
-    #[case::tiny(0.00001, "1e-05")]
-    #[case::large(1e15, "1000000000000000.0")]
-    #[case::huge(1e16, "1e+16")]
-    #[case::huge_fraction(1.5e17, "1.5e+17")]
-    #[case::negative(-2.5, "-2.5")]
-    #[case::infinite(f64::INFINITY, "inf")]
-    fn prints_floats_like_python(#[case] value: f64, #[case] expected: &str) {
-        assert_eq!(python_float(value), expected);
     }
 }

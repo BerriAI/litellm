@@ -12,7 +12,10 @@ use futures_util::future::BoxFuture;
 use http::{HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 
-use crate::facts::{Annotations, Facts, Record, RequestFacts};
+use crate::{
+    facts::{Annotations, Facts, Record, RequestFacts},
+    pricing::Prices,
+};
 
 /// The parts of a request a hook may change.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -93,6 +96,8 @@ pub struct Refusal {
     pub status: u16,
     /// The proxy's error `type`, such as `budget_exceeded`.
     pub kind: Cow<'static, str>,
+    /// The error's `param`: the string `"None"` for most proxy errors, `null` for some.
+    pub param: Option<&'static str>,
     pub message: String,
     pub headers: Vec<(HeaderName, HeaderValue)>,
 }
@@ -106,9 +111,16 @@ impl Refusal {
         Self {
             status,
             kind: kind.into(),
+            param: Some("None"),
             message: message.into(),
             headers: Vec::new(),
         }
+    }
+
+    /// Sends a `null` `param`, as the proxy's budget errors do.
+    pub fn without_param(mut self) -> Self {
+        self.param = None;
+        self
     }
 
     pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
@@ -228,6 +240,9 @@ pub trait Hook: Send + Sync + 'static {
 
     /// The parts of the request this hook may change.
     fn writes(&self) -> Targets;
+
+    /// Called once with the deployments' prices before the first request.
+    fn prepare(&self, _prices: &Arc<Prices>) {}
 
     /// Runs before the request is routed. Returning a [`Settle`] asks to be told how the request
     /// ended.

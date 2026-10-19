@@ -297,7 +297,45 @@ pub struct KeyProfile {
     pub team_alias: Option<String>,
     pub metadata: Arc<Map<String, Value>>,
     pub team_metadata: Arc<Map<String, Value>>,
+    pub budgets: KeyBudgets,
 }
+
+/// Stored spend against an optional budget, as the key store last read it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Spend {
+    pub spend: f64,
+    pub max_budget: Option<f64>,
+}
+
+impl Eq for Spend {}
+
+/// The spend and budgets of a key and of who it belongs to, read with the key and refreshed
+/// with it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct KeyBudgets {
+    /// The key's `max_budget`, else its budget table's.
+    pub key: Spend,
+    /// `key_name`, the key's masked form, which budget errors show while it still looks masked.
+    pub key_name: Option<String>,
+    /// The key's team, when its row exists.
+    pub team: Option<Spend>,
+    /// The key's user, when its row exists.
+    pub user: Option<Spend>,
+    /// The key's user within its team, when a membership row exists.
+    pub team_member: Option<MemberSpend>,
+    /// `metadata.end_user_budget_id`: the budget of end users without their own.
+    pub end_user_budget_id: Option<String>,
+}
+
+/// A team member's spend, with the membership's own budget and the team's default one.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MemberSpend {
+    pub spend: f64,
+    pub max_budget: Option<f64>,
+    pub default_max_budget: Option<f64>,
+}
+
+impl Eq for MemberSpend {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KeyStatus {

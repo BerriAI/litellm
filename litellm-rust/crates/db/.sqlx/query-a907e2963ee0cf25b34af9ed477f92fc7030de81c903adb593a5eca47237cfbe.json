@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.spend AS \"spend?\",\n                  e.blocked AS \"blocked?\",\n                  b.max_budget AS \"max_budget?\",\n                  (SELECT d.max_budget FROM \"LiteLLM_BudgetTable\" AS d\n                    WHERE d.budget_id = $2) AS \"default_max_budget?\"\n           FROM (SELECT 1) AS one\n           LEFT JOIN \"LiteLLM_EndUserTable\" AS e ON e.user_id = $1\n           LEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = e.budget_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "spend?",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "blocked?",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "blocked"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "max_budget?",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "default_max_budget?",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "a907e2963ee0cf25b34af9ed477f92fc7030de81c903adb593a5eca47237cfbe"
+}
