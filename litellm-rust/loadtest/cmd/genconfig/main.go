@@ -122,7 +122,11 @@ general_settings:
   master_key: %s
 `, *masterKey)
 	if full {
-		cfg.WriteString(fullFeatureSettings)
+		omit := os.Getenv("LOADTEST_OMIT_CALLBACKS")
+		if omit != "" {
+			log.Printf("leaving out callbacks: %s", omit)
+		}
+		cfg.WriteString(withoutCallbacks(fullFeatureSettings, omit))
 		write(filepath.Join(*outDir, "custom_callbacks.py"), customCallbacks)
 	}
 	write(filepath.Join(*outDir, "config.yaml"), cfg.String())

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // customCallbacks holds the Python proxy's stand-ins for the Rust gateway's request hooks.
@@ -78,6 +79,37 @@ const fullFeatureSettings = `litellm_settings:
         headers:
           x-caller-team: "{key.team_alias}"
 `
+
+// withoutCallbacks drops the comma-separated callbacks from the full-feature settings, with
+// s3_v2's s3_callback_params, so one run can tell what a callback costs (LOADTEST_OMIT_CALLBACKS).
+func withoutCallbacks(settings, omit string) string {
+	drop := map[string]bool{}
+	for _, name := range strings.Split(omit, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			drop[name] = true
+		}
+	}
+	if len(drop) == 0 {
+		return settings
+	}
+	var out strings.Builder
+	skipping := false
+	for _, line := range strings.SplitAfter(settings, "\n") {
+		if skipping && strings.HasPrefix(line, "    ") {
+			continue
+		}
+		skipping = false
+		if drop["s3_v2"] && strings.TrimSpace(line) == "s3_callback_params:" {
+			skipping = true
+			continue
+		}
+		if name, ok := strings.CutPrefix(strings.TrimSpace(line), "- "); ok && drop[name] && strings.HasPrefix(line, "    - ") {
+			continue
+		}
+		out.WriteString(line)
+	}
+	return out.String()
+}
 
 // setPrefix names a key set's keys, users, teams and budgets, so sets never collide in one
 // database.
