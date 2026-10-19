@@ -2,9 +2,11 @@
 #    This tests litellm.token_counter.token_counter() function
 import asyncio
 import base64
+import http.server
 import importlib
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -1076,7 +1078,6 @@ def test_token_counter_skips_the_deepseek_tokenizer_for_deepseek_models_built_on
     assert litellm.token_counter(model=model, text=_CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
 
 
-
 def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
     _load_huggingface_tokenizer.cache_clear()
     start: Final = threading.Barrier(8)
@@ -1089,6 +1090,58 @@ def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
         tokenizers: Final = tuple(pool.map(first_tokenizer, range(8)))
 
     assert len({id(tokenizer) for tokenizer in tokenizers}) == 1
+
+
+CONCURRENT_LLAMA_DOWNLOADS_SCRIPT: Final = """
+import sys
+from concurrent.futures import ThreadPoolExecutor
+sys.path.insert(0, sys.argv[1])
+from litellm.utils import _select_tokenizer_helper
+with ThreadPoolExecutor(max_workers=2) as pool:
+    tuple(pool.map(lambda _: _select_tokenizer_helper("meta-llama/llama-3-8b"), range(2)))
+"""
+
+
+def test_concurrent_first_llama_counts_download_without_waiting_on_each_other(tmp_path: Path):
+    both_downloading: Final = threading.Barrier(2, timeout=5)
+    downloads: Final = queue.SimpleQueue[str]()
+
+    class StalledHub(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path.endswith("/tokenizer.json"):
+                try:
+                    both_downloading.wait()
+                    downloads.put("concurrent")
+                except threading.BrokenBarrierError:
+                    downloads.put("serialized")
+            self.send_response(404)
+            self.end_headers()
+
+        do_HEAD = do_GET
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), StalledHub) as hub:
+        threading.Thread(target=hub.serve_forever, daemon=True).start()
+        result: Final = subprocess.run(
+            [sys.executable, "-I", "-c", CONCURRENT_LLAMA_DOWNLOADS_SCRIPT, str(Path(litellm.__file__).parent.parent)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={
+                **os.environ,
+                "HF_ENDPOINT": f"http://127.0.0.1:{hub.server_port}",
+                "HF_HOME": str(tmp_path / "home"),
+                "HF_HUB_CACHE": str(tmp_path / "cache"),
+                "HF_HUB_OFFLINE": "0",
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            },
+        )
+        hub.shutdown()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert downloads.get_nowait() == "concurrent"
 
 
 def test_token_counter_with_anthropic_tool_use():
