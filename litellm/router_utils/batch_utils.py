@@ -4,13 +4,12 @@ from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from os import PathLike
-from typing import Final
+from typing import Final, TypeVar
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
-from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import CallTypes
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
@@ -19,6 +18,7 @@ _DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(Mapping[str, object])
 BATCH_ENDPOINT: Final = "/v1/batch"
 
 _batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 class InMemoryFile(io.BytesIO):
@@ -86,24 +86,36 @@ def is_batch_create_routing() -> bool:
     return _batch_create_routing.get()
 
 
+def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
+    return _DEPLOYMENT_MODEL_INFO.validate_python(deployment.get("model_info") or {})
+
+
 def is_batch_deployment(deployment: Mapping[str, object]) -> bool:
-    return _DEPLOYMENT_MODEL_INFO.validate_python(deployment.get("model_info") or {}).get("mode") == "batch"
+    return _configured_model_info(deployment).get("mode") == "batch"
 
 
-def prefer_batch_deployments(deployments: Sequence[DeploymentTypedDict]) -> Sequence[DeploymentTypedDict]:
+def _declares_batch_endpoint(deployment: Mapping[str, object]) -> bool:
+    configured_endpoints: Final = _configured_model_info(deployment).get("supported_endpoints")
+    return isinstance(configured_endpoints, list | tuple) and BATCH_ENDPOINT in configured_endpoints
+
+
+def prefer_batch_deployments(deployments: Sequence[_DeploymentT]) -> Sequence[_DeploymentT]:
     if not is_batch_create_routing():
         return deployments
-    batch_deployments: Final = tuple(deployment for deployment in deployments if is_batch_deployment(deployment))
-    return batch_deployments or deployments
+    return [deployment for deployment in deployments if is_batch_deployment(deployment)] or deployments
+
+
+def batch_deployment_position(deployments: Sequence[Mapping[str, object]]) -> int:
+    return next((position for position, deployment in enumerate(deployments) if is_batch_deployment(deployment)), 0)
 
 
 def deployment_supported_endpoints(
-    declared_endpoints: Sequence[str] | None, deployment: Mapping[str, object]
+    resolved_endpoints: Sequence[str] | None, deployment: Mapping[str, object]
 ) -> tuple[str, ...]:
-    declared: Final = tuple(declared_endpoints or ())
-    if is_batch_deployment(deployment) and BATCH_ENDPOINT not in declared:
-        return (*declared, BATCH_ENDPOINT)
-    return declared
+    non_batch_endpoints: Final = tuple(endpoint for endpoint in resolved_endpoints or () if endpoint != BATCH_ENDPOINT)
+    if is_batch_deployment(deployment) or _declares_batch_endpoint(deployment):
+        return (*non_batch_endpoints, BATCH_ENDPOINT)
+    return non_batch_endpoints
 
 
 def should_replace_model_in_jsonl(

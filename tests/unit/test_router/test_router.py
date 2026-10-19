@@ -2406,6 +2406,48 @@ def test_model_group_info_lists_no_batch_for_a_chat_only_group():
     assert undeclared is not None and undeclared.supported_endpoints is None
 
 
+def test_model_group_info_lists_no_batch_for_a_chat_group_whose_cost_map_entry_lists_batch():
+    """The cost map lists /v1/batch for chat SKUs that only a separate batch deployment can run, so a group
+    of chat deployments must not advertise batch support from it."""
+    cost_map_model, cost_map_endpoints = next(
+        (name, tuple(info["supported_endpoints"]))
+        for name, info in litellm.model_cost.items()
+        if name.startswith("azure/")
+        and info.get("mode") == "chat"
+        and "/v1/batch" in (info.get("supported_endpoints") or ())
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-chat",
+                "litellm_params": {"model": cost_map_model, "api_base": "https://chat-sku.openai.azure.com"},
+            }
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-chat")
+
+    assert info is not None
+    assert info.supported_endpoints == tuple(endpoint for endpoint in cost_map_endpoints if endpoint != "/v1/batch")
+
+
+def test_model_group_info_lists_batch_for_a_deployment_that_declares_it():
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment(
+                "gpt-declared-batch",
+                "unmapped-chat-sku",
+                "chat",
+                supported_endpoints=["/v1/chat/completions", "/v1/batch"],
+            )
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-declared-batch")
+
+    assert info is not None and info.supported_endpoints == ("/v1/chat/completions", "/v1/batch")
+
+
 def _alias_cost_router() -> Router:
     return Router(
         model_list=[
@@ -13111,6 +13153,65 @@ async def test_acreate_batch_on_a_group_without_batch_deployments_still_uses_eve
     assert first_route.call_count > 0
     assert second_route.call_count > 0
     assert first_route.call_count + second_route.call_count == 40
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_id", "reached_host"), [(None, "chat-sku"), ("team-a", "batch-sku")])
+async def test_acreate_batch_prefers_only_the_batch_deployments_the_caller_may_use(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, reached_host: str
+):
+    """A batch deployment owned by one team must not take a mixed group's batch creates away from callers
+    outside that team, who still reach the group's shared deployments."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", team_id="team-a"),
+        ],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        routes: Final = {
+            host: respx_mock.post(host=f"{host}.openai.azure.com").mock(
+                return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            )
+            for host in ("chat-sku", "batch-sku")
+        }
+        await router.acreate_batch(
+            model="gpt-mixed",
+            input_file_id="file-batch-input",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+            metadata={"user_api_key_team_id": team_id},
+        )
+
+    assert {host: route.call_count for host, route in routes.items()} == {
+        host: int(host == reached_host) for host in routes
+    }
+
+
+@pytest.mark.parametrize("chat_deployment_first", [True, False])
+@pytest.mark.parametrize(
+    ("build_deployment", "model_name"),
+    [
+        (functools.partial(_azure_sku_deployment, "gpt-mixed"), "gpt-mixed"),
+        (_azure_wildcard_deployment, "mixed-wild/gpt-5.4-mini"),
+    ],
+    ids=["named-group", "wildcard-group"],
+)
+def test_credentials_for_a_mixed_group_name_resolve_to_its_batch_deployment(
+    chat_deployment_first: bool, build_deployment: Callable[[str, str], dict[str, object]], model_name: str
+):
+    """Files and batches addressed by a group name (x-litellm-model, a model param, or a model-encoded id)
+    take their credentials from one deployment, which must be the one that can run batches."""
+    chat: Final = build_deployment("chat-sku", "chat")
+    batch: Final = build_deployment("batch-sku", "batch")
+    router: Final = Router(model_list=[chat, batch] if chat_deployment_first else [batch, chat])
+
+    credentials: Final = router.get_deployment_credentials_with_provider(model_id=model_name)
+
+    assert credentials is not None and credentials["api_base"] == "https://batch-sku.openai.azure.com"
 
 
 @pytest.mark.asyncio
