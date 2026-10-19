@@ -1059,6 +1059,48 @@ async def test_ProxyConfig__process_includes_terminates_on_a_cycle(tmp_path):
     assert result == {"model_list": [{"model_name": "from-a"}, {"model_name": "from-b"}]}
 
 
+@pytest.mark.asyncio
+async def test_config_file_keeps_include_order_and_raw_values_with_native_parsing(tmp_path: Path) -> None:
+    from litellm.rust_bridge.config import INCLUDE_PLAN, PARSE_YAML
+
+    pytest.importorskip("litellm.rust_bridge._native")
+    assert PARSE_YAML.load() is not None
+    assert INCLUDE_PLAN.load() is not None
+    root: Final = tmp_path / "config.yaml"
+    root.write_text("include: [first.yaml, second.yaml]\nitems: [root]\nsettings: {discard: true}\nfuture: null\n")
+    (tmp_path / "first.yaml").write_text("include: [nested.yaml]\nitems: [first]\nsettings: {first: on}\n")
+    (tmp_path / "second.yaml").write_text("items: [second]\nsettings: {second: false}\n")
+    (tmp_path / "nested.yaml").write_text(
+        "include: [config.yaml, ./second.yaml]\nitems: [nested]\nsettings: {zero: 0, secret: os.environ/UNRESOLVED}\n"
+    )
+    result: Final = await ProxyConfig()._get_config_from_file(str(root))
+    assert result == {
+        "items": ["root", "first", "second", "nested"],
+        "settings": {"zero": 0, "secret": "os.environ/UNRESOLVED"},
+        "future": None,
+    }
+    assert tuple(result) == ("items", "settings", "future")
+
+
+@pytest.mark.asyncio
+async def test_native_include_merge_keeps_python_only_values_and_identity(tmp_path: Path) -> None:
+    from litellm.rust_bridge.config import INCLUDE_PLAN
+
+    pytest.importorskip("litellm.rust_bridge._native")
+    assert INCLUDE_PLAN.load() is not None
+    marker: Final = object()
+    retained: Final = {"marker": marker}
+    (tmp_path / "extra.yaml").write_text("values: [2026-01-02]\nsettings: null\n")
+    result: Final = await ProxyConfig()._process_includes(
+        {"include": ["extra.yaml"], "values": [marker], "retained": retained, "settings": {"enabled": True}},
+        str(tmp_path / "config.yaml"),
+    )
+    assert result["retained"] is retained
+    assert result["values"][0] is marker
+    assert result["values"][1].isoformat() == "2026-01-02"
+    assert result["settings"] is None
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.save_config
 # ---------------------------------------------------------------------------

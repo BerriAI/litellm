@@ -1,5 +1,6 @@
+mod document;
 mod error;
-mod includes;
+pub mod includes;
 mod mcp;
 mod model;
 mod settings;
@@ -9,7 +10,8 @@ use std::{fmt, path::Path};
 
 use serde::Deserialize;
 
-pub use error::Error;
+pub use document::Document;
+pub use error::{Error, ParseError};
 pub use litellm_router_types::{LitellmParams, Spelled};
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::Model;
@@ -85,10 +87,10 @@ impl fmt::Debug for Config {
 
 impl Config {
     pub fn from_yaml(yaml: &str) -> Result<Self, Error> {
-        Ok(serde_yaml_ng::from_str(yaml)?)
+        Document::from_yaml(yaml)?.typed()
     }
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Ok(serde_yaml_ng::from_value(includes::load(path.as_ref())?)?)
+        Document::load(path)?.typed()
     }
 }

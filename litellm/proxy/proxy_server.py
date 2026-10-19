@@ -803,6 +803,7 @@ from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.rust_bridge.config import parse_yaml as parse_config_yaml
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -5851,13 +5852,13 @@ class ProxyConfig:
         _, file_extension = os.path.splitext(config_file_path)
         return file_extension.lower() == ".yaml" or file_extension.lower() == ".yml"
 
-    def _load_yaml_file(self, file_path: str) -> dict:
+    def _load_yaml_file(self, file_path: str) -> object:
         """
         Load and parse a YAML file
         """
         try:
             with open(file_path, "r") as file:
-                return yaml.safe_load(file) or {}
+                return parse_config_yaml(file) or {}
         except Exception as e:
             raise Exception(f"Error loading yaml file {file_path}: {e}")
 
@@ -5878,7 +5879,9 @@ class ProxyConfig:
         ## Yaml
         if os.path.exists(f"{file_path}"):
             with open(f"{file_path}", "r") as config_file:
-                config = yaml.safe_load(config_file)
+                config = cast(  # cast-ok: preserve legacy malformed-document errors in _process_includes
+                    Mapping[str, object] | None, parse_config_yaml(config_file)
+                )
         elif file_path is not None:
             raise Exception(f"Config file not found: {file_path}")
         else:
@@ -5897,7 +5900,7 @@ class ProxyConfig:
         # verbose_proxy_logger.debug(f"loaded config={json.dumps(config, indent=4)}")
         return config
 
-    async def _process_includes(self, config: dict, config_file_path: str) -> dict:
+    async def _process_includes(self, config: Mapping[str, object], config_file_path: str) -> dict:
         """
         Process includes by appending their contents to the main config
 

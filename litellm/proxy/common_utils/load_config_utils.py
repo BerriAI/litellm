@@ -10,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.config_includes import resolve_includes
+from litellm.rust_bridge.config import parse_yaml as parse_config_yaml
 
 if TYPE_CHECKING:
     from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
@@ -31,7 +32,7 @@ class SyncBucketObjectReader(Protocol):
 
 def _parsed_config(object_key: str, file_contents: str) -> object | None:
     try:
-        parsed: Final = yaml.safe_load(file_contents)
+        parsed: Final = parse_config_yaml(file_contents)
     except yaml.YAMLError as e:
         verbose_proxy_logger.error("Config object %s is not valid YAML: %s", object_key, e)
         return None

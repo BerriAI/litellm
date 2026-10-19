@@ -8,10 +8,14 @@ repository.workspace = true
 [dependencies]
 litellm-auth-types.workspace = true
 litellm-router-types.workspace = true
+indexmap = "2"
 serde.workspace = true
+regex = "1"
 serde_yaml_ng = "0.10.0"
 strum.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
+yaml-rust2 = { version = "=0.13.0", default-features = false }
 
 [dev-dependencies]
 rstest.workspace = true

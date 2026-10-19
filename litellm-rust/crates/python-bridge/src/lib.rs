@@ -1,6 +1,7 @@
 mod cache;
 mod callable;
 mod coercion;
+mod config;
 mod credentials;
 mod diagnostics;
 mod errors;
@@ -19,6 +20,9 @@ mod _native {
     #[pymodule_export]
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
+
+    #[pymodule_export]
+    use crate::config::{_parse_config_yaml, _resolve_config_include_path, ConfigIncludes};
 
     #[cfg(feature = "panic-test")]
     #[pymodule_export]

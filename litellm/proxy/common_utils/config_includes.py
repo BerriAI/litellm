@@ -4,6 +4,7 @@ from types import MappingProxyType
 from typing import Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
+from litellm.rust_bridge.config import IncludePlan, include_path, include_plan
 
 INCLUDE_KEY: Final = "include"
 
@@ -16,6 +17,13 @@ def resolve_include_file_path(include_file: str, declared_in: str, root_config_p
     config instead, so that file is still read, with a warning naming where it was found. When both
     files exist the one next to the declaring config wins and the other is named in a warning.
     """
+    native: Final = include_path(include_file, declared_in, root_config_path)
+    if native is not None:
+        location, warning = native
+        if warning is not None:
+            verbose_proxy_logger.warning("%s", warning)
+        return location
+
     declared_relative: Final = os.path.abspath(os.path.join(os.path.dirname(declared_in), include_file))
     root_relative: Final = os.path.abspath(os.path.join(os.path.dirname(root_config_path), include_file))
     if root_relative == declared_relative or not os.path.exists(root_relative):
@@ -128,5 +136,26 @@ async def resolve_includes(
     read nor merged a second time, and `read` decides where a location is read from, so the same merge
     applies to configs on disk and to configs hosted in a bucket.
     """
+    native: Final = include_plan(config, location)
+    if native is not None:
+        return dict(await _resolve_native(config, native, resolve, read))
     merged: Final = await _resolve(config, _pending_from(config, location), frozenset((location,)), resolve, read)
     return dict(merged)
+
+
+async def _resolve_native(
+    config: Mapping[str, object],
+    plan: IncludePlan,
+    resolve: IncludeResolver,
+    read: ConfigReader,
+) -> Mapping[str, object]:
+    pending: Final = plan.next_entry()
+    if pending is None:
+        return {key: value for key, value in config.items() if key != INCLUDE_KEY}
+    entry, declared_in = pending
+    location: Final = resolve(entry, declared_in)
+    if not plan.mark_loaded(location):
+        return await _resolve_native(config, plan, resolve, read)
+    included: Final = await read(location)
+    merged: Final = plan.merge(dict(config), dict(included), location)
+    return await _resolve_native(merged, plan, resolve, read)
