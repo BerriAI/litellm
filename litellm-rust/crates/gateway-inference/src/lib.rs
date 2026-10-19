@@ -25,7 +25,10 @@ use litellm_inference_messages::MessagesRoute;
 use litellm_inference_ocr::OcrRoute;
 use litellm_inference_responses::ResponsesRoute;
 use litellm_inference_transcription::AudioTranscriptionRoute;
-use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
+use litellm_llms::base_llm::{
+    model_info::ModelInfo,
+    ocr::{handler::OcrClient, settings::OcrSettings},
+};
 use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
@@ -36,6 +39,8 @@ pub use request::{JsonBody, JsonObject, RequestId};
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     hooks: OnceLock<Hooks>,
+    model_info: OnceLock<Arc<dyn ModelInfo>>,
+    drop_params: bool,
     allow_client_side_credentials: bool,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
@@ -65,6 +70,29 @@ impl Gateway {
     /// The hooks requests run through, once installed.
     pub fn hooks(&self) -> Option<&Hooks> {
         self.hooks.get()
+    }
+
+    /// Gives providers whose param rules read model capabilities the model cost map. Only the
+    /// first call takes effect.
+    pub fn install_model_info(&self, model_info: Arc<dyn ModelInfo>) {
+        let _ = self.model_info.set(model_info);
+    }
+
+    pub(crate) fn model_info(&self) -> Option<Arc<dyn ModelInfo>> {
+        self.model_info.get().cloned()
+    }
+
+    /// `litellm_settings.drop_params`: drops params a provider does not support instead of
+    /// refusing the request.
+    pub fn with_drop_params(self, drop_params: bool) -> Self {
+        Self {
+            drop_params,
+            ..self
+        }
+    }
+
+    pub(crate) fn drop_params(&self) -> bool {
+        self.drop_params
     }
 
     /// `general_settings.allow_client_side_credentials`: lets a request body name the
@@ -98,6 +126,8 @@ impl Gateway {
         Ok(Self {
             cache: None,
             hooks: OnceLock::new(),
+            model_info: OnceLock::new(),
+            drop_params: false,
             allow_client_side_credentials: false,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),

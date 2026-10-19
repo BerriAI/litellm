@@ -117,6 +117,7 @@ fn programmatic_deployments_preserve_overrides_and_share_their_group() {
         },
         team_id: None,
         id: None,
+        base_model: None,
     };
     let router = Router::from_iter([
         ("public-model".into(), Deployment::default()),

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod base_model_iterator;
 pub mod chat;
 pub mod messages;
+pub mod model_info;
 pub mod ocr;
 pub mod responses;
 pub mod sse;

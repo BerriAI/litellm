@@ -18,6 +18,12 @@ use crate::usage::{ServiceTier, Usage};
 pub struct Prices {
     plans: HashMap<Arc<str>, PricingPlan>,
     max_output_tokens: HashMap<Arc<str>, u64>,
+    /// Deployments priced by the model their response names, with the provider route the
+    /// cost map keys that model under. The proxy prices an Azure deployment that sets neither
+    /// `base_model` nor prices of its own this way.
+    by_response_model: HashMap<Arc<str>, Arc<str>>,
+    /// Cost map prices by model name, for the deployments priced by their response's model.
+    models: HashMap<String, PricingPlan>,
 }
 
 impl Prices {
@@ -27,16 +33,27 @@ impl Prices {
         if let Some(limit) = fields.get("max_output_tokens").and_then(Value::as_u64) {
             self.max_output_tokens.insert(id.clone(), limit);
         }
-        let parsed = ParsedRates::parse(fields);
-        if parsed.standard == Rates::EMPTY && parsed.thresholds.is_empty() {
-            return;
+        if let Some(plan) = plan(&id, fields) {
+            self.plans.insert(id, plan);
         }
-        match parsed.compile() {
-            Ok(plan) => {
-                self.plans.insert(id, plan);
-            }
-            Err(error) => tracing::warn!(deployment = %id, ?error, "ignoring invalid prices"),
+    }
+
+    /// Prices `deployment` by the model its response names, looked up as
+    /// `{provider}/{model}`, before its own prices.
+    pub fn price_by_response_model(&mut self, deployment: Arc<str>, provider: &str) {
+        self.by_response_model.insert(deployment, provider.into());
+    }
+
+    /// Adds the cost map prices of `model`, for deployments priced by their response's model.
+    pub fn insert_model(&mut self, model: &str, fields: &Map<String, Value>) {
+        if let Some(plan) = plan(model, fields) {
+            self.models.insert(model.to_owned(), plan);
         }
+    }
+
+    /// Whether some deployment is priced by its response's model.
+    pub fn prices_by_response_model(&self) -> bool {
+        !self.by_response_model.is_empty()
     }
 
     pub fn len(&self) -> usize {
@@ -54,41 +71,78 @@ impl Prices {
 
     /// The cost in dollars of `usage` on a deployment, or `None` when its prices are unknown.
     pub fn cost(&self, deployment: &str, usage: &Usage) -> Option<f64> {
-        let plan = self.plans.get(deployment)?;
-        let one_hour = usage.cache_write_1h_tokens.min(usage.cache_write_tokens);
-        let split = (one_hour > 0).then_some(());
-        let request = Request {
-            usage: litellm_cost::Usage {
-                prompt_tokens: usage.prompt_tokens(),
-                completion_tokens: usage.output_tokens,
-                cache_read_tokens: usage.cache_read_tokens,
-                cache_write_tokens: usage.cache_write_tokens,
-                cache_write_5m_tokens: split.map(|()| usage.cache_write_tokens - one_hour),
-                cache_write_1h_tokens: split.map(|()| one_hour),
-                prompt_convention: PromptConvention::IncludesCache,
-            },
-            service_tier: match usage.service_tier {
-                ServiceTier::Priority => CostTier::Priority,
-                ServiceTier::Flex => CostTier::Flex,
-                ServiceTier::Standard | ServiceTier::Batch => CostTier::Standard,
-            },
-            threshold_policy: ThresholdPolicy::Exclusive,
-            region_multiplier: None,
-            billed_at_utc_minute: None,
-        };
-        match plan.calculate(&request) {
-            Ok(cost) => Some(cost.total()),
-            Err(error) => {
-                tracing::debug!(deployment, ?error, "no cost for response");
-                None
-            }
+        plan_cost(deployment, self.plans.get(deployment)?, usage)
+    }
+
+    /// [`Self::cost`], first by `response_model` for a deployment priced by its response's
+    /// model, as the proxy tries `{provider}/{response model}` ahead of the deployment.
+    pub fn response_cost(
+        &self,
+        deployment: &str,
+        response_model: Option<&str>,
+        usage: &Usage,
+    ) -> Option<f64> {
+        self.by_response_model
+            .get(deployment)
+            .zip(response_model.filter(|model| !model.is_empty()))
+            .and_then(|(provider, model)| {
+                let name = match model.starts_with(&format!("{provider}/")) {
+                    true => model.to_owned(),
+                    false => format!("{provider}/{model}"),
+                };
+                plan_cost(deployment, self.models.get(&name)?, usage)
+            })
+            .or_else(|| self.cost(deployment, usage))
+    }
+}
+
+/// The plan `fields` price, or `None` when they hold no usable prices.
+fn plan(name: &str, fields: &Map<String, Value>) -> Option<PricingPlan> {
+    let parsed = ParsedRates::parse(fields);
+    if parsed.standard == Rates::EMPTY && parsed.thresholds.is_empty() {
+        return None;
+    }
+    parsed
+        .compile()
+        .inspect_err(|error| tracing::warn!(deployment = %name, ?error, "ignoring invalid prices"))
+        .ok()
+}
+
+fn plan_cost(deployment: &str, plan: &PricingPlan, usage: &Usage) -> Option<f64> {
+    let one_hour = usage.cache_write_1h_tokens.min(usage.cache_write_tokens);
+    let split = (one_hour > 0).then_some(());
+    let request = Request {
+        usage: litellm_cost::Usage {
+            prompt_tokens: usage.prompt_tokens(),
+            completion_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
+            cache_write_5m_tokens: split.map(|()| usage.cache_write_tokens - one_hour),
+            cache_write_1h_tokens: split.map(|()| one_hour),
+            prompt_convention: PromptConvention::IncludesCache,
+        },
+        service_tier: match usage.service_tier {
+            ServiceTier::Priority => CostTier::Priority,
+            ServiceTier::Flex => CostTier::Flex,
+            ServiceTier::Standard | ServiceTier::Batch => CostTier::Standard,
+        },
+        threshold_policy: ThresholdPolicy::Exclusive,
+        region_multiplier: None,
+        billed_at_utc_minute: None,
+    };
+    match plan.calculate(&request) {
+        Ok(cost) => Some(cost.total()),
+        Err(error) => {
+            tracing::debug!(deployment, ?error, "no cost for response");
+            None
         }
     }
 }
 
 /// A deployment's cost map fields: the cost map entry for its model, overlaid by the prices its
 /// config sets. The entry is found by `base_model`, then the model name, then the name without
-/// its provider route.
+/// its provider route. An Azure deployment's names are keyed under `azure/` first, and its bare
+/// deployment name is never looked up, since it names a resource of the user's, not a model.
 pub fn deployment_fields(
     catalog: Option<&Catalog>,
     model: &str,
@@ -97,14 +151,10 @@ pub fn deployment_fields(
 ) -> Map<String, Value> {
     let mut fields = catalog
         .and_then(|catalog| {
-            let candidates = base_model.into_iter().chain([
-                model,
-                model.split_once('/').map_or(model, |(_, rest)| rest),
-                model.rsplit_once('/').map_or(model, |(_, rest)| rest),
-            ]);
-            candidates
+            candidates(model, base_model)
+                .into_iter()
                 .filter(|name| !name.is_empty())
-                .find_map(|name| catalog.lookup(name))
+                .find_map(|name| catalog.lookup(&name))
         })
         .map(|found| found.entry.fields().clone())
         .unwrap_or_default();
@@ -117,6 +167,30 @@ pub fn deployment_fields(
     }
     fields
 }
+
+fn candidates(model: &str, base_model: Option<&str>) -> Vec<String> {
+    if model.starts_with(AZURE_ROUTE) {
+        return base_model
+            .into_iter()
+            .flat_map(|base| match base.starts_with(AZURE_ROUTE) {
+                true => vec![base.to_owned()],
+                false => vec![format!("{AZURE_ROUTE}{base}"), base.to_owned()],
+            })
+            .chain([model.to_owned()])
+            .collect();
+    }
+    base_model
+        .into_iter()
+        .chain([
+            model,
+            model.split_once('/').map_or(model, |(_, rest)| rest),
+            model.rsplit_once('/').map_or(model, |(_, rest)| rest),
+        ])
+        .map(str::to_owned)
+        .collect()
+}
+
+const AZURE_ROUTE: &str = "azure/";
 
 #[derive(Clone, Copy)]
 enum Slot {
@@ -381,5 +455,82 @@ mod tests {
         assert_eq!(fields["input_cost_per_token"], json!(9e-6));
         assert_eq!(fields["output_cost_per_token"], json!(2e-6));
         assert!(!fields.contains_key("api_key"));
+    }
+
+    fn azure_catalog() -> Catalog {
+        Catalog::parse(
+            br#"{
+                "gpt-4o": {"input_cost_per_token": 1e-6, "output_cost_per_token": 1e-6},
+                "azure/gpt-4o": {"input_cost_per_token": 2e-6, "output_cost_per_token": 2e-6},
+                "gpt-4o-mini": {"input_cost_per_token": 3e-6, "output_cost_per_token": 3e-6},
+                "azure/my-dep": {"input_cost_per_token": 4e-6, "output_cost_per_token": 4e-6},
+                "chat-dep": {"input_cost_per_token": 5e-6, "output_cost_per_token": 5e-6}
+            }"#,
+            Default::default(),
+        )
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::base_model_under_azure("azure/chat-dep", Some("gpt-4o"), Some(2e-6))]
+    #[case::base_model_already_routed("azure/chat-dep", Some("azure/gpt-4o"), Some(2e-6))]
+    #[case::bare_base_model("azure/chat-dep", Some("gpt-4o-mini"), Some(3e-6))]
+    #[case::deployment_under_azure("azure/my-dep", None, Some(4e-6))]
+    #[case::bare_deployment_is_not_a_model("azure/chat-dep", None, None)]
+    fn azure_deployments_are_priced_under_the_azure_route(
+        #[case] model: &str,
+        #[case] base_model: Option<&str>,
+        #[case] input: Option<f64>,
+    ) {
+        let fields = deployment_fields(Some(&azure_catalog()), model, base_model, &[]);
+        assert_eq!(
+            fields.get("input_cost_per_token").and_then(Value::as_f64),
+            input
+        );
+    }
+
+    fn response_priced(own: Value) -> Prices {
+        let mut prices = Prices::default();
+        prices.insert("d".into(), own.as_object().unwrap());
+        prices.insert_model(
+            "azure/gpt-4o",
+            json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 0.0})
+                .as_object()
+                .unwrap(),
+        );
+        prices.price_by_response_model("d".into(), "azure");
+        prices
+    }
+
+    #[rstest]
+    #[case::response_model_under_the_route(Some("gpt-4o"), Some(2e-6))]
+    #[case::response_model_already_routed(Some("azure/gpt-4o"), Some(2e-6))]
+    #[case::unknown_response_model_uses_the_deployment(Some("gpt-9"), Some(7e-6))]
+    #[case::no_response_model_uses_the_deployment(None, Some(7e-6))]
+    fn response_model_prices_come_first(
+        #[case] response_model: Option<&str>,
+        #[case] rate: Option<f64>,
+    ) {
+        let prices =
+            response_priced(json!({"input_cost_per_token": 7e-6, "output_cost_per_token": 0.0}));
+        assert_eq!(
+            prices.response_cost("d", response_model, &usage(1, 0)),
+            rate
+        );
+    }
+
+    #[rstest]
+    fn other_deployments_ignore_the_response_model() {
+        let mut prices = response_priced(json!({}));
+        prices.insert(
+            "other".into(),
+            json!({"input_cost_per_token": 7e-6, "output_cost_per_token": 0.0})
+                .as_object()
+                .unwrap(),
+        );
+        assert_eq!(
+            prices.response_cost("other", Some("gpt-4o"), &usage(1, 0)),
+            Some(7e-6)
+        );
     }
 }

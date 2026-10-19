@@ -197,6 +197,7 @@ pub struct StreamUsage {
     line: Vec<u8>,
     state: Line,
     usage: Option<Usage>,
+    model: Option<String>,
 }
 
 impl StreamUsage {
@@ -206,6 +207,7 @@ impl StreamUsage {
             line: Vec::new(),
             state: Line::Reading,
             usage: None,
+            model: None,
         }
     }
 
@@ -264,6 +266,11 @@ impl StreamUsage {
         self.usage
     }
 
+    /// The model named by the chunk that carried an OpenAI stream's usage.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
     fn may_carry_usage(&self) -> bool {
         let line = &self.line;
         if line.len() > MAX_LINE_BYTES {
@@ -304,8 +311,13 @@ impl StreamUsage {
                 if !contains(data, b"\"usage\":{") && !contains(data, b"\"usage\": {") {
                     return;
                 }
-                if let Ok(OpenAiChunk { usage: Some(usage) }) = serde_json::from_slice(data) {
+                if let Ok(OpenAiChunk {
+                    usage: Some(usage),
+                    model,
+                }) = serde_json::from_slice(data)
+                {
                     self.usage = Some(usage.usage());
+                    self.model = model.filter(|model| !model.is_empty());
                 }
             }
         }
@@ -326,6 +338,7 @@ struct AnthropicMessage {
 #[derive(Deserialize)]
 struct OpenAiChunk {
     usage: Option<OpenAiUsage>,
+    model: Option<String>,
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -398,7 +411,7 @@ mod tests {
     fn openai_usage_comes_from_the_last_chunk() {
         let stream = concat!(
             "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}],\"usage\":null}\n\n",
-            "data: {\"id\":\"c\",\"choices\":[],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":5,\"total_tokens\":35,\"prompt_tokens_details\":{\"cached_tokens\":10}}}\n\n",
+            "data: {\"id\":\"c\",\"model\":\"gpt-4o-2024-11-20\",\"choices\":[],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":5,\"total_tokens\":35,\"prompt_tokens_details\":{\"cached_tokens\":10}}}\n\n",
             "data: [DONE]\n\n",
         );
         let mut meter = StreamUsage::new(StreamFormat::OpenAi);
@@ -414,6 +427,7 @@ mod tests {
                 ..Usage::default()
             })
         );
+        assert_eq!(meter.model(), Some("gpt-4o-2024-11-20"));
     }
 
     #[rstest]
