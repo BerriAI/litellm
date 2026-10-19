@@ -8425,7 +8425,7 @@ def validate_and_fix_openai_messages(messages: list[Any]):
 
     Handles missing role for assistant messages.
     """
-    new_messages: Final = []
+    new_messages: list[AllMessageValues] = []
     for message in messages:
         # Copy before mutating: assigning dicts into a pydantic Message's
         # tool_calls triggers PydanticSerializationUnexpectedValue warnings on
@@ -8446,7 +8446,7 @@ def validate_and_fix_openai_messages(messages: list[Any]):
             ),
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
-        new_messages.append(cleaned_message)
+        new_messages.append(cast(AllMessageValues, cleaned_message))
     return validate_chat_completion_user_messages(messages=new_messages)
 
 
