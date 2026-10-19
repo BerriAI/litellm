@@ -1396,3 +1396,157 @@ def test_langfuse_otel_metadata_omits_prompt_quoting_routing_fields(
         assert keyword not in json.dumps(langfuse_metadata, default=str), langfuse_metadata
         if otel_v2:
             assert keyword not in json.dumps(attrs, default=str), attrs
+
+
+def _span_records(body: bytes) -> tuple[tuple[dict[str, object], int], ...]:
+    request: Final = ExportTraceServiceRequest.FromString(body)
+    return tuple(
+        (
+            {
+                attribute.key: getattr(attribute.value, attribute.value.WhichOneof("value"))
+                for attribute in span.attributes
+            },
+            span.dropped_attributes_count,
+        )
+        for resource in request.resource_spans
+        for scope in resource.scope_spans
+        for span in scope.spans
+    )
+
+
+def _identity_attributes(attrs: Mapping[str, object]) -> frozenset[str]:
+    names: Final = {"langfuse.observation.metadata", *(f"langfuse.trace.metadata.{field}" for field in _IDENTITIES)}
+    return frozenset(key for key in attrs if key in names)
+
+
+def _limit_sweep(
+    rig: _Rig,
+    key: str,
+    marker: str,
+    bodies: Mapping[int, Mapping[str, object]],
+) -> dict[int, tuple[dict[str, object], int]]:
+    """The exported span and dropped-attribute count per size; each body's prompt carries ``<marker>:<size>:``."""
+    drained: list[
+        tuple[dict[str, object], int]
+    ] = []  # mutable-ok: drain() consumes the wire queue, so observed spans must accumulate across eventually polls
+    for body in bodies.values():
+        response = rig.candidate.request("POST", "/v1/chat/completions", dict(body), key=key)
+        assert response.status_code == 200, response.text
+
+    def by_size() -> dict[int, tuple[dict[str, object], int] | None]:
+        drained.extend(record for batch in rig.collector.drain() for record in _span_records(batch.body))
+        return {
+            size: next(
+                (
+                    (attrs, dropped)
+                    for attrs, dropped in drained
+                    if f"{marker}:{size}:" in str(attrs.get("langfuse.observation.input", ""))
+                ),
+                None,
+            )
+            for size in bodies
+        }
+
+    observed: Final = eventually(by_size, lambda spans: None not in spans.values(), seconds=30)
+    return {size: record for size, record in observed.items() if record is not None}
+
+
+def test_langfuse_otel_identity_is_evicted_before_any_other_attribute_of_a_full_span(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "lf-limit-" + uuid.uuid4().hex
+    with (
+        _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key, identity = _scenario_identity(scenario, rig.provider)
+
+        def body(tool_count: int) -> dict[str, object]:
+            return {
+                "model": identity["model"],
+                "messages": [{"role": "user", "content": f"{marker}:{tool_count}:"}],
+                "user": identity["end_user"],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": f"tool_{n}",
+                            "description": f"looks up thing {n}",
+                            "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                        },
+                    }
+                    for n in range(tool_count)
+                ],
+                "cache": {"no-cache": True},
+            }
+
+        spans: Final = _limit_sweep(
+            rig, key, marker, {tool_count: body(tool_count) for tool_count in (0, *range(30, 41))}
+        )
+
+        reference, reference_dropped = spans[0]
+        identity_count: Final = len(_identity_attributes(reference))
+        assert reference_dropped == 0, reference_dropped
+        assert identity_count == len(_chat_identity_fields(identity)) + 1, sorted(reference)
+        for tool_count, (attrs, dropped) in spans.items():
+            kept = _identity_attributes(attrs)
+            assert len(kept) == identity_count - min(dropped, identity_count), (tool_count, dropped, sorted(kept))
+            if dropped <= identity_count:
+                expected = {"openinference.span.kind", "metadata", "llm.model_name", "llm.request.type"}
+                assert expected <= set(attrs), (tool_count, dropped, sorted(expected - set(attrs)))
+                tools = {f"llm.tools.{n}.name" for n in range(tool_count)}
+                assert tools <= set(attrs), (tool_count, dropped, sorted(tools - set(attrs)))
+        assert [tool_count for tool_count, (_, dropped) in spans.items() if 0 < dropped <= identity_count], {
+            tool_count: dropped for tool_count, (_, dropped) in spans.items()
+        }
+
+
+def test_otel_v2_langfuse_identity_sheds_before_any_message_attribute(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "lf-v2-limit-" + uuid.uuid4().hex
+    with (
+        _langfuse_rig(
+            gateway,
+            tmp_path,
+            {},
+            marker,
+            overrides={
+                "LITELLM_OTEL_V2": "1",
+                "MAPPER_NAMES": "genai,openinference",
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only",
+            },
+        ) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key, identity = _scenario_identity(scenario, rig.provider)
+
+        def body(message_count: int) -> dict[str, object]:
+            return {
+                "model": identity["model"],
+                "messages": [
+                    {"role": ("user", "assistant")[n % 2], "content": f"{marker} turn {n}"}
+                    for n in range(message_count - 1)
+                ]
+                + [{"role": "user", "content": f"{marker}:{message_count}: turn {message_count - 1}"}],
+                "user": identity["end_user"],
+                "cache": {"no-cache": True},
+            }
+
+        spans: Final = _limit_sweep(
+            rig, key, marker, {message_count: body(message_count) for message_count in (1, *range(20, 61))}
+        )
+
+        reference, _ = spans[1]
+        identity_count: Final = len(_identity_attributes(reference))
+        assert identity_count == len(_chat_identity_fields(identity)) + 1, sorted(reference)
+        shed_by_size: Final[dict[int, tuple[int, int]]] = {}  # mutable-ok: filled once per swept span below
+        for message_count, (attrs, _) in spans.items():
+            kept = {n for n in range(message_count) if f"llm.input_messages.{n}.message.content" in attrs}
+            shed_messages = message_count - len(kept)
+            shed_identity = identity_count - len(_identity_attributes(attrs))
+            shed_by_size[message_count] = (shed_identity, shed_messages)
+            if shed_messages:
+                assert shed_identity == identity_count, (message_count, shed_identity, shed_messages)
+        assert [
+            size for size, (shed_identity, shed_messages) in shed_by_size.items() if shed_identity and not shed_messages
+        ], shed_by_size
+        assert [size for size, (_, shed_messages) in shed_by_size.items() if shed_messages], shed_by_size

@@ -6,7 +6,9 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
@@ -506,8 +508,11 @@ class TestLangfuseOtelIntegration:
             "standard_logging_object": {"metadata": request_metadata},
         }
 
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+        with (
+            patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute,
+            patch("litellm.integrations.arize._utils.set_attributes"),
+        ):
+            LangfuseOtelLogger.set_langfuse_otel_attributes(MagicMock(), kwargs, None)
 
             actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
 
@@ -545,8 +550,11 @@ class TestLangfuseOtelIntegration:
             "standard_logging_object": {"metadata": request_metadata},
         }
 
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+        with (
+            patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute,
+            patch("litellm.integrations.arize._utils.set_attributes"),
+        ):
+            LangfuseOtelLogger.set_langfuse_otel_attributes(MagicMock(), kwargs, None)
 
             actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
 
@@ -574,8 +582,11 @@ class TestLangfuseOtelIntegration:
             "standard_logging_object": {"metadata": request_metadata},
         }
 
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+        with (
+            patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute,
+            patch("litellm.integrations.arize._utils.set_attributes"),
+        ):
+            LangfuseOtelLogger.set_langfuse_otel_attributes(MagicMock(), kwargs, None)
 
         actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
         langfuse_metadata: Final = {
@@ -605,8 +616,11 @@ class TestLangfuseOtelIntegration:
             "standard_logging_object": {"metadata": request_metadata},
         }
 
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+        with (
+            patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute,
+            patch("litellm.integrations.arize._utils.set_attributes"),
+        ):
+            LangfuseOtelLogger.set_langfuse_otel_attributes(MagicMock(), kwargs, None)
 
             actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
 
@@ -627,8 +641,11 @@ class TestLangfuseOtelIntegration:
             },
         }
 
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+        with (
+            patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute,
+            patch("litellm.integrations.arize._utils.set_attributes"),
+        ):
+            LangfuseOtelLogger.set_langfuse_otel_attributes(MagicMock(), kwargs, None)
 
             actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
 
@@ -638,8 +655,11 @@ class TestLangfuseOtelIntegration:
     def test_request_metadata_keys_are_absent_without_standard_logging_object(self) -> None:
         kwargs: Final = {"litellm_params": {"metadata": {"trace_metadata": {"k": "v"}}}}
 
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+        with (
+            patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute,
+            patch("litellm.integrations.arize._utils.set_attributes"),
+        ):
+            LangfuseOtelLogger.set_langfuse_otel_attributes(MagicMock(), kwargs, None)
 
             actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
 
@@ -669,13 +689,88 @@ class TestLangfuseOtelIntegration:
         }
         response_obj: Final = {"choices": [{"message": {"role": "assistant", "content": "hello"}}]}
 
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, response_obj)
+        with (
+            patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute,
+            patch("litellm.integrations.arize._utils.set_attributes"),
+        ):
+            LangfuseOtelLogger.set_langfuse_otel_attributes(MagicMock(), kwargs, response_obj)
 
             actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
 
             assert json.loads(actual["langfuse.observation.metadata"]) == {"user_api_key_alias": "prod-key"}
             assert json.loads(actual["langfuse.observation.output"]) == {"role": "assistant", "content": "hello"}
+
+    @staticmethod
+    def _exported_span(
+        kwargs: dict[str, object], max_span_attributes: int | None, carried: dict[str, str] | None = None
+    ) -> ReadableSpan:
+        exporter: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=max_span_attributes))
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        span: Final = provider.get_tracer("langfuse-otel-test").start_span("litellm_request", attributes=carried)
+        response_obj: Final = {"id": "chatcmpl-1", "choices": [{"message": {"role": "assistant", "content": "hello"}}]}
+        LangfuseOtelLogger.set_langfuse_otel_attributes(span, kwargs, response_obj)
+        span.end()
+        (finished,) = exporter.get_finished_spans()
+        return finished
+
+    @staticmethod
+    def _tool_call_kwargs() -> dict[str, object]:
+        tools: Final = [
+            {
+                "type": "function",
+                "function": {"name": f"tool_{n}", "description": f"does thing {n}", "parameters": {"type": "object"}},
+            }
+            for n in range(3)
+        ]
+        messages: Final = [{"role": "user", "content": "hello"}]
+        return {
+            "model": "gpt-4o",
+            "messages": messages,
+            "optional_params": {"tools": tools},
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {
+                "model": "gpt-4o",
+                "custom_llm_provider": "openai",
+                "call_type": "completion",
+                "messages": messages,
+                "model_parameters": {"tools": tools},
+                "metadata": {"user_api_key_alias": "prod-key", "user_api_key_team_id": "team-1"},
+            },
+        }
+
+    def test_request_metadata_never_evicts_another_attribute_at_the_span_limit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        kwargs: Final = self._tool_call_kwargs()
+        monkeypatch.setattr(litellm, "redact_user_api_key_info", True)
+        plain: Final = dict(self._exported_span(kwargs, SpanLimits.UNSET).attributes or {})
+        monkeypatch.setattr(litellm, "redact_user_api_key_info", False)
+        full: Final = dict(self._exported_span(kwargs, SpanLimits.UNSET).attributes or {})
+        identity_keys: Final = set(full) - set(plain)
+        assert identity_keys == {
+            "langfuse.observation.metadata",
+            "langfuse.trace.metadata.user_api_key_alias",
+            "langfuse.trace.metadata.user_api_key_team_id",
+        }
+
+        at_limit: Final = self._exported_span(kwargs, len(plain))
+        assert dict(at_limit.attributes or {}) == plain
+
+        one_spare: Final = dict(self._exported_span(kwargs, len(plain) + 1).attributes or {})
+        assert {key: one_spare.get(key) for key in plain} == plain
+        assert len(set(one_spare) & identity_keys) == 1
+
+    def test_request_metadata_skips_a_span_that_already_carries_attributes(self) -> None:
+        attributes: Final = dict(
+            self._exported_span(self._tool_call_kwargs(), SpanLimits.UNSET, {"caller.attribute": "kept"}).attributes
+            or {}
+        )
+
+        assert attributes["caller.attribute"] == "kept"
+        assert attributes["langfuse.observation.type"] == "generation"
+        assert "langfuse.observation.metadata" not in attributes
+        assert not [key for key in attributes if key.startswith("langfuse.trace.metadata.")]
 
 
 class TestLangfuseOtelKeyDynamicConfig:

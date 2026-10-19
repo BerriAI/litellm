@@ -51,7 +51,14 @@ class LangfuseOtelLogger(OpenTelemetry):
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
         """
+        from opentelemetry.sdk.trace import ReadableSpan
 
+        # The caller identity goes first, so a span that reaches its attribute limit evicts it before any
+        # other attribute. A span that already carries attributes (a caller's active span) does not get it.
+        if not (isinstance(span, ReadableSpan) and span.attributes):
+            LangfuseOtelLogger._set_request_metadata_attributes(
+                span=span, kwargs=_MAPPING_ADAPTER.validate_python(kwargs)
+            )
         _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes)
         span.set_attribute("langfuse.observation.type", "generation")
 
@@ -278,7 +285,6 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         metadata: Final = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
-        LangfuseOtelLogger._set_request_metadata_attributes(span=span, kwargs=_MAPPING_ADAPTER.validate_python(kwargs))
 
         messages: Final = kwargs.get("messages")
         if messages:
