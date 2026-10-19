@@ -1048,7 +1048,7 @@ jobs:
             xdist_args=(-n "${WORKERS}" --dist="${DIST}")
           fi
           set +e
-          uv run --no-sync pytest "${pytest_args[@]}" \
+          uv run --no-sync pytest -p pytest_ci_report --ci-report=pytest-report.json "${pytest_args[@]}" \
             --tb=short -vv \
             --maxfail="${MAX_FAILURES}" \
             "${xdist_args[@]}" \
@@ -1078,6 +1078,14 @@ jobs:
           name: coverage-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: coverage.xml
           retention-days: 1
+
+      - name: Report test outcomes
+        if: always() && steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/pytest-report
+        with:
+          report: pytest-report.json
+          title: ${{ matrix.shard }}
+          artifact-name: pytest-report-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
   ui-unit:
     name: ui-unit
     permissions:
