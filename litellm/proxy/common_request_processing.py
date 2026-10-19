@@ -3203,10 +3203,7 @@ class ProxyBaseLLMRequestProcessing:
             else llm_cost_for_headers
         )
 
-        usage_cost: Final = (
-            response_cost_for_headers if isinstance(response_cost_for_headers, (int, float, str)) else None
-        )
-        self._maybe_set_usage_cost(request, response, usage_cost)
+        self._maybe_set_usage_cost(request, response, response_cost_for_headers)
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
