@@ -137,6 +137,7 @@ from litellm.types.utils import (
     TranscriptionUsageTokensObject,
     Usage,
     VectorStoreSearchResponse,
+    is_server_derived_pricing_key,
 )
 from litellm.utils import (
     CallTypes,
@@ -856,7 +857,12 @@ _NON_TOKEN_RATE_FIELDS: Final = frozenset(
 
 def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
     return any(
-        value is not None and (field in _NON_TOKEN_RATE_FIELDS or ("cost_per" in field and "token" in field))
+        value is not None
+        and (
+            field in _NON_TOKEN_RATE_FIELDS
+            or (field.startswith("cache_") and is_server_derived_pricing_key(field))
+            or ("cost_per" in field and "token" in field)
+        )
         for field, value in entry.items()
     )
 

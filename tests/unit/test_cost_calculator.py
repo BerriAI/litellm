@@ -9917,3 +9917,32 @@ def test_bedrock_converse_profile_ignores_registered_capabilities_without_prices
         custom_llm_provider="bedrock",
         optional_params={"model_id": f"us.{model}"},
     ) == pytest.approx(10 * prices["input_cost_per_token"] + 5 * prices["output_cost_per_token"])
+
+
+@pytest.mark.parametrize("rate", (0.0, 0.001))
+@pytest.mark.parametrize("cache_field", ("cache_read_input_token_cost", "cache_creation_input_token_cost"))
+def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
+    _local_model_cost_map: None, rate: float, cache_field: str
+) -> None:
+    model: Final = "openai.gpt-6-sol"
+    litellm.register_model({model: {cache_field: rate}}, persist_across_reloads=False)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=5,
+            completion_tokens=0,
+            total_tokens=5,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=5 if cache_field == "cache_read_input_token_cost" else 0
+            ),
+            cache_creation_input_tokens=5 if cache_field == "cache_creation_input_token_cost" else 0,
+        ),
+    )
+    expected: Final = completion_cost(completion_response=response, model=model, custom_llm_provider="bedrock")
+    assert expected == pytest.approx(5 * rate)
+    assert completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": f"us.{model}"},
+    ) == pytest.approx(expected)
