@@ -112,7 +112,10 @@ def _geography(region: str) -> str:
 def _within_deployment_geography(
     count_model: TokenCountModel | None, deployment_region: Callable[[], str]
 ) -> TokenCountModel | None:
-    if count_model is None or count_model.region is None or count_model.model.startswith("global."):
+    if count_model is None or count_model.region is None:
+        return count_model
+    model: Final = count_model.model.removeprefix("bedrock/").removeprefix("bedrock_mantle/")
+    if model.startswith("global."):
         return count_model
     if _geography(deployment_region()) == _geography(count_model.region):
         return count_model
