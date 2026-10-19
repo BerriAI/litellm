@@ -55,7 +55,6 @@ async def test_body_websearch_short_circuit_answers_without_the_provider(server:
         ) -> object:
             return {**MESSAGES_RESPONSE, "id": "short-circuited"}
 
-    server.expect(messages_reply())
     with rebound(litellm, "callbacks", [ShortCircuit()]):
         response: Final = await call(server)
 
@@ -74,7 +73,6 @@ async def test_body_interceptor_replaces_the_provider_call(server: SharedProvide
         async def handle(self, **kwargs: object) -> object:
             return {**MESSAGES_RESPONSE, "id": "intercepted"}
 
-    server.expect(messages_reply())
     with rebound(interceptors, "_interceptors", [Replace()]):
         response: Final = await call(server)
 

@@ -82,7 +82,7 @@ async def test_parse_v3_image_data_uri_upload_uses_image_mime(
     assert upload_request.target == "/upload"
     assert parse_request.target == "/parse"
     assert upload_request.headers["authorization"] == "Bearer programmatic-key"
-    assert b"image/png" in upload_request.raw_body
+    assert b"image/png" in upload_request.body
 
     assert json.loads(parse_request.body)["input"] == "reducto://uploaded-image.png"
     assert response.pages[0].markdown == "Image OCR"
@@ -131,4 +131,3 @@ async def test_parse_v3_uses_programmatic_api_key_over_env(
     assert len(requests) == 2
     assert requests[0].headers["authorization"] == "Bearer passed-key"
     assert requests[1].headers["authorization"] == "Bearer passed-key"
-

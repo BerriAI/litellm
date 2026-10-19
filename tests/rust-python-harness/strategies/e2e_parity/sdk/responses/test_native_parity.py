@@ -330,7 +330,7 @@ async def _isolated_leg(case: Case, server: SharedProvider, probe: FallbackProbe
     sent: Final = requests[0]
     standard: Final = _LOGGED.validate_python(_LOGGED.validate_python(success[0].kwargs)["standard_logging_object"])
     return Leg(
-        request_body=_OBJECT.validate_python(sent.body),
+        request_body=_OBJECT.validate_json(sent.body),
         request_headers=MappingProxyType(
             {name: value for name, value in sent.headers.items() if name in _COMPARED_HEADERS}
         ),

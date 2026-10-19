@@ -13,6 +13,7 @@ from tests.test_litellm_rust.responses.data import (
     REQUEST,
     RESPONSES_EVENTS,
     RESPONSES_RESPONSE,
+    RESPONSES_SSE,
     STREAMING,
     call,
     responses_reply,
@@ -23,6 +24,7 @@ from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.results import consume, response_id
 from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -30,6 +32,7 @@ pytestmark = pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
 @STREAMING
 async def test_body_streaming_deployment_hook_rewrites_chunks_before_delivery(server: SharedProvider) -> None:
+    server.expect(Reply(chunks=RESPONSES_SSE, content_type="text/event-stream"))
     seen: Final[list[str]] = []
 
     class Rewrite(CustomLogger):

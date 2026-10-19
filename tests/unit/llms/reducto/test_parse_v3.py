@@ -102,7 +102,7 @@ async def test_parse_v3_file_upload_and_response_mapping(disable_aiohttp_transpo
     assert parse_request.target == "/parse"
     assert upload_request.headers["authorization"] == "Bearer test-key"
     assert "application/json" not in upload_request.headers["content-type"]
-    upload_body = upload_request.raw_body
+    upload_body = upload_request.body
     assert b'filename="document"' in upload_body
     assert b"application/pdf" in upload_body
 

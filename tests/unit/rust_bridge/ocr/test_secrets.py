@@ -112,7 +112,8 @@ def rust_ocr(request: pytest.FixtureRequest) -> Ocr:
 @contextmanager
 def _mistral_service() -> Generator[SharedProvider]:
     with shared_provider() as server:
-        yield server
+        with server.checked("_mistral_service"):
+            yield server
 
 
 def _ocr_reply() -> Reply:
@@ -152,10 +153,9 @@ async def test_custom_secret_manager_supplies_the_ocr_key(
     with _mistral_service() as server:
         server.expect(_ocr_reply())
         await ocr(server.wire.url)
-
-    requests: Final = server.received()
-    assert len(requests) == 1
-    assert requests[0].headers["authorization"] == "Bearer vault-key"
+        requests: Final = server.received()
+        assert len(requests) == 1
+        assert requests[0].headers["authorization"] == "Bearer vault-key"
     assert manager.key_reads(), "the custom manager was never asked for MISTRAL_API_KEY"
     assert all(params == key_management.model_dump() for params in manager.key_reads()), manager.key_reads()
 
@@ -174,10 +174,9 @@ async def test_custom_secret_manager_is_not_read_when_settings_exclude_the_key(
     with _mistral_service() as server:
         server.expect(_ocr_reply())
         await ocr(server.wire.url)
-
-    requests: Final = server.received()
-    assert len(requests) == 1
-    assert requests[0].headers["authorization"] == "Bearer environment-key"
+        requests: Final = server.received()
+        assert len(requests) == 1
+        assert requests[0].headers["authorization"] == "Bearer environment-key"
     assert manager.key_reads() == ()
 
 
@@ -193,10 +192,9 @@ async def test_custom_secret_manager_exceptions_fall_back_to_the_environment_key
     with _mistral_service() as server:
         server.expect(_ocr_reply())
         await ocr(server.wire.url)
-
-    requests: Final = server.received()
-    assert len(requests) == 1
-    assert requests[0].headers["authorization"] == "Bearer environment-key"
+        requests: Final = server.received()
+        assert len(requests) == 1
+        assert requests[0].headers["authorization"] == "Bearer environment-key"
 
 
 async def test_custom_secret_manager_exceptions_without_environment_key_raise_missing_key(
@@ -243,10 +241,9 @@ async def test_rust_reads_a_python_only_secret_manager_through_python(
     with _mistral_service() as server:
         server.expect(_ocr_reply())
         await rust_ocr(server.wire.url)
-
-    requests: Final = server.received()
-    assert len(requests) == 1
-    assert requests[0].headers["authorization"] == "Bearer vault-key"
+        requests: Final = server.received()
+        assert len(requests) == 1
+        assert requests[0].headers["authorization"] == "Bearer vault-key"
     assert manager.key_reads(), "the Python manager was never asked for MISTRAL_API_KEY"
     assert all(params == key_management.model_dump() for params in manager.key_reads()), manager.key_reads()
 
@@ -286,10 +283,9 @@ async def test_python_only_builtin_manager_is_read_through_python_not_its_native
     with _mistral_service() as provider:
         provider.expect(_ocr_reply())
         await rust_ocr(provider.wire.url)
-
-    requests: Final = provider.received()
-    assert len(requests) == 1
-    assert requests[0].headers["authorization"] == "Bearer python-key"
+        requests: Final = provider.received()
+        assert len(requests) == 1
+        assert requests[0].headers["authorization"] == "Bearer python-key"
     assert (manager, "aws_secret_manager", "MISTRAL_API_KEY") in python_reads.reads
     assert getattr(manager, "_litellm_native_secret_manager", None) is None
 
@@ -304,10 +300,9 @@ async def test_no_secret_client_leaves_dormant_binding_settings_unread(
     with _mistral_service() as server:
         server.expect(_ocr_reply())
         await rust_ocr(server.wire.url)
-
-    requests: Final = server.received()
-    assert len(requests) == 1
-    assert requests[0].headers["authorization"] == "Bearer environment-key"
+        requests: Final = server.received()
+        assert len(requests) == 1
+        assert requests[0].headers["authorization"] == "Bearer environment-key"
 
 
 class _FixedSecrets(CustomSecretManager):
@@ -441,12 +436,11 @@ async def test_rust_hosted_keys_exclude_azure_sdk_clients_too(monkeypatch: pytes
     with _mistral_service() as server:
         server.expect(_ocr_reply())
         await rust_ocr(server.wire.url)
-
-    requests: Final = server.received()
-    assert len(requests) == 1
-    assert requests[0].headers["authorization"] == "Bearer environment-key", (
-        "recorded divergence: Python's get_secret_from_manager recognizes Azure SDK clients by type and ignores hosted_keys"
-    )
+        requests: Final = server.received()
+        assert len(requests) == 1
+        assert requests[0].headers["authorization"] == "Bearer environment-key", (
+            "recorded divergence: Python's get_secret_from_manager recognizes Azure SDK clients by type and ignores hosted_keys"
+        )
 
 
 async def test_custom_system_with_a_foreign_client_falls_back_to_the_environment(
@@ -462,10 +456,9 @@ async def test_custom_system_with_a_foreign_client_falls_back_to_the_environment
     with _mistral_service() as server:
         server.expect(_ocr_reply())
         await ocr(server.wire.url)
-
-    requests: Final = server.received()
-    assert len(requests) == 1
-    assert requests[0].headers["authorization"] == "Bearer environment-key"
+        requests: Final = server.received()
+        assert len(requests) == 1
+        assert requests[0].headers["authorization"] == "Bearer environment-key"
 
 
 async def test_native_backend_supplies_ocr_credentials_without_a_python_reader(

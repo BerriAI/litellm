@@ -1,10 +1,4 @@
-"""The fake provider shared by every integration test that takes the `provider` fixture.
-
-Deployments in `proxy_config.yaml` point at `PROVIDER_URL`, so one server answers for all of them. A test
-queues the replies it expects with `expect` and reads what the proxy sent with `received`. Tests run one at a
-time against it; the `provider` fixture checks nothing is left over between tests.
-The proxy's model-info refresh is answered here.
-"""
+"""Shared fake provider for integration suites and ephemeral native tests."""
 
 from __future__ import annotations
 
