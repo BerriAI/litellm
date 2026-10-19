@@ -2,7 +2,17 @@
 //! the OpenAI passthrough: each provider's config shapes the request, and the response goes
 //! back as the provider sent it but for the fixups its config makes. A stream is relayed
 //! event by event, with the usage the call asked for on the client's behalf recorded for the
-//! host and kept from the client.
+//! host and kept from the client. When the client asked for usage and the provider sent none,
+//! the usage is estimated from the request and the streamed text, as Python's stream wrapper
+//! does.
+
+use std::{
+    collections::BTreeMap,
+    sync::{
+        LazyLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, stream::BoxStream};
@@ -34,7 +44,10 @@ use litellm_llms::{
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsUsage, CompletionTokensDetails, PromptTokensDetails,
 };
-use serde_json::Value;
+use litellm_token_counter::{
+    CountableRequest, TokenCounter, Tokenizer, tiktoken::TiktokenTokenizer,
+};
+use serde_json::{Map, Value, json};
 use tokio_util::codec::Decoder;
 
 use crate::{
@@ -45,6 +58,15 @@ use crate::{
 };
 
 const ENV_REFERENCE: &str = "os.environ/";
+
+/// The tokenizer Python's `token_counter` falls back to for models it has no tokenizer for.
+static TOKENIZER: LazyLock<Option<TiktokenTokenizer>> =
+    LazyLock::new(|| TiktokenTokenizer::from_name("cl100k_base").ok());
+
+/// The most text one estimate encodes. Encoding runs inline and grows faster than the text on
+/// a long run of one character (a megabyte of `a` takes over half a second), so the text past
+/// this is counted at the rate of the text encoded before it.
+const ENCODED_BYTES: usize = 64 * 1024;
 
 /// The config of a provider served through the OpenAI passthrough with its own transforms.
 pub fn compatible_chat_config(
@@ -71,6 +93,20 @@ pub fn compatible_chat_config(
 pub(crate) struct ResponseAdapter {
     config: &'static dyn OpenAiCompatibleChatConfig,
     shape: ResponseShape,
+    /// The request's prompt tokens, counted when the client asked for stream usage, for a
+    /// provider that streams none.
+    prompt_tokens: Option<u64>,
+}
+
+/// What a stream has said so far, for the usage chunk estimated when the provider sends none.
+#[derive(Default)]
+struct Streamed {
+    text: String,
+    reasoning: String,
+    /// Tool calls by choice and call index: id, name and the arguments streamed so far.
+    tool_calls: BTreeMap<(u64, u64), [String; 3]>,
+    usage_seen: bool,
+    last: Map<String, Value>,
 }
 
 impl ChatCompletionsRoute {
@@ -117,6 +153,7 @@ impl ChatCompletionsRoute {
             drop_params,
             model_info: model_info.as_deref(),
         };
+        let prompt_tokens = wants_stream_usage(&body).then(|| prompt_tokens(&body));
         let CompatibleChatBody { body, shape } = transform_request(config, &context, body)?;
         let defaults: Vec<(&str, &str)> = provider_headers
             .iter()
@@ -141,7 +178,11 @@ impl ChatCompletionsRoute {
             headers: authenticated.headers,
             body,
             api_key,
-            adapter: Some(ResponseAdapter { config, shape }),
+            adapter: Some(ResponseAdapter {
+                config,
+                shape,
+                prompt_tokens,
+            }),
         })
     }
 }
@@ -169,6 +210,7 @@ impl ResponseAdapter {
             codec: SseBlockCodec::default(),
             adapter: self,
             usage,
+            streamed: Streamed::default(),
             ended: false,
         };
         futures_util::stream::try_unfold(relay, |mut relay| async move {
@@ -181,9 +223,17 @@ impl ResponseAdapter {
     }
 
     /// One event's frame for the client, or `None` when the client is not to see it.
-    fn frame(&self, block: SseBlock, usage: &ReportedUsage) -> Option<Bytes> {
+    fn frame(
+        &self,
+        block: SseBlock,
+        usage: &ReportedUsage,
+        streamed: &mut Streamed,
+    ) -> Option<Bytes> {
         if block.event.data.trim() == "[DONE]" {
-            return Some(Bytes::from_static(DONE_FRAME));
+            return Some(match self.estimated_usage(usage, streamed) {
+                Some(frame) => [frame.as_slice(), DONE_FRAME].concat().into(),
+                None => Bytes::from_static(DONE_FRAME),
+            });
         }
         let Ok(Value::Object(mut chunk)) = serde_json::from_str::<Value>(&block.event.data) else {
             return Some(block.bytes);
@@ -191,6 +241,10 @@ impl ResponseAdapter {
         let mut changed = self.config.fix_chunk(&mut chunk, &self.shape);
         if let Some(reported) = chunk.get("usage").and_then(usage_from_json) {
             usage.set(reported);
+            streamed.usage_seen = true;
+        }
+        if self.prompt_tokens.is_some() {
+            streamed.record(&chunk);
         }
         if !self.shape.client_usage {
             if chunk.get("usage").is_some_and(|usage| !usage.is_null()) {
@@ -208,10 +262,169 @@ impl ResponseAdapter {
         if !changed {
             return Some(block.bytes);
         }
-        let mut frame = b"data: ".to_vec();
-        serde_json::to_writer(&mut frame, &chunk).ok()?;
-        frame.extend_from_slice(b"\n\n");
-        Some(Bytes::from(frame))
+        sse_frame(&chunk).map(Bytes::from)
+    }
+
+    /// The usage chunk Python's stream wrapper adds when the client asked for usage and the
+    /// provider sent none: the request's prompt tokens, and the tokens of the streamed content
+    /// and tool calls plus those of the reasoning, counted apart as Python counts them, on a
+    /// chunk shaped like the stream's own. It is recorded as the call's usage too.
+    fn estimated_usage(&self, usage: &ReportedUsage, streamed: &Streamed) -> Option<Vec<u8>> {
+        let prompt_tokens = self.prompt_tokens?;
+        if streamed.usage_seen {
+            return None;
+        }
+        let tokenizer = counter()?;
+        let reasoning_tokens = match streamed.reasoning.is_empty() {
+            true => 0,
+            false => tokenizer.count_text(&streamed.reasoning).ok()?,
+        };
+        let completion_tokens =
+            (tokenizer.count_text(&streamed.completion()).ok()? + reasoning_tokens) as u64;
+        let counts = json!({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        });
+        usage.set(usage_from_json(&counts)?);
+        let mut chunk = Map::new();
+        for field in ["id", "object", "created", "model"] {
+            if let Some(value) = streamed.last.get(field) {
+                chunk.insert(field.into(), value.clone());
+            }
+        }
+        chunk.insert("choices".into(), json!([{"index": 0, "delta": {}}]));
+        chunk.insert("usage".into(), counts);
+        sse_frame(&chunk)
+    }
+}
+
+/// The string at `value`, or empty.
+fn text(value: Option<&Value>) -> &str {
+    value.and_then(Value::as_str).unwrap_or_default()
+}
+
+impl Streamed {
+    /// Keeps the chunk's identity fields and what it streamed: content, reasoning, and each
+    /// tool call's id, name and arguments.
+    fn record(&mut self, chunk: &Map<String, Value>) {
+        for field in ["id", "object", "created", "model"] {
+            if let Some(value) = chunk.get(field) {
+                self.last.insert(field.into(), value.clone());
+            }
+        }
+        for (position, choice) in chunk
+            .get("choices")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let Some(delta) = choice.get("delta") else {
+                continue;
+            };
+            let index = choice
+                .get("index")
+                .and_then(Value::as_u64)
+                .unwrap_or(position as u64);
+            self.text.push_str(text(delta.get("content")));
+            self.reasoning
+                .push_str(text(delta.get("reasoning_content")));
+            let calls = delta.get("tool_calls").and_then(Value::as_array);
+            for (order, call) in calls.into_iter().flatten().enumerate() {
+                let slot = call
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(order as u64);
+                let [id, name, arguments] = self.tool_calls.entry((index, slot)).or_default();
+                id.push_str(text(call.get("id")));
+                name.push_str(text(call.pointer("/function/name")));
+                arguments.push_str(text(call.pointer("/function/arguments")));
+            }
+        }
+    }
+
+    /// The text Python counts as the completion: the content, then each tool call as its
+    /// `model_dump_json()` writes it.
+    fn completion(&self) -> String {
+        let quoted = |text: &str| Value::from(text).to_string();
+        self.tool_calls.values().fold(
+            self.text.clone(),
+            |mut completion, [id, name, arguments]| {
+                completion.push_str(&format!(
+                    r#"{{"function":{{"arguments":{},"name":{}}},"id":{},"type":"function"}}"#,
+                    quoted(arguments),
+                    quoted(name),
+                    quoted(id),
+                ));
+                completion
+            },
+        )
+    }
+}
+
+fn sse_frame(chunk: &Map<String, Value>) -> Option<Vec<u8>> {
+    let mut frame = b"data: ".to_vec();
+    serde_json::to_writer(&mut frame, chunk).ok()?;
+    frame.extend_from_slice(b"\n\n");
+    Some(frame)
+}
+
+/// Whether the request streams and asks to see the usage.
+fn wants_stream_usage(body: &Map<String, Value>) -> bool {
+    body.get("stream") == Some(&Value::Bool(true))
+        && body
+            .get("stream_options")
+            .and_then(|options| options.get("include_usage"))
+            == Some(&Value::Bool(true))
+}
+
+/// The request's prompt tokens as Python's stream wrapper counts them, from the messages alone
+/// (`token_counter(model, messages)`), or 0 when they can't be counted.
+fn prompt_tokens(body: &Map<String, Value>) -> u64 {
+    let request: Map<String, Value> = body
+        .get("messages")
+        .map(|messages| ("messages".to_owned(), messages.clone()))
+        .into_iter()
+        .collect();
+    let counted = serde_json::from_value::<CountableRequest>(Value::Object(request))
+        .ok()
+        .and_then(|request| counter()?.count_request(&request).ok());
+    counted.map_or(0, |count| count.input_tokens as u64)
+}
+
+/// A counter that encodes at most `ENCODED_BYTES` across everything it counts.
+fn counter() -> Option<TokenCounter> {
+    TOKENIZER.as_ref().map(|tokenizer| {
+        TokenCounter::new(Bounded {
+            tokenizer,
+            left: AtomicUsize::new(ENCODED_BYTES),
+        })
+    })
+}
+
+/// Encodes each text up to what is left of the budget and extrapolates the rest: at the rate of
+/// the part encoded, or at four bytes a token once the budget is spent.
+struct Bounded {
+    tokenizer: &'static TiktokenTokenizer,
+    left: AtomicUsize,
+}
+
+impl Tokenizer for Bounded {
+    fn count_tokens(&self, text: &str) -> Result<usize, litellm_token_counter::Error> {
+        let mut end = text.len().min(self.left.load(Ordering::Relaxed));
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.left.fetch_sub(end, Ordering::Relaxed);
+        let tokens = Tokenizer::count_tokens(self.tokenizer, &text[..end])?;
+        let rest = text.len() - end;
+        Ok(tokens
+            + match (rest, end) {
+                (0, _) => 0,
+                (_, 0) => rest.div_ceil(4),
+                _ => (rest * tokens).div_ceil(end),
+            })
     }
 }
 
@@ -221,6 +434,7 @@ struct Relay {
     codec: SseBlockCodec,
     adapter: ResponseAdapter,
     usage: ReportedUsage,
+    streamed: Streamed,
     ended: bool,
 }
 
@@ -238,7 +452,8 @@ impl Relay {
             })?;
             match block {
                 Some(block) => {
-                    if let Some(frame) = self.adapter.frame(block, &self.usage) {
+                    if let Some(frame) = self.adapter.frame(block, &self.usage, &mut self.streamed)
+                    {
                         return Ok(Some(frame));
                     }
                 }
@@ -306,6 +521,7 @@ mod tests {
                 client_usage,
                 ..ResponseShape::default()
             },
+            prompt_tokens: None,
         }
     }
 
@@ -394,6 +610,96 @@ mod tests {
             "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
         );
         assert_eq!(usage.get().unwrap().total_tokens, 2);
+    }
+
+    #[rstest]
+    fn a_long_prompt_is_encoded_up_to_the_budget_and_extrapolated() {
+        // Four MiB of one character: encoding it whole takes seconds and gigabytes, and every
+        // eight `a`s are one cl100k token.
+        let long = "a".repeat(4 << 20);
+        let body = json!({"messages": [{"role": "user", "content": long}]});
+        let counted = prompt_tokens(body.as_object().unwrap());
+        let exact = (4 << 20) / 8 + 7;
+        assert!(
+            counted.abs_diff(exact) < exact / 100,
+            "{counted} vs {exact}"
+        );
+    }
+
+    #[rstest]
+    #[case::within_the_budget("Hello from the parity mock.", 6)]
+    #[case::cut_inside_a_character(&"é".repeat(ENCODED_BYTES), ENCODED_BYTES)]
+    fn text_counts_within_a_percent_of_its_encoding(#[case] text: &str, #[case] encoded: usize) {
+        let counted = counter().unwrap().count_text(text).unwrap();
+        assert!(
+            counted.abs_diff(encoded) <= encoded / 100,
+            "{counted} vs {encoded}"
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn usage_the_provider_did_not_send_is_estimated_when_the_client_asked() {
+        let body = json!({"messages": [{"role": "user", "content": "Say hello."}], "stream": true,
+            "stream_options": {"include_usage": true}});
+        let body = body.as_object().unwrap();
+        assert!(wants_stream_usage(body));
+        let adapter = ResponseAdapter {
+            prompt_tokens: Some(prompt_tokens(body)),
+            ..adapter(&MISTRAL_CHAT_CONFIG, true)
+        };
+        let (sent, usage) = relay(
+            adapter,
+            &[
+                "data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello from the parity mock.\"}}]}\n\n",
+                DONE,
+            ],
+        )
+        .await;
+        // Python's counts for the same request and text: 3 per message, 1 for the role, the
+        // text's 3, and 3 priming the reply; the answer is 6 tokens.
+        assert!(
+            sent.ends_with("data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":6,\"total_tokens\":16}}\n\ndata: [DONE]\n\n"),
+            "{sent}"
+        );
+        assert_eq!(usage.get().unwrap().total_tokens, 16);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_estimate_counts_tool_calls_as_python_dumps_them_and_not_the_tools() {
+        let body = json!({"messages": [{"role": "user", "content": "Weather in Paris? [[parity reply=tool]]"}],
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            "stream": true, "stream_options": {"include_usage": true}});
+        let adapter = ResponseAdapter {
+            prompt_tokens: Some(prompt_tokens(body.as_object().unwrap())),
+            ..adapter(&MISTRAL_CHAT_CONFIG, true)
+        };
+        let (_, usage) = relay(
+            adapter,
+            &[
+                "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_parity_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\"\"}}]}}]}\n\n",
+                "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\": \\\"Paris\\\"}\"}}]}}]}\n\n",
+                DONE,
+            ],
+        )
+        .await;
+        // Python's counts for the same stream: the messages without the tools, and the call as
+        // `{"function":{"arguments":"{\"city\": \"Paris\"}","name":"get_weather"},"id":"call_parity_1","type":"function"}`.
+        let usage = usage.get().unwrap();
+        assert_eq!((usage.prompt_tokens, usage.completion_tokens), (17, 30));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn usage_the_provider_sent_is_not_estimated() {
+        let adapter = ResponseAdapter {
+            prompt_tokens: Some(10),
+            ..adapter(&MISTRAL_CHAT_CONFIG, true)
+        };
+        let (sent, usage) = relay(adapter, &[CONTENT, USAGE, DONE]).await;
+        assert_eq!(sent, format!("{CONTENT}{USAGE}{DONE}"));
+        assert_eq!(usage.get().unwrap().total_tokens, 5);
     }
 
     #[rstest]
