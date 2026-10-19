@@ -388,6 +388,7 @@ from litellm.types.utils import (
     shared_backend_model_info,
 )
 from litellm.types.utils import ModelInfo as ModelMapInfo
+from litellm.types.videos.utils import decode_video_id_with_provider
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -514,6 +515,9 @@ CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_b
 
 _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
+_VIDEO_ID_CALL_TYPES: Final = frozenset(
+    {"avideo_status", "avideo_content", "avideo_remix", "avideo_edit", "avideo_extension"}
+)
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -6633,7 +6637,23 @@ class Router:
             return await self._aanthropic_messages_with_streaming_fallbacks(
                 original_function=original_function, **kwargs
             )
-        return await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
+        routed_kwargs: Final = self._pin_video_deployment(kwargs) if call_type in _VIDEO_ID_CALL_TYPES else kwargs
+        return await self._ageneric_api_call_with_fallbacks(original_function=original_function, **routed_kwargs)
+
+    def _pin_video_deployment(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        """
+        A video lives on the provider account of the deployment that created it, so a call on an id that names
+        a deployment of the requested group goes to that deployment instead of any member of the group.
+        """
+        video_id: Final = kwargs.get("video_id")
+        model: Final = kwargs.get("model")
+        if not isinstance(video_id, str) or not isinstance(model, str):
+            return kwargs
+        deployment_id: Final = decode_video_id_with_provider(video_id).get("deployment_id")
+        deployment: Final = self.get_deployment(model_id=deployment_id) if deployment_id else None
+        if deployment is None or deployment.model_name != (self.get_model_from_alias(model=model) or model):
+            return kwargs
+        return {**kwargs, "model": deployment_id}
 
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """

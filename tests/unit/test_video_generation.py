@@ -1269,6 +1269,33 @@ def test_encode_video_id_with_provider_handles_azure_video_prefix():
     assert encoded_twice == encoded_id  # Should return the same encoded ID
 
 
+
+@pytest.mark.parametrize(
+    "served_model, deployment_id, expected_extras",
+    [
+        ("seedance-east", "dep-1", {"served_model": "seedance-east", "deployment_id": "dep-1"}),
+        (None, "dep-1", {"deployment_id": "dep-1"}),
+        ("seedance-east", None, {"served_model": "seedance-east"}),
+        (None, None, {}),
+    ],
+)
+def test_video_id_round_trips_served_model_and_deployment_id(served_model, deployment_id, expected_extras):
+    from litellm.types.videos.utils import (
+        decode_video_id_with_provider,
+        encode_video_id_with_provider,
+    )
+
+    encoded = encode_video_id_with_provider(
+        "task_1", "volcengine", "seedance-group", served_model=served_model, deployment_id=deployment_id
+    )
+
+    assert decode_video_id_with_provider(encoded) == {
+        "custom_llm_provider": "volcengine",
+        "model_id": "seedance-group",
+        "video_id": "task_1",
+        **expected_extras,
+    }
+
 class TestVideoListTransformation:
     """Tests for video list request/response transformation with provider ID encoding."""
 

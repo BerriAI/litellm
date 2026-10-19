@@ -113,6 +113,7 @@ class DecodedVideoId(TypedDict, total=False):
     model_id: str | None
     video_id: str
     served_model: ReadOnly[str | None]
+    deployment_id: ReadOnly[str | None]
 
 
 class CharacterObject(LiteLLMBaseModel):

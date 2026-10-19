@@ -25,6 +25,8 @@ from litellm.proxy.video_endpoints.utils import (
     encode_video_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    routable_model_name,
+    video_model_group,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -124,7 +126,7 @@ async def video_generation(
         return encode_video_id_in_response(
             response=generated,
             fallback_provider=requested.custom_llm_provider,
-            fallback_model_id=requested.model,
+            fallback_model_id=routable_model_name(requested.model, llm_router, requested.custom_llm_provider),
         )
 
 
@@ -276,12 +278,9 @@ async def video_status(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    # Resolve model_name from model_id if available
-    # This allows the router to automatically inject litellm_params from the model config
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded, provider_from_id)
-        if resolved_model:
-            data["model"] = resolved_model
+    resolved_model: Final = video_model_group(decoded, llm_router)
+    if resolved_model:
+        data["model"] = resolved_model
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
@@ -369,7 +368,6 @@ async def video_content(
 
     decoded: Final = decode_video_id_with_provider(video_id)
     provider_from_id: Final = decoded.get("custom_llm_provider")
-    model_id_from_decoded: Final = decoded.get("model_id")
 
     custom_llm_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
@@ -380,12 +378,9 @@ async def video_content(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    # Resolve model_name from model_id if available
-    # This allows the router to automatically inject litellm_params from the model config
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded, provider_from_id)
-        if resolved_model:
-            data["model"] = resolved_model
+    resolved_model: Final = video_model_group(decoded, llm_router)
+    if resolved_model:
+        data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
     try:
@@ -489,12 +484,9 @@ async def video_remix(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    # Resolve model_name from model_id if available
-    # This allows the router to automatically inject litellm_params from the model config
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded, provider_from_id)
-        if resolved_model:
-            data["model"] = resolved_model
+    resolved_model: Final = video_model_group(decoded, llm_router)
+    if resolved_model:
+        data["model"] = resolved_model
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
@@ -528,7 +520,8 @@ async def video_remix(
         return encode_video_id_in_response(
             response=remixed,
             fallback_provider=custom_llm_provider,
-            fallback_model_id=model_id_from_decoded or requested.model,
+            fallback_model_id=model_id_from_decoded
+            or routable_model_name(requested.model, llm_router, custom_llm_provider),
         )
 
 
@@ -810,10 +803,9 @@ async def video_edit(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded, provider_from_id)
-        if resolved_model:
-            data["model"] = resolved_model
+    resolved_model: Final = video_model_group(decoded, llm_router)
+    if resolved_model:
+        data["model"] = resolved_model
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
     try:
@@ -846,7 +838,8 @@ async def video_edit(
         return encode_video_id_in_response(
             response=edited,
             fallback_provider=custom_llm_provider,
-            fallback_model_id=model_id_from_decoded or requested.model,
+            fallback_model_id=model_id_from_decoded
+            or routable_model_name(requested.model, llm_router, custom_llm_provider),
         )
 
 
@@ -912,10 +905,9 @@ async def video_extension(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded, provider_from_id)
-        if resolved_model:
-            data["model"] = resolved_model
+    resolved_model: Final = video_model_group(decoded, llm_router)
+    if resolved_model:
+        data["model"] = resolved_model
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
     try:
@@ -948,5 +940,6 @@ async def video_extension(
         return encode_video_id_in_response(
             response=extended,
             fallback_provider=custom_llm_provider,
-            fallback_model_id=model_id_from_decoded or requested.model,
+            fallback_model_id=model_id_from_decoded
+            or routable_model_name(requested.model, llm_router, custom_llm_provider),
         )

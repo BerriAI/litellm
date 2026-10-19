@@ -15,15 +15,20 @@ are checked by the genuine decode round-trip.
 """
 
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 
 
+from litellm.router import Router
+from litellm.types.videos.main import DecodedVideoId
 from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    routable_model_name,
+    video_model_group,
     video_reference_to_id,
 )
 from litellm.types.videos.main import VideoObject
@@ -225,7 +230,7 @@ def _video(video_id: str, hidden_params: dict[str, object] | None = None) -> Vid
     return video
 
 
-def test_encode_video__fills_empty_model_id_from_hidden_params() -> None:
+def test_encode_video__fills_empty_model_id_and_deployment_from_hidden_params() -> None:
     original_id: Final = encode_video_id_with_provider("video_raw", "openai", "")
     video: Final = _video(original_id, hidden_params={"model_id": "deployment-1"})
 
@@ -236,6 +241,7 @@ def test_encode_video__fills_empty_model_id_from_hidden_params() -> None:
         "custom_llm_provider": "openai",
         "model_id": "deployment-1",
         "video_id": "video_raw",
+        "deployment_id": "deployment-1",
     }
     assert out is not video
     assert video.id == original_id
@@ -251,21 +257,68 @@ def test_encode_video__asked_for_model_wins_over_hidden_deployment_id() -> None:
     out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-alias")
 
     assert isinstance(out, VideoObject)
-    assert decode_video_id_with_provider(out.id).get("model_id") == "sora-alias"
+    decoded: Final = decode_video_id_with_provider(out.id)
+    assert decoded.get("model_id") == "sora-alias"
+    assert decoded.get("deployment_id") == "deployment-1"
 
 
-def test_encode_video__stamped_id_kept_with_served_model_over_hidden_deployment_id() -> None:
+def test_encode_video__stamped_id_keeps_model_and_served_group_and_gains_routed_deployment() -> None:
     original_id: Final = encode_video_id_with_provider("task_1", "volcengine", "seedance-group", "seedance-east")
     video: Final = _video(original_id, hidden_params={"model_id": "deployment-1"})
 
     out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="other")
 
-    assert out is video
+    assert isinstance(out, VideoObject)
     assert decode_video_id_with_provider(out.id) == {
         "custom_llm_provider": "volcengine",
         "model_id": "seedance-group",
         "video_id": "task_1",
         "served_model": "seedance-east",
+        "deployment_id": "deployment-1",
+    }
+
+
+def test_encode_video__routed_deployment_replaces_the_one_in_the_id() -> None:
+    original_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id="deployment-old")
+    video: Final = _video(original_id, hidden_params={"model_id": "deployment-new"})
+
+    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id=None)
+
+    assert isinstance(out, VideoObject)
+    assert decode_video_id_with_provider(out.id).get("deployment_id") == "deployment-new"
+
+
+def test_encode_video__id_already_naming_the_routed_deployment_is_unchanged() -> None:
+    original_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id="deployment-1")
+    video: Final = _video(original_id, hidden_params={"model_id": "deployment-1"})
+
+    assert encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="other") is video
+
+
+def test_encode_video__unrouted_response_keeps_the_deployment_in_its_id() -> None:
+    original_id: Final = encode_video_id_with_provider("video_raw", "openai", "", deployment_id="deployment-1")
+
+    out: Final = encode_video_id_in_response(_video(original_id), fallback_provider=None, fallback_model_id="sora")
+
+    assert isinstance(out, VideoObject)
+    decoded: Final = decode_video_id_with_provider(out.id)
+    assert decoded.get("model_id") == "sora"
+    assert decoded.get("deployment_id") == "deployment-1"
+
+
+def test_encode_video__name_with_id_separator_is_never_written_into_the_id() -> None:
+    video: Final = _video(
+        encode_video_id_with_provider("video_raw", "openai", ""), hidden_params={"model_id": "deployment-1"}
+    )
+
+    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora;model_id:evil")
+
+    assert isinstance(out, VideoObject)
+    assert decode_video_id_with_provider(out.id) == {
+        "custom_llm_provider": "openai",
+        "model_id": "deployment-1",
+        "video_id": "video_raw",
+        "deployment_id": "deployment-1",
     }
 
 
@@ -299,6 +352,7 @@ def test_encode_video__plain_id_encoded_with_fallback_provider() -> None:
         "custom_llm_provider": "openai",
         "model_id": "deployment-1",
         "video_id": "video_raw",
+        "deployment_id": "deployment-1",
     }
 
 
@@ -321,3 +375,75 @@ def test_encode_video__no_provider_anywhere_unchanged() -> None:
 @pytest.mark.parametrize("response", [b"video-bytes", {"id": "video_raw"}, None])
 def test_encode_video__non_video_object_passthrough(response: object) -> None:
     assert encode_video_id_in_response(response, "openai", "sora-2") is response
+
+
+def _router_resolving(names: dict[str, str]) -> MagicMock:
+    router: Final = MagicMock()
+    router.resolve_model_name_from_model_id = MagicMock(
+        side_effect=lambda model_id, custom_llm_provider=None: names.get(model_id)
+    )
+    return router
+
+
+def test_routable_model_name__keeps_a_name_the_router_resolves() -> None:
+    router: Final = _router_resolving({"sora-alias": "sora-alias"})
+
+    assert routable_model_name("sora-alias", router, "openai") == "sora-alias"
+    router.resolve_model_name_from_model_id.assert_called_once_with("sora-alias", "openai")
+
+
+def test_routable_model_name__drops_a_name_the_router_cannot_route() -> None:
+    assert routable_model_name("team-public-name", _router_resolving({}), "openai") is None
+
+
+def test_routable_model_name__keeps_the_name_without_a_router() -> None:
+    assert routable_model_name("sora-2", None, None) == "sora-2"
+
+
+@pytest.mark.parametrize("model", [None, "", 7, "sora;model_id:evil"])
+def test_routable_model_name__never_returns_a_name_unsafe_for_the_id(model: object) -> None:
+    assert routable_model_name(model, _router_resolving({"sora;model_id:evil": "x"}), "openai") is None
+
+
+def _two_groups_sharing_sora() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-team", "sora-shared")
+        ]
+    )
+
+
+def _decoded(model_id: str, deployment_id: str | None) -> DecodedVideoId:
+    base: Final = DecodedVideoId(custom_llm_provider="azure", model_id=model_id, video_id="video_raw")
+    return base if deployment_id is None else {**base, "deployment_id": deployment_id}
+
+
+@pytest.mark.parametrize("deployment_id", ["dep-sora-team", "dep-sora-shared"])
+def test_video_model_group__shared_provider_model_resolves_to_the_creating_deployments_group(
+    deployment_id: str,
+) -> None:
+    router: Final = _two_groups_sharing_sora()
+
+    assert video_model_group(_decoded("sora-2", deployment_id), router) == deployment_id.removeprefix("dep-")
+
+
+@pytest.mark.parametrize("deployment_id", [None, "dep-gone"])
+def test_video_model_group__without_a_known_deployment_matches_plain_resolution(deployment_id: str | None) -> None:
+    router: Final = _two_groups_sharing_sora()
+
+    assert video_model_group(_decoded("sora-2", deployment_id), router) == router.resolve_model_name_from_model_id(
+        "sora-2", "azure"
+    )
+
+
+def test_video_model_group__keeps_a_group_named_in_the_id_over_a_deployment_of_another_group() -> None:
+    assert video_model_group(_decoded("sora-team", "dep-sora-shared"), _two_groups_sharing_sora()) == "sora-team"
+
+
+def test_video_model_group__is_none_without_a_router() -> None:
+    assert video_model_group(_decoded("sora-2", "dep-sora-shared"), None) is None

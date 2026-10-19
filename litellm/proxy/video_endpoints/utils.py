@@ -1,14 +1,18 @@
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import orjson
 from pydantic import BaseModel, ConfigDict
 
-from litellm.types.videos.main import VideoObject
+from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_character_id_with_provider,
     encode_video_id_with_provider,
+    id_safe_name,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 def extract_model_from_target_model_names(target_model_names: Any) -> str | None:
@@ -73,15 +77,37 @@ def encode_character_id_in_response(response: Any, custom_llm_provider: str, mod
     return response
 
 
-def _non_empty_str(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
-
-
 class VideoRequestRoute(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     model: object = None
     custom_llm_provider: object = None
+
+
+def routable_model_name(model: object, llm_router: "Router | None", custom_llm_provider: object) -> str | None:
+    name: Final = id_safe_name(model)
+    if name is None or llm_router is None:
+        return name
+    provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    return name if llm_router.resolve_model_name_from_model_id(name, provider) else None
+
+
+def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> str | None:
+    """
+    The group a video id names. A provider model that several groups share resolves to the group of the
+    deployment that created the video, while a name the router routes by itself is kept as written.
+    """
+    if llm_router is None:
+        return None
+    model_id: Final = decoded.get("model_id")
+    resolved: Final = (
+        llm_router.resolve_model_name_from_model_id(model_id, decoded.get("custom_llm_provider")) if model_id else None
+    )
+    deployment_id: Final = decoded.get("deployment_id")
+    if resolved == model_id or not deployment_id:
+        return resolved
+    deployment: Final = llm_router.get_deployment(model_id=deployment_id)
+    return resolved if deployment is None else deployment.model_name
 
 
 def encode_video_id_in_response(
@@ -93,22 +119,25 @@ def encode_video_id_in_response(
         return response
 
     decoded: Final = decode_video_id_with_provider(response.id)
-    if decoded.get("model_id"):
-        return response
-
     hidden_params: Final = response.hidden_params
-    model_id: Final = _non_empty_str(fallback_model_id) or _non_empty_str(hidden_params.get("model_id"))
+    routed_deployment_id: Final = id_safe_name(hidden_params.get("model_id"))
+    deployment_id: Final = routed_deployment_id or decoded.get("deployment_id")
+    model_id: Final = decoded.get("model_id") or id_safe_name(fallback_model_id) or routed_deployment_id
     provider: Final = (
-        _non_empty_str(decoded.get("custom_llm_provider"))
-        or _non_empty_str(hidden_params.get("custom_llm_provider"))
-        or _non_empty_str(fallback_provider)
+        id_safe_name(decoded.get("custom_llm_provider"))
+        or id_safe_name(hidden_params.get("custom_llm_provider"))
+        or id_safe_name(fallback_provider)
     )
     if not model_id or not provider:
+        return response
+    if model_id == decoded.get("model_id") and deployment_id == decoded.get("deployment_id"):
         return response
 
     restamped_id: Final = encode_video_id_with_provider(
         video_id=decoded.get("video_id") or response.id,
         provider=provider,
         model_id=model_id,
+        served_model=decoded.get("served_model"),
+        deployment_id=deployment_id,
     )
     return response.model_copy(update={"id": restamped_id})

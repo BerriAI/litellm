@@ -23,6 +23,7 @@ from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RoutingStrategy
 from litellm.types.utils import ImageResponse, ModelResponse, RerankResponse
+from litellm.types.videos.utils import encode_video_id_with_provider
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 EVENT_TIMEOUT_SECONDS: Final = 5
@@ -730,3 +731,60 @@ async def test_router_moderation_endpoint_factory_invokes_default_model(
     assert route.call_count == 1
     assert json.loads(route.calls[0].request.content) == {"input": "hello"}
     assert response.id == "modr-2"
+
+
+def _sora_deployment(model_name: str, api_key: str, deployment_id: str) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "openai/sora-2", "api_key": api_key},
+        "model_info": {"id": deployment_id},
+    }
+
+
+def _two_account_sora_router() -> Router:
+    return Router(
+        model_list=[
+            _sora_deployment("sora", "key-a", "dep-a"),
+            _sora_deployment("sora", "key-b", "dep-b"),
+            _sora_deployment("other", "key-x", "dep-x"),
+        ],
+        model_group_alias={"sora-alias": "sora"},
+    )
+
+
+async def _poll_status_keys(router: Router, model: str, deployment_id: str, respx_mock: respx.MockRouter) -> set[str]:
+    route: Final = respx_mock.get("https://api.openai.com/v1/videos/video_raw").respond(
+        200, json={"id": "video_raw", "object": "video", "status": "in_progress"}
+    )
+    video_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id=deployment_id)
+    for _ in range(10):
+        await router.avideo_status(model=model, video_id=video_id)
+    return {call.request.headers["authorization"] for call in route.calls}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["sora", "sora-alias"])
+async def test_video_status_polls_the_deployment_that_created_the_video(
+    model: str, respx_mock: respx.MockRouter
+) -> None:
+    keys: Final = await _poll_status_keys(_two_account_sora_router(), model, "dep-b", respx_mock)
+
+    assert keys == {"Bearer key-b"}
+
+
+@pytest.mark.asyncio
+async def test_video_status_never_pins_to_a_deployment_outside_the_requested_group(
+    respx_mock: respx.MockRouter,
+) -> None:
+    keys: Final = await _poll_status_keys(_two_account_sora_router(), "sora", "dep-x", respx_mock)
+
+    assert keys <= {"Bearer key-a", "Bearer key-b"}
+
+
+@pytest.mark.asyncio
+async def test_video_status_with_a_removed_deployment_routes_across_the_group(respx_mock: respx.MockRouter) -> None:
+    keys: Final = await _poll_status_keys(_two_account_sora_router(), "sora", "dep-gone", respx_mock)
+
+    assert keys <= {"Bearer key-a", "Bearer key-b"}
+    assert keys
+

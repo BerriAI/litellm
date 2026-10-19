@@ -98,6 +98,7 @@ ignored_function_names = [
     "_embedding",
     "_aembedding",
     "_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
+    "_pin_video_deployment",  # Tested through avideo_status polls in test_router_provider_endpoints.py
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call

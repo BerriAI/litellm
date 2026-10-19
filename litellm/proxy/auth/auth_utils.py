@@ -1998,10 +1998,12 @@ def _extract_models_from_managed_resource_id(
             )
 
             if resource_id_field == "video_id":
-                model_id = decode_video_id_with_provider(resource_id).get("model_id")
+                from litellm.proxy.video_endpoints.utils import video_model_group
+
+                decoded_video: Final = decode_video_id_with_provider(resource_id)
                 _append_model_candidates(
                     candidates=candidates,
-                    value=_resolve_model_id_with_router(model_id, llm_router),
+                    value=video_model_group(decoded_video, llm_router) or decoded_video.get("model_id"),
                 )
             else:
                 model_id = decode_character_id_with_provider(resource_id).get("model_id")

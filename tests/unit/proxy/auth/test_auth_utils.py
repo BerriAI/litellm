@@ -1396,8 +1396,14 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
         provider="vertex_ai",
         model_id="veo-3.1-generate-001",
     )
-    llm_router = MagicMock()
-    llm_router.resolve_model_name_from_model_id.return_value = "gcp/google/veo-3.1-generate-001"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/veo-3.1-generate-001",
+                "litellm_params": {"model": "vertex_ai/veo-3.1-generate-001"},
+            }
+        ]
+    )
 
     assert (
         get_model_from_request(
@@ -1407,7 +1413,33 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
         )
         == "gcp/google/veo-3.1-generate-001"
     )
-    llm_router.resolve_model_name_from_model_id.assert_called_once_with("veo-3.1-generate-001")
+
+
+def test_get_model_from_request_checks_the_group_of_the_deployment_that_created_the_video():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-team", "sora-shared")
+        ]
+    )
+    video_id: Final = encode_video_id_with_provider(
+        video_id="video_raw", provider="azure", model_id="sora-2", deployment_id="dep-sora-shared"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "sora-shared"
+    )
 
 
 _BATCH_DEPLOYMENT_ID = "8d0eaa7e6c6f54a425dfd0062cb6b0dc"

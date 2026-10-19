@@ -84,12 +84,14 @@ def _video_with_empty_model_id(
     return video
 
 
-def _assert_id_resolves_to_deployment(response: object) -> None:
+def _assert_id_resolves_to_deployment(response: object, *, deployment_id: str | None = None) -> None:
     assert isinstance(response, VideoObject)
+    expected_deployment: Final = {} if deployment_id is None else {"deployment_id": deployment_id}
     assert decode_video_id_with_provider(response.id) == {
         "custom_llm_provider": "azure",
         "model_id": VIDEO_MODEL_ID,
         "video_id": "video_new456",
+        **expected_deployment,
     }
 
 
@@ -276,17 +278,28 @@ async def test_generation__restamps_id_with_asked_for_model_over_router_deployme
 
     resp: Final = await call_generation(harness, body={"model": VIDEO_MODEL_ID, "prompt": "x"})
 
-    _assert_id_resolves_to_deployment(resp)
+    _assert_id_resolves_to_deployment(resp, deployment_id="deployment-uuid")
 
 
 @pytest.mark.asyncio
 async def test_generation__restamps_id_with_request_model_when_no_hidden_model_id(harness: Harness) -> None:
     harness.respond_with(_video_with_empty_model_id())
 
-    resp: Final = await call_generation(harness, body={"model": "sora-2", "prompt": "x"})
+    resp: Final = await call_generation(harness, body={"model": VIDEO_MODEL_ID, "prompt": "x"})
+
+    _assert_id_resolves_to_deployment(resp)
+
+
+@pytest.mark.asyncio
+async def test_generation__unroutable_request_model_falls_back_to_router_deployment_id(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id(hidden_params={"model_id": "deployment-uuid"}))
+
+    resp: Final = await call_generation(harness, body={"model": "team-public-sora", "prompt": "x"})
 
     assert isinstance(resp, VideoObject)
-    assert decode_video_id_with_provider(resp.id).get("model_id") == "sora-2"
+    decoded: Final = decode_video_id_with_provider(resp.id)
+    assert decoded.get("model_id") == "deployment-uuid"
+    assert decoded.get("deployment_id") == "deployment-uuid"
 
 
 @pytest.mark.asyncio
@@ -439,6 +452,30 @@ async def test_status_and_content__hand_the_served_member_to_the_request_process
 
     assert harness.processor_data()["model"] == "wan3"
     assert harness.base_process.call_args.args[0].served_model == "wan3-b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", [call_status, call_content])
+async def test_status_and_content__shared_provider_model_routes_to_the_creating_deployments_group(
+    harness: Harness, call: Any
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-team", "sora-shared")
+        ]
+    )
+    harness.base_process.return_value = b"x"
+    video_id: Final = encode_video_id_with_provider("video_raw", "azure", "sora-2", deployment_id="dep-sora-shared")
+
+    with patch.object(proxy_server, "llm_router", router):
+        await call(harness, video_id)
+
+    assert harness.processor_data()["model"] == "sora-shared"
 
 
 # =========================================================================== #
