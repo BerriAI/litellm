@@ -281,7 +281,17 @@ def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
     return _PATCHABLE_ITEM_FIELDS.get(item_type)
 
 
+def _rewritten_compaction_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+    encrypted_content: Final = item.get("encrypted_content")
+    summary: Final = rewritten.get("content") if isinstance(rewritten, Mapping) else None
+    if not isinstance(encrypted_content, str) or not isinstance(summary, str) or not summary:
+        return None
+    return {**item, "encrypted_content": with_compaction_summary(encrypted_content, summary)}
+
+
 def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+    if compaction_summary(item) is not None:
+        return _rewritten_compaction_item(item, rewritten)
     field: Final = _item_rewrite_field(item)
     if field is None or not isinstance(rewritten, Mapping):
         return None

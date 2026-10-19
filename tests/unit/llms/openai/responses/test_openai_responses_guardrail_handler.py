@@ -34,6 +34,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.responses.litellm_completion_transformation.compaction_items import compaction_summary
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -3098,6 +3099,21 @@ class DictStructuredMessagesGuardrail(CustomGuardrail):
         return {**inputs, "structured_messages": {"evaluation": "allowed", "messages": []}}
 
 
+class NameMaskingStructuredGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        rewritten: Final = [
+            {**m, "content": m["content"].replace("Biscuit", "[NAME]")} if isinstance(m.get("content"), str) else m
+            for m in inputs.get("structured_messages") or []
+        ]
+        return {**inputs, "structured_messages": rewritten}
+
+
 def _parallel_tool_call_input() -> list:
     return [
         {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "read_a", "arguments": "{}"},
@@ -3323,6 +3339,30 @@ class TestProvenancePatching:
         assert not any(item is original for item in result["input"] for original in raw_input)
         assistant_items = [item for item in result["input"] if item.get("role") == "assistant"]
         assert [_texts(item) for item in assistant_items] == [[COMPRESSED_MARKER]]
+
+    @pytest.mark.asyncio
+    async def test_masked_compaction_summary_stays_a_compaction_item_that_drops_older_history(self) -> None:
+        data: Final = {
+            "model": "claude-sonnet-5-5",
+            "input": [
+                {"role": "user", "content": "My cat is Biscuit. " * 200},
+                {"role": "assistant", "content": "Noted."},
+                {
+                    "type": "compaction",
+                    "id": "cmp_1",
+                    "encrypted_content": json.dumps({"type": "compaction", "content": "Cat is Biscuit."}),
+                },
+                {"role": "user", "content": "Cat name?"},
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, NameMaskingStructuredGuardrail())
+
+        assert compaction_summary(result["input"][2]) == "Cat is [NAME]."
+        provider_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=result["input"], responses_api_request={}, only_since_compaction=True
+        )
+        assert [message["content"] for message in provider_messages] == ["Cat is [NAME].", "Cat name?"]
 
     def test_provenance_bails_on_non_mapping_item(self):
         from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
