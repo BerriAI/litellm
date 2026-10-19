@@ -1264,6 +1264,45 @@ async def test_discovery_preserves_caller_scope_and_proxy_restrictions():
 
 
 @pytest.mark.asyncio
+async def test_discovery_outright_tools_failure_still_advertises_other_capabilities() -> None:
+    from mcp.types import DiscoverRequest, ListPromptsResult, ListToolsResult, Prompt
+
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.catalog import ToolListingFailedOutright
+
+    tools: Final = AsyncMock(side_effect=ToolListingFailedOutright(code=-32603, message="every server failed"))
+    prompts: Final = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="p")]))
+    context: Final = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["broken"])
+    with (
+        patch.object(operations, "_execute_handle_list_tools", tools),
+        patch.object(operations, "_execute_list_prompts", prompts),
+        patch.object(operations, "_execute_list_resources", AsyncMock(return_value=ListToolsResult(tools=[]))),
+        patch.object(operations, "_execute_list_resource_templates", AsyncMock(return_value=ListToolsResult(tools=[]))),
+    ):
+        result: Final = await GatewayOperations().execute(DiscoverRequest(), context)
+    assert result.capabilities.tools is None
+    assert result.capabilities.prompts is not None
+
+
+@pytest.mark.asyncio
+async def test_discovery_propagates_non_outright_mcp_errors_from_tools_listing() -> None:
+    from mcp import MCPError
+    from mcp.types import INVALID_PARAMS, DiscoverRequest
+
+    from litellm.proxy._experimental.mcp_server import operations
+
+    tools: Final = AsyncMock(side_effect=MCPError(code=INVALID_PARAMS, message="bad cursor"))
+    context: Final = prepare_context(
+        UserAPIKeyAuth(user_id="scoped"), mcp_servers=["broken"], mcp_proxy_mode=True, protocol_version="2025-06-18"
+    )
+    with patch.object(operations, "_execute_handle_list_tools", tools):
+        expected_error: Final = pytest.raises(MCPError)
+        with expected_error as exc_info:
+            await GatewayOperations().execute(DiscoverRequest(), context)
+    assert exc_info.value.error.code == INVALID_PARAMS
+
+
+@pytest.mark.asyncio
 async def test_discovery_denial_cannot_advertise_tools():
     from mcp.types import DiscoverRequest
     from fastapi import HTTPException
