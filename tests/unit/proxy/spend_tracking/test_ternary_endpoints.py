@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import UUID
 
 import polars as pl
 import pytest
+from fastapi import HTTPException
 from pydantic import TypeAdapter
 from fastapi.testclient import TestClient
 
@@ -482,6 +484,37 @@ def test_export_reports_failed_days_as_a_bad_gateway(client: TestClient):
 
     assert response.status_code == 502
     assert "2026-10-14" in response.text
+
+
+def test_dry_run_serializes_the_date_types_the_database_returns(client: TestClient):
+    columns = {
+        **_usage_columns(),
+        "date": [date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 14)],
+        "updated_at": [datetime(2026, 10, 13, 9, 30, tzinfo=timezone.utc)] * 3,
+        "id": [UUID(int=1), UUID(int=2), UUID(int=3)],
+    }
+    _use(ternary_usage_source, UsageSource(columns))
+
+    response = client.post("/ternary/dry-run", json={"limit": 1})
+
+    assert response.status_code == 200, response.text
+    body = TernaryDryRunResponse.model_validate_json(response.content)
+    [row] = body.usage_data
+    assert (row["date"], row["updated_at"], row["id"]) == (
+        "2026-10-13",
+        "2026-10-13T09:30:00+00:00",
+        str(UUID(int=1)),
+    )
+    assert body.summary.days == ["2026-10-13"]
+
+
+def test_settings_need_a_connected_database(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with pytest.raises(HTTPException) as raised:
+        ternary_settings_store()
+
+    assert raised.value.status_code == 500
 
 
 def test_export_without_settings_is_not_found(client: TestClient):
