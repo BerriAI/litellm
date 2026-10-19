@@ -319,7 +319,7 @@ def test_speech_rejected_by_google_reaches_the_caller_and_logs_one_failure_after
 def test_a_speech_reply_fills_the_deployment_tpm_limit_so_the_next_request_gets_429(
     uncached: BillingProxy, tts_wire: Wire
 ) -> None:
-    eventually(lambda: datetime.now(UTC), lambda now: now.second < 30, seconds=65)
+    eventually(lambda: datetime.now(UTC), lambda now: now.second < 10, seconds=65)
     with uncached.proxy.gateway.scenario() as scenario:
         key: Final = scenario.key()
         first_text: Final = marker()
