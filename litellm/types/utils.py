@@ -13,6 +13,7 @@ from typing import (
     TypeAlias,
     get_args,
 )
+from urllib.parse import urlsplit
 
 import httpx
 from openai._models import BaseModel as OpenAIObject
@@ -39,6 +40,7 @@ from pydantic import (
     ConfigDict,
     Field,
     FieldSerializationInfo,
+    GetCoreSchemaHandler,
     JsonValue,
     PrivateAttr,
     SkipValidation,
@@ -46,6 +48,7 @@ from pydantic import (
     field_validator,
 )
 from pydantic.main import IncEx
+from pydantic_core import core_schema
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
@@ -4172,6 +4175,87 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_scope",
 )
 github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
+API_KEY_SECRET_REFERENCE_REJECTION: Final = (
+    "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
+    "admin configures can carry."
+)
+
+
+API_KEY_UPSTREAM_PARAMS: Final = (
+    "api_base",
+    "base_url",
+    "aws_bedrock_runtime_endpoint",
+    "s3_endpoint_url",
+    "sagemaker_base_url",
+    "deployment_url",
+)
+
+
+def _origin(url: str) -> str:
+    parts: Final = urlsplit(url.strip())
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}" if parts.netloc else url.strip().rstrip("/").lower()
+
+
+def upstream_origins(params: Mapping[str, object]) -> frozenset[str]:
+    values: Final = (params.get(key) for key in API_KEY_UPSTREAM_PARAMS)
+    return frozenset(_origin(value) for value in values if isinstance(value, str) and value)
+
+
+class AdminApiKeySecretReference(str):
+    """An ``oidc/`` api_key reference read from a source only a proxy admin writes: a proxy-level deployment or a
+    stored credential. The call path swaps only this type for the secret it points to, so the same text arriving
+    in a request, a prompt template, or a row a non-admin wrote is sent as written, and the secret goes only to the
+    origins the admin configured beside the reference."""
+
+    def __new__(cls, reference: str, origins: frozenset[str]) -> "AdminApiKeySecretReference":
+        return super().__new__(cls, reference)
+
+    def __init__(self, reference: str, origins: frozenset[str]) -> None:
+        super().__init__()
+        self.origins: Final = origins
+
+    def __reduce__(self) -> tuple[type["AdminApiKeySecretReference"], tuple[str, frozenset[str]]]:
+        return type(self), (str(self), self.origins)
+
+    def may_reach(self, upstream: Mapping[str, object]) -> bool:
+        return upstream_origins(upstream) <= self.origins
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.is_instance_schema(cls, serialization=core_schema.to_string_ser_schema())
+
+
+class CredentialApiKeySecretReference(AdminApiKeySecretReference):
+    """An admin ``oidc/`` api_key reference stored in a named credential, so its origins are the credential's own."""
+
+
+def _unmarked_api_key_secret_reference(params: Mapping[str, object]) -> str | None:
+    api_key: Final = params.get("api_key")
+    if (
+        not isinstance(api_key, str)
+        or isinstance(api_key, AdminApiKeySecretReference)
+        or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX)
+    ):
+        return None
+    return api_key
+
+
+def admin_api_key_secret_reference(params: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(params)
+    if api_key is None:
+        return params
+    return {**params, "api_key": AdminApiKeySecretReference(api_key, upstream_origins(params))}
+
+
+def credential_api_key_secret_reference(credential_values: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(credential_values)
+    if api_key is None:
+        return credential_values
+    reference: Final = CredentialApiKeySecretReference(api_key, upstream_origins(credential_values))
+    return {**credential_values, "api_key": reference}
+
+
 server_owned_wif_litellm_params: Final = (
     anthropic_wif_litellm_params
     + openai_wif_litellm_params
