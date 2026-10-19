@@ -200,7 +200,7 @@ async def list_search_tools(
     }
     ```
     """
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     if prisma_client is None:
@@ -229,7 +229,7 @@ async def list_search_tools(
             tool_name = config_search_tool.get("search_tool_name")
             if tool_name:
                 litellm_params_dict = dict(config_search_tool.get("litellm_params", {}))
-                masked_litellm_params_dict = _get_masked_values(
+                masked_litellm_params_dict = get_masked_values(
                     litellm_params_dict,
                     unmasked_length=4,
                     number_of_asterisks=4,
@@ -254,7 +254,7 @@ async def list_search_tools(
 
         for db_search_tool in search_tools_from_db:
             litellm_params_dict = dict(db_search_tool.get("litellm_params", {}))
-            masked_litellm_params_dict = _get_masked_values(
+            masked_litellm_params_dict = get_masked_values(
                 litellm_params_dict,
                 unmasked_length=4,
                 number_of_asterisks=4,
@@ -529,7 +529,7 @@ async def get_search_tool_info(search_tool_id: str):
     }
     ```
     """
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -549,7 +549,7 @@ async def get_search_tool_info(search_tool_id: str):
 
         # Mask sensitive data
         litellm_params_dict: Final = dict(result.get("litellm_params", {}))
-        masked_litellm_params_dict: Final = _get_masked_values(
+        masked_litellm_params_dict: Final = get_masked_values(
             litellm_params_dict,
             unmasked_length=4,
             number_of_asterisks=4,

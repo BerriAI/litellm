@@ -26,6 +26,13 @@ class OllamaEmbeddingResponse(TypedDict):
     prompt_eval_count: ReadOnly[NotRequired[int]]
 
 
+def _ollama_embed_url(api_base: str) -> str:
+    clean_api_base: Final = api_base.rstrip("/")
+    if clean_api_base.endswith("/api/embed"):
+        return clean_api_base
+    return f"{clean_api_base}/api/embed"
+
+
 def _prepare_ollama_embedding_payload(
     model: str, prompts: list[str], optional_params: Mapping[str, object]
 ) -> dict[str, object]:
@@ -90,12 +97,9 @@ async def ollama_aembeddings(
     logging_obj: object,
     encoding: TokenEncoder | None,
 ):
-    if not api_base.endswith("/api/embed"):
-        api_base += "/api/embed"
-
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    response: Final = await litellm.module_level_aclient.post(url=api_base, json=data)
+    response: Final = await litellm.module_level_aclient.post(url=_ollama_embed_url(api_base), json=data)
     response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(
@@ -117,12 +121,9 @@ def ollama_embeddings(
     logging_obj: object,
     encoding: TokenEncoder | None = None,
 ):
-    if not api_base.endswith("/api/embed"):
-        api_base += "/api/embed"
-
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    response: Final = litellm.module_level_client.post(url=api_base, json=data)
+    response: Final = litellm.module_level_client.post(url=_ollama_embed_url(api_base), json=data)
     response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(

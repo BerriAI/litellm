@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
-from urllib.parse import urlparse
 
 import pytest
-import yaml
-from integration._support.otlp_sink import SpanSinks, owned_sinks
-from integration._support.prometheus_series import CapRig, series_cap_rig
+from integration._support.client import eventually
+from integration._support.otlp_sink import (
+    AuditConfigWriter,
+    SpanSinks,
+    audit_configuration_writer,
+    langfuse_callback_variables,
+    owned_sinks,
+)
+from integration._support.prometheus_series import CapRig, series_cap_rig, spend_rows
 from pydantic import JsonValue
-
-AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
 
 
 @pytest.fixture(scope="module")
@@ -24,34 +26,12 @@ def audit_sinks(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SpanSinks]
 
 @pytest.fixture(scope="module")
 def otel_audit_config(audit_sinks: SpanSinks) -> AuditConfigWriter:
-    tenant_host: Final = urlparse(audit_sinks.tenant).netloc
-
-    def write(directory: Path, litellm_settings: Mapping[str, JsonValue] = {}) -> Path:
-        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-        config["litellm_settings"] = {
-            **config.get("litellm_settings", {}),
-            "callbacks": ["otel"],
-            "provider_url_destination_allowed_hosts": [tenant_host],
-            **dict(litellm_settings),
-        }
-        config["callback_settings"] = {
-            "otel": {"exporter": "http/json", "endpoint": audit_sinks.operator, "use_simple_processor": True}
-        }
-        config["general_settings"] = {**config.get("general_settings", {}), "user_api_key_cache_ttl": 2}
-        path: Final = directory / f"otel-audit-{uuid.uuid4().hex}.yaml"
-        path.write_text(yaml.safe_dump(config))
-        return path
-
-    return write
+    return audit_configuration_writer(audit_sinks)
 
 
 @pytest.fixture(scope="module")
 def langfuse_vars(audit_sinks: SpanSinks) -> dict[str, JsonValue]:
-    return {
-        "langfuse_public_key": "pk-lf-audit",
-        "langfuse_secret_key": "sk-lf-audit",
-        "langfuse_host": audit_sinks.tenant,
-    }
+    return langfuse_callback_variables(audit_sinks)
 
 
 @pytest.fixture(scope="session")
@@ -63,4 +43,9 @@ def capped(tmp_path_factory: pytest.TempPathFactory) -> Iterator[CapRig]:
         workers=2,
         warm_keys=3,
     ) as rig:
+        eventually(
+            lambda: tuple(len(spend_rows(key.alias)) for key in rig.warm),
+            lambda counts: all(count == 1 for count in counts),
+            seconds=70,
+        )
         yield rig

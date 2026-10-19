@@ -10,7 +10,7 @@ import re
 import typing
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Any, Final, Protocol
+from typing import Any, Final, Literal, Protocol, overload
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
@@ -21,6 +21,20 @@ if typing.TYPE_CHECKING:
 
 MCP_SERVERS_TARGET: Final = "mcp_servers"
 MCP_OAUTH_TOKENS_TARGET: Final = "mcp_oauth_tokens"
+
+
+class ASGIScopeFields(Protocol):
+    @overload
+    def get(
+        self, key: Literal["headers"], default: Sequence[tuple[bytes, bytes]], /
+    ) -> Sequence[tuple[bytes, bytes]]: ...
+
+    @overload
+    def get(self, key: Literal["path", "method"], default: str, /) -> str: ...
+
+
+def asgi_scope_fields(scope: ASGIScopeFields) -> ASGIScopeFields:
+    return scope
 
 
 class _McpServerLike(Protocol):
@@ -76,7 +90,7 @@ MCP_TOOL_PREFIX_FORMAT: Final = "{server_name}{separator}{tool_name}"
 #     principle hash to the same three chars; that natural-hash collision
 #     IS a routing-correctness issue (the second registrant would otherwise
 #     have its tools misrouted to the first), so registration goes through
-#     ``MCPServerManager._assign_unique_short_prefix`` which rehashes with
+#     ``MCPServerManager.assign_unique_short_prefix`` which rehashes with
 #     a deterministic attempt counter until it finds an unused prefix and
 #     caches the result on ``MCPServer.short_prefix``.  A collision is
 #     logged at INFO when it happens.
@@ -109,7 +123,7 @@ def compute_short_server_prefix(server_id: str, attempt: int = 0) -> str:
     and whose remaining characters are drawn from the full base62
     alphabet.  Pass ``attempt > 0`` to rehash to a different prefix when
     the natural hash collides with a prefix already assigned to another
-    server (see ``MCPServerManager._assign_unique_short_prefix``).  An
+    server (see ``MCPServerManager.assign_unique_short_prefix``).  An
     empty ``server_id`` raises ``ValueError`` — short prefixes require a
     stable identifier to be deterministic.
     """
@@ -309,7 +323,7 @@ def get_server_prefix(server: object) -> str:
     When the short-prefix mode is enabled (``LITELLM_USE_SHORT_MCP_TOOL_PREFIX``)
     a three-character base62 ID is returned.  We prefer the cached
     ``server.short_prefix`` value when set — that field is populated at
-    registration time by ``MCPServerManager._assign_unique_short_prefix``
+    registration time by ``MCPServerManager.assign_unique_short_prefix``
     and resolves natural-hash collisions deterministically — and only fall
     back to the natural hash for ad-hoc / temp-server objects without a
     cached value.  In default mode the historical behaviour is preserved:
@@ -363,6 +377,11 @@ def iter_known_server_prefixes(server: _McpServerLike) -> Iterator[str]:
     yield from _emit(getattr(server, "alias", None))
     yield from _emit(getattr(server, "server_name", None))
     yield from _emit(server_id)
+
+
+def server_answers_to(server: _McpServerLike, name: str) -> bool:
+    requested: Final = name.lower()
+    return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
 
 
 def iter_known_tool_name_spellings(tool_name: str, server: MCPServer) -> Iterator[str]:

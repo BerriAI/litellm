@@ -93,7 +93,7 @@ from litellm.types.router import (
     TaggedPreRoutingStrategy,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -2748,6 +2748,7 @@ def _llm_response(content: str, response_cost: float | None = None):
     response.choices = [MagicMock()]
     response.choices[0].message.content = content
     response._hidden_params = {} if response_cost is None else {"response_cost": response_cost}
+    response.hidden_params = response._hidden_params
     return response
 
 
@@ -5356,6 +5357,7 @@ class TestRouterPreRoutingSharedAliasName:
                 "api_key": "sk-marker",
                 "api_base": "https://marker.example/v1",
                 "api_version": "2024-01-01",
+                "responses_api_version": "v1",
             },
         }
         router = Router(model_list=[marker_with_connection_params, self._tier_entry()])
@@ -5371,6 +5373,7 @@ class TestRouterPreRoutingSharedAliasName:
         assert "api_base" not in request_kwargs
         assert "api_key" not in request_kwargs
         assert "api_version" not in request_kwargs
+        assert "responses_api_version" not in request_kwargs
         assert request_kwargs["drop_params"] is True
 
     @pytest.mark.asyncio

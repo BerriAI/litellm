@@ -2145,6 +2145,54 @@ def test_get_file_content_streams_openai_direct_path(
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
+@respx.mock
+def test_get_file_content_forwards_upstream_download_headers(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    body: Final = b'{"prompt": "Hello", "completion": "Hi"}'
+    upstream_filename: Final = "mydata.jsonl"
+    upstream_request_id: Final = "req_upstream_123"
+    upstream_route: Final = respx.get("https://api.openai.com/v1/files/file-abc123/content").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            content=body,
+            headers={
+                "content-type": "application/octet-stream",
+                "content-length": str(len(body)),
+                "content-disposition": f'attachment; filename="{upstream_filename}"',
+                "x-request-id": upstream_request_id,
+            },
+        )
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+    try:
+        response: Final = client.get(
+            "/v1/files/file-abc123/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert upstream_route.call_count == 1
+    assert response.content == body
+    assert response.headers["content-type"].startswith("application/octet-stream")
+    assert int(response.headers["content-length"]) == len(response.content)
+    assert upstream_filename in response.headers["content-disposition"]
+    assert response.headers["x-request-id"] == upstream_request_id
+
+
 def test_get_file_content_routed_provider_skips_streaming_when_resolved_provider_is_not_supported(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
@@ -4849,7 +4897,7 @@ def _setup_unscoped_list_files_route_over_real_hook(
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     for env_var in ("OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_ORGANIZATION"):
@@ -4857,7 +4905,7 @@ def _setup_unscoped_list_files_route_over_real_hook(
     monkeypatch.setattr(litellm, "api_key", None, raising=False)
     monkeypatch.setattr(litellm, "openai_key", None, raising=False)
 
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(), prisma_client=MagicMock()
     )
     managed_files.prisma_client.db.litellm_managedfiletable = _ManagedFileTableOverRows(rows)

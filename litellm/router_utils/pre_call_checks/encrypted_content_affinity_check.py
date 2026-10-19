@@ -40,6 +40,8 @@ from collections.abc import Iterator, Mapping, Sequence
 from functools import cache
 from typing import TYPE_CHECKING, Final, Optional, cast
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -51,9 +53,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import Deployment
+from litellm.utils import get_order_filtered_deployments
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -131,7 +136,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
         item_id: Final = item.get("id")
         if item_id and isinstance(item_id, str):
-            decoded: Final = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
+            decoded: Final = ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id)
             if decoded:
                 return decoded.get("model_id")
 
@@ -156,7 +161,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _model_id_from_wrapped_encrypted_content(encrypted_content: str) -> str | None:
-        model_id, _ = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
+        model_id, _ = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(encrypted_content)
         return model_id or None
 
     @staticmethod
@@ -253,12 +258,22 @@ class EncryptedContentAffinityCheck(CustomLogger):
         ]
         return matches, originating
 
-    def _strip_reasoning_the_target_cannot_decrypt(
-        self,
+    @staticmethod
+    def strip_reasoning_the_targets_cannot_decrypt(
+        router: "Router | None",
         request_input: object,
         anthropic_messages: object,
         target_deployments: Sequence[Mapping[str, object]],
+        *,
+        unmarked_origin: str | None,
     ) -> None:
+        """
+        Drop the encrypted reasoning that none of ``target_deployments`` minted or shares an
+        encryption boundary with, keeping each item's readable summary. Encrypted reasoning that
+        carries no litellm origin marker is attributed to ``unmarked_origin``: the affinity pin
+        names the deployment its marker decoded to, a fallback hop names the deployment that just
+        failed, and ``None`` drops it, since no deployment is known to have minted it.
+        """
         target_ids: Final = frozenset(
             str(model_info["id"])
             for target in target_deployments
@@ -267,30 +282,34 @@ class EncryptedContentAffinityCheck(CustomLogger):
         target_boundaries: Final = frozenset(
             boundary
             for target in target_deployments
-            if (boundary := self._encryption_boundary_key(target.get("litellm_params"))) is not None
+            if (boundary := EncryptedContentAffinityCheck._encryption_boundary_key(target.get("litellm_params")))
+            is not None
         )
 
         @cache
-        def target_can_decrypt(origin_model_id: str) -> bool:
+        def target_can_decrypt(marked_origin: str | None) -> bool:
+            origin_model_id: Final = marked_origin if marked_origin is not None else unmarked_origin
+            if origin_model_id is None:
+                return False
             if origin_model_id in target_ids:
                 return True
-            if self.router is None:
+            if router is None:
                 return False
-            origin: Final = self.router.get_deployment(model_id=origin_model_id)
+            origin: Final = router.get_deployment(model_id=origin_model_id)
             origin_boundary: Final = (
-                self._encryption_boundary_key(origin.litellm_params.model_dump(exclude_none=True))
+                EncryptedContentAffinityCheck._encryption_boundary_key(
+                    origin.litellm_params.model_dump(exclude_none=True)
+                )
                 if origin is not None
                 else None
             )
             return origin_boundary is not None and origin_boundary in target_boundaries
 
         def should_strip_input_item(item: Mapping[str, object]) -> bool:
-            origin_model_id: Final = self._model_id_of_input_item(item)
-            return origin_model_id is not None and not target_can_decrypt(origin_model_id)
+            return not target_can_decrypt(EncryptedContentAffinityCheck._model_id_of_input_item(item))
 
         def should_strip_anthropic_block(block: Mapping[str, object]) -> bool:
-            origin_model_id: Final = self._model_id_of_anthropic_block(block)
-            return origin_model_id is not None and not target_can_decrypt(origin_model_id)
+            return not target_can_decrypt(EncryptedContentAffinityCheck._model_id_of_anthropic_block(block))
 
         ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(
             request_input, should_strip=should_strip_input_item
@@ -317,12 +336,21 @@ class EncryptedContentAffinityCheck(CustomLogger):
         unhealthy, the request was routed to a different group by an auto-router tier
         change or model switch, or the marker is removed/unknown/forged), the
         encrypted reasoning is stripped and the request dispatches to the healthy
-        pool with its readable history instead of failing.
+        pool with its readable history instead of failing. An order-based fallback hop
+        carries ``_target_order``, and the pin only considers deployments of that order,
+        so the hop reaches the next order with the origin's reasoning stripped instead
+        of replaying it to a deployment that cannot decrypt it.
         """
         request_kwargs = request_kwargs or {}
-        typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
+        typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
+        target_order: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs).get("_target_order")
+        candidates: Final = (
+            get_order_filtered_deployments(typed_healthy_deployments, target_order=target_order)
+            if isinstance(target_order, int)
+            else typed_healthy_deployments
+        )
 
         # Signal to the response post-processor that encrypted item IDs should be
         # encoded in the output of this request.  Only set the flag when
@@ -348,7 +376,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
 
         deployment: Final = self._find_deployment_by_model_id(
-            healthy_deployments=typed_healthy_deployments,
+            healthy_deployments=candidates,
             model_id=model_id,
         )
         if deployment is not None:
@@ -357,12 +385,14 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 model_id,
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
-            self._strip_reasoning_the_target_cannot_decrypt(request_input, anthropic_messages, (deployment,))
+            self.strip_reasoning_the_targets_cannot_decrypt(
+                self.router, request_input, anthropic_messages, (deployment,), unmarked_origin=model_id
+            )
             return [deployment]
 
         # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
         boundary_matches, _originating = self._find_deployments_on_same_encryption_boundary(
-            healthy_deployments=typed_healthy_deployments,
+            healthy_deployments=candidates,
             model_id=model_id,
         )
         if boundary_matches:
@@ -373,7 +403,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 len(boundary_matches),
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
-            self._strip_reasoning_the_target_cannot_decrypt(request_input, anthropic_messages, boundary_matches)
+            self.strip_reasoning_the_targets_cannot_decrypt(
+                self.router, request_input, anthropic_messages, boundary_matches, unmarked_origin=model_id
+            )
             return boundary_matches
 
         # The origin cannot serve this turn and no peer shares its encryption boundary, so its
@@ -389,4 +421,4 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
         ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
         strip_encrypted_reasoning_from_messages(anthropic_messages)
-        return typed_healthy_deployments
+        return candidates
