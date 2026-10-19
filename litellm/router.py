@@ -11370,6 +11370,26 @@ class Router:
             return None
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
 
+    @staticmethod
+    def _deployment_token_limits_configured(model_info: object) -> bool:
+        """Both operative per-request token limits are explicitly configured.
+
+        Discovery only populates ``max_input_tokens`` / ``max_output_tokens``
+        (and ``max_tokens``) from the upstream ``/v1/models`` card; when a
+        deployment already sets both, the call cannot add anything, so it is
+        skipped to avoid billing scale-to-zero backends (issue #42657).
+        """
+        if not isinstance(model_info, Mapping):
+            return False
+        # ``Mapping`` is unparameterised here, so pin the key/value types before
+        # reading the keys: bare ``Mapping`` makes both ``.get`` member accesses
+        # only partially known, which trips the basedpyright delta gate.
+        typed_model_info: Final = cast(Mapping[str, object], model_info)  # cast-ok: isinstance check above
+        return (
+            typed_model_info.get("max_input_tokens") is not None
+            and typed_model_info.get("max_output_tokens") is not None
+        )
+
     async def arefresh_model_info(self, *, client: AsyncHTTPHandler | None = None) -> None:
         """Refresh token limits advertised by configured OpenAI-compatible deployments."""
         deployments: Final = iter(tuple(self.model_list))
@@ -11403,6 +11423,8 @@ class Router:
         if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
             return
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):
+            return
+        if self._deployment_token_limits_configured(raw_deployment.get("model_info")):
             return
         api_key: Final = params.api_key or dynamic_api_key
         headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
