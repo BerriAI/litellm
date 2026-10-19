@@ -33,6 +33,7 @@ def _model(
     output_price: float = 2.0,
     cached_read: float | None = None,
     cached_write: float | None = None,
+    **prices: float,
 ) -> sync.CatalogModel:
     return sync.CatalogModel(
         id=model_id,
@@ -47,6 +48,7 @@ def _model(
             output_token=output_price,
             cache_read_cost=cached_read,
             cache_write_cost=cached_write,
+            **prices,
         ),
     )
 
@@ -140,10 +142,11 @@ def test_load_catalog_rejects_an_empty_catalog() -> None:
         sync.load_catalog(b'{"object": "list", "data": []}')
 
 
-def test_sync_adds_every_catalog_model() -> None:
+def test_sync_registers_or_reports_every_catalog_model() -> None:
     outcome = sync.compute_sync({}, RECORDED_CATALOG)
+    reported = " ".join(outcome.warnings)
 
-    assert outcome.added == tuple(sorted(f"cortecs/{model.id}" for model in RECORDED_CATALOG))
+    assert all(f"cortecs/{model.id}" in outcome.added or model.id in reported for model in RECORDED_CATALOG)
     assert outcome.stale == ()
     assert all(entry["litellm_provider"] == "cortecs" for entry in outcome.cost_map.values())
 
@@ -217,6 +220,123 @@ def test_sync_skips_models_with_non_text_output_instead_of_registering_them_as_c
     assert any("image-maker" in warning for warning in outcome.warnings)
 
 
+def test_embedding_model_is_priced_per_input_token_without_chat_flags() -> None:
+    entry = sync.entry_for(
+        _model(
+            "embedder",
+            outputs=("embeddings",),
+            features=("tools", "json_mode"),
+            context=8192,
+            max_output=8192,
+            input_price=0.11,
+            output_price=0.0,
+        )
+    )
+
+    assert entry == {
+        "input_cost_per_token": 1.1e-07,
+        "litellm_provider": "cortecs",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.cortecs.ai/v1/models",
+    }
+
+
+def test_decision_model_registers_as_evaluation_with_zero_output_price() -> None:
+    entry = sync.entry_for(_model("decider", outputs=("decision",), context=66000, input_price=0.047, output_price=0))
+
+    assert entry is not None
+    assert entry["mode"] == "evaluation"
+    assert entry["input_cost_per_token"] == 4.7e-08
+    assert entry["output_cost_per_token"] == 0.0
+    assert entry["max_input_tokens"] == 66000
+
+
+def test_speech_model_is_priced_per_character_from_the_per_million_price() -> None:
+    entry = sync.entry_for(_model("talker", outputs=("audio", "speech"), speech_cost=19.805))
+
+    assert entry == {
+        "input_cost_per_character": 1.9805e-05,
+        "litellm_provider": "cortecs",
+        "mode": "audio_speech",
+        "source": "https://api.cortecs.ai/v1/models",
+    }
+
+
+def test_transcription_model_is_priced_per_second() -> None:
+    entry = sync.entry_for(
+        _model("listener", inputs=("audio",), outputs=("text", "transcription"), audio_cost=3.126e-05)
+    )
+
+    assert entry == {
+        "input_cost_per_second": 3.126e-05,
+        "litellm_provider": "cortecs",
+        "mode": "audio_transcription",
+        "source": "https://api.cortecs.ai/v1/models",
+    }
+
+
+def test_text_model_with_an_ocr_price_registers_as_ocr_priced_per_page() -> None:
+    entry = sync.entry_for(_model("reader", inputs=("file", "image"), ocr_cost=4.444305, ocr_annotated_cost=5.555381))
+
+    assert entry == {
+        "annotation_cost_per_page": 0.005555381,
+        "litellm_provider": "cortecs",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.004444305,
+        "source": "https://api.cortecs.ai/v1/models",
+    }
+
+
+def test_ocr_entry_omits_the_annotation_price_the_catalog_does_not_give() -> None:
+    entry = sync.entry_for(_model("reader", ocr_cost=2.222152))
+
+    assert entry is not None
+    assert "annotation_cost_per_page" not in entry
+
+
+@pytest.mark.parametrize(
+    "unpriced",
+    [
+        _model("talker", outputs=("audio", "speech")),
+        _model("listener", inputs=("audio",), outputs=("text", "transcription")),
+    ],
+)
+def test_sync_reports_audio_models_without_their_price_instead_of_registering_them_free(
+    unpriced: sync.CatalogModel,
+) -> None:
+    outcome = sync.compute_sync({}, [unpriced])
+
+    assert outcome.added == ()
+    assert any(unpriced.id in warning for warning in outcome.warnings)
+
+
+def test_sync_reports_a_chat_model_without_an_output_limit() -> None:
+    model = _model("no-limit").model_copy(update={"max_output_tokens": None})
+    outcome = sync.compute_sync({}, [model])
+
+    assert outcome.added == ()
+    assert any("no-limit" in warning for warning in outcome.warnings)
+
+
+def test_load_catalogs_requests_every_tag_and_merges_models_listed_under_several() -> None:
+    by_url = {
+        url: json.dumps({"data": [_model(model_id).model_dump(mode="json") for model_id in model_ids]}).encode()
+        for url, model_ids in zip(
+            sync.catalog_urls(),
+            [("shared", "chat-only"), ("shared", "embedder"), ("a",), ("b",), ("c",), ("d",)],
+            strict=True,
+        )
+    }
+
+    catalog = sync.load_catalogs(by_url.__getitem__)
+
+    assert [model.id for model in catalog] == ["shared", "chat-only", "embedder", "a", "b", "c", "d"]
+    assert {tag for url in by_url for tag in url.rsplit("tag=", 1)[1:]} == set(sync.CATALOG_TAGS)
+
+
 def test_every_field_the_sync_can_write_is_refreshed_and_cleared_on_update() -> None:
     everything = _model(
         inputs=("text", "image", "audio", "file", "video"),
@@ -237,10 +357,28 @@ def test_every_field_the_sync_can_write_is_refreshed_and_cleared_on_update() -> 
     assert set(cleared) == set(sync.entry_for(_model()))
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        _model("embedder", outputs=("embeddings",)),
+        _model("decider", outputs=("decision",)),
+        _model("talker", outputs=("audio", "speech"), speech_cost=15.0),
+        _model("listener", inputs=("audio",), outputs=("text", "transcription"), audio_cost=3e-05),
+        _model("reader", ocr_cost=4.0, ocr_annotated_cost=5.0),
+    ],
+    ids=lambda model: model.id,
+)
+def test_every_field_of_a_non_chat_entry_is_refreshed_on_update(model: sync.CatalogModel) -> None:
+    full_entry = sync.entry_for(model)
+    stale_entry = {field: "stale" for field in full_entry}
+
+    refreshed = sync.compute_sync({f"cortecs/{model.id}": stale_entry}, [model]).cost_map[f"cortecs/{model.id}"]
+
+    assert refreshed == full_entry
+
+
 def test_sync_warns_about_prices_it_does_not_write() -> None:
-    model = _model()
-    speech_priced = model.model_copy(update={"pricing": model.pricing.model_copy(update={"speech_cost": 15.0})})
-    outcome = sync.compute_sync({}, [speech_priced])
+    outcome = sync.compute_sync({}, [_model(speech_cost=15.0)])
 
     assert any("speech_cost" in warning for warning in outcome.warnings)
     assert "input_cost_per_character" not in outcome.cost_map["cortecs/some-model"]
@@ -302,16 +440,30 @@ def test_registry_entries_match_the_recorded_catalog() -> None:
     assert outcome.updated == ()
 
 
-def test_every_registry_entry_is_a_complete_chat_model() -> None:
-    entries = {key: entry for key, entry in COST_MAP.items() if key.startswith("cortecs/")}
+def test_every_registry_chat_entry_is_complete() -> None:
+    entries = {key: entry for key, entry in COST_MAP.items() if key.startswith("cortecs/") and entry["mode"] == "chat"}
 
-    assert len(entries) == len(RECORDED_CATALOG)
+    assert entries
     for key, entry in entries.items():
         assert entry["litellm_provider"] == "cortecs", key
-        assert entry["mode"] == "chat", key
         assert entry["max_tokens"] == entry["max_output_tokens"], key
         assert entry["input_cost_per_token"] >= 0, key
         assert entry["output_cost_per_token"] >= 0, key
+
+
+def test_every_registry_entry_comes_from_a_recorded_catalog_model() -> None:
+    catalog_ids = {f"cortecs/{model.id}" for model in RECORDED_CATALOG}
+    entries = {key for key in COST_MAP if key.startswith("cortecs/")}
+
+    assert entries <= catalog_ids
+    assert {COST_MAP[key]["mode"] for key in entries} == {
+        "chat",
+        "embedding",
+        "audio_speech",
+        "audio_transcription",
+        "ocr",
+        "evaluation",
+    }
 
 
 def test_registry_entries_route_and_price_through_litellm() -> None:
@@ -324,3 +476,28 @@ def test_registry_entries_route_and_price_through_litellm() -> None:
     assert info["litellm_provider"] == "cortecs"
     assert prompt_cost == pytest.approx(row["input_cost_per_token"] * 10)
     assert completion_cost == pytest.approx(row["output_cost_per_token"] * 10)
+
+
+def test_registry_embedding_entry_prices_through_litellm() -> None:
+    key, row = next(
+        (key, entry) for key, entry in COST_MAP.items() if key.startswith("cortecs/") and entry["mode"] == "embedding"
+    )
+    info = litellm.get_model_info(key)
+    prompt_cost, completion_cost = litellm.cost_per_token(model=key, prompt_tokens=1000)
+
+    assert info["mode"] == "embedding"
+    assert prompt_cost == pytest.approx(row["input_cost_per_token"] * 1000)
+    assert completion_cost == 0
+
+
+def test_registry_transcription_entry_prices_per_audio_second_through_litellm() -> None:
+    key, row = next(
+        (key, entry)
+        for key, entry in COST_MAP.items()
+        if key.startswith("cortecs/") and entry["mode"] == "audio_transcription"
+    )
+    prompt_cost, _ = litellm.cost_per_token(
+        model=key, prompt_tokens=0, call_type="transcription", audio_transcription_file_duration=60
+    )
+
+    assert prompt_cost == pytest.approx(row["input_cost_per_second"] * 60)

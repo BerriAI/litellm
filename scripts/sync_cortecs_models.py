@@ -12,8 +12,11 @@ Policy highlights:
 - Modality and feature flags come from ``input_modalities`` / ``supported_features``, and a flag is only
   written when the catalog advertises it. Terms with no registry field are surfaced as warnings instead of
   being guessed at.
-- Only text-output models are written, as chat entries. Models with any other output modality are reported and
-  skipped, because a chat entry would price them with the wrong contract.
+- The catalog hides every non-default tag, so the sync requests each of ``CATALOG_TAGS`` and merges the results.
+- The entry type follows the model's output: text is chat, embeddings is embedding, speech is audio_speech,
+  transcription is audio_transcription, an OCR price makes it ocr and decision is evaluation (the mode the
+  Decisions routes price from). A model with any other output, or without the price its type bills by, is
+  reported and skipped instead of being registered with a wrong or zero price.
 - A cortecs entry the catalog no longer lists is reported, never deleted: delisting is a human call.
 - Fields the sync does not own (anything a human added by hand) are preserved across updates.
 """
@@ -23,21 +26,23 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 MODELS_URL: Final = "https://api.cortecs.ai/v1/models?currency=USD"
 SOURCE_URL: Final = "https://api.cortecs.ai/v1/models"
 PROVIDER: Final = "cortecs"
 PREFIX: Final = "cortecs/"
+CATALOG_TAGS: Final = ("Instruct", "Embedding", "Speech", "Transcription", "OCR", "Decision")
 COST_MAP_RELPATHS: Final = (
     "model_prices_and_context_window.json",
     "litellm/model_prices_and_context_window_backup.json",
@@ -64,14 +69,18 @@ _TERMS_WITHOUT_A_FIELD: Final[frozenset[str]] = frozenset({"json_mode", "text"})
 _OWNED_FIELDS: Final[frozenset[str]] = frozenset(
     (
         "cache_creation_input_token_cost",
+        "annotation_cost_per_page",
         "cache_read_input_token_cost",
         "input_cost_per_audio_per_second",
+        "input_cost_per_character",
+        "input_cost_per_second",
         "input_cost_per_token",
         "litellm_provider",
         "max_input_tokens",
         "max_output_tokens",
         "max_tokens",
         "mode",
+        "ocr_cost_per_page",
         "output_cost_per_token",
         "source",
         "supports_prompt_caching",
@@ -105,7 +114,7 @@ class CatalogModel(BaseModel):
 
     id: str
     context_size: int
-    max_output_tokens: int
+    max_output_tokens: int | None = None
     input_modalities: tuple[str, ...]
     output_modalities: tuple[str, ...]
     supported_features: tuple[str, ...]
@@ -135,8 +144,44 @@ class _Splice:
     text: str
 
 
+Kind = Literal["chat", "embedding", "speech", "transcription", "ocr", "decision"]
+
+_CONSUMED_PRICING: Final[Mapping[Kind, frozenset[str]]] = MappingProxyType(
+    {
+        "chat": frozenset({"input_token", "output_token", "cache_read_cost", "cache_write_cost", "audio_cost"}),
+        "embedding": frozenset({"input_token", "output_token"}),
+        "speech": frozenset({"speech_cost"}),
+        "transcription": frozenset({"audio_cost"}),
+        "ocr": frozenset({"ocr_cost", "ocr_annotated_cost"}),
+        "decision": frozenset({"input_token", "output_token"}),
+    }
+)
+
+
 def per_token(usd_per_million: float) -> float:
     return float(Decimal(f"{usd_per_million:.12g}") / 1_000_000)
+
+
+def per_page(usd_per_thousand: float) -> float:
+    return float(Decimal(f"{usd_per_thousand:.12g}") / 1_000)
+
+
+def kind_of(model: CatalogModel) -> Kind | None:
+    if model.pricing.ocr_cost is not None:
+        return "ocr"
+    match model.output_modalities:
+        case ("text",):
+            return "chat"
+        case ("embeddings",):
+            return "embedding"
+        case ("audio", "speech"):
+            return "speech"
+        case ("text", "transcription"):
+            return "transcription"
+        case ("decision",):
+            return "decision"
+        case _:
+            return None
 
 
 def _flags(model: CatalogModel) -> Mapping[str, bool]:
@@ -159,20 +204,84 @@ def _priced_fields(pricing: CatalogPricing) -> Mapping[str, object]:
     )
 
 
-def entry_for(model: CatalogModel) -> Mapping[str, object]:
-    fields: Final = {
+def _base_fields(mode: str) -> Mapping[str, object]:
+    return {"litellm_provider": PROVIDER, "mode": mode, "source": SOURCE_URL}
+
+
+def _token_fields(model: CatalogModel) -> Mapping[str, object]:
+    return {
         "input_cost_per_token": per_token(model.pricing.input_token),
-        "litellm_provider": PROVIDER,
+        "max_input_tokens": model.context_size,
+        "max_tokens": model.context_size,
+        "output_cost_per_token": per_token(model.pricing.output_token),
+    }
+
+
+def _chat_fields(model: CatalogModel) -> Mapping[str, object] | None:
+    if model.max_output_tokens is None:
+        return None
+    return {
+        **_base_fields("chat"),
+        "input_cost_per_token": per_token(model.pricing.input_token),
         "max_input_tokens": model.context_size,
         "max_output_tokens": model.max_output_tokens,
         "max_tokens": model.max_output_tokens,
-        "mode": "chat",
         "output_cost_per_token": per_token(model.pricing.output_token),
-        "source": SOURCE_URL,
         **_flags(model),
         **_priced_fields(model.pricing),
     }
-    return dict(sorted(fields.items()))
+
+
+def _speech_fields(model: CatalogModel) -> Mapping[str, object] | None:
+    price: Final = model.pricing.speech_cost
+    if price is None:
+        return None
+    return {**_base_fields("audio_speech"), "input_cost_per_character": per_token(price)}
+
+
+def _transcription_fields(model: CatalogModel) -> Mapping[str, object] | None:
+    price: Final = model.pricing.audio_cost
+    if price is None:
+        return None
+    return {**_base_fields("audio_transcription"), "input_cost_per_second": float(f"{price:.6g}")}
+
+
+def _ocr_fields(model: CatalogModel) -> Mapping[str, object] | None:
+    price: Final = model.pricing.ocr_cost
+    annotated: Final = model.pricing.ocr_annotated_cost
+    if price is None:
+        return None
+    return {
+        **_base_fields("ocr"),
+        "ocr_cost_per_page": per_page(price),
+        **({"annotation_cost_per_page": per_page(annotated)} if annotated is not None else {}),
+    }
+
+
+def _fields_for(model: CatalogModel, kind: Kind) -> Mapping[str, object] | None:
+    match kind:
+        case "chat":
+            return _chat_fields(model)
+        case "embedding":
+            return {**_base_fields("embedding"), **_token_fields(model)}
+        case "decision":
+            return {**_base_fields("evaluation"), **_token_fields(model)}
+        case "speech":
+            return _speech_fields(model)
+        case "transcription":
+            return _transcription_fields(model)
+        case "ocr":
+            return _ocr_fields(model)
+        case _:
+            assert_never(kind)
+
+
+def entry_for(model: CatalogModel) -> Mapping[str, object] | None:
+    kind: Final = kind_of(model)
+    if kind is None:
+        return None
+    fields: Final = _fields_for(model, kind)
+    return None if fields is None else dict(sorted(fields.items()))
 
 
 def _merged(existing: Mapping[str, object], desired: Mapping[str, object]) -> Mapping[str, object]:
@@ -182,22 +291,35 @@ def _merged(existing: Mapping[str, object], desired: Mapping[str, object]) -> Ma
 
 def _unmapped_terms(catalog: Sequence[CatalogModel]) -> tuple[str, ...]:
     advertised: Final = chain.from_iterable(
-        chain.from_iterable((model.input_modalities, model.supported_features)) for model in catalog
+        chain.from_iterable((model.input_modalities, model.supported_features))
+        for model in catalog
+        if kind_of(model) == "chat"
     )
     return tuple(sorted({term for term in advertised if term not in _ALL_FLAGS and term not in _TERMS_WITHOUT_A_FIELD}))
 
 
-def _unmapped_pricing_fields(model: CatalogModel) -> tuple[str, ...]:
-    """Catalog prices outside the chat token contract, or with no registry field, that today's catalog omits."""
-    pricing: Final = model.pricing
-    values: Final = {
+def _optional_prices(pricing: CatalogPricing) -> Mapping[str, float | None]:
+    return {
+        "audio_cost": pricing.audio_cost,
+        "cache_read_cost": pricing.cache_read_cost,
+        "cache_write_cost": pricing.cache_write_cost,
         "ocr_annotated_cost": pricing.ocr_annotated_cost,
         "ocr_cost": pricing.ocr_cost,
         "output_cost_per_additional_megapixel": pricing.output_cost_per_additional_megapixel,
         "output_cost_per_image": pricing.output_cost_per_image,
         "speech_cost": pricing.speech_cost,
     }
-    return tuple(field for field, value in values.items() if value is not None)
+
+
+def _unmapped_pricing_fields(model: CatalogModel) -> tuple[str, ...]:
+    """Catalog prices that the registry entry for this model's type does not carry."""
+    kind: Final = kind_of(model)
+    if kind is None:
+        return ()
+    consumed: Final = _CONSUMED_PRICING[kind]
+    return tuple(
+        field for field, price in _optional_prices(model.pricing).items() if price is not None and field not in consumed
+    )
 
 
 def _unmapped_pricing(catalog: Sequence[CatalogModel]) -> tuple[str, ...]:
@@ -205,7 +327,7 @@ def _unmapped_pricing(catalog: Sequence[CatalogModel]) -> tuple[str, ...]:
 
 
 def _warnings(catalog: Sequence[CatalogModel], stale: tuple[str, ...]) -> tuple[str, ...]:
-    non_text_output: Final = tuple(model.id for model in catalog if model.output_modalities != ("text",))
+    skipped: Final = tuple(model.id for model in catalog if entry_for(model) is None)
     unmapped: Final = _unmapped_terms(catalog)
     unmapped_pricing: Final = _unmapped_pricing(catalog)
     return (
@@ -229,19 +351,22 @@ def _warnings(catalog: Sequence[CatalogModel], stale: tuple[str, ...]) -> tuple[
         ),
         *(
             (
-                f"the catalog reports non-text output for {list(non_text_output)}; those models are skipped because "
-                "this sync only writes chat entries",
+                f"no registry entry is written for {list(skipped)}; each has an output type this sync does not "
+                "register or lacks the price its type is billed by",
             )
-            if non_text_output
+            if skipped
             else ()
         ),
     )
 
 
+def _desired_entries(catalog: Sequence[CatalogModel]) -> Mapping[str, Mapping[str, object]]:
+    entries: Final = ((model, entry_for(model)) for model in catalog)
+    return MappingProxyType({f"{PREFIX}{model.id}": entry for model, entry in entries if entry is not None})
+
+
 def compute_sync(cost_map: Mapping[str, object], catalog: Sequence[CatalogModel]) -> SyncOutcome:
-    desired: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
-        {f"{PREFIX}{model.id}": entry_for(model) for model in catalog if model.output_modalities == ("text",)}
-    )
+    desired: Final = _desired_entries(catalog)
     existing: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
         {key: entry for key, entry in cost_map.items() if key.startswith(PREFIX) and isinstance(entry, Mapping)}
     )
@@ -323,7 +448,7 @@ def _section(title: str, lines: Sequence[str]) -> str:
 def render_pr_body(outcome: SyncOutcome) -> str:
     return (
         "Automated daily sync of the cortecs entries in model_prices_and_context_window.json against "
-        f"`GET {MODELS_URL}` by scripts/sync_cortecs_models.py.\n"
+        f"`GET {MODELS_URL}` for the tags {', '.join(CATALOG_TAGS)} by scripts/sync_cortecs_models.py.\n"
         "\n"
         f"{_section('Added', outcome.added)}"
         "\n"
@@ -356,6 +481,15 @@ def load_catalog(raw: bytes) -> list[CatalogModel]:
     return catalog
 
 
+def catalog_urls() -> tuple[str, ...]:
+    return tuple(f"{MODELS_URL}&tag={tag}" for tag in CATALOG_TAGS)
+
+
+def load_catalogs(fetch: Callable[[str], bytes]) -> list[CatalogModel]:
+    models: Final = chain.from_iterable(load_catalog(fetch(url)) for url in catalog_urls())
+    return list({model.id: model for model in models}.values())
+
+
 def _fetch(url: str) -> bytes:
     response: Final = httpx.get(url, timeout=30, follow_redirects=True)
     if response.status_code != 200:
@@ -371,8 +505,9 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     args: Final = parser.parse_args(argv)
 
-    raw: Final = args.models_json.read_bytes() if args.models_json is not None else _fetch(MODELS_URL)
-    catalog: Final = load_catalog(raw)
+    catalog: Final = (
+        load_catalog(args.models_json.read_bytes()) if args.models_json is not None else load_catalogs(_fetch)
+    )
     cost_map_path: Final = args.repo_root / COST_MAP_RELPATHS[0]
     original: Final = cost_map_path.read_text()
     outcome: Final = compute_sync(json.loads(original), catalog)
