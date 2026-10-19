@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import json
+import random
 import sys
 from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
@@ -19,8 +20,8 @@ from starlette.routing import Match
 
 import litellm
 from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.decisions_endpoints.endpoints import decisions, router, systemone
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import SafeRouteAdder
@@ -1345,4 +1346,53 @@ def test_a_compressed_body_naming_a_model_outside_the_key_is_refused_by_auth(
 
     assert response.status_code == 403, response.text
     assert "not-on-this-key" in response.text
+    assert not upstream.called
+
+
+@pytest.mark.parametrize(
+    ("content_encoding", "undecodable_body"),
+    (("gzip", gzip.compress(b"{}")[:-8]), ("zstd", zstd.compress(b"{}") + b"trailing")),
+)
+def test_a_browser_can_read_the_error_for_a_compressed_body_the_proxy_cannot_decode(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    content_encoding: str,
+    undecodable_body: bytes,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+    origin: Final = "https://app.example.test"
+
+    response: Final = client.post(
+        "/v1/systemone",
+        content=undecodable_body,
+        headers={"content-type": "application/json", "content-encoding": content_encoding, "origin": origin},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.headers["access-control-allow-origin"] in ("*", origin)
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert not upstream.called
+
+
+def test_the_operator_request_size_limit_applies_to_the_decoded_body(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    max_request_size_mb: Final = 0.01
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setitem(litellm.proxy.proxy_server.general_settings, "max_request_size_mb", max_request_size_mb)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+    state_text: Final = "".join(random.Random(0).choices("abcd", k=20_000))
+    compressed: Final = zstd.compress(json.dumps({**_REQUEST, "state": {"source": state_text}}).encode())
+
+    response: Final = client.post(
+        "/v1/systemone",
+        content=compressed,
+        headers={"content-type": "application/json", "content-encoding": "zstd"},
+    )
+
+    assert len(compressed) < max_request_size_mb * 1024 * 1024
+    assert response.status_code == 413, response.text
+    assert response.json() == {"error": f"Request size is too large. Max size is {max_request_size_mb} MB"}
     assert not upstream.called
