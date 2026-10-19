@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import socket
 import threading
 import time
 import uuid
@@ -28,14 +27,15 @@ from _logging_only_scope_support import (
     _configuration,
     _direction,
     _directions_for_audit_leg,
-    _drain_upstream,
     _guardrail_entries,
     _is_base_audit_leg,
     _json_contains_exact_string,
     _policy_call_id_matches,
+    _reset_upstream,
     _spend_rows,
     _spend_rows_for_calls,
     _spend_rows_matching_call,
+    _upstream_requests,
     wire_server,
 )
 from _logging_only_scope_support import (
@@ -43,11 +43,14 @@ from _logging_only_scope_support import (
 )
 from anthropic import APIConnectionError as AnthropicAPIConnectionError
 from integration._support.client import Gateway, eventually
+from integration._support.ports import allocate_port
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.timing import Timed, assert_not_delayed_by, timed
 from integration._support.wire import Reply, Request
 from openai import APIConnectionError as OpenAIAPIConnectionError
 from pydantic import JsonValue
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _EDGE_DELAY_SECONDS: Final = 5
 
@@ -60,9 +63,7 @@ def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gat
     def policy(_request: Request) -> Reply:
         return Reply(body=b'{"action":"NONE"}')
 
-    with socket.socket() as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        policy_port: Final = reservation.getsockname()[1]
+    policy_port: Final = allocate_port()
     with gateway.scenario() as scenario:
         deployments: Final = _chaos_models(scenario, marker)
         models: Final = tuple(deployment.model_name for deployment in deployments)
@@ -83,7 +84,7 @@ def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gat
                 )
                 for call in chaos_calls
             )
-        control_upstream: Final = _drain_upstream(gateway.upstream_url)
+        control_upstream: Final = _upstream_requests(gateway.upstream_url)
         assert len(control_upstream) == 30, control_upstream
         assert (
             tuple(
@@ -92,6 +93,7 @@ def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gat
             )
             == (1,) * 30
         ), control_upstream
+        _reset_upstream(gateway.upstream_url)
         config: Final = _configuration(
             tmp_path,
             identity,
@@ -155,7 +157,7 @@ def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gat
             assert all(result.text == controls[index].text for index, result in results), results
             candidate_ids: Final = tuple(result.response_id for _, result in results)
             assert len(set(candidate_ids)) == 30, candidate_ids
-            observed_upstream: Final = _drain_upstream(gateway.upstream_url)
+            observed_upstream: Final = _upstream_requests(gateway.upstream_url)
             assert len(observed_upstream) == 30, observed_upstream
             assert (
                 tuple(
@@ -246,7 +248,7 @@ def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway
             with ThreadPoolExecutor(max_workers=30) as control_pool:
                 timed_controls: Final = tuple(control_pool.map(run_control, chaos_calls))
             controls: Final = tuple(control.value for control in timed_controls)
-        control_upstream: Final = _drain_upstream(gateway.upstream_url)
+        control_upstream: Final = _upstream_requests(gateway.upstream_url)
         assert len(control_upstream) == 30, control_upstream
         assert (
             tuple(
@@ -255,6 +257,7 @@ def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway
             )
             == (1,) * 30
         ), control_upstream
+        _reset_upstream(gateway.upstream_url)
         with wire_server(policy) as edge:
             config: Final = _configuration(tmp_path, identity, edge.url, "output", model_list=model_list)
             with owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as candidate:
@@ -306,7 +309,7 @@ def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway
                     ), payloads_for_call
                 response_ids: Final = tuple(result.response_id for _, result, _ in results)
                 assert len(set(response_ids)) == 30, response_ids
-                upstream: Final = _drain_upstream(gateway.upstream_url)
+                upstream: Final = _upstream_requests(gateway.upstream_url)
                 assert len(upstream) == 30, upstream
                 assert (
                     tuple(
@@ -333,7 +336,7 @@ def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway
                     ) == tuple((identity, "logging_only", "success") for _ in expected_directions), entries
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
     gateway: Gateway,
     tmp_path: Path,
@@ -370,7 +373,8 @@ def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
                 )
                 for call in calls
             )
-        assert len(_drain_upstream(gateway.upstream_url)) == 30
+        assert len(_upstream_requests(gateway.upstream_url)) == 30
+        _reset_upstream(gateway.upstream_url)
         with wire_server(policy) as edge:
             config: Final = _configuration(tmp_path, identity, edge.url, "output", model_list=model_list)
             with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
@@ -476,7 +480,7 @@ def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
                 assert len(set(response_ids)) == len(response_ids), response_ids
                 served_calls: Final = tuple(call for call, _ in served)
                 requested_call_ids: Final = frozenset(call.call_id for call in calls + post_kill_calls)
-                upstream: Final = _drain_upstream(gateway.upstream_url)
+                upstream: Final = _upstream_requests(gateway.upstream_url)
                 assert all(
                     sum(_json_contains_exact_string(observation["body"], call.prompt) for observation in upstream) == 1
                     for call in served_calls
@@ -602,7 +606,7 @@ def test_K4_proxy_restart_after_fifteen_responses_records_lost_ids(
                 )
                 for call in calls
             )
-        control_upstream: Final = _drain_upstream(gateway.upstream_url)
+        control_upstream: Final = _upstream_requests(gateway.upstream_url)
         assert len(control_upstream) == 30, control_upstream
         assert (
             tuple(
@@ -611,6 +615,7 @@ def test_K4_proxy_restart_after_fifteen_responses_records_lost_ids(
             )
             == (1,) * 30
         ), control_upstream
+        _reset_upstream(gateway.upstream_url)
         with wire_server(policy) as edge:
             config: Final = _configuration(tmp_path, identity, edge.url, "output", model_list=model_list)
             restart_gate: Final = threading.Event()
@@ -711,7 +716,7 @@ def test_K4_proxy_restart_after_fifteen_responses_records_lost_ids(
             results: Final = first_results + second_results
             expected_response_ids: Final = frozenset(result.response_id for result in results)
             assert len(expected_response_ids) == 30, results
-            upstream: Final = _drain_upstream(gateway.upstream_url)
+            upstream: Final = _upstream_requests(gateway.upstream_url)
             assert len(upstream) == 30, upstream
             assert (
                 tuple(

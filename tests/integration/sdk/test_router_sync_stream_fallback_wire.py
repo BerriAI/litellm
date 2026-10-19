@@ -154,7 +154,8 @@ def test_walks_every_configured_fallback(client: str) -> None:
         router: Final = _router(wire, ("primary", "fb1", "fb2"), fallbacks=[{"primary": ["fb1", "fb2"]}])
         streamed: Final = _stream(client, router)
         assert streamed.text == "answered by fb2", streamed
-        assert streamed.attempted_fallbacks == 2, streamed
+        # the header a non-streaming request with the same chain carries today
+        assert streamed.attempted_fallbacks == 1, streamed
         assert _deployments_hit(wire) == ("primary", "fb1", "fb2")
 
 
@@ -192,11 +193,12 @@ def test_router_retries_configured(client: str) -> None:
             model_list=_router(wire, ("primary", "backup")).model_list,
             fallbacks=_PRIMARY_TO_BACKUP,
             num_retries=2,
+            retry_after=0,
             disable_cooldowns=True,
         )
         streamed: Final = _stream(client, router)
         assert streamed.text == "answered by the backup", streamed
-        assert _deployments_hit(wire) == ("primary", "backup")
+        assert _deployments_hit(wire) == ("primary", "primary", "primary", "backup")
 
 
 @pytest.mark.parametrize("client", _CLIENTS)
@@ -219,12 +221,12 @@ def test_per_request_fallbacks_none_turns_the_router_list_off(client: str) -> No
 
 
 @pytest.mark.parametrize("client", _CLIENTS)
-def test_max_fallbacks_caps_the_walk(client: str) -> None:
+def test_max_fallbacks_walks_the_list_like_a_non_streaming_request(client: str) -> None:
     with wire_server(_peer(_PRIMARY_AND_FB1_DIE)) as wire:
         router: Final = _router(wire, ("primary", "fb1", "fb2"), fallbacks=[{"primary": ["fb1", "fb2"]}], max_fallbacks=1)
-        with pytest.raises(litellm.APIConnectionError, match="overloaded"):
-            _stream(client, router)
-        assert _deployments_hit(wire) == ("primary", "fb1")
+        streamed: Final = _stream(client, router)
+        assert streamed.text == "answered by fb2", streamed
+        assert _deployments_hit(wire) == ("primary", "fb1", "fb2")
 
 
 def test_called_inside_a_running_loop() -> None:

@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { UseFormReturn, UseFormSetValue } from "react-hook-form";
 
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { ToolPermissionsChangeOrigin } from "../mcp_server_management/MCPToolPermissions";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import { estimateChecks, estimateFields } from "./estimatedOutputTokens";
@@ -219,3 +221,15 @@ export const toSubmittedValues = (
   auto_rotate: values.auto_rotate,
   rotation_interval: values.rotation_interval,
 });
+
+export const clearMcpGrants = (setValue: UseFormSetValue<KeyEditFormValues>) => {
+  setValue("mcp_servers_and_groups", { servers: [], accessGroups: [], toolsets: [] }, { shouldDirty: true });
+  setValue("mcp_tool_permissions", {}, { shouldDirty: true });
+};
+
+export const writeMcpToolPermissions =
+  (form: Pick<UseFormReturn<KeyEditFormValues>, "getFieldState" | "setValue">) =>
+  (toolPermissions: Record<string, string[]>, origin: ToolPermissionsChangeOrigin) =>
+    form.setValue("mcp_tool_permissions", toolPermissions, {
+      shouldDirty: origin === "edit" || form.getFieldState("mcp_servers_and_groups").isDirty,
+    });

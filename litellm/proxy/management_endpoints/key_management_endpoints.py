@@ -322,9 +322,9 @@ def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialIt
     )
 
 
-def _config_table(prisma_client: PrismaClient) -> _ConfigTableActions:
+def _config_table(prisma_client: PrismaClient, *, use_writer: bool = False) -> _ConfigTableActions:
     return cast(  # cast-ok: ConfigRepository.table hides the write actions this module needs on that same object
-        "_ConfigTableActions", ConfigRepository(prisma_client).table
+        "_ConfigTableActions", ConfigRepository(prisma_client, use_writer=use_writer).table
     )
 
 
@@ -450,7 +450,7 @@ def _generate_budget_windows(
 
 
 def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> LiteLLM_VerificationToken:
-    requested: Final = data.model_dump(exclude_unset=True, exclude_none=True)
+    requested: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
     metadata_fields: Final = MappingProxyType(
         {field: value for field, value in requested.items() if field in _KEY_METADATA_REQUEST_FIELDS}
     )
@@ -493,7 +493,7 @@ def _regenerate_request_as_update_request(key: str, data: RegenerateKeyRequest) 
     changed_fields: Final = MappingProxyType(
         {
             field: value
-            for field, value in data.model_dump(exclude_unset=True).items()
+            for field, value in _as_object_dict(data.model_dump(exclude_unset=True)).items()
             if field in UpdateKeyRequest.model_fields
             and field != "key"
             and not (field in _EMPTY_DURATION_MEANS_UNCHANGED and value == "")
@@ -4667,7 +4667,8 @@ async def info_key_fn(
           hour), so subtracting budget_duration from it does not give the window's start
         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
-          the key has per-model budgets
+          the key has per-model budgets. Each entry's budget_reset_at is when that model's open
+          window ends and its spend resets, or None when no window is open or it ends after year 9999
         - budget_limits: list | None - Concurrent budget windows, exactly as stored
         - budget_limits_usage: dict | None - Current-window spend per budget window, e.g.
           {"1h": {"current_spend": 0.0009}}, present only when the key has budget windows
@@ -4762,8 +4763,16 @@ async def info_key_fn(
             key_info_dict["budget_limits_usage"] = budget_limits_usage
 
         return {"key": key, "info": await attach_object_permission_to_dict(key_info_dict, prisma_client)}
-    except Exception as e:
+    except (ProxyException, HTTPException) as e:
         raise handle_exception_on_proxy(e)
+    except Exception as e:
+        verbose_proxy_logger.exception("Unhandled error in /key/info")
+        raise ProxyException(
+            message="Internal server error from /key/info. Details are in the proxy server logs.",
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 async def _find_deleted_key_info(
@@ -5565,7 +5574,7 @@ async def rotate_master_key(
         await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
     # 3. process config table
     try:
-        config = await _config_table(prisma_client).find_many()
+        config = await _config_table(prisma_client, use_writer=True).find_many()
     except Exception:
         config = None
 
@@ -5588,7 +5597,7 @@ async def rotate_master_key(
             if encrypted_env_vars:
                 await _config_table(prisma_client).update(
                     where={"param_name": "environment_variables"},
-                    data={"param_value": prisma.Json(encrypted_env_vars)},
+                    data={"param_value": prisma.Json({**environment_variables_dict, **encrypted_env_vars})},
                 )
 
     try:
@@ -7712,6 +7721,11 @@ async def block_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
+    record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
+        where={"token": hashed_token},
+        data=with_settings_updated_at({"blocked": True}),
+    )
+
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
@@ -7732,11 +7746,6 @@ async def block_key(
                 )
             )
         )
-
-    record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
-        where={"token": hashed_token},
-        data=with_settings_updated_at({"blocked": True}),
-    )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
     await delete_cache_key_object(
@@ -7826,6 +7835,11 @@ async def unblock_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
+    record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
+        where={"token": hashed_token},
+        data=with_settings_updated_at({"blocked": False}),
+    )
+
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
@@ -7846,11 +7860,6 @@ async def unblock_key(
                 )
             )
         )
-
-    record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
-        where={"token": hashed_token},
-        data=with_settings_updated_at({"blocked": False}),
-    )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
     await delete_cache_key_object(

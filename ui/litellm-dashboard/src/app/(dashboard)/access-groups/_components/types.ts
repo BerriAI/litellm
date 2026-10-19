@@ -5,6 +5,7 @@ export interface AccessGroup {
   modelIds: string[];
   mcpServerIds: string[];
   agentIds: string[];
+  skillNames: string[];
   keyIds: string[];
   teamIds: string[];
   createdAt: string;

@@ -161,8 +161,15 @@ router: Final = APIRouter()
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
+_DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _REQUEST_BODY_VIEW: Final = TypeAdapter(Mapping[str, object])
+_PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
+
+
+def _is_mergeable_client_metadata(key: str, value: object) -> bool:
+    return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
+
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -635,8 +642,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
         )
+        kept_out_of_litellm_params: Final = (
+            _KEPT_OUT_OF_LITELLM_PARAMS
+            if _key_or_team_allows_client_pricing_override(user_api_key_dict)
+            else _KEPT_OUT_OF_LITELLM_PARAMS | _PRICING_MODEL_OVERRIDE_PARAMS
+        )
         litellm_params_in_body: Final = MappingProxyType(
-            {k: v for k, v in litellm_keys_in_body.items() if k not in _KEPT_OUT_OF_LITELLM_PARAMS}
+            {k: v for k, v in litellm_keys_in_body.items() if k not in kept_out_of_litellm_params}
         )
 
         _metadata = dict(
@@ -647,7 +659,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         metadata: Final = litellm_keys_in_body.get("metadata")
         for client_metadata in (litellm_metadata, metadata):
             if isinstance(client_metadata, dict):
-                _metadata.update({k: v for k, v in client_metadata.items() if not k.startswith("user_api_key_")})
+                _metadata.update(
+                    {
+                        k: v
+                        for k, v in cast(Mapping[str, object], client_metadata).items()  # cast-ok: json
+                        if _is_mergeable_client_metadata(k, v)
+                    }
+                )
 
         _metadata = _apply_key_team_project_controls(user_api_key_dict=user_api_key_dict, metadata=_metadata)
         _metadata = _update_metadata_with_tags_in_header(
@@ -1089,6 +1107,10 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
+def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return headers
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1104,6 +1126,7 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1124,6 +1147,7 @@ async def pass_through_request(
         guardrails_config: Optional field - guardrails configuration for passthrough endpoint
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
+        upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1151,13 +1175,15 @@ async def pass_through_request(
     #########################################################
     try:
         url = httpx.URL(target)
-        headers = custom_headers
-        headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+        forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request_headers=safe_get_request_headers(request).copy(),
-            headers=headers,
+            headers=custom_headers,
             forward_headers=forward_headers,
         )
-        upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
+        upstream_headers: Final = _with_trace_context(
+            upstream_headers_filter(forwarded_headers),
+            parent_span=user_api_key_dict.parent_otel_span,
+        )
 
         requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
@@ -1170,7 +1196,7 @@ async def pass_through_request(
         # parsed dict (hooks mutate it, breaking the signature / Content-Length).
         # Tolerate request objects without `state` (test fixtures) and only honor
         # values httpx accepts for `content=`.
-        _request_state: Final = getattr(request, "state", None)
+        _request_state: Final[object] = getattr(request, "state", None)
         state_raw_body: str | bytes | None = (
             getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
             if _request_state is not None
@@ -2115,6 +2141,7 @@ def create_pass_through_route(
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2254,6 +2281,7 @@ def create_pass_through_route(
                         custom_llm_provider=custom_llm_provider,
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
+                        upstream_headers_filter=upstream_headers_filter,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
@@ -2333,7 +2361,7 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     if setup_model_rewriter is None:
         return text_data
     try:
-        message: Final[object] = json.loads(text_data)
+        message: Final[object] = _DECODED_JSON.validate_python(json.loads(text_data))
     except json.JSONDecodeError:
         return text_data
     if not isinstance(message, dict):
@@ -2368,7 +2396,9 @@ def _resolved_vertex_live_setup(
 
 def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
     try:
-        decoded: Final[object] = json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+        decoded: Final[object] = _DECODED_JSON.validate_python(
+            json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+        )
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return decoded if isinstance(decoded, dict) else None
@@ -2597,7 +2627,7 @@ async def websocket_passthrough_request(
                                     endpoint,
                                 )
                                 try:
-                                    client_message = json.loads(text_data)
+                                    client_message = _DECODED_JSON.validate_python(json.loads(text_data))
                                     if isinstance(client_message, dict) and "setup" in client_message:
                                         setup_data = client_message["setup"]
                                         verbose_proxy_logger.debug(
@@ -4016,7 +4046,7 @@ async def create_pass_through_endpoints(
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
-    if response.field_value is None:
+    if _config_field_endpoints(response) is None:
         response.field_value = [data_dict]
     elif isinstance(response.field_value, list):
         response.field_value.append(data_dict)
@@ -4106,7 +4136,7 @@ async def delete_pass_through_endpoints(
 
     ## Update field by removing endpoint
     pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
-    if response.field_value is None or pass_through_endpoint_data is None:
+    if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=400,
             detail={"error": "There are no pass-through endpoints setup."},

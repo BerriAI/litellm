@@ -16,6 +16,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
+from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -41,6 +42,12 @@ BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
+
+
+def _record_bridged_response(responses_kwargs: Mapping[str, object], result: ResponsesAPIResponse) -> None:
+    logging_obj: Final = litellm_logging_obj_from_kwargs(responses_kwargs)
+    if logging_obj is not None:
+        logging_obj.record_bridged_responses_api_response(result)
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -182,6 +189,7 @@ def _build_responses_kwargs(
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
     )
 
     # Normalize reasoning effort based on model capabilities
@@ -301,7 +309,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        return await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
+        served: Final = await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
+        _record_bridged_response(responses_kwargs, result)
+        return served
 
     @staticmethod
     def anthropic_messages_handler(

@@ -11,8 +11,10 @@ import pytest
 import yaml
 from integration._support.client import Gateway, JsonValue, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 
 @pytest.mark.covers(
@@ -266,6 +268,89 @@ def test_streamed_responses_success_callback_carries_provider_apim_request_id(ga
                 "llm_provider-apim-request-id": correlation,
                 "llm_provider-x-ms-region": region,
             }, json.dumps(events[0]["hidden_params"])
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_non_stream_openai_like_success_callback_carries_provider_headers(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = uuid.uuid4().hex
+    request_id: Final = "req_" + marker
+    sink_secret: Final = "synthetic-sink-secret-" + marker
+
+    def upstream(request: Request) -> Reply:
+        assert request.target.endswith("/chat/completions"), request.target
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "chatcmpl-" + marker,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "google.gemma-4-31b",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": marker}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+                }
+            ).encode(),
+            headers={"x-amzn-requestid": request_id, "x-ratelimit-remaining-requests": "997"},
+        )
+
+    def sink(request: Request) -> Reply:
+        assert request.headers["authorization"] == f"Bearer {sink_secret}"
+        return Reply()
+
+    with wire_server(upstream) as provider, wire_server(sink) as endpoint:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["litellm_settings"].update({"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1})
+        path: Final = tmp_path / "callbacks.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with (
+            owned_proxy(
+                gateway,
+                tmp_path,
+                {
+                    "GENERIC_LOGGER_ENDPOINT": endpoint.url,
+                    "GENERIC_LOGGER_HEADERS": f"Authorization=Bearer {sink_secret}",
+                },
+                config=path,
+            ) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="bedrock_mantle/google.gemma-4-31b",
+                api_base=provider.url,
+                api_key="synthetic-mantle-bearer",
+                aws_region_name="us-west-2",
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "header callback " + marker}],
+                    "cache": {"no-cache": True},
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["choices"][0]["message"]["content"] == marker, response.text
+            assert len(provider.drain()) == 1
+            batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+
+            def delivered() -> tuple[dict, ...]:
+                batches.extend(endpoint.drain())
+                return tuple(
+                    event for batch in batches for event in json.loads(batch.body) if event.get("model_group") == model
+                )
+
+            events: Final = eventually(delivered, lambda values: len(values) == 1, seconds=10)
+            assert (events[0]["status"], events[0]["call_type"]) == ("success", "acompletion")
+            assert events[0]["litellm_call_id"] == response.headers["x-litellm-call-id"]
+            additional_headers: Final = events[0]["hidden_params"]["additional_headers"] or {}
+            assert {
+                name: additional_headers.get(name)
+                for name in ("llm_provider-x-amzn-requestid", "x_ratelimit_remaining_requests")
+            } == {"llm_provider-x-amzn-requestid": request_id, "x_ratelimit_remaining_requests": 997}, json.dumps(
+                events[0]["hidden_params"]
+            )
 
 
 _RAISING_HOOK: Final = """

@@ -1,9 +1,12 @@
+import asyncio
 from collections.abc import Mapping
+from functools import partial
 from typing import Final
 
 import httpx
 
 from litellm.decisions.call import (
+    DecisionsAssetEntries,
     DecisionsAudioClips,
     DecisionsCall,
     DecisionsImages,
@@ -25,6 +28,7 @@ def _prepare_systemone_call(
     state: DecisionsJSON | None,
     questions: SystemOneQuestions | None,
     images: DecisionsImages | None,
+    assets: DecisionsAssetEntries | None,
     safety_identifier: str | None,
     audio: DecisionsAudioClips | None,
     videos: DecisionsVideoClips | None,
@@ -38,7 +42,9 @@ def _prepare_systemone_call(
     reject_other_format(model=model, kwargs=kwargs, field_name="input", other_function="decisions")
     return prepare_call(
         model=model,
-        fields=SystemOneRequestFields(state=state, questions=questions, images=images, audio=audio, videos=videos),
+        fields=SystemOneRequestFields(
+            state=state, questions=questions, images=images, assets=assets, audio=audio, videos=videos
+        ),
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -68,22 +74,27 @@ async def asystemone(
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
     images: DecisionsImages | None = None,
+    assets: DecisionsAssetEntries | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
-    call: Final = _prepare_systemone_call(
-        model=model,
-        state=state,
-        questions=questions,
-        images=images,
-        safety_identifier=safety_identifier,
-        audio=audio,
-        videos=videos,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+    call: Final = await asyncio.to_thread(
+        partial(
+            _prepare_systemone_call,
+            model=model,
+            state=state,
+            questions=questions,
+            images=images,
+            assets=assets,
+            safety_identifier=safety_identifier,
+            audio=audio,
+            videos=videos,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            kwargs=kwargs,
+        )
     )
     return _systemone_response(await asend(call))
 
@@ -102,6 +113,7 @@ def systemone(
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
     images: DecisionsImages | None = None,
+    assets: DecisionsAssetEntries | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
     call: Final = _prepare_systemone_call(
@@ -109,6 +121,7 @@ def systemone(
         state=state,
         questions=questions,
         images=images,
+        assets=assets,
         safety_identifier=safety_identifier,
         audio=audio,
         videos=videos,

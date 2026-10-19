@@ -1,15 +1,21 @@
 """Tests for minting the ``lite login`` credential from a consented native-client grant."""
 
-from unittest.mock import ANY, AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import ConsentTeam, MintedProxyCredential
-from litellm.proxy._experimental.mcp_server.proxy_api_credentials import lookup_consent_teams, mint_proxy_credential
+from litellm.proxy._experimental.mcp_server.proxy_api_credentials import (
+    lookup_consent_teams,
+    lookup_consent_teams_from_database,
+    mint_proxy_credential,
+)
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
 
@@ -235,3 +241,82 @@ async def test_lookup_consent_teams_passes_user_lookup_failures_through(failure,
 async def test_lookup_consent_teams_reports_unavailable_when_details_cannot_load(load_user, fetch_teams):
     fetch_teams.return_value = None
     assert await lookup_consent_teams("u1") == "unavailable"
+
+
+def _route_status(minted: MintedProxyCredential, route: str, method: str | None = None) -> int:
+    request = None if method is None else MagicMock(method=method)
+    try:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=_decoded(minted), request=request)
+    except HTTPException as refused:
+        return refused.status_code
+    return 200
+
+
+@pytest.mark.parametrize(
+    "allowed_routes, chat_completions, mcp",
+    [
+        (None, True, True),
+        (("mcp_inference_routes",), False, True),
+        (("llm_api_routes_without_mcp",), True, False),
+        (("mcp_inference_routes", "llm_api_routes_without_mcp"), True, True),
+    ],
+    ids=["full credential", "mcp only", "llm only", "both"],
+)
+@pytest.mark.asyncio
+async def test_mint_narrows_the_credential_to_the_allowed_routes_the_route_check_enforces(
+    load_user, fetch_teams, allowed_routes, chat_completions, mcp
+):
+    """The allowed_routes a grant's scope resolved to ride inside the credential, so the same route
+    check a virtual key goes through on every request refuses /chat/completions for an MCP-only
+    credential and /mcp for an LLM-only one, and a credential minted without them is unchanged."""
+    minted = await mint_proxy_credential("u1", "team-a", allowed_routes=allowed_routes)
+    assert isinstance(minted, MintedProxyCredential)
+    assert _decoded(minted).allowed_routes == list(allowed_routes or ())
+    chat_status, mcp_status = (200 if chat_completions else 403), (200 if mcp else 403)
+    assert _route_status(minted, "/chat/completions") == chat_status
+    assert _route_status(minted, "/v1/chat/completions") == chat_status
+    assert _route_status(minted, "/mcp") == mcp_status
+    assert _route_status(minted, "/mcp/tools/call") == mcp_status
+
+
+@pytest.mark.asyncio
+async def test_lookup_consent_teams_from_database_reads_the_row_the_minter_will_recheck(load_user, fetch_teams):
+    """A grant consumed once a team is picked must pick it from the same membership the minter re-reads,
+    or a stale cache would burn the assertion on a request the caller could have fixed."""
+    teams = await lookup_consent_teams_from_database("u1")
+    load_user.assert_awaited_once_with("u1", source="database")
+    assert teams == (ConsentTeam(team_id="team-a", team_alias="Team A"), ConsentTeam(team_id="team-b"))
+
+
+@pytest.mark.parametrize(
+    "allowed_routes, registered_pass_through, auto_router_session, mcp_server_listing, agent_registry",
+    [
+        (("llm_api_routes",), 200, 200, 200, 200),
+        (("llm_api_routes_without_mcp",), 200, 200, 403, 403),
+        (("mcp_inference_routes",), 403, 403, 403, 403),
+    ],
+    ids=["llm_api_routes key", "llm only", "mcp only"],
+)
+@pytest.mark.asyncio
+async def test_an_llm_only_credential_keeps_the_llm_api_carve_outs_except_mcp_discovery(
+    load_user,
+    fetch_teams,
+    allowed_routes,
+    registered_pass_through,
+    auto_router_session,
+    mcp_server_listing,
+    agent_registry,
+):
+    """Operator-registered pass-through endpoints and the auto-router session read are LLM API
+    surface that only the ``llm_api_routes`` group used to reach, so an LLM-only credential keeps
+    them, while the MCP server listing that group also carves out stays MCP surface."""
+    minted = await mint_proxy_credential("u1", "team-a", allowed_routes=allowed_routes)
+    assert isinstance(minted, MintedProxyCredential)
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route",
+        side_effect=lambda route: route.startswith("/my-llm-endpoint"),
+    ):
+        assert _route_status(minted, "/my-llm-endpoint/v1/chat", "POST") == registered_pass_through
+    assert _route_status(minted, "/auto_router/session", "GET") == auto_router_session
+    assert _route_status(minted, "/v1/mcp/server", "GET") == mcp_server_listing
+    assert _route_status(minted, "/v1/agents", "GET") == agent_registry
