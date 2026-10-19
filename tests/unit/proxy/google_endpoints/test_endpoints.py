@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 from dotenv import load_dotenv
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from starlette.requests import Request
 
 from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request, google_count_tokens
@@ -104,3 +104,35 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
     )
 
     assert response.get("totalTokens") > 0
+
+
+@pytest.mark.parametrize("system_field", ("systemInstruction", "system_instruction"))
+@pytest.mark.parametrize("parts", ({"text": "Follow these rules"}, [{"text": "Follow these rules"}]))
+@pytest.mark.parametrize("tools", (None, []))
+def test_google_count_tokens_accepts_equivalent_system_parts_and_no_tools(
+    system_field: str, parts: JsonValue, tools: JsonValue
+) -> None:
+    contents: Final = [{"role": "user", "parts": [{"text": "Count this request"}]}]
+    request: Final = _google_count_tokens_request(
+        "counted", {"contents": contents, system_field: {"parts": parts}, "tools": tools}
+    )
+
+    assert request.messages == [{"role": "user", "content": "Count this request"}]
+    assert request.system == [{"type": "text", "text": "Follow these rules"}]
+    assert request.tools is None
+    assert request.contents == contents
+
+
+@pytest.mark.parametrize(
+    "parts",
+    (
+        {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}},
+        [{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}],
+    ),
+)
+def test_google_count_tokens_rejects_media_only_system_parts(parts: JsonValue) -> None:
+    with pytest.raises(ValidationError):
+        _google_count_tokens_request(
+            "counted",
+            {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}], "systemInstruction": {"parts": parts}},
+        )
