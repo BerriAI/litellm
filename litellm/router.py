@@ -61,6 +61,7 @@ from litellm.caching.caching import (
 )
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import (
+    BAGGAGE_MAPPED_TAGS_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
@@ -159,6 +160,7 @@ from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import (
+    baggage_stamp_for_serving_deployment,
     get_deployments_for_tag,
     get_routing_tags_from_request_kwargs,
     get_tags_from_request_kwargs,
@@ -4630,6 +4632,12 @@ class Router:
                 if tag not in merged_tags:
                     merged_tags.append(tag)
             kwargs[metadata_variable_name]["tags"] = merged_tags
+
+        baggage_stamp: Final = baggage_stamp_for_serving_deployment(
+            kwargs[metadata_variable_name], deployment.get("litellm_params")
+        )
+        if baggage_stamp is not None:
+            kwargs[metadata_variable_name][BAGGAGE_MAPPED_TAGS_METADATA_KEY] = baggage_stamp
 
         ## CREDENTIAL NAME AS TAG
         credential_name: Final = deployment.get("litellm_params", {}).get("litellm_credential_name")

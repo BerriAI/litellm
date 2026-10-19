@@ -48,6 +48,7 @@ class EnterpriseCustomGuardrailHelper:
                 proxy_server_request=proxy_server_request,
             ),
             data.get(get_metadata_variable_name_from_kwargs(data)),
+            keep_serving_deployment_tags=True,
         )
 
         # Check if any request tag matches a Mode tag key

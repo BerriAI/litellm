@@ -52,11 +52,13 @@ def _resolve_key(
     key: str, values: Mapping[str, object], member_keys: Sequence[str], rules: Sequence[RequestTagMapping]
 ) -> tuple[str, bool] | None:
     key_rules: Final = tuple(rule for rule in rules if rule.key == key)
-    value: Final = values.get(key)
+    key_spellings: Final = frozenset((key, unquote_plus(key)))
+    sent_keys: Final = tuple(member_key for member_key in member_keys if member_key in key_spellings)
+    value: Final = values.get(sent_keys[0]) if len(sent_keys) == 1 else None
     selected: Final = next(
         (rule for rule in key_rules if rule.value == value and rule.value is not None), None
     ) or next((rule for rule in key_rules if rule.value is None), None)
-    usable: Final = isinstance(value, str) and value.isprintable() and bool(value) and member_keys.count(key) == 1
+    usable: Final = isinstance(value, str) and value.isprintable() and bool(value)
     if not usable or selected is None:
         if any(rule.required for rule in key_rules):
             raise mapping_rejection(f"Missing, invalid or unmapped baggage value for {key}")

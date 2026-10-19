@@ -9,6 +9,7 @@ Use this to route requests between Teams
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload
 
@@ -478,7 +479,9 @@ def _request_tags_after_router_consumption(metadata: object, model: str) -> Sequ
     return tuple(dict.fromkeys((*leftover, *(tag for tag in typed_inherited_tags if isinstance(tag, str)))))
 
 
-def without_baggage_mapped_tags(request_tags: Sequence[str] | None, metadata: object) -> Sequence[str] | None:
+def without_baggage_mapped_tags(
+    request_tags: Sequence[str] | None, metadata: object, *, keep_serving_deployment_tags: bool = False
+) -> Sequence[str] | None:
     """Drop baggage-mapped tags that neither key, team or project policy nor the caller itself asked for."""
     if request_tags is None or not isinstance(metadata, Mapping):
         return request_tags
@@ -489,8 +492,23 @@ def without_baggage_mapped_tags(request_tags: Sequence[str] | None, metadata: ob
     asked_for_tags: Final = (
         *_metadata_tags(typed_metadata, "inherited_tags"),
         *_metadata_tags(typed_metadata, "caller_tags"),
+        *(stamp.serving_deployment_tags if keep_serving_deployment_tags else ()),
     )
     return tuple(tag for tag in request_tags if tag not in stamp.tags or tag in asked_for_tags) or None
+
+
+def baggage_stamp_for_serving_deployment(
+    metadata: object, deployment_litellm_params: object
+) -> BaggageMappedTagsStamp | None:
+    if not isinstance(metadata, Mapping) or not isinstance(deployment_litellm_params, Mapping):
+        return None
+    typed_metadata: Final[Mapping[str, object]] = metadata
+    typed_litellm_params: Final[Mapping[str, object]] = deployment_litellm_params
+    stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
+    if not isinstance(stamp, BaggageMappedTagsStamp):
+        return None
+    deployment_tags: Final = _metadata_tags(typed_litellm_params, "tags")
+    return replace(stamp, serving_deployment_tags=tuple(tag for tag in deployment_tags if isinstance(tag, str)))
 
 
 def _metadata_tags(metadata: Mapping[str, object], key: str) -> Sequence[object]:

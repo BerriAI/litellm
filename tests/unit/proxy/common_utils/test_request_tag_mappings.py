@@ -111,6 +111,19 @@ def test_variable_mapper_skips_control_characters_and_percent_encoded_duplicate_
     assert resolve_baggage_tag_mappings(header, [rule]) == ()
 
 
+@pytest.mark.parametrize(
+    "header,expected",
+    [
+        ("entry+point=a", (("usecase:a", False),)),
+        ("entry%2Bpoint=a", (("usecase:a", False),)),
+        ("entry+point=a,entry%2Bpoint=b", ()),
+    ],
+)
+def test_key_with_a_plus_matches_both_wire_spellings_and_rejects_both_at_once(header, expected):
+    rule = RequestTagMapping(key="entry+point", tag_prefix="usecase:")
+    assert resolve_baggage_tag_mappings(header, [rule]) == expected
+
+
 def test_exact_rules_work_without_a_variable_rule():
     rule = RequestTagMapping(key="entrypoint", value="a", tag="usecase:manual")
     assert resolve_baggage_tag_mappings("entrypoint=a", [rule]) == (("usecase:manual", False),)

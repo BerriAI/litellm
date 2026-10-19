@@ -276,3 +276,33 @@ def test_custom_guardrail_mode_ignores_baggage_mapped_tags_the_caller_did_not_se
     LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
     data["metadata"]["caller_tags"] = caller_tags
     assert cg.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is runs_pre_call
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deployment_tags,runs_post_call", [(["usecase:sensitive"], True), ([], False)])
+async def test_baggage_cannot_switch_off_the_guardrail_mode_a_serving_deployment_tag_selects(
+    monkeypatch, deployment_tags, runs_post_call
+):
+    from types import SimpleNamespace
+    from typing import cast
+
+    from fastapi import Request
+
+    import litellm
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    cg = CustomGuardrail(
+        guardrail_name="test_guardrail",
+        supported_event_hooks=[GuardrailEventHooks.post_call, GuardrailEventHooks.logging_only],
+        event_hook=Mode(tags={"usecase:sensitive": "post_call"}, default="logging_only"),
+        default_on=True,
+    )
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4o", "tags": deployment_tags}}]
+    )
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(litellm_baggage_mapped_tags=("usecase:sensitive",))))
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "test"}], "metadata": {"tags": []}}
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
+    await router.acompletion(**data, mock_response="hi")
+    assert cg.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is runs_post_call
