@@ -2723,6 +2723,67 @@ async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
 
 
 @pytest.mark.asyncio
+async def test_proxy_only_error_failure_callback_preserves_trusted_litellm_params(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.utils import ProxyLogging, hash_token
+
+    class FailureCaptureLogger(CustomLogger):
+        def __init__(self):
+            self.failure_kwargs: Dict[str, Any] | None = None
+
+        async def async_log_failure_event(
+            self,
+            kwargs: Dict[str, Any],
+            response_obj: object,
+            start_time: datetime,
+            end_time: datetime,
+        ) -> None:
+            self.failure_kwargs = kwargs
+
+    capture_logger = FailureCaptureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [capture_logger])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm.utils, "callback_list", [])
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data={
+            "model": "openai/gpt-4o-mini",
+            "messages": [{"role": "user", "content": "test"}],
+            "litellm_logging_obj": None,
+            "litellm_params": {"metadata": {"foo": "bar"}},
+            "temperature": 0.2,
+        },
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            key_alias="alias-1",
+            team_id="team-1",
+            team_alias="t1",
+        ),
+        route="/v1/chat/completions",
+        original_exception=HTTPException(status_code=400, detail="request rejected"),
+    )
+
+    callback_kwargs = capture_logger.failure_kwargs
+    assert callback_kwargs is not None
+    litellm_params_metadata = callback_kwargs["litellm_params"]["metadata"]
+    assert litellm_params_metadata["user_api_key_hash"] == hash_token("sk-test")
+    assert litellm_params_metadata["user_api_key_alias"] == "alias-1"
+    assert litellm_params_metadata["user_api_key_team_id"] == "team-1"
+    assert litellm_params_metadata["user_api_key_team_alias"] == "t1"
+    standard_metadata = callback_kwargs["standard_logging_object"]["metadata"]
+    assert standard_metadata["user_api_key_hash"] == hash_token("sk-test")
+    assert standard_metadata["user_api_key_team_id"] == "team-1"
+    assert callback_kwargs["optional_params"]["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
 async def test_during_call_hook_parallel_execution():
     """
     Test that multiple guardrails in during_call_hook are executed in parallel.
