@@ -23,7 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -177,7 +177,11 @@ class HighflameGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         evaluations: Final = _plan_evaluations(
-            inputs, request_data, input_type, streamed=request_data.get("stream") is True
+            inputs,
+            request_data,
+            input_type,
+            streamed=request_data.get("stream") is True,
+            pass_through=_is_pass_through(logging_obj),
         )
         if not evaluations:
             return inputs
@@ -326,17 +330,23 @@ class HighflameGuardrail(CustomGuardrail):
         return HighflameGuardrailConfigModel
 
 
+def _is_pass_through(logging_obj: object) -> bool:
+    call_type: Final[object] = getattr(logging_obj, "call_type", None)
+    return call_type == CallTypes.pass_through.value
+
+
 def _plan_evaluations(
     inputs: GenericGuardrailAPIInputs,
     request_data: Mapping[str, object],
     input_type: Literal["request", "response"],
     *,
     streamed: bool,
+    pass_through: bool,
 ) -> tuple[_Evaluation, ...]:
     is_request: Final = input_type == "request"
-    # LiteLLM's streaming path drops text rewrites and replays the original chunks, so a redaction
-    # of a streamed response cannot be applied and is refused instead
-    rewritable: Final = is_request or not streamed
+    # LiteLLM's streaming path replays the original chunks and the pass-through handler forwards the
+    # original payload, so a redaction cannot be applied there and is refused instead
+    rewritable: Final = not pass_through and (is_request or not streamed)
     texts: Final = tuple(
         _Evaluation(
             content=text,
