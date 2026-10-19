@@ -353,13 +353,13 @@ class TestRuninfra:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="runinfra/deepseek-ai/DeepSeek-V4-Flash-0731",
+            model="runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
         )
 
-        assert model == "deepseek-ai/DeepSeek-V4-Flash-0731"
+        assert model == "deepseek-ai/DeepSeek-V4.1-Flash-1017"
         assert provider == "runinfra"
         assert api_key is None
         assert api_base == "https://api.runinfra.ai/v1"
@@ -392,7 +392,7 @@ class TestRuninfra:
         url = config.get_complete_url(
             api_base="https://api.runinfra.ai/v1",
             api_key="test-key",
-            model="runinfra/deepseek-ai/DeepSeek-V4-Flash-0731",
+            model="runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
             optional_params={},
             litellm_params={},
             stream=True,
@@ -405,7 +405,7 @@ class TestRuninfra:
         from litellm.utils import ProviderConfigManager
 
         config = ProviderConfigManager.get_provider_chat_config(
-            model="deepseek-ai/DeepSeek-V4-Flash-0731", provider=LlmProviders.RUNINFRA
+            model="deepseek-ai/DeepSeek-V4.1-Flash-1017", provider=LlmProviders.RUNINFRA
         )
 
         assert config is not None
@@ -418,18 +418,23 @@ class TestRuninfra:
             model_cost = json.load(f)
 
         expected_models = {
-            "runinfra/deepseek-ai/DeepSeek-V4-Flash-0731": (1.3e-07, 2.7e-07, 1e-08),
-            "runinfra/deepseek-ai/DeepSeek-V4-Pro-0813": (6e-07, 1.9e-06, 3e-08),
+            "runinfra/deepseek-ai/DeepSeek-V4.1-Flash": (1.4e-07, 5.8e-07, 3e-08),
+            "runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017": (1.5e-07, 6e-07, 1e-08),
             "runinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": (
                 5e-08,
                 1.5e-07,
                 1e-08,
             ),
-            "runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4": (2e-06, 6e-06, 2e-07),
             "runinfra/Qwen/Qwen3.8-27B": (1e-07, 4e-07, 1e-08),
             "runinfra/ornith-ai/Ornith-1.5-35B-A3B": (1e-07, 4e-07, 1e-08),
-            "runinfra/zai-org/GLM-5.3-Flash": (1e-07, 4e-07, 1e-08),
+            "runinfra/zai-org/GLM-5.3-Flash": (1.1e-07, 4.5e-07, 3e-08),
+            "runinfra/zai-org/GLM-5.3": (1.4e-06, 4.4e-06, 1.4e-07),
         }
+        # Every RunInfra entry is pinned here, so a retired model left in the
+        # cost map, or a new one added without its prices, reddens this test.
+        assert {
+            k for k, v in model_cost.items() if v.get("litellm_provider") == "runinfra"
+        } == set(expected_models)
         for model, (input_cost, output_cost, cache_read_cost) in expected_models.items():
             assert model in model_cost
             assert model_cost[model]["litellm_provider"] == "runinfra"
@@ -446,21 +451,25 @@ class TestRuninfra:
                 assert model_cost[model]["cache_read_input_token_cost"] == cache_read_cost
                 assert model_cost[model]["supports_prompt_caching"] is True
 
-        assert model_cost["runinfra/deepseek-ai/DeepSeek-V4-Flash-0731"]["max_input_tokens"] == 1048576
-        assert model_cost["runinfra/deepseek-ai/DeepSeek-V4-Pro-0813"]["max_input_tokens"] == 1048576
+        assert model_cost["runinfra/deepseek-ai/DeepSeek-V4.1-Flash"]["max_input_tokens"] == 1048576
+        assert model_cost["runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"]["max_input_tokens"] == 1048576
+        assert model_cost["runinfra/zai-org/GLM-5.3"]["max_input_tokens"] == 1048576
         assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["max_input_tokens"] == 262144
-        assert model_cost["runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4"]["supports_response_schema"] is True
+        assert model_cost["runinfra/zai-org/GLM-5.3"]["supports_response_schema"] is True
         assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["supports_response_schema"] is True
         assert model_cost["runinfra/ornith-ai/Ornith-1.5-35B-A3B"]["max_input_tokens"] == 262144
-        # Image input is proven on exactly these two and declared on no other,
-        # so a copied flag on a text-only model reddens here.
+        # Image input is declared on exactly the four models that RunInfra's
+        # provider feed lists with an image input modality (Qwen3.8-27B,
+        # Ornith-1.5-35B-A3B, GLM-5.3-Flash and DeepSeek-V4.1-Flash-1017) and
+        # on no other, so a copied flag on a text-only model reddens here.
         for model, expected_vision in (
             ("runinfra/Qwen/Qwen3.8-27B", True),
             ("runinfra/ornith-ai/Ornith-1.5-35B-A3B", True),
-            ("runinfra/deepseek-ai/DeepSeek-V4-Flash-0731", False),
-            ("runinfra/deepseek-ai/DeepSeek-V4-Pro-0813", False),
+            ("runinfra/zai-org/GLM-5.3-Flash", True),
+            ("runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017", True),
+            ("runinfra/deepseek-ai/DeepSeek-V4.1-Flash", False),
             ("runinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16", False),
-            ("runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4", False),
+            ("runinfra/zai-org/GLM-5.3", False),
         ):
             assert model_cost[model].get("supports_vision", False) is expected_vision
 
