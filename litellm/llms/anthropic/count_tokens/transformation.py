@@ -4,20 +4,31 @@ Anthropic CountTokens API transformation logic.
 This module handles the transformation of requests to Anthropic's CountTokens API format.
 """
 
+import copy
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import (
+    Final,
+    Protocol,
+    TypeAlias,
+    cast,  # noqa: TID251  # caller chat messages go to chat inference translation as-is
+)
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_blocks,
     split_leading_system_run,
 )
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
-from litellm.types.llms.openai import ChatCompletionImageObject
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
+from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
@@ -72,6 +83,124 @@ def _lift_leading_system(
     if isinstance(system, str) and system:
         return conversation, [{"type": "text", "text": system}, *lifted]
     return conversation, lifted or system
+
+
+@dataclass(frozen=True, slots=True)
+class AnthropicCountFields:
+    messages: tuple[Mapping[str, JsonValue], ...]
+    system: JsonValue
+    tools: tuple[Mapping[str, JsonValue], ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class ChatCountTranslationError:
+    message: str
+
+    def response(self, request_model: str, model_used: str, tokenizer_type: str) -> TokenCountResponse:
+        return TokenCountResponse(
+            total_tokens=0,
+            request_model=request_model,
+            model_used=model_used,
+            tokenizer_type=tokenizer_type,
+            error=True,
+            error_message=self.message,
+            status_code=400,
+            rejected_before_provider_call=True,
+        )
+
+
+@with_config(ConfigDict(extra="ignore"))
+class _AnthropicChatRequest(TypedDict):
+    messages: ReadOnly[tuple[Mapping[str, JsonValue], ...]]
+    system: NotRequired[ReadOnly[JsonValue]]
+    tools: NotRequired[ReadOnly[tuple[Mapping[str, JsonValue], ...]]]
+
+
+_ANTHROPIC_CHAT_REQUEST: Final = TypeAdapter(_AnthropicChatRequest)
+_ChatParams: TypeAlias = dict[str, object]
+_ChatMessages: TypeAlias = list[AllMessageValues]
+
+
+class _ChatRequestTranslator(Protocol):
+    def map_openai_params(
+        self, non_default_params: _ChatParams, optional_params: _ChatParams, model: str, drop_params: bool
+    ) -> _ChatParams: ...
+
+    def transform_request(
+        self,
+        model: str,
+        messages: _ChatMessages,
+        optional_params: _ChatParams,
+        litellm_params: _ChatParams,
+        headers: _ChatParams,
+    ) -> _ChatParams: ...
+
+
+def _is_chat_tool_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "tool" or bool(message.get("tool_calls"))
+
+
+def _is_chat_tool(tool: Mapping[str, object]) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.factory import is_flat_responses_tool
+
+    return is_flat_responses_tool(tool) or (tool.get("type") == "function" and "function" in tool)
+
+
+def _system_messages(system: object) -> tuple[Mapping[str, object], ...]:
+    message: Final[Mapping[str, object]] = {"role": "system", "content": system}
+    return (message,) if isinstance(system, (str, list)) and system else ()
+
+
+def anthropic_fields_for_chat_tool_use(
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+    translator: _ChatRequestTranslator,
+) -> AnthropicCountFields | ChatCountTranslationError | None:
+    counted_tools: Final = tools or ()
+    if not any(map(_is_chat_tool, counted_tools)) and not any(map(_is_chat_tool_turn, messages)):
+        return None
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    chat_tools: Final = [
+        dict(chat_tool) for chat_tool in chain.from_iterable(map(chat_completion_tools_for, counted_tools))
+    ]
+    chat_messages: Final = cast(  # cast-ok: chat-shaped request messages, read the way chat inference reads them
+        _ChatMessages, copy.deepcopy([*_system_messages(system), *messages])
+    )
+    try:
+        request: Final = translator.transform_request(
+            model=model,
+            messages=chat_messages,
+            optional_params=translator.map_openai_params({"tools": chat_tools}, {}, model, drop_params=False)
+            if chat_tools
+            else {},
+            litellm_params={},
+            headers={},
+        )
+    except (AnthropicError, BadRequestError) as e:
+        return ChatCountTranslationError(message=str(e.message))
+    translated: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
+    return AnthropicCountFields(
+        messages=translated["messages"], system=translated.get("system"), tools=translated.get("tools")
+    )
+
+
+async def anthropic_count_fields(
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+    messages_format: TokenCountMessagesFormat,
+) -> AnthropicCountFields | ChatCountTranslationError | None:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    if messages_format != "openai":
+        return None
+    return await asyncify(anthropic_fields_for_chat_tool_use)(model, messages, system, tools, AnthropicConfig())
 
 
 class AnthropicCountTokensConfig:

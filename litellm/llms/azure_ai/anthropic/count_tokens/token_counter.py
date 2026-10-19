@@ -9,6 +9,11 @@ from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.count_tokens.transformation import (
+    AnthropicCountFields,
+    ChatCountTranslationError,
+    anthropic_count_fields,
+)
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
@@ -73,6 +78,25 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
 
         if not messages:
             return None
+
+        match translated := await anthropic_count_fields(model_to_use, messages, system, tools, messages_format):
+            case ChatCountTranslationError():
+                return translated.response(request_model, model_to_use, "azure_ai_anthropic_api")
+            case AnthropicCountFields():
+                return await self.count_tokens(
+                    model_to_use=model_to_use,
+                    messages=[dict(message) for message in translated.messages],
+                    contents=contents,
+                    deployment=deployment,
+                    request_model=request_model,
+                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
+                    system=translated.system,
+                    messages_format="anthropic",
+                    output_format=output_format,
+                    context_management=context_management,
+                )
+            case None:
+                pass
 
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
