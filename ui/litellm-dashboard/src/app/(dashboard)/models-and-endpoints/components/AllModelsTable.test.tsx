@@ -518,7 +518,7 @@ describe("AllModelsTable", () => {
       );
 
       const chip = screen.getByTestId("filter-chip-model_name");
-      expect(chip).toHaveTextContent("Public Model Name");
+      expect(chip).toHaveTextContent("Virtual Model Name");
       expect(chip).toHaveTextContent("Wildcard Models (*)");
 
       await user.click(screen.getByTestId("filter-chip-remove-model_name"));

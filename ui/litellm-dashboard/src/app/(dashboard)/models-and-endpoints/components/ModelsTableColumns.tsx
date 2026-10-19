@@ -88,7 +88,7 @@ function ModelInformationCell({ model, displayName }: { model: ModelData; displa
             <span className="truncate text-xs text-muted-foreground">{model.provider || "Unknown provider"}</span>
           </div>
           <div className="flex flex-col gap-0.5">
-            <span className="text-xs text-muted-foreground">Public Model Name</span>
+            <span className="text-xs text-muted-foreground">Virtual Model Name</span>
             <span className="truncate text-sm font-medium text-foreground" title={displayName}>
               {displayName}
             </span>

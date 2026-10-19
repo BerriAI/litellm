@@ -290,7 +290,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                       />
                       <DecisionModelNote catalog={decisionCatalog} litellmProvider={pickedLitellmProvider} />
 
-                      {/* Conditionally Render "Public Model Name" */}
+                      {/* Conditionally Render "Virtual Model Name" */}
                       <ConditionalPublicModelName />
 
                       {/* Select Mode */}

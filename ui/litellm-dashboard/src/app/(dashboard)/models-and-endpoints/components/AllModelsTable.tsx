@@ -36,7 +36,7 @@ const MODEL_TABLE_BODY_HEIGHT = 600;
 const ALL_PROXY_MODELS_LABEL = "All Proxy Models";
 
 const FILTER_LABELS: Record<string, string> = {
-  [MODEL_NAME_COLUMN_ID]: "Public Model Name",
+  [MODEL_NAME_COLUMN_ID]: "Virtual Model Name",
   [ACCESS_GROUPS_COLUMN_ID]: "Model Access Group",
   [ROUTING_STATUS_FILTER_ID]: "Status",
 };
@@ -302,14 +302,14 @@ export function AllModelsTable({
           >
             {({ get, set }) => (
               <>
-                <DataTableFilterField label="Public Model Name">
+                <DataTableFilterField label="Virtual Model Name">
                   <SearchSelect
                     options={modelGroupOptions}
                     value={(get(MODEL_NAME_COLUMN_ID) as string) ?? ALL_MODEL_GROUPS_VALUE}
                     onValueChange={(value) =>
                       set(MODEL_NAME_COLUMN_ID, value === ALL_MODEL_GROUPS_VALUE ? undefined : value ?? undefined)
                     }
-                    placeholder="Filter by Public Model Name"
+                    placeholder="Filter by Virtual Model Name"
                     emptyText="No models found"
                   />
                 </DataTableFilterField>

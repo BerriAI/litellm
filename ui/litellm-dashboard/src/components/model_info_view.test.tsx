@@ -225,7 +225,7 @@ describe("ModelInfoView", () => {
   it("should display model name in the header", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
-      expect(screen.getByText(/Public Model Name:/)).toBeInTheDocument();
+      expect(screen.getByText(/Virtual Model Name:/)).toBeInTheDocument();
     });
   });
 

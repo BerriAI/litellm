@@ -541,7 +541,7 @@ export default function ModelInfoView({
             <ArrowLeft className="size-4" />
             Back to Models
           </Button>
-          <h2 className="text-xl font-semibold">Public Model Name: {getDisplayModelName(modelData)}</h2>
+          <h2 className="text-xl font-semibold">Virtual Model Name: {getDisplayModelName(modelData)}</h2>
           <div className="flex items-center cursor-pointer">
             <span className="text-sm text-muted-foreground font-mono">{modelData.model_info.id}</span>
             <Button

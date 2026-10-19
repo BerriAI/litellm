@@ -29,7 +29,7 @@ const modelMappingsRule = {
       (mapping) => !mapping.public_name || mapping.public_name.trim() === "",
     );
     if (invalidMappings.length > 0) {
-      throw new Error("All model mappings must have valid public names");
+      throw new Error("All model mappings must have valid virtual model names");
     }
   },
 };
@@ -42,7 +42,7 @@ const publicNameTooltipContent = (
   <div className="flex flex-col gap-2 text-left font-normal">
     <div>The name you specify in your API calls to LiteLLM Proxy</div>
     <div>
-      <strong>Example:</strong> If you name your public model <code className={tooltipCodeClassName}>example-name</code>
+      <strong>Example:</strong> If you name your virtual model <code className={tooltipCodeClassName}>example-name</code>
       , and choose <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
     </div>
     <div>
@@ -94,7 +94,7 @@ const columns: ColumnDef<ModelMapping>[] = [
     accessorKey: "public_name",
     header: () => (
       <span className="flex items-center">
-        Public Model Name
+        Virtual Model Name
         <SimpleTooltip content={publicNameTooltipContent} width="500px" />
       </span>
     ),
@@ -206,7 +206,7 @@ const ConditionalPublicModelName: React.FC = () => {
       label={
         <span className="flex items-center">
           Model Mappings
-          <SimpleTooltip content="Map public model names to LiteLLM model names for load balancing" />
+          <SimpleTooltip content="Map virtual model names to LiteLLM model names for load balancing" />
         </span>
       }
       required
