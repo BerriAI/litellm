@@ -62,6 +62,10 @@ fn to_python<P: Cachable>(value: Value) -> Result<Value, Error> {
 }
 
 impl<P: Cachable> ResponseCacheService for PythonCacheService<P> {
+    fn requires_wire_request(&self) -> bool {
+        false
+    }
+
     fn prepare(
         self: Arc<Self>,
         options: CacheOptions,

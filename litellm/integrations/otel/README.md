@@ -176,11 +176,9 @@ causal order) and the write inside `cache.set llm_response`. Deployment selectio
 runs inside `route {model_group}` (`Router.async_get_available_deployment`, the
 requested group, never the deployment it picks), so the cooldown, usage and
 model-id reads the router issues nest under it, before `chat {model}`; the phase
-is opened in Python, never inside the native lifecycle. The one known ordering
-limitation is the native path (`LITELLM_RUST`): its lifecycle fires pre-call
-logging before it yields the cache await, so `cache.get llm_response` starts after
-`chat {model}` there, and moving it needs native changes that
-`litellm/rust_bridge/AGENTS.md` forbids. The write runs from
+is opened in Python, never inside the native lifecycle. Native Messages requests
+await the Python response-cache lookup before pre-call logging, so
+`cache.get llm_response` finishes before `chat {model}` starts. The write runs from
 the post-response phase, so that span is a linked root rather than a child that
 would stretch the request, and the Redis write it issues nests under it instead
 of starting a third trace (`context.post_response_root`). Identity

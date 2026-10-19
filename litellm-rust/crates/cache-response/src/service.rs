@@ -32,6 +32,10 @@ pub struct CacheHit {
 }
 
 pub trait ResponseCacheService: Send + Sync {
+    fn requires_wire_request(&self) -> bool {
+        true
+    }
+
     fn prepare(
         self: Arc<Self>,
         options: CacheOptions,
