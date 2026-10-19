@@ -37,12 +37,14 @@ from litellm.types.utils import (
     Function,
     FunctionCall,
     LlmProviders,
+    Logprobs,
     Message,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     ServerToolUse,
     StreamingChoices,
+    TextChoices,
     TextCompletionResponse,
     Usage,
 )
@@ -1224,6 +1226,18 @@ def _as_text_completion_chunk(chunk: TextCompletionResponse | Mapping[str, objec
     return chunk if isinstance(chunk, TextCompletionResponse) else TextCompletionResponse.model_validate(chunk)
 
 
+def _merged_logprobs(choices: Sequence[TextChoices]) -> Logprobs | None:
+    parts: Final = tuple(choice.logprobs for choice in choices if isinstance(choice.logprobs, Logprobs))
+    if not parts:
+        return None
+    return Logprobs(
+        text_offset=list(chain.from_iterable(part.text_offset or () for part in parts)),
+        token_logprobs=list(chain.from_iterable(part.token_logprobs or () for part in parts)),
+        tokens=list(chain.from_iterable(part.tokens or () for part in parts)),
+        top_logprobs=list(chain.from_iterable(part.top_logprobs or () for part in parts)),
+    )
+
+
 def _reported_usage(chunk: TextCompletionResponse) -> Usage | None:
     usage: Final = ChunkProcessor.extract_usage_chunk(chunk)
     return usage if usage is not None and (usage.prompt_tokens or usage.completion_tokens) else None
@@ -1244,9 +1258,8 @@ def stream_chunk_builder_text_completion(
         (c.choices[0].finish_reason for c in reversed(chunks_with_choices) if c.choices[0].finish_reason),
         None,
     )
-    logprobs: Final = chunks_with_choices[-1].choices[0].logprobs if chunks_with_choices else None
-
-    all_choices: Final = chain.from_iterable(chunk.choices for chunk in text_chunks)
+    all_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in text_chunks))
+    logprobs: Final = _merged_logprobs(all_choices)
     combined_content: Final = "".join(choice.text for choice in all_choices if choice.text)
 
     reported_usages: Final = tuple(reported for reported in map(_reported_usage, text_chunks) if reported is not None)
@@ -1422,9 +1435,13 @@ def stream_chunk_builder(
             return None
         ## Route to the text completion logic
         first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), None)
-        if first_chunk_with_choices is not None and isinstance(
-            first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
-        ):  # route to the text completion logic
+        if first_chunk_with_choices is not None and (
+            isinstance(first_chunk_with_choices["choices"][0], TextChoices)
+            or (
+                isinstance(first_chunk_with_choices["choices"][0], Mapping)
+                and "text" in first_chunk_with_choices["choices"][0]
+            )
+        ):
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
