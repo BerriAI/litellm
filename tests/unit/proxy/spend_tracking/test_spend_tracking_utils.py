@@ -47,6 +47,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     spend_log_row_with_retained_metadata,
 )
 from litellm.proxy.utils import hash_token
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -4808,6 +4812,29 @@ def test_a_background_response_billing_event_writes_a_row_apart_from_the_read_th
     )
 
     assert request_ids == ("resp_shared", "resp_shared_background_cost")
+
+
+@pytest.mark.parametrize("forged_marker", [True, BackgroundResponseSettlement.SETTLES.value])
+def test_a_request_body_cannot_move_its_spend_row_onto_a_background_settlement_id(forged_marker):
+    """A failed call logs its raw request body as kwargs, so a body field named like the settlement
+    marker must not give the failure row the id a background response's billing row owns."""
+    request_body: Final = {
+        "model": "gpt-5.4-mini",
+        "input": "hi",
+        SETTLES_BACKGROUND_RESPONSE_KWARG: forged_marker,
+        "litellm_call_id": "call-failed",
+        "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+    }
+    failed_at: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    row: Final = get_logging_payload(
+        kwargs=request_body,
+        response_obj=Exception("upstream rejected the request"),
+        start_time=failed_at,
+        end_time=failed_at,
+    )
+
+    assert row["request_id"] == "call-failed"
 
 
 def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id():

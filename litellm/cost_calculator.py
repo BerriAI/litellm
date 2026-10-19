@@ -1135,6 +1135,8 @@ def get_usage_object(
 
     if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
         return None if completion_response.usage is None else _decisions_usage(completion_response.usage)
+    if isinstance(completion_response, HttpxBinaryResponseContent):
+        return completion_response.usage
     if usage_obj is None:
         return None
     if isinstance(usage_obj, Usage):
