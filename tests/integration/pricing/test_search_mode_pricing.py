@@ -183,7 +183,7 @@ def test_a_price_set_on_the_search_tool_still_wins_over_the_mode_price_entry(gat
         assert _spend(gateway, response.headers["x-litellm-call-id"]) == pytest.approx(0.02)
 
 
-def _anthropic_reply(identity: str, content: list[dict[str, JsonValue]], stop_reason: str) -> Reply:
+def _anthropic_reply(identity: str, content: list[JsonValue], stop_reason: str) -> Reply:
     return Reply(
         body=json.dumps(
             {
@@ -222,7 +222,12 @@ def test_a_web_search_intercepted_on_messages_is_charged_at_the_search_tools_mod
         )
         if answered:
             return _anthropic_reply(identity, [{"type": "text", "text": "answered"}], "end_turn")
-        tool_use: Final = {"type": "tool_use", "id": identity, "name": "litellm_web_search", "input": {"query": _QUERY}}
+        tool_use: Final[JsonValue] = {
+            "type": "tool_use",
+            "id": identity,
+            "name": "litellm_web_search",
+            "input": {"query": _QUERY},
+        }
         return _anthropic_reply(identity, [tool_use], "tool_use")
 
     def send(candidate: Gateway, model: str) -> httpx.Response:

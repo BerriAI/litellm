@@ -175,7 +175,7 @@ def test_sync_tavily_advanced_search_reports_the_advanced_price(respx_mock: resp
         query="litellm release notes", search_provider="tavily", api_key="test-tavily-key", search_depth="advanced"
     )
     assert json.loads(respx_mock.calls.last.request.content)["search_depth"] == "advanced"
-    assert response._hidden_params["response_cost"] == pytest.approx(0.007)
+    assert response.hidden_params["response_cost"] == pytest.approx(0.007)
 
 
 @pytest.mark.asyncio
@@ -191,4 +191,4 @@ async def test_async_linkup_deep_search_reports_the_deep_price(
         query="litellm release notes", search_provider="linkup", api_key="test-linkup-key", depth="deep"
     )
     assert json.loads(respx_mock.calls.last.request.content)["depth"] == "deep"
-    assert response._hidden_params["response_cost"] == pytest.approx(0.011)
+    assert response.hidden_params["response_cost"] == pytest.approx(0.011)
