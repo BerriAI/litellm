@@ -13,12 +13,13 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from httpx import Response
+from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
@@ -559,6 +560,12 @@ def mask_api_base_credentials(api_base: str) -> str:
     return api_base[:key_end] + "*" * 5 + api_base[-4:]
 
 
+@dataclass(frozen=True, slots=True)
+class UncachedPrice:
+    cost: float | None
+    cost_breakdown: CostBreakdown | None
+
+
 def _timestamp_seconds(moment: object) -> float | None:
     if isinstance(moment, datetime.datetime):
         return moment.timestamp()
@@ -628,15 +635,15 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         model: str,
         messages,
-        stream,
+        stream: bool | None,
         call_type,
         start_time: datetime.datetime,
         litellm_call_id: str,
         function_id: str,
         litellm_trace_id: str | None = None,
         dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = None,
-        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None,
-        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None,
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
+        dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
         dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
         applied_guardrails: list[str] | None = None,
@@ -665,6 +672,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
+        self.applied_timeout: float | Timeout | None = None
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.relays_llm_passthrough: Final = call_type in (
@@ -712,8 +720,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
-        self.dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = dynamic_success_callbacks
-        self.dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = (
+        self.dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
+            dynamic_success_callbacks
+        )
+        self.dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_success_callbacks
         )
         self.dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = dynamic_failure_callbacks
@@ -780,6 +790,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.defer_async_logging: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
+        self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -812,6 +823,10 @@ class Logging(LiteLLMLoggingBaseClass):
         new_call.streaming_chunks = []
         new_call.sync_streaming_chunks = []
         return new_call
+
+    def reset_caching_details(self) -> None:
+        """Forget an earlier cache lookup's result, so a call that looks up again reports only its latest."""
+        self.caching_details = None
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
@@ -976,6 +991,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 return model_id
         return None
 
+    def _routed_deployment_model(self) -> str | None:
+        litellm_params: Final = self._model_call_details_view.get("litellm_params")
+        metadata: Final = (
+            StandardLoggingPayloadSetup.merge_litellm_metadata(_LITELLM_PARAMS.validate_python(litellm_params))
+            if isinstance(litellm_params, dict)
+            else {}
+        )
+        deployment: Final = metadata.get("deployment")
+        return deployment if isinstance(deployment, str) else None
+
     def get_deployment_model_for_cost(self) -> str | None:
         """The provider-qualified model to price against.
 
@@ -1046,6 +1071,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def record_applied_timeout(self, timeout: float | Timeout) -> None:
+        self.applied_timeout = timeout
+        self.litellm_params["timeout"] = timeout
+        self.model_call_details["litellm_params"] = self.litellm_params
 
     def update_from_kwargs(
         self,
@@ -1892,6 +1922,7 @@ class Logging(LiteLLMLoggingBaseClass):
         cache_hit: bool | None = None,
         litellm_model_name: str | None = None,
         router_model_id: str | None = None,
+        ignore_stamped_cost: bool = False,
     ) -> float | None:
         """
         Calculate response cost using result + logging object variables.
@@ -1927,7 +1958,9 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             hidden_params: Final = result_hidden_params
             if (
-                "response_cost" in hidden_params and hidden_params["response_cost"] is not None
+                not ignore_stamped_cost
+                and "response_cost" in hidden_params
+                and hidden_params["response_cost"] is not None
             ):  # use cost if already calculated
                 self._record_zero_cost_diagnostic(
                     priced_result,
@@ -2052,6 +2085,20 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def uncached_price(self, result: object) -> UncachedPrice:
+        previous_cost_breakdown: Final = self.cost_breakdown
+        previous_billed_token_rates: Final = self.billed_token_rates
+        debug_key: Final = "response_cost_failure_debug_information"
+        had_failure_debug_info: Final = debug_key in self.model_call_details
+        try:
+            cost: Final = self.response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
+            return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
+        finally:
+            self.cost_breakdown = previous_cost_breakdown
+            self.billed_token_rates = previous_billed_token_rates
+            if not had_failure_debug_info:
+                self.model_call_details.pop(debug_key, None)
 
     def _record_zero_cost_diagnostic(
         self,
@@ -2221,6 +2268,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.agenerate_content.value, False) is not True
             and litellm_params.get(CallTypes.agenerate_content_stream.value, False) is not True
             and litellm_params.get(CallTypes.arealtime.value, False) is not True
+            and litellm_params.get(CallTypes.aresponses_websocket.value, False) is not True
         )
 
     _is_sync_litellm_request = is_sync_litellm_request
@@ -2286,7 +2334,7 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
-        if not self._should_run_sync_callbacks_for_async_calls():
+        if not self.stream or not self._should_run_sync_callbacks_for_async_calls():
             return
 
         executor.submit(
@@ -2414,7 +2462,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
     ) -> None:
-        if self.stream is not None and self.stream is True and event_type in ["async_success", "sync_success"]:
+        if self.stream is True and event_type in ["async_success", "sync_success"]:
             """
             Ignore check on stream, as there can be multiple chunks
             """
@@ -2476,7 +2524,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
             logging_result = ResponsesWebSocketTokenUsageProcessor.create_logging_object(
-                results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                litellm_model_name=self._routed_deployment_model(),
             )
 
         elif self.relays_llm_passthrough and isinstance(result, Response):
@@ -2911,6 +2960,8 @@ class Logging(LiteLLMLoggingBaseClass):
         discarded as a duplicate of the in-progress create.
         """
         self.model_call_details.pop("has_logged_async_success", None)
+        self.model_call_details.pop("has_logged_sync_success", None)
+        self._sync_success_scheduled = False
         litellm_params = self.model_call_details.get("litellm_params")
         if not isinstance(litellm_params, dict):
             return
@@ -3033,7 +3084,7 @@ class Logging(LiteLLMLoggingBaseClass):
             complete_streaming_response: (
                 ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
             ) = None
-            if "complete_streaming_response" in self.model_call_details:
+            if "complete_streaming_response" in self.model_call_details and not for_async_request:
                 return  # break out of this.
             complete_streaming_response = self._get_assembled_streaming_response(
                 result=result,
@@ -3099,6 +3150,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
                 global_callbacks=litellm.success_callback,
             )
+            delivery_callbacks: Final = (
+                self._get_completed_success_callbacks(asynchronous=False)
+                if for_async_request and not self.stream
+                else callbacks
+            )
 
             ## REDACT MESSAGES ##
             result = redact_message_input_output_from_logging(
@@ -3106,7 +3162,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 result=result,
             )
             ## LOGGING HOOK ##
-            for callback in callbacks:
+            hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
+            for callback in hook_callbacks:
                 if isinstance(callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -3136,7 +3193,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             call_details_view: Final = MappingProxyType[str, object](call_details)
             self.mark_logging_complete(event_type="sync_success")
-            for callback in callbacks:
+            for callback in delivery_callbacks:
                 try:
                     should_run = self.should_run_callback(
                         callback=callback,
@@ -3408,7 +3465,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                     if (
                         isinstance(callback, CustomLogger)
-                        and is_sync_request
+                        and (is_sync_request or (for_async_request and not self.stream))
+                        and not (
+                            for_async_request
+                            and self.stream
+                            and callback in (self.dynamic_async_success_callbacks or ())
+                        )
                         and self.call_type
                         != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
                     ):  # custom logger class
@@ -3425,7 +3487,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = call_details_view["complete_response"]
 
                             callback.log_success_event(
-                                kwargs=call_details,
+                                kwargs=callback.redact_standard_logging_payload_from_model_call_details(call_details),
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
@@ -3667,6 +3729,9 @@ class Logging(LiteLLMLoggingBaseClass):
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
         )
+        delivery_callbacks: Final = (
+            self._get_completed_success_callbacks(asynchronous=True) if not self.stream else callbacks
+        )
 
         result = redact_message_input_output_from_logging(
             model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
@@ -3675,7 +3740,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## LOGGING HOOK ##
 
-        for callback in callbacks:
+        hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
+        for callback in hook_callbacks:
             try:
                 if isinstance(callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
@@ -3713,7 +3779,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.mark_logging_complete(event_type="async_success")
 
-        for callback in callbacks:
+        for callback in delivery_callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
             should_run = self.should_run_callback(
@@ -3848,6 +3914,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     traceback.format_exc(),
                 )
                 self._handle_callback_failure(callback=callback)
+        if not self.stream:
+            try:
+                self.handle_sync_success_callbacks_for_async_calls(
+                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+                )
+            except RuntimeError:
+                verbose_logger.exception("Could not schedule synchronous success callbacks")
         await flush_post_call_redis_batches()
 
     def _handle_callback_failure(self, callback: object):
@@ -4271,6 +4344,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
+        if not self.stream and self._sync_success_scheduled:
+            return
+        if not self.stream:
+            self._sync_success_scheduled = True
         executor.submit(
             self.success_handler,
             result,
@@ -4289,11 +4366,57 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
+    def _get_completed_success_callbacks(
+        self, *, asynchronous: bool
+    ) -> tuple[str | Callable[..., object] | CustomLogger, ...]:
+        sync_callbacks: Final = self.get_combined_callback_list(
+            self.dynamic_success_callbacks, litellm.success_callback
+        )
+        async_callbacks: Final = self.get_combined_callback_list(
+            self.dynamic_async_success_callbacks,
+            litellm._async_success_callback,  # pyright: ignore[reportPrivateUsage]  # shared logging registry
+        )
+        legacy_sync_callbacks: Final = self._remove_internal_litellm_callbacks(
+            self._remove_internal_custom_logger_callbacks(sync_callbacks)
+        )
+        selected: Final = async_callbacks if asynchronous else sync_callbacks
+        other: Final = sync_callbacks if asynchronous else async_callbacks
+        return tuple(
+            callback
+            for callback in self.get_combined_callback_list(selected, other)
+            if (
+                (
+                    (
+                        getattr(callback.async_log_success_event, "__func__", callback.async_log_success_event)
+                        is not CustomLogger.async_log_success_event
+                    )
+                    == asynchronous
+                    and (
+                        asynchronous
+                        or getattr(callback.log_success_event, "__func__", callback.log_success_event)
+                        is not CustomLogger.log_success_event
+                    )
+                )
+                if isinstance(callback, CustomLogger)
+                else callback in selected
+                and (
+                    asynchronous
+                    or (
+                        callback not in async_callbacks
+                        and callback in legacy_sync_callbacks
+                        and not (isinstance(callback, str) and callback in INTERNAL_CALLBACK_NAMES)
+                    )
+                )
+            )
+        )
+
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
         """
         Returns:
             - bool: True if sync callbacks should be run for async calls. eg. `langfuse`, `s3`
         """
+        if not self.stream:
+            return bool(self._get_completed_success_callbacks(asynchronous=False))
         _combined_sync_callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_success_callbacks,
             global_callbacks=litellm.success_callback,
@@ -4323,7 +4446,11 @@ class Logging(LiteLLMLoggingBaseClass):
         _filtered_failure_callbacks = self._remove_internal_litellm_callbacks(_filtered_failure_callbacks)
         return len(_filtered_failure_callbacks) > 0
 
-    def get_combined_callback_list(self, dynamic_success_callbacks: list | None, global_callbacks: list) -> list:
+    def get_combined_callback_list(
+        self,
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
+        global_callbacks: list[str | Callable[..., object] | CustomLogger],
+    ) -> list[str | Callable[..., object] | CustomLogger]:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
         return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
@@ -6911,6 +7038,36 @@ def _autorouter_savings_for_payload(
         return None
 
 
+_CACHE_HIT_ZEROED_AMOUNTS: Final = MappingProxyType(
+    {
+        "cache_read_cost": CostBreakdown(cache_read_cost=0.0),
+        "cache_creation_cost": CostBreakdown(cache_creation_cost=0.0),
+        "reasoning_cost": CostBreakdown(reasoning_cost=0.0),
+        "original_cost": CostBreakdown(original_cost=0.0),
+        "discount_amount": CostBreakdown(discount_amount=0.0),
+        "margin_fixed_amount": CostBreakdown(margin_fixed_amount=0.0),
+        "margin_total_amount": CostBreakdown(margin_total_amount=0.0),
+    }
+)
+
+
+def _cache_hit_cost_breakdown(served: CostBreakdown | None) -> CostBreakdown:
+    """Every amount at 0, keeping the pricing basis and rates a fresh call would have had, which savings reports read."""
+    zero_costs: Final = CostBreakdown(input_cost=0.0, output_cost=0.0, total_cost=0.0, tool_usage_cost=0.0)
+    if served is None:
+        return zero_costs
+    zeroed_additional_costs: Final = (
+        CostBreakdown(additional_costs=dict.fromkeys(served["additional_costs"], 0.0))
+        if "additional_costs" in served
+        else CostBreakdown()
+    )
+    return functools.reduce(
+        lambda breakdown, zeroed: breakdown | zeroed,
+        (_CACHE_HIT_ZEROED_AMOUNTS[key] for key in served if key in _CACHE_HIT_ZEROED_AMOUNTS),
+        served | zero_costs | zeroed_additional_costs,
+    )
+
+
 def get_standard_logging_object_payload(
     kwargs: dict | None,
     init_response_obj: object,
@@ -6994,17 +7151,10 @@ def get_standard_logging_object_payload(
             "user", None
         )  # maintain backwards compatibility with old request body check
 
-        saved_cache_cost: float = 0.0
         if cache_hit is True or served_from_cache(init_response_obj):
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
-        if cache_hit is True:
-            saved_cache_cost = (
-                logging_obj.response_cost_calculator(
-                    result=init_response_obj,
-                    cache_hit=False,
-                )
-                or 0.0
-            )
+        uncached_price: Final = logging_obj.uncached_price(result=init_response_obj) if cache_hit is True else None
+        saved_cache_cost: Final = (uncached_price.cost if uncached_price is not None else None) or 0.0
 
         ## Get model cost information ##
         base_model = get_base_model_from_metadata(model_call_details=kwargs)
@@ -7021,7 +7171,7 @@ def get_standard_logging_object_payload(
 
         # clean up litellm hidden params
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
-        if clean_hidden_params["response_cost"] is None and raw_response_cost is not None:
+        if cache_hit is True or (clean_hidden_params["response_cost"] is None and raw_response_cost is not None):
             clean_hidden_params["response_cost"] = llm_response_cost
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
@@ -7083,7 +7233,14 @@ def get_standard_logging_object_payload(
         ):
             model_name = response_model_name
 
-        request_cost_breakdown: Final = cost_breakdown_with_guardrail(logging_obj.cost_breakdown, guardrail_cost)
+        request_cost_breakdown: Final = cost_breakdown_with_guardrail(
+            (
+                _cache_hit_cost_breakdown(uncached_price.cost_breakdown)
+                if uncached_price is not None
+                else logging_obj.cost_breakdown
+            ),
+            guardrail_cost,
+        )
         captured_baseline: Final = logging_obj.baseline_observation
         autorouter_savings: Final = (
             None

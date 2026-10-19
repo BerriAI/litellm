@@ -31,6 +31,8 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _KIMI_US: Final = "us.moonshotai.kimi-k3"
 _KIMI_GLOBAL: Final = "global.moonshotai.kimi-k3"
 _KIMI_BASE: Final = "moonshotai.kimi-k3"

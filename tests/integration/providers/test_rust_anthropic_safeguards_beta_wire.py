@@ -61,7 +61,7 @@ from integration.providers._anthropic_safeguards_beta_support import (
 )
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.xdist_group("anthropic_safeguards_beta")
+pytestmark: Final = [pytest.mark.xdist_group("anthropic_safeguards_beta"), pytest.mark.shares_worker_state]
 
 _CELL_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 120)
 _BURST: Final = 24
@@ -334,7 +334,6 @@ def test_deepseek_messages_forward_safeguards_without_adding_a_beta(rig: _Rig, b
 
 
 def test_python_route_adds_the_beta_for_safeguards(gateway: Gateway, scenario: Scenario) -> None:
-    pytest.skip("BUG: Python /v1/messages sends safeguards without the dangerous-tool-use beta, Anthropic answers 400")
     with wire_server(anthropic_peer) as wire:
         deployment: Final = scenario.model(model=f"anthropic/{BACKEND}", api_base=wire.url, api_key=ANTHROPIC_KEY)
         marker: Final = new_marker()

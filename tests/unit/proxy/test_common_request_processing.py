@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
 )
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
+from litellm.types.utils import CachingDetails
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -11670,3 +11671,98 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         assert logging_obj.cost_breakdown is not None
         assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
         assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+class TestResponseCostFromLoggingObjForCacheHits:
+    BODY: Final = MappingProxyType(
+        {
+            "id": "msg_cached",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "cached answer"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1200, "output_tokens": 400},
+        }
+    )
+
+    @staticmethod
+    def _logging_obj():
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj: Final = Logging(
+            model="claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime.now(),
+            litellm_call_id=str(uuid.uuid4()),
+            function_id="cache-hit-header",
+        )
+        logging_obj.optional_params = {}
+        return logging_obj
+
+    def test_a_v1_messages_cache_hit_costs_nothing_though_its_usage_prices_as_a_fresh_call(self):
+        fresh_cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(self.BODY), logging_obj=self._logging_obj()
+        )
+        hit: Final = self._logging_obj()
+        hit.caching_details = {"cache_hit": True, "cache_duration_ms": 2.0}
+
+        hit_cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(self.BODY), logging_obj=hit
+        )
+
+        assert fresh_cost is not None and fresh_cost > 0
+        assert hit_cost == 0.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("hidden_params", "caching_details", "expected_header"),
+        (
+            (
+                {"cache_hit": True, "response_cost": 0.0},
+                CachingDetails(cache_hit=True, cache_duration_ms=2.0),
+                "0.0",
+            ),
+            ({"response_cost": 0.0}, None, None),
+        ),
+    )
+    async def test_only_a_cache_hit_sends_zero_cost_headers(
+        self,
+        hidden_params: dict[str, object],
+        caching_details: CachingDetails | None,
+        expected_header: str | None,
+    ):
+        response: Final = litellm.ModelResponse()
+        response._hidden_params = hidden_params
+        logging_obj: Final = self._logging_obj()
+        logging_obj.caching_details = caching_details
+
+        headers: Final = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=response,
+            request_data={"model": "gpt-5.4-mini"},
+            request=Request({"type": "http", "method": "POST", "headers": []}),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            logging_obj=logging_obj,
+            version=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+        cost_headers: Final = (
+            "x-litellm-response-cost",
+            "x-litellm-response-cost-original",
+            "x-litellm-response-cost-input",
+            "x-litellm-response-cost-output",
+        )
+        assert {name: headers.get(name) for name in cost_headers} == dict.fromkeys(cost_headers, expected_header)
+
+    def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):
+        logging_obj: Final = self._logging_obj()
+        logging_obj.model_call_details["response_cost"] = 0.0
+
+        cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(self.BODY), logging_obj=logging_obj
+        )
+
+        assert cost == ""

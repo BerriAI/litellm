@@ -2,7 +2,7 @@ import asyncio
 import json
 import threading
 import time
-from typing import AsyncIterator, Final, Iterator, Literal, NoReturn, Optional
+from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -1467,7 +1467,53 @@ async def test_async_streaming_read_timeout_triggers_midstream_fallback(
         await response.__anext__()
 
     assert excinfo.value.is_pre_first_chunk is True
-    assert isinstance(excinfo.value.original_exception, Exception)
+    assert isinstance(excinfo.value.original_exception, litellm.Timeout)
+
+
+def _raw_read_timeout() -> NoReturn:
+    raise httpx.ReadTimeout("")
+
+
+def _bridged_read_timeout() -> NoReturn:
+    raise litellm.Timeout(
+        message="APITimeoutError - Request timed out. Error_str: ReadTimeout", model="glm", llm_provider="hosted_vllm"
+    ) from httpx.ReadTimeout("")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stall", [_raw_read_timeout, _bridged_read_timeout], ids=["raw", "responses_bridge"])
+async def test_async_streaming_read_timeout_after_first_chunk_surfaces_timeout(
+    logging_obj: Logging, stall: Callable[[], NoReturn]
+):
+    from litellm.exceptions import MidStreamFallbackError
+
+    class _OneChunkThenStall:
+        def __init__(self) -> None:
+            self.sent = False
+
+        def __aiter__(self) -> "_OneChunkThenStall":
+            return self
+
+        async def __anext__(self) -> ModelResponseStream:
+            if self.sent:
+                stall()
+            self.sent = True
+            return ModelResponseStream(choices=[{"index": 0, "delta": {"content": "hello"}}])
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=_OneChunkThenStall(),
+        model="glm",
+        logging_obj=logging_obj,
+        custom_llm_provider="hosted_vllm",
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        async for _ in response:
+            pass
+
+    assert excinfo.value.is_pre_first_chunk is False
+    assert isinstance(excinfo.value.original_exception, litellm.Timeout)
+    assert excinfo.value.original_exception.status_code == 408
 
 
 _AZURE_DEPLOYMENT_API_BASE: Final = "https://mid-stream-debug.openai.azure.com"
