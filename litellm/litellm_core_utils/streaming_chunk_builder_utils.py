@@ -1250,6 +1250,10 @@ def _text_of(choice: TextChoices) -> str:
     return choice.text if isinstance(choice.text, str) else ""
 
 
+def _index_of(choice: TextChoices) -> int:
+    return choice.index
+
+
 def _rebuilt_text_choice(index: int, choices: Sequence[TextChoices]) -> TextChoices:
     return TextChoices(
         text="".join(map(_text_of, choices)),
@@ -1275,11 +1279,10 @@ def stream_chunk_builder_text_completion(
     model: Final = text_chunks[0].model
     system_fingerprint: Final = text_chunks[0].get("system_fingerprint", None)
     all_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in text_chunks))
-    indexes: Final = sorted({choice.index for choice in all_choices}) or [0]
     choices: Final = [
-        _rebuilt_text_choice(index, tuple(choice for choice in all_choices if choice.index == index))
-        for index in indexes
-    ]
+        _rebuilt_text_choice(index, tuple(group))
+        for index, group in groupby(sorted(all_choices, key=_index_of), key=_index_of)
+    ] or [_rebuilt_text_choice(0, ())]
     combined_content: Final = "".join(map(_text_of, choices))
 
     reported_usages: Final = tuple(reported for reported in map(_reported_usage, text_chunks) if reported is not None)
@@ -1453,6 +1456,7 @@ def stream_chunk_builder(
             or (
                 isinstance(first_chunk_with_choices["choices"][0], Mapping)
                 and "text" in first_chunk_with_choices["choices"][0]
+                and "delta" not in first_chunk_with_choices["choices"][0]
             )
         ):
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)

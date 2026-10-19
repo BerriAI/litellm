@@ -2223,6 +2223,36 @@ def test_stream_chunk_builder_rebuilds_dict_text_completion_chunks(build: Callab
     assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (3, 2, 5)
 
 
+@pytest.mark.parametrize("choice_text", ["Hi", None])
+def test_stream_chunk_builder_keeps_dumped_chat_chunks_with_a_choice_text_on_the_chat_path(
+    choice_text: str | None,
+) -> None:
+    from litellm.types.utils import ModelResponseStream
+
+    def dumped_chunk(content: str, finish_reason: str | None) -> dict[str, object]:
+        return ModelResponseStream(
+            id="chatcmpl-1",
+            object="chat.completion.chunk",
+            created=1,
+            model="my-model",
+            choices=[
+                {
+                    "index": 0,
+                    "text": choice_text,
+                    "delta": {"role": "assistant", "content": content},
+                    "finish_reason": finish_reason,
+                    "logprobs": None,
+                }
+            ],
+        ).model_dump()
+
+    response = litellm.stream_chunk_builder(chunks=[dumped_chunk("Hi", None), dumped_chunk(" there", "stop")])
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "Hi there"
+    assert response.choices[0].finish_reason == "stop"
+
+
 def test_stream_chunk_builder_keeps_logprobs_from_every_text_completion_chunk() -> None:
     def chunk(text: str, offset: int, logprob: float, finish_reason: str | None) -> dict[str, object]:
         return {
