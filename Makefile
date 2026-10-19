@@ -61,6 +61,7 @@ help:
 
 UV := uv
 UV_RUN := $(UV) run --no-sync
+CI_PYTHON := 3.12
 BASE_REF ?=
 export BASE_REF
 RESOLVE_BASE = python3 scripts/default_branch.py --base "$(BASE_REF)"
@@ -89,7 +90,7 @@ install-dev:
 # Deliberately unqueued: provisioning is I/O bound, so it doesn't need one of the
 # machine-wide slots the CPU-bound gates below share.
 bootstrap:
-	$(UV) sync --inexact --frozen --group ci --group proxy-dev --group e2e-dev --extra google --extra proxy \
+	$(UV) sync --python $(CI_PYTHON) --inexact --frozen --group ci --group proxy-dev --group e2e-dev --extra google --extra proxy \
 		--extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
@@ -283,10 +284,10 @@ pre-commit:
 test-rust-extension:
 	@temporary=$$(mktemp -d) && \
 	trap 'rm -rf "$$temporary"' EXIT HUP INT TERM && \
-	$(UV) build --python 3.12 --wheel --out-dir "$$temporary/wheels" && \
+	$(UV) build --python $(CI_PYTHON) --wheel --out-dir "$$temporary/wheels" && \
 	set -- "$$temporary"/wheels/*.whl && \
 	[ "$$#" -eq 1 ] && \
-	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
+	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python $(CI_PYTHON) --frozen --no-install-project --all-groups --all-extras && \
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
 	"$$temporary/venv/bin/python" -I -m mypy.stubtest \
 		--mypy-config-file tests/unit/rust_bridge/stubtest.ini \
