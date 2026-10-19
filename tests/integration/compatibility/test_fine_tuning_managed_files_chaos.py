@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 import pytest
 import yaml
 from integration._support.client import eventually, gateway_from_environment
+from integration._support.database import scratch_database
 from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, BadRequestError, OpenAI
@@ -259,15 +260,16 @@ def test_a_replaced_worker_still_sends_the_provider_file_ids(rig: Rig) -> None:
 
 
 def test_a_deployment_added_after_the_upload_never_receives_the_create(tmp_path: Path) -> None:
-    with gateway_from_environment() as shared, wire_server(_respond) as wire:
+    with gateway_from_environment() as shared, wire_server(_respond) as wire, scratch_database() as database_url:
+        one_database: Final = {"DATABASE_URL": database_url}
         before: Final = tmp_path / "before"
-        with owned_proxy_process(shared, before, {}, config=_config_file(before, wire)) as uploader:
+        with owned_proxy_process(shared, before, one_database, config=_config_file(before, wire)) as uploader:
             with Rig(uploader, wire, "", "").sdk() as client:
                 training_file: Final = _upload(client, "train")
                 validation_file: Final = _upload(client, "validate")
         after: Final = tmp_path / "after"
         with owned_proxy_process(
-            shared, after, {}, config=_config_file(after, wire, late_preferred_deployment=True), workers=2
+            shared, after, one_database, config=_config_file(after, wire, late_preferred_deployment=True), workers=2
         ) as owned:
             eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=120)
             wire.drain()
