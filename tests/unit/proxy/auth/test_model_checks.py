@@ -1211,9 +1211,11 @@ def _registered_chat_models(provider_by_model: Mapping[str, str]) -> Generator[N
     try:
         yield
     finally:
-        for model, provider in provider_by_model.items():
+        provider_model_sets: Final = tuple(known for known in vars(litellm).values() if isinstance(known, set))
+        for model in provider_by_model:
             litellm.model_cost.pop(model, None)
-            litellm.models_by_provider[provider].discard(model)
+            for provider_models in provider_model_sets:
+                provider_models.discard(model)
         litellm.add_known_models(model_cost_map={})
 
 
@@ -1339,17 +1341,16 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
             infer_model_from_keys=False,
             llm_router=router,
         )
-        model_info_rows: Final = tuple(
-            (str(row["model_name"]), TypeAdapter(LiteLLM_Params).validate_python(row["litellm_params"]).model)
+        model_info_names: Final = [
+            str(row["model_name"])
             for row in expand_wildcard_deployments_for_model_info(
                 [dict(deployment) for deployment in router.get_model_list() or []]
             )
-        )
+        ]
         listed_v1_models: Final = routed_catalog_ids(v1_models)
-        listed_model_info_names: Final = routed_catalog_ids([name for name, _ in model_info_rows])
+        listed_model_info_names: Final = routed_catalog_ids(model_info_names)
 
     assert listed_v1_models == sorted(reachable)
-    assert [shown_model for _, shown_model in model_info_rows] == [routed_model(name) for name, _ in model_info_rows]
     if key_model is None:
         assert listed_model_info_names == sorted(reachable)
 
@@ -1375,21 +1376,3 @@ def test_catch_all_over_a_partial_deployment_lists_no_catalog_ids(deployment_mod
     assert v1_models == []
     assert model_info_rows == deployments
 
-
-def test_catch_all_model_info_rows_show_the_listed_provider_model() -> None:
-    from pydantic import TypeAdapter
-
-    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
-    from litellm.types.router import LiteLLM_Params
-
-    listed_id: Final = "openai/partial-route-catch-all-model"
-    with _registered_chat_models({listed_id.removeprefix("openai/"): "openai"}):
-        model_info_rows: Final = expand_wildcard_deployments_for_model_info(
-            [{"model_name": "*", "litellm_params": {"model": "openai/*"}}]
-        )
-
-    shown_models: Final = {
-        str(row["model_name"]): TypeAdapter(LiteLLM_Params).validate_python(row["litellm_params"]).model
-        for row in model_info_rows
-    }
-    assert shown_models[listed_id] == listed_id

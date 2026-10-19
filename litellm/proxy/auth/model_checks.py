@@ -375,17 +375,6 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
     return list(dict.fromkeys(suffix_appended_wildcard_models))
 
 
-def _deployment_model_serving(listed_id: str, name_pattern: str, deployment_model: str) -> str:
-    listed_match: Final = (
-        None if name_pattern == "*" else re.fullmatch(PatternMatchRouter().pattern_to_regex(name_pattern), listed_id)
-    )
-    if listed_match is None:
-        return listed_id
-    return PatternMatchRouter.set_deployment_model_name(
-        matched_pattern=listed_match, litellm_deployment_litellm_model=deployment_model
-    )
-
-
 def expand_wildcard_deployments_for_model_info(
     deployments: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -434,9 +423,7 @@ def expand_wildcard_deployments_for_model_info(
             row["model_name"] = name
             params = row.get("litellm_params")
             if isinstance(params, dict):
-                params["model"] = _deployment_model_serving(
-                    name, name_pattern=model_name, deployment_model=litellm_model
-                )
+                params["model"] = name
             expanded.append(row)
 
     return expanded
