@@ -231,6 +231,13 @@ impl Annotations {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Sets each of `later`'s values in turn, as if they had been written after this one's.
+    pub(crate) fn extend(&mut self, later: Annotations) {
+        for (key, value) in later.0 {
+            self.set(key, value);
+        }
+    }
 }
 
 /// How a request ended.

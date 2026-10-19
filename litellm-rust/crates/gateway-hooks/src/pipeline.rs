@@ -3,6 +3,7 @@
 use std::{sync::Arc, time::SystemTime};
 
 use bytes::Bytes;
+use futures_util::future::join_all;
 
 use crate::{
     facts::{Facts, Outcome, Record, RequestFacts},
@@ -19,7 +20,7 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    /// `hooks` run in the order given, which is the config's.
+    /// `hooks` are given in the config's order, which decides whose changes win.
     pub fn new(hooks: Vec<Arc<dyn Hook>>, observers: Observers, prices: Arc<Prices>) -> Self {
         let mut reads = observers.reads();
         for hook in &hooks {
@@ -60,8 +61,9 @@ impl Pipeline {
         &self.prices
     }
 
-    /// Runs every hook in order. When one refuses, the hooks before it are told the request
-    /// ended with that refusal, and so are the observers.
+    /// Runs every hook at once. Their changes apply in config order, and when several refuse,
+    /// the first in config order answers. On a refusal the hooks that let the request through
+    /// are told it ended with that refusal, and so are the observers.
     pub async fn admit(&self, request: Arc<RequestFacts>) -> Result<Admission, Refusal> {
         let admitted = self.run_hooks(request).await;
         // Refused or not, the request's facts outlive this call (in observer records, or for
@@ -74,38 +76,57 @@ impl Pipeline {
         admitted.map_err(|(_, refusal)| refusal)
     }
 
+    /// Hooks read only the request and write only their own edit, so none waits on another;
+    /// admission costs the slowest hook's round trips rather than the sum of them.
     async fn run_hooks(
         &self,
         request: Arc<RequestFacts>,
     ) -> Result<Admission, (Arc<RequestFacts>, Refusal)> {
+        let mut edits: Vec<RequestEdit> = self
+            .hooks
+            .iter()
+            .map(|hook| RequestEdit::scoped(hook.name(), hook.writes()))
+            .collect();
+        let results = join_all(
+            self.hooks
+                .iter()
+                .zip(edits.iter_mut())
+                .map(|(hook, edit)| hook.run(&request, edit)),
+        )
+        .await;
         let mut admission = Admission {
             request,
             edit: RequestEdit::default(),
             settles: Vec::new(),
         };
-        for hook in &self.hooks {
-            admission.edit.scope(hook.name(), hook.writes());
-            match hook.run(&admission.request, &mut admission.edit).await {
-                Ok(Some(settle)) => admission.settles.push(settle),
-                Ok(None) => {}
+        let mut refused = None;
+        for (result, edit) in results.into_iter().zip(edits) {
+            match result {
+                Ok(settle) => {
+                    admission.settles.extend(settle);
+                    admission.edit.extend(edit);
+                }
                 Err(refusal) => {
-                    let outcome = Outcome {
-                        deployment: None,
-                        status: refusal.status,
-                        usage: None,
-                        cost: None,
-                        time_to_first_byte: None,
-                        upstream_started_at: None,
-                        ended_at: SystemTime::now(),
-                        interrupted: false,
-                    };
-                    let request = Arc::clone(&admission.request);
-                    self.finish(admission, outcome, None);
-                    return Err((request, refusal));
+                    refused.get_or_insert(refusal);
                 }
             }
         }
-        Ok(admission)
+        let Some(refusal) = refused else {
+            return Ok(admission);
+        };
+        let outcome = Outcome {
+            deployment: None,
+            status: refusal.status,
+            usage: None,
+            cost: None,
+            time_to_first_byte: None,
+            upstream_started_at: None,
+            ended_at: SystemTime::now(),
+            interrupted: false,
+        };
+        let request = Arc::clone(&admission.request);
+        self.finish(admission, outcome, None);
+        Err((request, refusal))
     }
 
     /// Records how the request ended: prices its usage, lets hooks settle, and hands the
@@ -288,7 +309,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hooks_run_in_order_and_settle_with_the_cost() {
+    async fn later_hooks_win_and_settle_with_the_cost() {
         let log = Log::default();
         let costs = Arc::new(Costs(Mutex::default()));
         let mut prices = Prices::default();
@@ -370,7 +391,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_refusal_settles_the_hooks_before_it() {
+    async fn a_refusal_settles_the_hooks_that_let_the_request_through() {
         let log = Log::default();
         let pipeline = Pipeline::new(
             vec![
@@ -383,6 +404,94 @@ mod tests {
         );
         let refusal = pipeline.admit(request()).await.err().unwrap();
         assert_eq!(refusal.status, 429);
-        assert_eq!(*log.lock().unwrap(), ["run a", "run limit", "settle a 429"]);
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "run a",
+                "run limit",
+                "run c",
+                "settle a 429",
+                "settle c 429"
+            ]
+        );
+    }
+
+    struct Refuses(u16);
+
+    impl Hook for Refuses {
+        fn name(&self) -> &'static str {
+            "refuses"
+        }
+
+        fn reads(&self) -> Facts {
+            Facts::KEY
+        }
+
+        fn writes(&self) -> Targets {
+            Targets::ADMISSION
+        }
+
+        fn run<'a>(
+            &'a self,
+            _request: &'a Arc<RequestFacts>,
+            _edit: &'a mut RequestEdit,
+        ) -> BoxFuture<'a, Result<Option<Box<dyn Settle>>, Refusal>> {
+            Box::pin(async move { Err(Refusal::new(self.0, "refused", "no")) })
+        }
+    }
+
+    #[tokio::test]
+    async fn the_first_refusal_in_config_order_answers() {
+        let pipeline = Pipeline::new(
+            vec![Arc::new(Refuses(400)), Arc::new(Refuses(429))],
+            Observers::start(Vec::new(), 8),
+            Arc::default(),
+        );
+        assert_eq!(pipeline.admit(request()).await.err().unwrap().status, 400);
+    }
+
+    /// Each hook waits until every hook has started, which only finishes when they run at once.
+    struct Meets(Arc<tokio::sync::Barrier>);
+
+    impl Hook for Meets {
+        fn name(&self) -> &'static str {
+            "meets"
+        }
+
+        fn reads(&self) -> Facts {
+            Facts::KEY
+        }
+
+        fn writes(&self) -> Targets {
+            Targets::ADMISSION
+        }
+
+        fn run<'a>(
+            &'a self,
+            _request: &'a Arc<RequestFacts>,
+            _edit: &'a mut RequestEdit,
+        ) -> BoxFuture<'a, Result<Option<Box<dyn Settle>>, Refusal>> {
+            Box::pin(async move {
+                self.0.wait().await;
+                Ok(None)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn hooks_run_at_once() {
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let pipeline = Pipeline::new(
+            (0..3)
+                .map(|_| Arc::new(Meets(barrier.clone())) as Arc<dyn Hook>)
+                .collect(),
+            Observers::start(Vec::new(), 8),
+            Arc::default(),
+        );
+        let admitted =
+            tokio::time::timeout(std::time::Duration::from_secs(5), pipeline.admit(request()))
+                .await
+                .expect("hooks waited on each other");
+        assert!(admitted.is_ok());
     }
 }

@@ -152,9 +152,21 @@ pub struct RequestEdit {
 }
 
 impl RequestEdit {
-    pub(crate) fn scope(&mut self, writer: &'static str, allowed: Targets) {
-        self.writer = writer;
-        self.allowed = allowed;
+    /// An empty edit for one hook, which may only make the changes `allowed` names.
+    pub(crate) fn scoped(writer: &'static str, allowed: Targets) -> Self {
+        Self {
+            allowed,
+            writer,
+            ..Self::default()
+        }
+    }
+
+    /// Appends `later`'s changes after this edit's, as if its hook had run after this one's.
+    pub(crate) fn extend(&mut self, later: RequestEdit) {
+        self.header_ops.extend(later.header_ops);
+        self.body_fields.extend(later.body_fields);
+        self.response_headers.extend(later.response_headers);
+        self.annotations.extend(later.annotations);
     }
 
     fn may(&self, target: Targets) -> bool {
@@ -314,18 +326,18 @@ mod tests {
 
     #[rstest]
     fn header_changes_apply_in_order() {
-        let mut edit = RequestEdit::default();
-        edit.scope("first", Targets::UPSTREAM_HEADERS);
+        let mut edit = RequestEdit::scoped("first", Targets::UPSTREAM_HEADERS);
         edit.set_upstream_header(
             HeaderName::from_static("x-a"),
             HeaderValue::from_static("1"),
         );
-        edit.scope("second", Targets::UPSTREAM_HEADERS);
-        edit.remove_upstream_headers(HeaderPattern::parse("x-*").unwrap());
-        edit.set_upstream_header(
+        let mut second = RequestEdit::scoped("second", Targets::UPSTREAM_HEADERS);
+        second.remove_upstream_headers(HeaderPattern::parse("x-*").unwrap());
+        second.set_upstream_header(
             HeaderName::from_static("x-b"),
             HeaderValue::from_static("2"),
         );
+        edit.extend(second);
 
         let mut sent = headers(&[("X-A", "client"), ("content-type", "application/json")]);
         edit.apply_upstream_headers(&mut sent);
@@ -337,11 +349,11 @@ mod tests {
 
     #[rstest]
     fn later_hooks_win_on_the_same_body_field() {
-        let mut edit = RequestEdit::default();
-        edit.scope("first", Targets::UPSTREAM_BODY);
+        let mut edit = RequestEdit::scoped("first", Targets::UPSTREAM_BODY);
         edit.set_upstream_body_field("metadata", Value::from("a"));
-        edit.scope("second", Targets::UPSTREAM_BODY);
-        edit.set_upstream_body_field("metadata", Value::from("b"));
+        let mut second = RequestEdit::scoped("second", Targets::UPSTREAM_BODY);
+        second.set_upstream_body_field("metadata", Value::from("b"));
+        edit.extend(second);
 
         let serde_json::Value::Object(mut body) =
             serde_json::json!({"model": "m", "metadata": "client"})
@@ -357,8 +369,7 @@ mod tests {
 
     #[rstest]
     fn nested_body_fields_keep_their_siblings() {
-        let mut edit = RequestEdit::default();
-        edit.scope("hook", Targets::UPSTREAM_BODY);
+        let mut edit = RequestEdit::scoped("hook", Targets::UPSTREAM_BODY);
         edit.set_upstream_body_path(vec!["metadata".into(), "user_id".into()], Value::from("u"));
         edit.set_upstream_body_path(vec!["extra".into(), "a".into()], Value::from(1));
 
@@ -376,8 +387,7 @@ mod tests {
 
     #[rstest]
     fn undeclared_writes_are_dropped() {
-        let mut edit = RequestEdit::default();
-        edit.scope("reader", Targets::ANNOTATIONS);
+        let mut edit = RequestEdit::scoped("reader", Targets::ANNOTATIONS);
         edit.set_upstream_body_field("metadata", Value::Null);
         edit.add_response_header(
             HeaderName::from_static("x-a"),
