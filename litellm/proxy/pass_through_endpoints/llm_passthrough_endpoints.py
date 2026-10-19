@@ -3522,6 +3522,19 @@ def _strip_openai_version_prefix(normalized_path: str) -> str:
     return normalized_path
 
 
+def _iteratively_undecoded(value: str, max_rounds: int = 3) -> str:
+    """Decode nested percent-encoding (bounded): a wire path like /v1/%2566iles
+    carries a second encoded layer; the upstream decodes once, so this gate
+    resolves the fully decoded route name."""
+    decoded = value  # rebind-ok: the decode converges; each round replaces the wire path with one decoded layer
+    for _ in range(max_rounds):
+        step = unquote(decoded)
+        if step == decoded:
+            break
+        decoded = step
+    return decoded
+
+
 def openai_proxy_gate(
     *,
     user_api_key_dict: UserAPIKeyAuth,
@@ -3538,13 +3551,7 @@ def openai_proxy_gate(
     decoded path."""
     if is_proxy_admin(user_api_key_dict):
         return
-    decoded = endpoint_path
-    for _ in range(3):
-        step: Final = unquote(decoded)
-        if step == decoded:
-            break
-        decoded = step  # mutable-ok: the decode loop converges and the mutated value is the local decision input
-    normalized: Final = posixpath.normpath(f"/{decoded.strip('/')}")
+    normalized: Final = posixpath.normpath(_iteratively_undecoded(endpoint_path))
     canonical: Final = _strip_openai_version_prefix(normalized)
     if canonical.lower().startswith(_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES):
         raise HTTPException(
