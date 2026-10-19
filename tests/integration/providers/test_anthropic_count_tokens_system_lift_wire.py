@@ -398,24 +398,24 @@ def test_messages_count_tokens_keeps_a_mid_conversation_system_in_place(
         )
 
 
-def test_messages_count_tokens_falls_back_locally_when_every_message_is_system(
+def test_messages_count_tokens_surfaces_the_peer_error_when_every_message_is_system(
     deployment: _Deployment, gateway: Gateway
 ) -> None:
     with _listening(deployment) as peer:
         body: Final[dict[str, JsonValue]] = {"model": deployment.model, "messages": [LEADING]}
-        local: Final = _local_count(gateway, body)
         response: Final = _count(gateway, body)
-        assert _payload(response) == {"input_tokens": local}, response.text
+        assert response.status_code == 400, response.text
+        assert "input_tokens" not in response.text, response.text
         assert _bodies(peer, deployment.provider) == ({"model": _MODEL, "messages": [], "system": [LIFTED]},)
 
 
-def test_messages_count_tokens_leaves_the_request_untouched_for_a_non_text_system(
+def test_messages_count_tokens_surfaces_the_peer_error_for_a_non_text_system(
     deployment: _Deployment, gateway: Gateway
 ) -> None:
     with _listening(deployment) as peer:
-        local: Final = _local_count(gateway, count_request(deployment.model, STRING_CASE))
         response: Final = _count(gateway, {**count_request(deployment.model, STRING_CASE), "system": 5})
-        assert _payload(response) == {"input_tokens": local}, response.text
+        assert response.status_code == 400, response.text
+        assert "input_tokens" not in response.text, response.text
         assert _bodies(peer, deployment.provider) == ({"model": _MODEL, "messages": [LEADING, USER], "system": 5},)
 
 
@@ -428,14 +428,14 @@ def test_messages_count_tokens_repeated_request_lifts_each_time(deployment: _Dep
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,) * 2
 
 
-def test_messages_count_tokens_answers_a_leading_system_without_content_before_any_peer_call(
+def test_messages_count_tokens_surfaces_the_counting_error_for_a_leading_system_without_content(
     deployment: _Deployment, gateway: Gateway
 ) -> None:
     with _listening(deployment) as peer:
         body: Final[dict[str, JsonValue]] = {"model": deployment.model, "messages": [{"role": "system"}, USER]}
-        local: Final = _local_count(gateway, body)
         response: Final = _count(gateway, body)
-        assert _payload(response) == {"input_tokens": local}, response.text
+        assert 500 <= response.status_code < 600, response.text
+        assert "input_tokens" not in response.text, response.text
         assert peer.drain() == ()
         follow_up: Final = _count(gateway, count_request(deployment.model, STRING_CASE))
         assert _payload(follow_up) == {"input_tokens": _COUNT}, follow_up.text
@@ -458,14 +458,14 @@ def test_messages_count_tokens_duplicate_messages_key_lifts_the_last_value(
 
 
 @pytest.mark.parametrize("status", [400, 403, 404, 500, 503])
-def test_messages_count_tokens_falls_back_locally_when_the_peer_rejects_the_lifted_body(
+def test_messages_count_tokens_surfaces_the_peer_status_when_the_peer_rejects_the_lifted_body(
     deployment: _Deployment, gateway: Gateway, status: int
 ) -> None:
     with _listening(deployment, _rejecting(status)) as peer:
         body: Final = count_request(deployment.model, STRING_CASE)
-        local: Final = _local_count(gateway, body)
         response: Final = _count(gateway, body)
-        assert _payload(response) == {"input_tokens": local}, response.text
+        assert response.status_code == status, response.text
+        assert "input_tokens" not in response.text, response.text
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,)
 
 
@@ -478,14 +478,13 @@ def test_messages_count_tokens_unauthenticated_request_never_reaches_the_peer(
         assert peer.drain() == ()
 
 
-def test_peer_outage_between_concurrent_waves_falls_back_then_recovers(
+def test_peer_outage_between_concurrent_waves_errors_then_recovers(
     deployment: _Deployment, gateway: Gateway
 ) -> None:
     with ExitStack() as stack:
         clients: Final = _clients(stack, str(gateway.client.base_url), 8)
         pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(clients)))
         body: Final = count_request(deployment.model, STRING_CASE)
-        local: Final = _local_count(gateway, body)
 
         def count(client: httpx.Client) -> tuple[int, JsonValue]:
             return _counted_on(client, gateway.key, body)
@@ -493,7 +492,9 @@ def test_peer_outage_between_concurrent_waves_falls_back_then_recovers(
         with _listening(deployment) as peer:
             assert tuple(pool.map(count, clients)) == ((200, _COUNT),) * len(clients)
             assert _bodies(peer, deployment.provider) == (_STRING_BODY,) * len(clients)
-        assert tuple(pool.map(count, clients)) == ((200, local),) * len(clients)
+        outage: Final = tuple(pool.map(count, clients))
+        for status, tokens in outage:
+            assert 500 <= status < 600 and tokens is None, outage
         with _listening(deployment) as revived:
             assert tuple(pool.map(count, clients)) == ((200, _COUNT),) * len(clients)
             assert _bodies(revived, deployment.provider) == (_STRING_BODY,) * len(clients)
