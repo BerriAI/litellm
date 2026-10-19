@@ -60,7 +60,9 @@ def test_production_module_omits_panic_hook(facts: WheelFacts) -> None:
 
 
 def test_native_extension_does_not_exceed_48_mb(facts: WheelFacts) -> None:
-    assert facts.native_size <= 1, "Deliberate CI proof: native extension limit set to one byte"
+    assert facts.native_size <= 48_000_000, (
+        f"native extension exceeds 48 MB: {facts.native_size / 1_000_000:.2f} MB"
+    )
 
 
 def test_tokenizer_vocabularies_are_not_duplicated(facts: WheelFacts) -> None:
