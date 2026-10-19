@@ -978,6 +978,31 @@ async def test_credential_fields_name_every_field_that_carries_a_caller_header_o
     general_settings: dict[str, object],
     expected: tuple[str, ...],
 ) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(sent, request_headers, general_settings)
+
+    assert updated["proxy_server_request"]["credential_fields"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_headers,expected",
+    [({}, ()), ({"x-caller-trace": "trace-1"}, ("headers",))],
+    ids=["user-information-only", "user-information-and-caller-header"],
+)
+async def test_credential_fields_ignore_the_user_information_the_proxy_adds_to_forwarded_headers(
+    monkeypatch: pytest.MonkeyPatch, request_headers: dict[str, str], expected: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "add_user_information_to_llm_headers", True)
+
+    updated: Final = await _request_data_added_by_the_proxy({}, request_headers, FORWARD_PROVIDER_AUTH_HEADERS)
+
+    assert updated["headers"]["x-litellm-user_api_key_user_id"] == "test-user"
+    assert updated["proxy_server_request"]["credential_fields"] == expected
+
+
+async def _request_data_added_by_the_proxy(
+    sent: dict[str, object], request_headers: dict[str, str], general_settings: dict[str, object]
+) -> dict:
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     request_mock: Final = MagicMock(spec=Request)
@@ -991,7 +1016,7 @@ async def test_credential_fields_name_every_field_that_carries_a_caller_header_o
     request_mock.client.host = "127.0.0.1"
     data: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], **sent}
 
-    updated: Final = await add_litellm_data_to_request(
+    return await add_litellm_data_to_request(
         data=data,
         request=request_mock,
         user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", user_id="test-user"),
@@ -999,8 +1024,6 @@ async def test_credential_fields_name_every_field_that_carries_a_caller_header_o
         general_settings=dict(general_settings),
         version="test-version",
     )
-
-    assert updated["proxy_server_request"]["credential_fields"] == expected
 
 
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:

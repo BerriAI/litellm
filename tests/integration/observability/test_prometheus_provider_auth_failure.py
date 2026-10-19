@@ -86,6 +86,7 @@ REJECTED_CELLS: Final = (
     "plain-provider-specific-header",
     "forwarded-provider-header",
     "forwarded-plain-header",
+    "forwarded-user-information",
 )
 GATED_CELLS: Final = ("invalid-key", "missing-key", "expired-key", "blocked-key", "no-model-access")
 CALLER_SCOPE_CELLS: Final = ("forwarded-gateway-key", "caller-organization", "forwarded-organization")
@@ -293,8 +294,10 @@ def config(directory: Path, upstream: Wire) -> Path:
             name("forwarded-provider-header"),
             name("forwarded-plain-header"),
             name("forwarded-gateway-key"),
+            name("forwarded-user-information"),
         ]
     }
+    configuration["litellm_settings"]["add_user_information_to_llm_headers"] = True
     configuration["general_settings"]["forward_llm_provider_auth_headers"] = True
     configuration["general_settings"]["forward_openai_org_id"] = True
     configuration.setdefault("router_settings", {}).update({"num_retries": 0, "disable_cooldowns": True})
@@ -660,6 +663,19 @@ def test_a_provider_401_on_the_deployments_own_key_stays_out_when_the_proxy_forw
         (request.headers["authorization"], request.headers.get("x-caller-trace")) for request in rig.upstream.drain()
     ] == [("Bearer sk-deployment-credential-forwarded-plain-header", trace)]
     assert_kept_out_of_the_deployment_metrics(rig, "forwarded-plain-header")
+
+
+def test_a_provider_401_on_the_deployments_own_key_counts_when_the_proxy_forwards_only_its_own_user_information(
+    rig: Rig,
+) -> None:
+    rig.upstream.drain()
+    response: Final = send(rig.gateway, "forwarded-user-information")
+    assert response.status_code == 401, response.text
+    reached: Final = rig.upstream.drain()
+    assert [
+        (request.headers["authorization"], "x-litellm-user_api_key_hash" in request.headers) for request in reached
+    ] == [("Bearer sk-deployment-credential-forwarded-user-information", True)]
+    assert_recorded_as_a_deployment_failure(rig, "forwarded-user-information", "401")
 
 
 def test_a_provider_401_on_a_gateway_key_the_proxy_forwards_stays_out_of_a_healthy_deployments_metrics(
