@@ -252,7 +252,7 @@ class GenericAPILogger(CustomBatchLogger):
         if self.retry_delay <= 0:
             return
 
-        delay: Final = self.retry_delay * (2**attempt)
+        delay: Final = self.retry_delay * (2.0**attempt)
         await asyncio.sleep(delay)
 
     async def _post_with_retries(self, data: str) -> httpx.Response:

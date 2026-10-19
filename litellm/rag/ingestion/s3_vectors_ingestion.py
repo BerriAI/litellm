@@ -37,7 +37,7 @@ from litellm.llms.s3_vectors.vector_stores.transformation import (
     s3_vectors_ingest_embedding_options,
     s3_vectors_ingest_target,
 )
-from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
+from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 
 if TYPE_CHECKING:
     import httpx
@@ -269,13 +269,13 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Validate bucket name (AWS S3 naming rules)
         if len(self.vector_bucket_name) < 3:
-            raise ValueError(
+            raise RAGIngestBadRequestError(
                 f"Invalid vector_bucket_name '{self.vector_bucket_name}': "
                 f"AWS S3 bucket names must be at least 3 characters long. "
                 f"Please provide a valid bucket name (e.g., 'my-vector-bucket')."
             )
         if not self.vector_bucket_name.replace("-", "").replace(".", "").isalnum():
-            raise ValueError(
+            raise RAGIngestBadRequestError(
                 f"Invalid vector_bucket_name '{self.vector_bucket_name}': "
                 f"AWS S3 bucket names can only contain lowercase letters, numbers, hyphens, and periods. "
                 f"Please provide a valid bucket name (e.g., 'my-vector-bucket')."
