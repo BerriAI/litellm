@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
-from collections.abc import AsyncGenerator, Iterator, Mapping
+import sys
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Final
@@ -17,15 +19,24 @@ from starlette.routing import Match
 
 import litellm
 from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.decisions_endpoints.endpoints import decisions, router, systemone
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import SafeRouteAdder
 from litellm.proxy.proxy_server import (
     app,
     cleanup_router_config_variables,
+    hash_token,
     initialize,
 )
 from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionRequestBody
+from tests._master_key import MASTER_KEY
+
+if sys.version_info >= (3, 14):
+    from compression import zstd
+else:
+    from backports import zstd
 
 _INPUT_TOKENS: Final[int] = 367
 _OUTPUT_TOKENS: Final[int] = 3
@@ -1282,3 +1293,56 @@ def test_the_two_decisions_routes_document_different_request_formats(decisions_o
 
     assert "state" in properties("/v1/systemone") and "state" not in properties("/v1/decisions")
     assert "input" in properties("/v1/decisions") and "input" not in properties("/v1/systemone")
+
+
+def test_proxy_systemone_reads_a_zstd_compressed_request_body(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        content=zstd.compress(json.dumps(_REQUEST).encode()),
+        headers={"content-type": "application/json", "content-encoding": "zstd"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert json.loads(upstream.calls[0].request.content)["questions"] == _REQUEST["questions"]
+
+
+@pytest.mark.parametrize(
+    ("content_encoding", "compress"),
+    (("gzip", gzip.compress), ("zstd", zstd.compress)),
+)
+def test_a_compressed_body_naming_a_model_outside_the_key_is_refused_by_auth(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    content_encoding: str,
+    compress: Callable[[bytes], bytes],
+) -> None:
+    user_key: Final = "sk-decider-only"
+    user_api_key_cache: Final = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key), models=["decider"])
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", "no-db-needed-for-a-cached-key")
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        content=compress(json.dumps({**_REQUEST, "model": "not-on-this-key"}).encode()),
+        headers={
+            "content-type": "application/json",
+            "content-encoding": content_encoding,
+            "authorization": f"Bearer {user_key}",
+        },
+    )
+
+    assert response.status_code == 403, response.text
+    assert "not-on-this-key" in response.text
+    assert not upstream.called
