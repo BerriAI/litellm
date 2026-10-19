@@ -6,7 +6,13 @@
 //! the usage is estimated from the request and the streamed text, as Python's stream wrapper
 //! does.
 
-use std::{collections::BTreeMap, sync::LazyLock};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        LazyLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, stream::BoxStream};
@@ -38,7 +44,9 @@ use litellm_llms::{
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsUsage, CompletionTokensDetails, PromptTokensDetails,
 };
-use litellm_token_counter::{CountableRequest, TokenCounter};
+use litellm_token_counter::{
+    CountableRequest, TokenCounter, Tokenizer, tiktoken::TiktokenTokenizer,
+};
 use serde_json::{Map, Value, json};
 use tokio_util::codec::Decoder;
 
@@ -52,8 +60,13 @@ use crate::{
 const ENV_REFERENCE: &str = "os.environ/";
 
 /// The tokenizer Python's `token_counter` falls back to for models it has no tokenizer for.
-static TOKENIZER: LazyLock<Option<TokenCounter>> =
-    LazyLock::new(|| TokenCounter::from_tiktoken("cl100k_base").ok());
+static TOKENIZER: LazyLock<Option<TiktokenTokenizer>> =
+    LazyLock::new(|| TiktokenTokenizer::from_name("cl100k_base").ok());
+
+/// The most text one estimate encodes. Encoding runs inline and grows faster than the text on
+/// a long run of one character (a megabyte of `a` takes over half a second), so the text past
+/// this is counted at the rate of the text encoded before it.
+const ENCODED_BYTES: usize = 64 * 1024;
 
 /// The config of a provider served through the OpenAI passthrough with its own transforms.
 pub fn compatible_chat_config(
@@ -261,7 +274,7 @@ impl ResponseAdapter {
         if streamed.usage_seen {
             return None;
         }
-        let tokenizer = TOKENIZER.as_ref()?;
+        let tokenizer = counter()?;
         let reasoning_tokens = match streamed.reasoning.is_empty() {
             true => 0,
             false => tokenizer.count_text(&streamed.reasoning).ok()?,
@@ -376,8 +389,43 @@ fn prompt_tokens(body: &Map<String, Value>) -> u64 {
         .collect();
     let counted = serde_json::from_value::<CountableRequest>(Value::Object(request))
         .ok()
-        .and_then(|request| TOKENIZER.as_ref()?.count_request(&request).ok());
+        .and_then(|request| counter()?.count_request(&request).ok());
     counted.map_or(0, |count| count.input_tokens as u64)
+}
+
+/// A counter that encodes at most `ENCODED_BYTES` across everything it counts.
+fn counter() -> Option<TokenCounter> {
+    TOKENIZER.as_ref().map(|tokenizer| {
+        TokenCounter::new(Bounded {
+            tokenizer,
+            left: AtomicUsize::new(ENCODED_BYTES),
+        })
+    })
+}
+
+/// Encodes each text up to what is left of the budget and extrapolates the rest: at the rate of
+/// the part encoded, or at four bytes a token once the budget is spent.
+struct Bounded {
+    tokenizer: &'static TiktokenTokenizer,
+    left: AtomicUsize,
+}
+
+impl Tokenizer for Bounded {
+    fn count_tokens(&self, text: &str) -> Result<usize, litellm_token_counter::Error> {
+        let mut end = text.len().min(self.left.load(Ordering::Relaxed));
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.left.fetch_sub(end, Ordering::Relaxed);
+        let tokens = Tokenizer::count_tokens(self.tokenizer, &text[..end])?;
+        let rest = text.len() - end;
+        Ok(tokens
+            + match (rest, end) {
+                (0, _) => 0,
+                (_, 0) => rest.div_ceil(4),
+                _ => (rest * tokens).div_ceil(end),
+            })
+    }
 }
 
 struct Relay {
@@ -562,6 +610,31 @@ mod tests {
             "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
         );
         assert_eq!(usage.get().unwrap().total_tokens, 2);
+    }
+
+    #[rstest]
+    fn a_long_prompt_is_encoded_up_to_the_budget_and_extrapolated() {
+        // Four MiB of one character: encoding it whole takes seconds and gigabytes, and every
+        // eight `a`s are one cl100k token.
+        let long = "a".repeat(4 << 20);
+        let body = json!({"messages": [{"role": "user", "content": long}]});
+        let counted = prompt_tokens(body.as_object().unwrap());
+        let exact = (4 << 20) / 8 + 7;
+        assert!(
+            counted.abs_diff(exact) < exact / 100,
+            "{counted} vs {exact}"
+        );
+    }
+
+    #[rstest]
+    #[case::within_the_budget("Hello from the parity mock.", 6)]
+    #[case::cut_inside_a_character(&"é".repeat(ENCODED_BYTES), ENCODED_BYTES)]
+    fn text_counts_within_a_percent_of_its_encoding(#[case] text: &str, #[case] encoded: usize) {
+        let counted = counter().unwrap().count_text(text).unwrap();
+        assert!(
+            counted.abs_diff(encoded) <= encoded / 100,
+            "{counted} vs {encoded}"
+        );
     }
 
     #[rstest]
