@@ -105,6 +105,7 @@ from litellm.types.utils import (
     ProviderField,
     StandardCallbackDynamicParams,
     StandardLoggingGuardrailInformation,
+    StandardLoggingKubernetesPodRouting,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
@@ -667,6 +668,7 @@ class LiteLLMRoutes(enum.Enum):
             "/model/update",
             "/model/delete",
             "/model/info",
+            "/model/{model_id}/kubernetes_pods",
             "/jwt/key/mapping/new",
             "/jwt/key/mapping/update",
             "/jwt/key/mapping/delete",
@@ -2791,6 +2793,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
     )
+    self_serve_budget_policy: Literal["disabled", "lower_only", "ceiling"] | None = Field(
+        None,
+        description="Lets a non-admin change max_budget or budget_limits on a key they created and still own via /key/update. 'disabled' (default) requires an admin for any budget change. 'lower_only' lets the owner add or lower limits. 'ceiling' also lets the owner raise or remove limits when they could create that key with the new budget via /key/generate.",
+    )
     user_mcp_management_mode: UserMCPManagementMode | None = Field(
         None,
         description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
@@ -3682,6 +3688,7 @@ class SpendLogsMetadata(TypedDict):
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
+    kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None

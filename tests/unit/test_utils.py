@@ -114,10 +114,22 @@ from litellm.utils import (
 )
 
 
-def test_get_base_model_from_metadata_returns_unvalidated_root_value():
+@pytest.mark.parametrize("root_base_model", [42, ["gemini-3.5-flash"], {"model": "gemini-3.5-flash"}])
+def test_get_base_model_from_metadata_ignores_a_non_string_root_value(root_base_model: object):
     from litellm.utils import get_base_model_from_metadata
 
-    assert get_base_model_from_metadata({"litellm_params": {"base_model": 42}}) == 42
+    assert get_base_model_from_metadata({"litellm_params": {"base_model": root_base_model}}) is None
+    assert (
+        get_base_model_from_metadata(
+            {
+                "litellm_params": {
+                    "base_model": root_base_model,
+                    "metadata": {"model_info": {"base_model": "vertex_ai/gemini-3.5-flash"}},
+                }
+            }
+        )
+        == "vertex_ai/gemini-3.5-flash"
+    )
 
 
 def _reject_short_post_call_response(input: str, model: str | None = None) -> dict[str, object]:

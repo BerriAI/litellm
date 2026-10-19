@@ -1547,10 +1547,8 @@ def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_ev
             "DATABASE_URL_READ_REPLICA",
             "GENERIC_CLIENT_ID",
             "GOOGLE_CLIENT_ID",
-            "GOOGLE_CLIENT_SECRET",
             "MICROSOFT_CLIENT_ID",
             "MICROSOFT_CLIENT_SECRET",
-            "MICROSOFT_TENANT",
             "PROXY_BASE_URL",
         )
         with (
@@ -1569,12 +1567,7 @@ def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_ev
                 response: Final = first.request(
                     "POST",
                     "/config/update",
-                    {
-                        "environment_variables": {
-                            "MICROSOFT_CLIENT_ID": client_id,
-                            "MICROSOFT_CLIENT_SECRET": secret,
-                        }
-                    },
+                    {"environment_variables": {"MICROSOFT_CLIENT_ID": client_id, "MICROSOFT_CLIENT_SECRET": secret}},
                 )
                 assert response.status_code == 200, response.text
 

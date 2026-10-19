@@ -43,6 +43,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     EMPTY_MAPPING,
     INTERNAL_CALLBACK_NAMES,
+    KUBERNETES_POD_ROUTING_KEY,
     PROVIDER_REQUEST_ID_HEADERS,
     REDACTED_BY_LITELLM,
 )
@@ -75,6 +76,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 from litellm.litellm_core_utils.core_helpers import (
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
+    proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
     set_response_cost_in_hidden_params,
@@ -149,6 +151,7 @@ from litellm.types.llms.openai import (
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
+from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     CachingDetails,
@@ -298,7 +301,9 @@ else:
     _GENERIC_API_LOGGER_CLS: Final = GenericAPILogger
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
-_STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token", "usage_object"))
+_STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(
+    ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY)
+)
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
 )
@@ -988,6 +993,16 @@ class Logging(LiteLLMLoggingBaseClass):
             if model_id is not None:
                 return model_id
         return None
+
+    def _routed_deployment_model(self) -> str | None:
+        litellm_params: Final = self._model_call_details_view.get("litellm_params")
+        metadata: Final = (
+            StandardLoggingPayloadSetup.merge_litellm_metadata(_LITELLM_PARAMS.validate_python(litellm_params))
+            if isinstance(litellm_params, dict)
+            else {}
+        )
+        deployment: Final = metadata.get("deployment")
+        return deployment if isinstance(deployment, str) else None
 
     def get_deployment_model_for_cost(self) -> str | None:
         """The provider-qualified model to price against.
@@ -2256,6 +2271,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.agenerate_content.value, False) is not True
             and litellm_params.get(CallTypes.agenerate_content_stream.value, False) is not True
             and litellm_params.get(CallTypes.arealtime.value, False) is not True
+            and litellm_params.get(CallTypes.aresponses_websocket.value, False) is not True
         )
 
     _is_sync_litellm_request = is_sync_litellm_request
@@ -2511,7 +2527,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
             logging_result = ResponsesWebSocketTokenUsageProcessor.create_logging_object(
-                results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                litellm_model_name=self._routed_deployment_model(),
             )
 
         elif self.relays_llm_passthrough and isinstance(result, Response):
@@ -6276,7 +6293,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_standard_logging_metadata(
         metadata: Mapping[str, object] | None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         prompt_integration: str | None = None,
         applied_guardrails: list[str] | None = None,
         mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = None,
@@ -6316,6 +6333,8 @@ class StandardLoggingPayloadSetup:
                     prompt_integration=prompt_integration,
                 )
 
+        kubernetes_pod_routing: Final = proxy_stamped_kubernetes_pod_routing(metadata, litellm_params)
+
         # Initialize with default values
         clean_metadata = StandardLoggingMetadata(
             user_api_key_hash=None,
@@ -6352,6 +6371,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_auth_metadata=None,
             team_alias=None,
             team_id=None,
+            kubernetes_pod_routing=kubernetes_pod_routing,
             used_client_oauth_token=resolve_used_client_oauth_token(
                 proxy_stamped_used_client_oauth_token(metadata, litellm_params),
                 custom_llm_provider,
@@ -6464,6 +6484,7 @@ class StandardLoggingPayloadSetup:
         custom_llm_provider: str | None,
         init_response_obj: object,
         api_base: str | None = None,
+        router_model_id: str | None = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name: Final = select_model_name_for_cost_calc(
             model=base_model if custom_pricing else None,
@@ -6471,12 +6492,23 @@ class StandardLoggingPayloadSetup:
             base_model=base_model,
             custom_pricing=custom_pricing,
         )
+        pricing_model_name: Final = (
+            select_model_name_for_cost_calc(
+                model=base_model if custom_pricing else None,
+                completion_response=init_response_obj,
+                base_model=base_model,
+                custom_pricing=custom_pricing,
+                router_model_id=router_model_id,
+            )
+            if router_model_id is not None
+            else model_cost_name
+        )
         if model_cost_name is None:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
             try:
                 _model_cost_information: Final = litellm.get_model_info(
-                    model=model_cost_name,
+                    model=pricing_model_name or model_cost_name,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
                 )
@@ -6686,6 +6718,7 @@ class StandardLoggingPayloadSetup:
         rate_limit_category: Final = validate_rate_limit_category(getattr(original_exception, "category", None))
         rate_limit_type: Final = validate_rate_limit_type(getattr(original_exception, "rate_limit_type", None))
         budget_error: Final = original_exception if isinstance(original_exception, BudgetExceededError) else None
+        router_error: Final = original_exception if isinstance(original_exception, RouterRateLimitError) else None
         provider_request_id: Final = _get_provider_request_id(original_exception) if original_exception else None
 
         return StandardLoggingPayloadErrorInformation(
@@ -6701,6 +6734,7 @@ class StandardLoggingPayloadSetup:
             error_budget_entity_id=budget_error.entity_id if budget_error else None,
             error_budget_limit=budget_error.max_budget if budget_error else None,
             error_budget_spend=budget_error.current_cost if budget_error else None,
+            error_cooldown_deployments=router_error.cooldown_deployments if router_error else None,
             normalized_error=normalize_error(original_exception, error_status, error_message),
         )
 
@@ -7184,6 +7218,7 @@ def get_standard_logging_object_payload(
             custom_llm_provider=kwargs.get("custom_llm_provider"),
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
+            router_model_id=logging_obj.get_router_model_id(),
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
@@ -7419,6 +7454,7 @@ def get_standard_logging_metadata(
         user_api_key_auth_metadata=None,
         team_alias=None,
         team_id=None,
+        kubernetes_pod_routing=None,
         used_client_oauth_token=None,
     )
     if isinstance(metadata, dict):
@@ -7492,6 +7528,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         requester_ip_address="127.0.0.1",
         requester_metadata=None,
         user_api_key_end_user_id="test_end_user",
+        kubernetes_pod_routing=None,
     )
 
     hidden_params: Final = StandardLoggingHiddenParams(

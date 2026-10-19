@@ -3118,14 +3118,19 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
         return response_ids[-1] if response_ids else None
 
     @staticmethod
-    def create_logging_object(results: Sequence[Mapping[str, object]]) -> LiteLLMRealtimeStreamLoggingObject:
+    def create_logging_object(
+        results: Sequence[Mapping[str, object]], litellm_model_name: str | None = None
+    ) -> LiteLLMRealtimeStreamLoggingObject:
         tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(results)
-        return LiteLLMRealtimeStreamLoggingObject(
+        logging_object: Final = LiteLLMRealtimeStreamLoggingObject(
             id=ResponsesWebSocketTokenUsageProcessor.response_id_from_responses_ws_results(results),
             usage=ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(results),
             results=cast(OpenAIRealtimeStreamList, list(results)),  # cast-ok: raw WS frames, unvalidated field
             service_tier=next(iter(tier_partition)) if len(tier_partition) == 1 else None,
         )
+        if litellm_model_name is not None:
+            logging_object.hidden_params = {"litellm_model_name": litellm_model_name}
+        return logging_object
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"

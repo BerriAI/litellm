@@ -30,7 +30,12 @@ from litellm._internal_context import in_post_response_phase
 from litellm._logging import session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
+from litellm.constants import (
+    KUBERNETES_POD_ROUTING_KEY,
+    LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
+    REDACTED_BY_LITELLM,
+    SENTRY_PII_DENYLIST,
+)
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
@@ -2064,6 +2069,56 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
     logger.log_failure_event.assert_not_called()
     assert captured["litellm_params"].get("_arealtime") is True
     assert LitellmLogging.is_sync_litellm_request(captured["litellm_params"]) is False
+
+
+@pytest.mark.asyncio
+async def test_aresponses_websocket_turn_reaches_a_custom_logger_through_the_async_hook_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils import thread_pool_executor
+    from litellm.responses.main import base_llm_http_handler
+
+    class InlineExecutor:
+        def submit(self, fn, *args, **kwargs):
+            fn(*args, **kwargs)
+
+    sessions: list[LitellmLogging] = []
+
+    async def open_session(**kwargs):
+        sessions.append(kwargs["logging_obj"])
+
+    async_logged = asyncio.Event()
+    sync_call_ids: list[str] = []
+    async_call_ids: list[str] = []
+
+    class CaptureLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            sync_call_ids.append(kwargs["litellm_call_id"])
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            async_call_ids.append(kwargs["litellm_call_id"])
+            async_logged.set()
+
+    logger = CaptureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "success_callback", ["cache", logger])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logger])
+    monkeypatch.setattr(thread_pool_executor, "executor", InlineExecutor())
+    with patch.object(  # test-quality-ok: the provider socket is the seam; how a turn of the session logs is under test
+        base_llm_http_handler, "async_responses_websocket", AsyncMock(side_effect=open_session)
+    ):
+        await litellm._aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
+    turn = sessions[0].copy_for_new_call("ws-turn-2", dt_object.now())
+
+    await turn.dispatch_success_handlers(
+        litellm.ResponsesAPIResponse(
+            id="resp_turn_2", created_at=0, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[]
+        ),
+        prefer_async_handlers=True,
+    )
+    await asyncio.wait_for(async_logged.wait(), timeout=10)
+
+    assert (async_call_ids, sync_call_ids) == (["ws-turn-2"], [])
 
 
 @pytest.mark.asyncio
@@ -4570,6 +4625,50 @@ def test_get_error_information_falls_back_to_str_when_no_message_attr():
     assert result["error_class"] == "ValueError"
 
 
+def test_get_error_information_records_the_cooled_deployments_of_a_router_refusal():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.router import RouterRateLimitError
+    from litellm.types.utils import CooldownDeploymentInfo
+
+    cooled: Final = (
+        CooldownDeploymentInfo(model_id="refused-1", api_base="https://first.example/v1"),
+        CooldownDeploymentInfo(model_id="refused-2", api_base=None),
+    )
+    refusal: Final = RouterRateLimitError(
+        model="refused",
+        cooldown_time=60,
+        enable_pre_call_checks=False,
+        cooldown_list=["refused-1", "refused-2", "neighbour-1"],
+        model_ids=("refused-1", "refused-2"),
+        cooldown_deployments=cooled,
+    )
+
+    result: Final = StandardLoggingPayloadSetup.get_error_information(refusal)
+    assert (result["error_class"], result["error_code"], result["error_cooldown_deployments"]) == (
+        "RouterRateLimitError",
+        "429",
+        cooled,
+    ), result
+    provider_429: Final = litellm.RateLimitError("scripted 429", "openai", "gpt-5.4")
+    assert StandardLoggingPayloadSetup.get_error_information(provider_429)["error_cooldown_deployments"] is None
+
+
+def test_get_error_information_handles_a_router_refusal_subclass_that_skips_its_init():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.router import RouterRateLimitError
+
+    class PluginRefusal(RouterRateLimitError):
+        def __init__(self, message: str) -> None:
+            ValueError.__init__(self, message)
+
+    result: Final = StandardLoggingPayloadSetup.get_error_information(PluginRefusal("plugin refused"))
+    assert (result["error_class"], result["error_code"], result["error_cooldown_deployments"]) == (
+        "PluginRefusal",
+        "429",
+        None,
+    ), result
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Tests for _get_assembled_streaming_response non-streaming early return
 # ──────────────────────────────────────────────────────────────────────
@@ -5717,6 +5816,97 @@ def test_get_standard_logging_object_payload_takes_used_client_oauth_token_from_
 
     assert payload is not None
     assert payload["metadata"]["used_client_oauth_token"] is expected
+
+
+@pytest.mark.parametrize(
+    ("metadata", "litellm_metadata", "expected"),
+    [
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {},
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.1",
+                "pod_count": 3,
+                "selection": "round_robin",
+            },
+        ),
+        (
+            {},
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.2",
+                    "pod_count": 3,
+                    "selection": "session_affinity",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.2",
+                "pod_count": 3,
+                "selection": "session_affinity",
+            },
+        ),
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.3",
+                    "pod_count": 3,
+                    "selection": "session_affinity_retry",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.3",
+                "pod_count": 3,
+                "selection": "session_affinity_retry",
+            },
+        ),
+    ],
+)
+def test_standard_logging_payload_resolves_kubernetes_pod_routing_from_metadata_buckets(
+    logging_obj: LitellmLogging,
+    metadata: dict[str, object],
+    litellm_metadata: dict[str, object],
+    expected: dict[str, object],
+) -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime(2026, 1, 1)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-4o",
+            "messages": [],
+            "litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"][KUBERNETES_POD_ROUTING_KEY] == expected
 
 
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
@@ -10580,6 +10770,89 @@ def test_uncached_price_leaves_no_pricing_state_on_the_call():
 
         assert cost is not None and cost > 0.0
         assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
+@pytest.mark.parametrize(
+    ("input_cost_per_token", "output_cost_per_token"),
+    [(1e-06, 2e-06), (0.0, 0.0)],
+    ids=["custom_price", "explicit_zero_price"],
+)
+def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_billed_from(
+    input_cost_per_token: float, output_cost_per_token: float
+):
+    """A deployment with its own price keeps the catalog model as model_map_key but is logged at its own rates."""
+    deployment_id: Final = "lit9660-priced-deployment"
+    deployment_model_info: Final = {
+        "id": deployment_id,
+        "input_cost_per_token": input_cost_per_token,
+        "output_cost_per_token": output_cost_per_token,
+    }
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": output_cost_per_token,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        logging_obj: Final = LitellmLogging(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="lit9660",
+            function_id="fn",
+        )
+        litellm_params: Final = {
+            "metadata": {
+                "model_group": "lit9660-group",
+                "deployment": "openai/gpt-5.4-nano",
+                "model_info": deployment_model_info,
+            }
+        }
+        logging_obj.update_environment_variables(
+            model="gpt-5.4-nano", user="", optional_params={}, litellm_params=litellm_params, custom_llm_provider="openai"
+        )
+        response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=6, total_tokens=16),
+        )
+
+        response_cost: Final = logging_obj.response_cost_calculator(result=response)
+        payload: Final = get_standard_logging_object_payload(
+            kwargs={
+                "model": "gpt-5.4-nano",
+                "custom_llm_provider": "openai",
+                "litellm_params": litellm_params,
+                "response_cost": response_cost,
+            },
+            init_response_obj=response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+        assert response_cost == 10 * input_cost_per_token + 6 * output_cost_per_token
+        assert payload is not None
+        assert payload["model_map_information"] == {
+            "model_map_key": "openai/gpt-5.4-nano",
+            "model_map_value": litellm.get_model_info(model=f"openai/{deployment_id}", custom_llm_provider="openai"),
+        }
+        model_map_value: Final = payload["model_map_information"]["model_map_value"]
+        assert model_map_value is not None
+        assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (
+            input_cost_per_token,
+            output_cost_per_token,
+        )
     finally:
         litellm.model_cost.pop(deployment_id, None)
 
