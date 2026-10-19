@@ -12,6 +12,7 @@ from pydantic import JsonValue, TypeAdapter
 
 KEYWORD: Final = "zebracornflux"
 FLAGGED: Final = "moderation-flagged-fragment"
+MODERATION_LIMIT: Final = 24_000
 AZURE_FLAGGED: Final = "azure-flagged-fragment"
 AZURE_LIMIT: Final = 10_000
 AZURE_ANALYZE: Final = "/contentsafety/text:analyze"
@@ -38,7 +39,7 @@ def _vendors(request: Request) -> Reply:
         return Reply()
     body: Final = json.loads(request.body)
     if request.target.endswith("/moderations"):
-        flagged: Final = FLAGGED in body["input"]
+        flagged: Final = FLAGGED in body["input"] and len(body["input"]) <= MODERATION_LIMIT
         return Reply(
             body=json.dumps(
                 {
@@ -209,25 +210,28 @@ def test_deep_tool_result_chain_cannot_hide_a_later_keyword(rig: Rig) -> None:
 
 
 @pytest.mark.parametrize(
-    ("path", "body", "fragments"),
+    ("path", "body", "message", "added"),
     (
         pytest.param(
             "/v1/messages",
             _messages("tool result"),
-            ("read notes", "summarize", "system note", "notes.txt\ntool input", "tool result"),
+            ("read notes", "summarize"),
+            ("system note", "notes.txt\ntool input", "tool result"),
             id="messages",
         ),
         pytest.param(
             "/v1/chat/completions",
             _chat(json.dumps({"path": "n.txt", "content": "argument text"})),
-            ("write notes", "written", "say hi", "n.txt\nargument text"),
+            ("write notes", "written", "say hi"),
+            ("n.txt\nargument text",),
             id="chat",
         ),
     ),
 )
 def test_read_only_vendors_receive_tool_and_system_text(
-    rig: Rig, path: str, body: dict[str, JsonValue], fragments: tuple[str, ...]
+    rig: Rig, path: str, body: dict[str, JsonValue], message: tuple[str, ...], added: tuple[str, ...]
 ) -> None:
+    fragments: Final = (*message, *added)
     rig.wire.drain()
     response: Final = rig.proxy.request("POST", path, body)
     assert response.status_code == 200, response.text
@@ -235,10 +239,26 @@ def test_read_only_vendors_receive_tool_and_system_text(
     moderated: Final = tuple(json.loads(r.body)["input"] for r in sent if r.target.endswith("/moderations"))
     detected: Final = tuple(json.loads(r.body)["contents"] for r in sent if "/api/v1/text/contents" in r.target)
     orchestrated: Final = tuple(json.loads(r.body)["content"] for r in sent if r.target.endswith("/detection/content"))
-    assert moderated == ("".join(fragments),)
+    assert moderated == ("".join(message), "".join(added))
     assert detected == (list(fragments),)
     assert orchestrated == fragments
     assert len(_provider_calls(sent)) == 1
+
+
+def test_moderation_flag_in_message_text_blocks_next_to_long_system_text(rig: Rig) -> None:
+    rig.wire.drain()
+    system: Final = ("Follow the repository conventions and write tests. " * 600)[:30_000]
+    body: Final = {
+        "model": "claude",
+        "max_tokens": 32,
+        "cache": {"no-cache": True},
+        "system": system,
+        "messages": [{"role": "user", "content": f"say {FLAGGED}"}],
+    }
+    response: Final = rig.proxy.request("POST", "/v1/messages", body)
+    assert response.status_code == 403, response.text
+    moderated: Final = tuple(json.loads(r.body)["input"] for r in rig.wire.drain() if r.target.endswith("/moderations"))
+    assert moderated == (f"say {FLAGGED}",)
 
 
 def test_moderation_flag_in_tool_result_blocks(rig: Rig) -> None:

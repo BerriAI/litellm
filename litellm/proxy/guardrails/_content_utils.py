@@ -315,8 +315,18 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
     system, instructions and tool text. Walks every role (user, assistant,
     system, …) — guardrails inspect the entire conversation, not just user turns.
     """
-    message_text: Final = tuple(_iter_message_parts_text(data))
+    message_text, added_text = split_message_text(data)
     yield from message_text
+    yield from added_text
+
+
+def split_message_text(data: Mapping[str, object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the message text parts, then the system, instructions and tool text, in :func:`iter_message_text` order."""
+    message_text: Final = tuple(_iter_message_parts_text(data))
+    return message_text, tuple(_iter_added_text(data, message_text))
+
+
+def _iter_added_text(data: Mapping[str, object], message_text: tuple[str, ...]) -> Iterator[str]:
     pending: Final = Counter(message_text)
     for text in _iter_request_text(data):
         if pending[text]:
