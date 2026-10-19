@@ -42,8 +42,9 @@ const publicNameTooltipContent = (
   <div className="flex flex-col gap-2 text-left font-normal">
     <div>The name you specify in your API calls to LiteLLM Proxy</div>
     <div>
-      <strong>Example:</strong> If you name your virtual model <code className={tooltipCodeClassName}>example-name</code>
-      , and choose <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
+      <strong>Example:</strong> If you name your virtual model{" "}
+      <code className={tooltipCodeClassName}>example-name</code>, and choose{" "}
+      <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
     </div>
     <div>
       <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
