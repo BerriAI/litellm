@@ -224,3 +224,52 @@ async def test_apimodels_anthropic_messages_request_is_bridged_to_chat_completio
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert body["max_tokens"] == 32
     assert response["content"][0]["text"] == "Hello from APIMODELS"
+
+
+def _completion_with_usage(model: str, usage: dict[str, object]) -> litellm.ModelResponse:
+    body: Final = {**_chat_completion(model), "usage": usage}
+    with respx.mock() as upstream:
+        upstream.post("https://api.apimodels.app/v1/chat/completions").respond(200, json=body)
+        return litellm.completion(
+            model=f"apimodels/{model}",
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="apimodels-test-key",
+        )
+
+
+def test_apimodels_chat_completion_cost_bills_cached_tokens_at_cache_read_rate():
+    row: Final = litellm.model_cost["apimodels/gpt-6-sol"]
+    response: Final = _completion_with_usage(
+        "gpt-6-sol",
+        {
+            "prompt_tokens": 1000,
+            "completion_tokens": 20,
+            "total_tokens": 1020,
+            "prompt_tokens_details": {"cached_tokens": 800},
+        },
+    )
+
+    assert row["cache_read_input_token_cost"] < row["input_cost_per_token"]
+    assert litellm.completion_cost(completion_response=response, model="apimodels/gpt-6-sol") == pytest.approx(
+        200 * row["input_cost_per_token"] + 800 * row["cache_read_input_token_cost"] + 20 * row["output_cost_per_token"]
+    )
+
+
+def test_apimodels_prompt_over_272k_bills_the_whole_request_at_the_long_context_rates():
+    row: Final = litellm.model_cost["apimodels/gpt-6-sol"]
+    response: Final = _completion_with_usage(
+        "gpt-6-sol",
+        {
+            "prompt_tokens": 300_000,
+            "completion_tokens": 20,
+            "total_tokens": 300_020,
+            "prompt_tokens_details": {"cached_tokens": 100_000},
+        },
+    )
+
+    assert row["input_cost_per_token_above_272k_tokens"] > row["input_cost_per_token"]
+    assert litellm.completion_cost(completion_response=response, model="apimodels/gpt-6-sol") == pytest.approx(
+        200_000 * row["input_cost_per_token_above_272k_tokens"]
+        + 100_000 * row["cache_read_input_token_cost_above_272k_tokens"]
+        + 20 * row["output_cost_per_token_above_272k_tokens"]
+    )
