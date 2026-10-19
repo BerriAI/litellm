@@ -635,3 +635,46 @@ def test_openai_proxy_gate_matches_case_variant_version_prefixes():
                 endpoint_path=path,
             )
         assert int(getattr(exc.value, "status_code", 0)) == 403
+
+
+def test_openai_proxy_gate_decodes_percent_encoded_management_paths():
+    """A wire path carrying a percent-encoded management segment (`v1/%2566iles`
+    -> wire `%66iles` -> upstream decodes once to `files`) is the same request
+    as `/v1/files`: the gate must decide on the fully decoded path. Found
+    reviewing this PR's own review corpus - the raw-string check passed on the
+    encoded spelling while the forward sent it with shared credentials."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        openai_proxy_gate,
+    )
+
+    for wire_path in ("/v1/%2566iles", "/v1/%66iles", "/v1/%66ILEs"):
+        with pytest.raises(HTTPException) as exc:
+            openai_proxy_gate(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+                endpoint_path=wire_path,
+            )
+        assert int(getattr(exc.value, "status_code", 0)) == 403
+
+
+def test_openai_proxy_gate_decodes_absolute_endpoint_strings():
+    """An absolute endpoint string jumps the base URL by construction; its
+    httpx-resolved path is the value to authorize."""
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        openai_proxy_gate,
+    )
+
+    for raw in ("https://unused.invalid/v1/files", "https://unused.invalid/v1/%2566iles"):
+        decoded: Final = httpx.URL(raw).path  # the handler forwards this exact path
+        with pytest.raises(HTTPException) as exc:
+            openai_proxy_gate(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+                endpoint_path=decoded,
+            )
+        assert int(getattr(exc.value, "status_code", 0)) == 403

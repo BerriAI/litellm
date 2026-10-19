@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
+from urllib.parse import unquote
 
 import httpx
 import openai
@@ -3531,10 +3532,19 @@ def openai_proxy_gate(
     object-management paths address the shared account with no tenant records,
     so they are proxy-admin-only. The check runs on the canonical forward path:
     a caller that omits the /v1 segment reaches the same management routes once
-    the forwarder injects the version prefix."""
+    the forwarder injects the version prefix, and a percent-encoded management
+    segment (`%2566iles` -> wire `%66iles`) arrives at the upstream as the plain
+    route once their server decodes it once - so the decision uses the fully
+    decoded path."""
     if is_proxy_admin(user_api_key_dict):
         return
-    normalized: Final = posixpath.normpath(f"/{endpoint_path.strip('/')}")
+    decoded: Final = endpoint_path
+    for _ in range(3):
+        step: Final = unquote(decoded)
+        if step == decoded:
+            break
+        decoded = step
+    normalized: Final = posixpath.normpath(f"/{decoded.strip('/')}")
     canonical: Final = _strip_openai_version_prefix(normalized)
     if canonical.lower().startswith(_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES):
         raise HTTPException(
@@ -3573,6 +3583,17 @@ class BaseOpenAIPassThroughHandler:
             base_url=base_url,
             path=encoded_endpoint,
             custom_llm_provider=custom_llm_provider,
+        )
+
+        # (R2-3) The authoritative authorization runs on the canonical forward
+        # path - the value httpx will actually send. A raw-string check at the
+        # route can be dodged with a percent-encoded management segment
+        # (`%2566iles` decodes to `files` here) or an absolute endpoint string
+        # that jumps the base URL; both are the same forward decision once
+        # httpx parses them.
+        openai_proxy_gate(
+            user_api_key_dict=user_api_key_dict,
+            endpoint_path=httpx.URL(str(updated_url)).path,
         )
 
         ## check for streaming
