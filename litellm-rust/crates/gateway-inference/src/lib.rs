@@ -3,7 +3,6 @@
 //! Authentication, rate limiting and logging are the mounting server's layers; this crate
 //! maps a public model name to its deployment and runs the core route.
 
-mod audio_transcription;
 mod caching;
 mod chat_completions;
 mod client_side;
@@ -11,24 +10,16 @@ mod error;
 mod hooks;
 pub mod messages;
 pub mod observe;
-mod ocr;
 mod request;
-mod responses;
 
 use std::sync::{Arc, OnceLock};
 
 use axum::{Router, routing::post};
-use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
+use litellm_http::{ClientVariant, HttpClientConfig};
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::ChatCompletionsRoute;
 use litellm_inference_messages::MessagesRoute;
-use litellm_inference_ocr::OcrRoute;
-use litellm_inference_responses::ResponsesRoute;
-use litellm_inference_transcription::AudioTranscriptionRoute;
-use litellm_llms::base_llm::{
-    model_info::ModelInfo,
-    ocr::{handler::OcrClient, settings::OcrSettings},
-};
+use litellm_llms::base_llm::model_info::ModelInfo;
 use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
@@ -42,11 +33,8 @@ pub struct Gateway {
     model_info: OnceLock<Arc<dyn ModelInfo>>,
     drop_params: bool,
     allow_client_side_credentials: bool,
-    pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
-    pub ocr: OcrRoute,
-    pub responses: ResponsesRoute,
     pub models: ModelRouter,
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
@@ -129,26 +117,12 @@ impl Gateway {
             model_info: OnceLock::new(),
             drop_params: false,
             allow_client_side_credentials: false,
-            audio_transcription: AudioTranscriptionRoute::new(
-                provider.clone(),
-                auth.clone(),
-                secrets.clone(),
-            ),
             chat_completions: ChatCompletionsRoute::new(
                 provider.clone(),
                 auth.clone(),
                 secrets.clone(),
             ),
-            messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
-            responses: ResponsesRoute::new(provider, auth.clone(), secrets.clone()),
-            ocr: OcrRoute::new(OcrClient::new(
-                &resources.pool,
-                &http,
-                UrlPolicy::default(),
-                auth,
-                OcrSettings::default(),
-                secrets.clone(),
-            )?),
+            messages: MessagesRoute::new(provider, auth, secrets.clone()),
             models,
             secrets,
             resources,
@@ -160,19 +134,18 @@ impl Gateway {
 pub fn router(gateway: Arc<Gateway>) -> Router {
     Router::new()
         .route("/v1/messages", post(messages::create))
-        .route("/ocr", post(ocr::create))
-        .route("/v1/ocr", post(ocr::create))
         .route("/chat/completions", post(chat_completions::create))
         .route("/v1/chat/completions", post(chat_completions::create))
         .nest("/engines/{model}", model_routes())
         .nest("/openai/deployments/{model}", model_routes())
-        .route("/audio/transcriptions", post(audio_transcription::create))
-        .route(
-            "/v1/audio/transcriptions",
-            post(audio_transcription::create),
-        )
-        .route("/responses", post(responses::create))
-        .route("/v1/responses", post(responses::create))
+        // Not served: these routes skip the hooks (budgets, rate limits, spend), so a key could
+        // spend past its limits through them.
+        .route("/responses", post(request::unsupported))
+        .route("/v1/responses", post(request::unsupported))
+        .route("/audio/transcriptions", post(request::unsupported))
+        .route("/v1/audio/transcriptions", post(request::unsupported))
+        .route("/ocr", post(request::unsupported))
+        .route("/v1/ocr", post(request::unsupported))
         .route("/embeddings", post(request::unsupported))
         .route("/v1/embeddings", post(request::unsupported))
         .route("/completions", post(request::unsupported))

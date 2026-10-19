@@ -139,30 +139,6 @@ fn refusal(row: &VerificationToken, personal_keys_use_teams: bool) -> Option<Ref
             team_id: team_id.clone(),
         });
     }
-    // Refused here as the proxy's auth does, on the spend last stored, so routes outside the hook
-    // pipeline (responses, audio, OCR) also stop an exhausted key or team; the budgets hook then
-    // enforces the live counters on messages and chat.
-    if let Some(max_budget) = row.max_budget
-        && max_budget.is_finite()
-        && row.spend >= max_budget
-    {
-        return Some(budget_exceeded(
-            format!("Key={}", key_label(row)),
-            row.spend,
-            max_budget,
-        ));
-    }
-    if let Some((team_id, team)) = team
-        && let Some(max_budget) = team.max_budget
-        && max_budget.is_finite()
-        && team.spend > max_budget
-    {
-        return Some(budget_exceeded(
-            format!("Team={team_id}"),
-            team.spend,
-            max_budget,
-        ));
-    }
     unsupported(row, personal_keys_use_teams)
         .map(|(restriction, owner)| Refusal::Unsupported { restriction, owner })
 }
@@ -255,57 +231,6 @@ fn metadata_restriction(metadata: &Value) -> Option<Restriction> {
         })
 }
 
-fn budget_exceeded(label: String, spend: f64, max_budget: f64) -> Refusal {
-    Refusal::BudgetExceeded {
-        owner: label,
-        spend: python_float(spend),
-        max_budget: python_float(max_budget),
-    }
-}
-
-/// The proxy names a key by its alias, adding `key_name` only while it still looks masked.
-fn key_label(row: &VerificationToken) -> String {
-    let alias = row
-        .key_alias
-        .as_deref()
-        .filter(|alias| !alias.is_empty())
-        .unwrap_or("key");
-    match row.key_name.as_deref().filter(|name| is_masked(name)) {
-        Some(name) => format!("{alias} ({name})"),
-        None => alias.to_owned(),
-    }
-}
-
-/// The proxy's `_MASKED_KEY_NAME_RE`, `sk-\.\.\.(?:[^\s\x00-\x1f\x7f-\x9f]{4})?`.
-fn is_masked(name: &str) -> bool {
-    name.strip_prefix("sk-...").is_some_and(|rest| {
-        rest.is_empty()
-            || (rest.chars().count() == 4
-                && rest
-                    .chars()
-                    .all(|character| !character.is_whitespace() && !character.is_control()))
-    })
-}
-
-/// Python's `repr` of a float.
-fn python_float(value: f64) -> String {
-    if value.is_nan() {
-        return "nan".into();
-    }
-    if value.is_infinite() {
-        return if value > 0.0 { "inf" } else { "-inf" }.into();
-    }
-    let magnitude = value.abs();
-    if magnitude != 0.0 && !(1e-4..1e16).contains(&magnitude) {
-        let scientific = format!("{value:e}");
-        let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-        let exponent: i32 = exponent.parse().unwrap_or(0);
-        let sign = if exponent < 0 { '-' } else { '+' };
-        return format!("{mantissa}e{sign}{:02}", exponent.abs());
-    }
-    format!("{value:?}")
-}
-
 fn is_set(value: &Value) -> bool {
     match value {
         Value::Null | Value::Bool(false) => false,
@@ -395,14 +320,6 @@ mod tests {
         }
     }
 
-    fn exceeded(owner: &str, spend: &str, max_budget: &str) -> KeyStatus {
-        refused(Refusal::BudgetExceeded {
-            owner: owner.into(),
-            spend: spend.into(),
-            max_budget: max_budget.into(),
-        })
-    }
-
     fn unsupported(restriction: Restriction, owner: Owner) -> KeyStatus {
         refused(Refusal::Unsupported { restriction, owner })
     }
@@ -474,39 +391,6 @@ mod tests {
         None,
         0.0,
         refused(Refusal::TeamBlocked { team_id: "team-1".into() })
-    )]
-    #[case::key_at_budget(
-        false,
-        None,
-        None,
-        Some(10.0),
-        10.0,
-        exceeded("Key=key", "10.0", "10.0")
-    )]
-    #[case::key_zero_budget(false, None, None, Some(0.0), 0.0, exceeded("Key=key", "0.0", "0.0"))]
-    #[case::team_over_budget(
-        false,
-        Some("team-1"),
-        team(false, Some(5.0), 5.25),
-        None,
-        0.0,
-        exceeded("Team=team-1", "5.25", "5.0")
-    )]
-    #[case::team_over_budget_under_key_budget(
-        false,
-        Some("team-1"),
-        team(false, Some(5.0), 9.0),
-        Some(10.0),
-        2.0,
-        exceeded("Team=team-1", "9.0", "5.0")
-    )]
-    #[case::key_budget_checked_before_team(
-        false,
-        Some("team-1"),
-        team(false, Some(5.0), 9.0),
-        Some(1.0),
-        2.0,
-        exceeded("Key=key", "2.0", "1.0")
     )]
     fn refuses_like_the_proxy(
         row: VerificationToken,

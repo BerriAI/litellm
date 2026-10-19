@@ -178,8 +178,6 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
 #[case::messages("/v1/messages")]
 #[case::chat("/v1/chat/completions")]
 #[case::model_path("/engines/path-model/chat/completions")]
-#[case::ocr("/ocr")]
-#[case::transcription("/audio/transcriptions")]
 #[tokio::test]
 async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
     let upstream = MockServer::start().await;

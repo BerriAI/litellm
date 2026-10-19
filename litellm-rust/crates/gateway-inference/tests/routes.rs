@@ -130,29 +130,16 @@ async fn chat_errors_come_from_core(
 }
 
 #[rstest]
-#[case::audio("/v1/audio/transcriptions", "bedrock/test-model", "audio")]
-#[case::document("/v1/ocr", "mistral/test-ocr", "document")]
-#[tokio::test]
-async fn missing_inference_fields_use_the_same_validation_as_null(
-    #[case] path: &str,
-    #[case] model: &str,
-    #[case] field: &str,
-) {
-    let upstream = MockServer::start().await;
-    let app = support::app(model, &upstream.uri());
-    let missing = support::post(app.clone(), path, json!({"model": "public/model"})).await;
-    let null = support::post(app, path, json!({"model": "public/model", field: null})).await;
-    assert_eq!(missing.status(), 400);
-    assert_eq!(missing.status(), null.status());
-    assert_eq!(support::json(missing).await, support::json(null).await);
-    assert!(upstream.received_requests().await.unwrap().is_empty());
-}
-
-#[rstest]
 #[case("/embeddings")]
 #[case("/v1/embeddings")]
 #[case("/completions")]
 #[case("/v1/completions")]
+#[case("/responses")]
+#[case("/v1/responses")]
+#[case("/audio/transcriptions")]
+#[case("/v1/audio/transcriptions")]
+#[case("/ocr")]
+#[case("/v1/ocr")]
 #[case("/engines/public%2Fmodel/embeddings")]
 #[case("/openai/deployments/public%2Fmodel/completions")]
 #[tokio::test]
@@ -171,65 +158,9 @@ async fn unimplemented_routes_return_an_explicit_error(#[case] path: &str) {
 }
 
 #[rstest]
-#[case("/audio/transcriptions")]
-#[case("/v1/audio/transcriptions")]
-#[tokio::test]
-async fn transcription_aliases_reach_core_validation(#[case] path: &str) {
-    let response = support::post(
-        support::app("bedrock/test-model", "http://127.0.0.1:1"),
-        path,
-        json!({"model": "public/model", "audio": {"data": "YWJj", "format": "invalid"}}),
-    )
-    .await;
-    assert_eq!(response.status(), 400);
-    let body: Value = support::json(response).await;
-    assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("audio.format")
-    );
-}
-
-#[rstest]
-#[case::no_extension("test")]
-#[case::unsupported_extension("test.invalid")]
-#[tokio::test]
-async fn upload_audio_format_validation_matches_core(#[case] filename: &str) {
-    let upstream = MockServer::start().await;
-    let app = support::app("bedrock/test-model", &upstream.uri());
-    let path = "/v1/audio/transcriptions";
-    let expected = support::post(
-        app.clone(),
-        path,
-        json!({"model": "public/model", "audio": {"data": "YWJj", "format": null}}),
-    )
-    .await;
-    let payload = format!(
-        "--test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\npublic/model\r\n\
-         --test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\r\nabc\r\n--test--\r\n"
-    );
-    let response = app
-        .oneshot(
-            Request::post(path)
-                .header("content-type", "multipart/form-data; boundary=test")
-                .body(Body::from(payload))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 400);
-    assert_eq!(support::json(response).await, support::json(expected).await);
-    assert!(upstream.received_requests().await.unwrap().is_empty());
-}
-
-#[rstest]
 #[case::chat("/v1/chat/completions", false)]
-#[case::responses("/v1/responses", false)]
 #[case::deployment("/openai/deployments/public%2Fmodel/chat/completions", false)]
 #[case::messages("/v1/messages", true)]
-#[case::ocr("/v1/ocr", false)]
-#[case::transcription("/v1/audio/transcriptions", false)]
 #[tokio::test]
 async fn json_extraction_rejections_use_the_endpoint_error_envelope(
     #[case] path: &str,
