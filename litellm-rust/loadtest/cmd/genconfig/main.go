@@ -122,7 +122,12 @@ general_settings:
   master_key: %s
 `, *masterKey)
 	if full {
-		omit := os.Getenv("LOADTEST_OMIT_CALLBACKS")
+		// Experiment branch: the gateway pods run genconfig in an init container that the build's
+		// environment does not reach, so s3_v2 is left out here unless the variable says otherwise.
+		omit, set := os.LookupEnv("LOADTEST_OMIT_CALLBACKS")
+		if !set {
+			omit = "s3_v2"
+		}
 		if omit != "" {
 			log.Printf("leaving out callbacks: %s", omit)
 		}
