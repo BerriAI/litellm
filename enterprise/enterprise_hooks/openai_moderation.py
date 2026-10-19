@@ -40,7 +40,7 @@ class ENTERPRISE_OpenAI_Moderation(CustomLogger):
         # Covers multimodal list content + Responses-API input. System, instructions
         # and tool text go in a second call after the message text.
         message_text, added_text = split_message_text(data)
-        texts = ("".join(message_text), "".join(added_text)) if added_text else ("".join(message_text),)
+        texts = tuple(text for text in ("".join(message_text), "".join(added_text)) if text) or ("",)
 
         from litellm.proxy.proxy_server import llm_router
 

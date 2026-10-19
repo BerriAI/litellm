@@ -909,6 +909,37 @@ async def test_openai_moderation_sends_tool_and_system_text_in_its_own_call(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("data", "inputs"),
+    [
+        ({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]}, [""]),
+        (
+            {
+                "system": "be brief",
+                "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}],
+            },
+            ["be brief"],
+        ),
+    ],
+    ids=("no-text", "system-only"),
+)
+async def test_openai_moderation_makes_one_call_when_one_side_has_no_text(
+    monkeypatch: pytest.MonkeyPatch, user_api_key: UserAPIKeyAuth, data: dict[str, JsonValue], inputs: list[str]
+) -> None:
+    from enterprise.enterprise_hooks.openai_moderation import ENTERPRISE_OpenAI_Moderation
+
+    seen: Final[list[str]] = []
+
+    async def amoderation(model: str, input: str) -> SimpleNamespace:
+        seen.append(input)
+        return SimpleNamespace(results=[SimpleNamespace(flagged=False)])
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", SimpleNamespace(amoderation=amoderation))
+    assert await ENTERPRISE_OpenAI_Moderation().async_moderation_hook(data, user_api_key, "acompletion") is None
+    assert seen == inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("configured_after_init", "expected_model"),
     [("omni-moderation-2024-09-26", "omni-moderation-2024-09-26"), (None, DEFAULT_OPENAI_MODERATIONS_MODEL)],
 )
