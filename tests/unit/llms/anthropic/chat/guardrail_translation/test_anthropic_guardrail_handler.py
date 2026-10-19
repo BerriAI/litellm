@@ -10,6 +10,8 @@ from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
+import litellm
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -2905,3 +2907,31 @@ class TestAnthropicMessagesHandlerPostCallHookResponse:
         native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
 
         assert AnthropicMessagesHandler().post_call_hook_response(native) is native
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rewritten", [
+    "Short context\n\nSummarize it", "Short context. Summarize it", "Short context\n\n",
+])
+async def test_headroom_latest_multipart_turn_preserves_valid_text_blocks(
+    rewritten: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
+    messages: Final = [{"role": "user", "content": [
+        {"type": "text", "text": "Context " * 100},
+        {"type": "text", "text": "Summarize it"},
+    ]}]
+    route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(
+        200, json={"messages": [{"role": "user", "content": rewritten}]}
+    )
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        {"model": "claude-haiku-5-5", "max_tokens": 200, "messages": messages}, callback
+    )
+    assert route.called
+    assert result["messages"] == ([{"role": "user", "content": [
+        {"type": "text", "text": "Short context"},
+        {"type": "text", "text": "Summarize it"},
+    ]}] if rewritten == "Short context\n\nSummarize it" else messages)

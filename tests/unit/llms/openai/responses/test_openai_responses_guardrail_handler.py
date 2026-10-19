@@ -4215,14 +4215,14 @@ async def test_headroom_latest_user_input_preserves_native_text_metadata(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
     route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(
-        200, json={"messages": [{"role": "user", "content": "short"}]}
+        200, json={"messages": [{"role": "user", "content": "short\n\nsummary"}]}
     )
     result: Final = await OpenAIResponsesHandler().process_input_messages({"input": raw_input}, callback)
     assert route.called
-    assert result["input"] == ([{"role": "user", "content": "short"}] if isinstance(raw_input, str) else [
+    assert result["input"] == ([{"role": "user", "content": "short\n\nsummary"}] if isinstance(raw_input, str) else [
         {"role": "user", "content": [
             {"type": "input_text", "text": "short", "source": "first"},
-            {"type": "input_text", "text": "", "source": "second"},
+            {"type": "input_text", "text": "summary", "source": "second"},
         ]},
     ])
 
@@ -4232,6 +4232,8 @@ async def test_headroom_unsafe_native_mapping_preserves_request_and_tools(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+    from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+    from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
@@ -4247,5 +4249,11 @@ async def test_headroom_unsafe_native_mapping_preserves_request_and_tools(
     })
     result: Final = await OpenAIResponsesHandler().process_input_messages(original, callback)
     assert route.called
-    assert result == {"input": items}
+    assert result["input"] == items
     assert "tools" not in result
+    _, metadata = get_or_create_metadata_bucket(original)
+    entries: Final = metadata.get("standard_logging_guardrail_information", [])
+    assert len(entries) == 1
+    assert entries[0]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert entries[0]["duration"] >= 0
+    assert extract_compression_saved_tokens({"guardrail_information": entries}) == 0

@@ -279,9 +279,7 @@ def _rewritten_input_item(
         from litellm.proxy.guardrails.guardrail_hooks.content_text import content_to_text, replace_text_content
 
         typed_rewritten: Final = _item_fields_adapter.validate_python(rewritten)
-        replaced: Final = replace_text_content(
-            item.get(field), content_to_text(typed_rewritten.get("content"), ignore_empty=True)
-        )
+        replaced: Final = replace_text_content(item.get(field), content_to_text(typed_rewritten.get("content")))
         return {**item, field: replaced} if replaced is not None else None
     rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
     converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
@@ -511,18 +509,13 @@ def patch_response_request_fields(
     *,
     preserve_text_metadata: bool = False,
 ) -> _RequestFields | None:
-    if isinstance(raw_input, str) and preserve_text_metadata:
-        return patch_response_request_fields(
-            [{"role": "user", "content": raw_input}],
-            instructions,
-            original_messages,
-            structured_messages,
-            preserve_text_metadata=True,
-        )
-    if not isinstance(raw_input, list) or len(original_messages) != len(structured_messages):
+    input_items: Final = (
+        [{"role": "user", "content": raw_input}] if isinstance(raw_input, str) and preserve_text_metadata else raw_input
+    )
+    if not isinstance(input_items, list) or len(original_messages) != len(structured_messages):
         return None
     offset: Final = 1 if instructions else 0
-    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:])
+    provenance: Final = _input_item_provenance(input_items, tuple(original_messages)[offset:])
     if provenance is None:
         return None
     item_for_message, tainted = provenance
@@ -546,7 +539,7 @@ def patch_response_request_fields(
     replacements: Final = MappingProxyType(
         {
             item_for_message[message_index]: _rewritten_input_item(
-                cast("Mapping[str, object]", raw_input[item_for_message[message_index]]),  # cast-ok: checked Mappings
+                cast("Mapping[str, object]", input_items[item_for_message[message_index]]),  # cast-ok: checked Mappings
                 rewritten,
                 preserve_text_metadata=preserve_text_metadata,
             )
@@ -556,7 +549,7 @@ def patch_response_request_fields(
     if len(replacements) != len(body_changes) or any(item is None for item in replacements.values()):
         return None
     return _RequestFields(
-        input=tuple(replacements.get(index, item) for index, item in enumerate(raw_input)),
+        input=tuple(replacements.get(index, item) for index, item in enumerate(input_items)),
         instructions=instructions_value,
     )
 

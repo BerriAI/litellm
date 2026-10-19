@@ -3122,6 +3122,8 @@ async def test_configured_latest_turn_compression_preserves_tool_linkage(
     [],
     [{"role": "assistant", "content": "short"}],
     [{"role": "user", "content": {"unexpected": "shape"}}],
+    [{"role": "user", "content": ""}],
+    [{"role": "user", "content": " "}],
     [{"role": "user", "content": "short", "tool_call_id": "wrong"}],
 ])
 async def test_latest_turn_unsafe_rewrite_keeps_original_input(
@@ -3131,9 +3133,16 @@ async def test_latest_turn_unsafe_rewrite_keeps_original_input(
     callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, compress_latest_turn=True)
     original: Final = GenericGuardrailAPIInputs(structured_messages=[{"role": "user", "content": "long " * 100}])
     route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(200, json={"messages": rewritten})
-    result: Final = await callback.apply_guardrail(original, {}, "request")
+    request_data: Final[dict[str, object]] = {}
+    result: Final = await callback.apply_guardrail(original, request_data, "request")
     assert route.called
     assert result is original
+    entries: Final = _recorded_guardrail_entries(request_data)
+    assert len(entries) == 1
+    assert entries[0]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert entries[0]["duration"] >= 0
+    assert entries[0]["end_time"] >= entries[0]["start_time"]
+    assert extract_compression_saved_tokens({"guardrail_information": entries}) == 0
 
 
 @pytest.mark.asyncio
@@ -3176,7 +3185,7 @@ async def test_latest_turn_retains_each_text_parts_metadata(
         {"type": "text", "text": "more " * 100, "source": "second"},
     ]}]
     route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(
-        200, json={"messages": [{"role": "user", "content": "short"}]}
+        200, json={"messages": [{"role": "user", "content": "short\n\nsummary"}]}
     )
     result: Final = await callback.apply_guardrail(
         GenericGuardrailAPIInputs(structured_messages=messages), {}, "request"
@@ -3184,7 +3193,7 @@ async def test_latest_turn_retains_each_text_parts_metadata(
     assert route.called
     assert result["structured_messages"] == [{"role": "user", "content": [
         {"type": "text", "text": "short", "source": "first"},
-        {"type": "text", "text": "", "source": "second"},
+        {"type": "text", "text": "summary", "source": "second"},
     ]}]
 
 
@@ -3207,14 +3216,20 @@ async def test_latest_turn_does_not_replace_non_text_content(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["Already short", [
+    {"type": "text", "text": "Already", "source": "first"},
+    {"type": "text", "text": "short", "source": "second"},
+]])
 async def test_latest_turn_unchanged_text_retains_original_metadata(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    content: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, compress_latest_turn=True)
-    original: Final = [{"role": "user", "content": "Already short", "name": "reader"}]
+    original: Final = [{"role": "user", "content": content, "name": "reader"}]
     route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(
-        200, json={"messages": [{"role": "user", "content": "Already short"}]}
+        200, json={"messages": [
+            {"role": "user", "content": "Already short" if isinstance(content, str) else "Already\n\nshort"}
+        ]}
     )
     result: Final = await callback.apply_guardrail(
         GenericGuardrailAPIInputs(structured_messages=original), {}, "request"

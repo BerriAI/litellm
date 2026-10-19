@@ -20,7 +20,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.litellm_core_utils.prompt_templates.factory import get_attribute_or_key
 
 
-def content_to_text(content: object, *, ignore_empty: bool = False) -> str:
+def content_to_text(content: object) -> str:
     """Collapse a message ``content`` (str or list-of-parts) to plain text.
 
     For the multimodal list shape, joins ``{type: "text", text: ...}`` parts
@@ -33,7 +33,7 @@ def content_to_text(content: object, *, ignore_empty: bool = False) -> str:
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
                 text = part.get("text")
-                if isinstance(text, str) and (text or not ignore_empty):
+                if isinstance(text, str):
                     parts.append(text)
         return "\n\n".join(parts)
     return ""
@@ -102,6 +102,8 @@ _TEXT_PARTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
 def replace_text_content(content: object, text: str) -> object:
+    if not text.strip():
+        return None
     if isinstance(content, str):
         return text
     if not isinstance(content, list) or not content:
@@ -115,4 +117,7 @@ def replace_text_content(content: object, text: str) -> object:
         for part in parts
     ):
         return None
-    return [{**part, "text": text if index == 0 else ""} for index, part in enumerate(parts)]
+    texts: Final = text.split("\n\n", len(parts) - 1)
+    if len(texts) != len(parts) or any(not value.strip() for value in texts):
+        return None
+    return [{**part, "text": value} for part, value in zip(parts, texts)]

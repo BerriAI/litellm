@@ -144,8 +144,11 @@ def _restore_content_shapes(
 
 def _compressed_message_content(original: Mapping[str, object], rewritten: Mapping[str, object]) -> object:
     content: Final = rewritten.get("content")
-    if content == original.get("content"):
-        return content
+    original_content: Final = original.get("content")
+    if content == original_content or (
+        is_all_text_parts(original_content) and content == content_to_text(original_content)
+    ):
+        return original_content
     if not isinstance(content, str):
         return None
     return replace_text_content(original.get("content"), content)
@@ -810,11 +813,28 @@ class HeadroomGuardrail(CustomGuardrail):
 
         return str(body)
 
+    def _record_skipped_rewrite(self, request_data: dict[str, object], start_time: float, end_time: float) -> None:
+        from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "error": "Headroom rewrite could not be mapped safely",
+                "compression_applied": False,
+            },
+            request_data=request_data,
+            guardrail_status="guardrail_failed_to_respond",
+            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time - start_time,
+        )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -882,6 +902,7 @@ class HeadroomGuardrail(CustomGuardrail):
             else _restore_content_shapes(originals=compressible, returned=result.messages)
         )
         if restored is None:
+            self._record_skipped_rewrite(request_data, start_time, end_time)
             return inputs
         compressed: Final = _restore_protected_messages(
             messages=messages,
@@ -902,6 +923,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 )
                 is None
             ):
+                self._record_skipped_rewrite(request_data, start_time, end_time)
                 return inputs
 
         self.add_standard_logging_guardrail_information_to_request_data(
