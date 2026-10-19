@@ -1,11 +1,11 @@
 """Provider / exporter factory + the Baggage span processor."""
 
 import queue
-import random
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from hashlib import sha256
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -512,9 +512,9 @@ def _is_sampled(destination: "OtelDestination") -> bool:
     return destination.success_sampling_rate is not None or destination.error_sampling_rate is not None
 
 
-#: A verdict is one request tree's draw for one destination at its rates: the exporter
+#: A verdict is one trace's keep or drop for one destination at its rates: the exporter
 #: ``cache_key`` leaves the rates out, so two destinations sharing an exporter with
-#: different rates would otherwise share one draw.
+#: different rates would otherwise share one verdict.
 _VerdictKey = tuple[int, object, float | None, float | None]
 
 
@@ -522,15 +522,19 @@ def _verdict_key(trace_id: int, destination: "OtelDestination") -> _VerdictKey:
     return (trace_id, destination.cache_key(), destination.success_sampling_rate, destination.error_sampling_rate)
 
 
-def _keeps_tree(destination: "OtelDestination", failed: bool, draw: Callable[[], float]) -> bool:
-    """Whether one draw against the destination's rate keeps a request tree, read the
-    way the legacy Arize callback reads ``arize_success_sampling_rate`` /
-    ``arize_error_sampling_rate``: a tree with a failed span answers to the error
-    rate, an unset rate keeps everything and ``0.0`` keeps nothing."""
+def _keeps_tree(destination: "OtelDestination", failed: bool, trace_id: int) -> bool:
+    """Whether the destination's rate keeps a request tree of ``trace_id``: a tree with
+    a failed span answers to ``arize_error_sampling_rate``, the rest to
+    ``arize_success_sampling_rate``, an unset rate keeps everything and ``0.0`` keeps
+    nothing.
+
+    The first eight bytes of a SHA-256 of the trace id are read against the rate, so
+    every process serving a span of the trace reaches the same verdict."""
     rate: Final = destination.error_sampling_rate if failed else destination.success_sampling_rate
     if rate is None:
         return True
-    return rate > 0.0 and draw() <= rate
+    digest: Final = sha256(trace_id.to_bytes(16, "big")).digest()
+    return int.from_bytes(digest[:8], "big") < round(rate * 2**64)
 
 
 def _in_scope(span: ReadableSpan, scope: "OtelSpanScope") -> bool:
@@ -667,10 +671,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         default_capture_by_backend: Mapping[str, str] = MappingProxyType({}),
         pending_drains: int = _MAX_PENDING_DRAINS,
         drain_pool: _DrainPool | None = None,
-        sampling_draw: Callable[[], float] | None = None,
     ) -> None:
         self._operator_sinks: Final = operator_sinks
-        self._draw: Final = sampling_draw if sampling_draw is not None else random.random
         self._excluded_db_systems: Final = excluded_db_systems
         self._default_capture: Final = default_capture
         self._default_capture_by_backend: Final = default_capture_by_backend
@@ -750,7 +752,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         tree is held for the rest of its trace, or what the bounds made the fan-out decide
         early (a tree that outgrew its cap is decided on what it has, and so is the oldest
         tree once too many are waiting, so a span that never ends holds nothing back for
-        ever). A failed span marks its tree before any such early draw. Once shutdown
+        ever). A failed span marks its tree before any such early decision. Once shutdown
         has started flushing, nothing is held: a span ending then is decided at once,
         since no later flush would reach it.
 
@@ -795,16 +797,16 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             return self._decide_locked(trace_id)
 
     def _decide_locked(self, trace_id: int) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
-        """Draw once per destination for the held tree; the spans the draws keep, and a
-        verdict remembered for the spans of this trace that start later."""
+        """Decide once per destination for the held tree; the spans the verdicts keep, and
+        a verdict remembered for the spans of this trace that start later."""
         tree: Final = self._pending.pop(trace_id, None)
         if tree is None:
             return ()
-        verdicts: dict[_VerdictKey, bool] = {}  # mutable-ok: one draw per destination of this tree
+        verdicts: dict[_VerdictKey, bool] = {}  # mutable-ok: one verdict per destination of this tree
         for _, destination in tree.held:
             key = _verdict_key(trace_id, destination)
             if key not in verdicts:
-                verdicts[key] = _keeps_tree(destination, tree.failed, self._draw)
+                verdicts[key] = _keeps_tree(destination, tree.failed, trace_id)
                 self._verdicts[key] = verdicts[key]
         while len(self._verdicts) > _MAX_REMEMBERED_VERDICTS:
             self._verdicts.popitem(last=False)
