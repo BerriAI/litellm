@@ -13,6 +13,7 @@ from litellm.decisions.call import (
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
+    log_caller_request,
     prepare_call,
     send,
 )
@@ -59,6 +60,14 @@ def _prepare_decisions_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    log_caller_request(
+        kwargs,
+        {
+            "input": decision_input,
+            "questions": questions,
+            **({"state": kwargs["state"]} if "state" in kwargs else {}),
+        },
+    )
     return prepare_call(
         model=model,
         fields=_request_fields(decision_input, questions, kwargs),
