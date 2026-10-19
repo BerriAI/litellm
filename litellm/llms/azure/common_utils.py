@@ -4,9 +4,9 @@ import json
 import os
 import re
 import threading
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Hashable, Mapping
 from contextlib import closing
-from functools import lru_cache, partial
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, cast
 
@@ -138,7 +138,37 @@ def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return _cached_azure_ad_token_refresh_provider(scope)
 
 
+@lru_cache(maxsize=128)
+def _cached_oidc_token_provider(
+    azure_ad_token: str,
+    client_id: str | None,
+    tenant_id: str | None,
+    scope: str,
+) -> Callable[[], str]:
+    return lambda: get_azure_ad_token_from_oidc(
+        azure_ad_token=azure_ad_token,
+        azure_client_id=client_id,
+        azure_tenant_id=tenant_id,
+        scope=scope,
+    )
+
+
 def _async_azure_ad_token_provider(
+    provider: Callable[[], str | Awaitable[str]],
+) -> Callable[[], Awaitable[str]]:
+    if isinstance(provider, Hashable):
+        return _shared_async_azure_ad_token_provider(provider)
+    return _single_flight_async_azure_ad_token_provider(provider)
+
+
+@lru_cache(maxsize=128)
+def _shared_async_azure_ad_token_provider(
+    provider: Callable[[], str | Awaitable[str]],
+) -> Callable[[], Awaitable[str]]:
+    return _single_flight_async_azure_ad_token_provider(provider)
+
+
+def _single_flight_async_azure_ad_token_provider(
     provider: Callable[[], str | Awaitable[str]],
 ) -> Callable[[], Awaitable[str]]:
     single_flight: Final = threading.Lock()
@@ -715,13 +745,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
         if oidc_token is not None:
             verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
-            azure_ad_token_provider = partial(
-                get_azure_ad_token_from_oidc,
-                azure_ad_token=oidc_token,
-                azure_client_id=client_id,
-                azure_tenant_id=tenant_id,
-                scope=scope,
-            )
+            azure_ad_token_provider = _cached_oidc_token_provider(oidc_token, client_id, tenant_id, scope)
         elif not api_key and azure_ad_token_provider is None and litellm.enable_azure_ad_token_refresh is True:
             verbose_logger.debug(
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
@@ -734,7 +758,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             api_version = os.getenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
 
         _api_key = api_key
-        if _api_key is not None and isinstance(_api_key, str):
+        if _api_key is not None:
             # only show first 5 chars of api_key
             _api_key = _api_key[:8] + "*" * 15
         verbose_logger.debug(

@@ -2272,7 +2272,7 @@ async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_re
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
-async def test_a_cold_burst_of_oidc_requests_exchanges_the_token_once(
+async def test_a_cold_burst_across_deployments_sharing_an_oidc_identity_exchanges_the_token_once(
     monkeypatch: pytest.MonkeyPatch, api_version: str
 ) -> None:
     import asyncio
@@ -2294,23 +2294,29 @@ async def test_a_cold_burst_of_oidc_requests_exchanges_the_token_once(
     monkeypatch.setattr(
         litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
     )
-    client: Final = BaseAzureLLM().get_azure_openai_client(
-        api_key=None,
-        api_base=f"https://oidc-burst-{api_version}.openai.azure.com",
-        api_version=api_version,
-        litellm_params={
-            "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
-            "client_id": f"burst-client-{api_version}",
-            "tenant_id": "oidc-tenant",
-        },
-        _is_async=True,
+    clients: Final = tuple(
+        BaseAzureLLM().get_azure_openai_client(
+            api_key=None,
+            api_base=f"https://oidc-burst-{resource}-{api_version}.openai.azure.com",
+            api_version=api_version,
+            litellm_params={
+                "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
+                "client_id": f"burst-client-{api_version}",
+                "tenant_id": "oidc-tenant",
+            },
+            _is_async=True,
+        )
+        for resource in ("east", "west")
     )
 
     responses: Final = await asyncio.gather(
-        *(client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}]) for _ in range(5))
+        *(
+            clients[i % 2].chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+            for i in range(6)
+        )
     )
 
-    assert [response.choices[0].message.content for response in responses] == [f"Bearer burst-{api_version}"] * 5
+    assert [response.choices[0].message.content for response in responses] == [f"Bearer burst-{api_version}"] * 6
     assert len(exchanges) == 1
 
 
