@@ -1031,16 +1031,31 @@ def _format_function_definitions(tools: Sequence[object]) -> str:
     """Formats tool definitions in the format that OpenAI appears to use.
     Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
     """
-    lines: Final = []
-    lines.append("namespace functions {")
-    lines.append("")
+    from litellm.llms.anthropic.tool_token_counter import format_anthropic_tool_for_token_counting
+
+    formatted_tools: Final = tuple(_format_tool_definitions(tools, format_anthropic_tool_for_token_counting))
+    return "\n".join(("namespace functions {", "", *formatted_tools, "} // namespace functions"))
+
+
+def _format_tool_definitions(
+    tools: Sequence[object],
+    anthropic_formatter: Callable[[Mapping[str, object]], str | None],
+) -> Iterable[str]:
     for tool in tools:
-        if not isinstance(tool, Mapping):
-            continue
-        for function in _function_definitions_for_tool(cast(Mapping[str, object], tool)):
-            lines.extend(_format_single_function_definition(function))
-    lines.append("} // namespace functions")
-    return "\n".join(lines)
+        if isinstance(tool, Mapping):
+            yield from _formatted_tool_definitions(cast(Mapping[str, object], tool), anthropic_formatter)
+
+
+def _formatted_tool_definitions(
+    tool: Mapping[str, object],
+    anthropic_formatter: Callable[[Mapping[str, object]], str | None],
+) -> Iterable[str]:
+    anthropic_definition: Final = anthropic_formatter(tool)
+    if anthropic_definition is not None:
+        yield anthropic_definition
+        return
+    for function in _function_definitions_for_tool(tool):
+        yield from _format_single_function_definition(function)
 
 
 def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mapping[str, object]]:

@@ -7684,6 +7684,45 @@ def test_pre_call_checks_counts_anthropic_system_tokens(monkeypatch, system):
 
 
 @pytest.mark.asyncio
+async def test_aanthropic_messages_enforces_context_window_with_schema_tokens():
+    messages: Final = [{"role": "user", "content": "hi"}]
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "values": {"type": "array"},
+            **{
+                f"field_{index}": {
+                    "type": "string",
+                    "description": "A sufficiently detailed field description to contribute schema tokens.",
+                }
+                for index in range(12)
+            },
+        },
+    }
+    empty_schema_tool: Final = [{"name": "lookup", "input_schema": {}}]
+    max_input_tokens: Final = litellm.token_counter(messages=messages, tools=empty_schema_tool)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "anthropic/claude-3-5-haiku-20241022", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": max_input_tokens},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    assert await router.aanthropic_messages(model="small-ctx", messages=messages, max_tokens=5) is not None
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aanthropic_messages(
+            model="small-ctx",
+            messages=messages,
+            max_tokens=5,
+            tools=[{"name": "lookup", "input_schema": schema}],
+        )
+
+
+@pytest.mark.asyncio
 async def test_aanthropic_messages_enforces_context_window_with_system_and_tools():
     """
     End-to-end router regression for /v1/messages: a request whose only oversized
