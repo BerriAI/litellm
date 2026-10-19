@@ -751,9 +751,9 @@ def _promoted_trace_control_fields(
     )
 
 
-def _extract_generic_session_id_from_headers(
-    normalized: dict[str, str],
-) -> str | None:
+def _extract_generic_session_id_and_key_from_headers(
+    normalized: Mapping[str, str],
+) -> tuple[str, str] | None:
     """
     Scan a normalised (lower-cased keys) header dict for any header that looks
     like ``x-<vendor>-session-id`` and whose value is a plausible session/trace
@@ -772,7 +772,7 @@ def _extract_generic_session_id_from_headers(
             and isinstance(value, str)
             and _SESSION_ID_VALUE_RE.match(value)
         ):
-            return value
+            return value, key
     return None
 
 
@@ -838,16 +838,36 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     Used by MCP (and other paths that have raw_headers but no Request) to set
     litellm_trace_id/litellm_session_id for spend logs and logging consistency.
     """
+    return _get_chain_id_and_source_from_headers(headers)[0]
+
+
+def _get_chain_id_and_source_from_headers(headers: Mapping[str, str] | None) -> tuple[str | None, str | None]:
+    """``get_chain_id_from_headers`` plus the name of the header the chain id came from
+    (None for Codex's unprefixed headers), so callers can tell a caller's own session
+    header apart from a parent-session grouping header."""
     if not headers:
-        return None
+        return None, None
     normalized: Final = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
-    return (
-        normalized.get("x-litellm-trace-id")
-        or normalized.get("x-litellm-session-id")
-        or _extract_generic_session_id_from_headers(normalized)
-        or _extract_codex_session_id_from_headers(normalized)
-        or _extract_bare_session_id_from_headers(normalized)
+    explicit: Final = next(
+        (
+            (value, header)
+            for header in ("x-litellm-trace-id", "x-litellm-session-id")
+            if (value := normalized.get(header))
+        ),
+        None,
     )
+    if explicit is not None:
+        return explicit
+    generic: Final = _extract_generic_session_id_and_key_from_headers(normalized)
+    if generic is not None:
+        return generic
+    codex_value: Final = _extract_codex_session_id_from_headers(normalized)
+    if codex_value is not None:
+        return codex_value, None
+    bare_value: Final = _extract_bare_session_id_from_headers(normalized)
+    if bare_value is not None:
+        return bare_value, "x-session-id"
+    return None, None
 
 
 def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
@@ -1666,7 +1686,7 @@ class LiteLLMProxyRequestSetup:
         )
         agent_id_from_header: Final = headers.get("x-litellm-agent-id")
         # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
-        chain_id: Final = get_chain_id_from_headers(dict(headers))
+        chain_id, chain_id_source = _get_chain_id_and_source_from_headers(dict(headers))  # pyright: ignore[reportUnknownArgumentType]  # raw transport headers
 
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
@@ -1679,9 +1699,21 @@ class LiteLLMProxyRequestSetup:
         )
         if chain_id:
             metadata_from_headers["trace_id"] = chain_id
-            metadata_from_headers["session_id"] = chain_id
             data["litellm_session_id"] = chain_id
             data["litellm_trace_id"] = chain_id
+            # opencode's x-parent-session-id groups a subagent call under the parent's
+            # trace, but it names the PARENT's session: letting it become
+            # metadata.session_id makes the subagent's first turn reclassify and overwrite
+            # the parent's complexity-router tier pin (#47125). Keep it for trace/log
+            # grouping only; the caller's own bare x-session-id, when sent alongside,
+            # defines the routing session instead.
+            routing_session_id: Final = (
+                _extract_bare_session_id_from_headers(normalized_headers)  # pyright: ignore[reportUnknownArgumentType]  # MappingProxyType over a str-keyed header dict
+                if chain_id_source == "x-parent-session-id"
+                else chain_id
+            )
+            if routing_session_id:
+                metadata_from_headers["session_id"] = routing_session_id
             verbose_proxy_logger.debug("Extracted chain_id from header (trace-id/session-id): %s", chain_id)
         else:
             body_metadata: Final = data.get("metadata")

@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -10288,3 +10289,104 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"]
     assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"] == "gho_user_a_token"
+
+
+def test_get_chain_id_and_source_reports_the_winning_header():
+    from litellm.proxy.litellm_pre_call_utils import (
+        _get_chain_id_and_source_from_headers,  # pyright: ignore[reportPrivateUsage]  # unit test of the private resolver
+    )
+
+    parent_session: Final = "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert _get_chain_id_and_source_from_headers(None) == (None, None)
+    assert _get_chain_id_and_source_from_headers({"x-litellm-trace-id": "trace-1"}) == ("trace-1", "x-litellm-trace-id")
+    assert _get_chain_id_and_source_from_headers({"x-litellm-session-id": "sess-1"}) == (
+        "sess-1",
+        "x-litellm-session-id",
+    )
+    assert _get_chain_id_and_source_from_headers({"x-parent-session-id": parent_session}) == (
+        parent_session,
+        "x-parent-session-id",
+    )
+    assert _get_chain_id_and_source_from_headers({"x-session-id": OPENCODE_SESSION_ID}) == (
+        OPENCODE_SESSION_ID,
+        "x-session-id",
+    )
+
+
+def _request_mock_with_session_headers(headers: Mapping[str, str]) -> MagicMock:
+    request_mock: Final = MagicMock(spec=Request)
+    request_mock.url = MagicMock()  # pyright: ignore[reportAny]  # MagicMock attributes are Any, same as the existing request mocks in this file
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"  # pyright: ignore[reportAny]  # MagicMock
+    request_mock.url.path = "/v1/chat/completions"  # pyright: ignore[reportAny]  # MagicMock
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = headers
+    request_mock.client = MagicMock()  # pyright: ignore[reportAny]  # MagicMock
+    request_mock.client.host = "127.0.0.1"  # pyright: ignore[reportAny]  # MagicMock
+    return request_mock
+
+
+async def _data_with_session_headers(
+    headers: Mapping[str, str],
+) -> dict[str, object]:  # mutable-ok: the request data dict is asserted on directly
+    from litellm.proxy.litellm_pre_call_utils import (
+        add_litellm_data_to_request,  # pyright: ignore[reportUnknownVariableType]  # the proxy setup signature is partially untyped
+    )
+
+    return await add_litellm_data_to_request(  # pyright: ignore[reportUnknownVariableType]  # the proxy setup signature is partially untyped
+        data={"metadata": {}, "model": "gpt-3.5-turbo"},
+        request=_request_mock_with_session_headers(headers),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+            spend=0.0,
+            max_budget=100.0,
+            model_max_budget={},
+            team_spend=0.0,
+            team_max_budget=200.0,
+        ),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+
+@pytest.mark.asyncio
+async def test_parent_session_header_groups_the_trace_without_defining_the_routing_session():
+    """Regression test for #47125 bug two: x-parent-session-id keeps winning the chain
+    id for trace/log grouping, but the parent's session must not become
+    metadata.session_id - the key the complexity router pins tiers on, where a
+    subagent's first turn would reclassify and overwrite the parent's pin. The
+    caller's own bare x-session-id defines the routing session instead."""
+    parent_session: Final = "e96634a3-fa28-4083-b354-55542e2dca01"
+
+    updated_data: Final = await _data_with_session_headers(
+        {
+            "Content-Type": "application/json",
+            "x-parent-session-id": parent_session,
+            "x-session-id": OPENCODE_SESSION_ID,
+        }
+    )
+
+    metadata: Final = updated_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert updated_data["litellm_trace_id"] == parent_session
+    assert updated_data["litellm_session_id"] == parent_session
+    assert metadata["trace_id"] == parent_session
+    assert metadata["session_id"] == OPENCODE_SESSION_ID
+
+
+@pytest.mark.asyncio
+async def test_parent_session_header_alone_leaves_the_routing_session_unset():
+    updated_data: Final = await _data_with_session_headers(
+        {
+            "Content-Type": "application/json",
+            "x-parent-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
+        }
+    )
+
+    metadata: Final = updated_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert updated_data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert "session_id" not in metadata
