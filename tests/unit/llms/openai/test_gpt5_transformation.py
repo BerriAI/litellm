@@ -1,4 +1,6 @@
 import re
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
@@ -431,12 +433,12 @@ def test_gpt5_drops_reasoning_effort_minimal_when_requested(config: OpenAIConfig
     assert "reasoning_effort" not in params
 
 
-def _chat_row_forwards(row: dict, level: str) -> bool:
+def _chat_row_forwards(row: Mapping[str, object], level: str) -> bool:
     """Chat polarity: max is never gated, xhigh needs an explicit true, every other level only has
     to not be false."""
     if level == "max":
         return True
-    flag = row.get(f"supports_{level}_reasoning_effort")
+    flag: Final = row.get(f"supports_{level}_reasoning_effort")
     return flag is True if level == "xhigh" else flag is not False
 
 
@@ -446,8 +448,8 @@ def test_gpt6_1_sol_forwards_exactly_the_effort_levels_its_map_row_allows(config
     change. gpt-6.1-sol's row turns none and minimal off: OpenAI lists low, medium, high, xhigh
     and max for it (https://developers.openai.com/api/docs/models/gpt-6.1-sol, via #43910), and a
     local proxy got OpenAI's 400 for none and minimal on both endpoints on 2026-09-30."""
-    forwarded = _chat_row_forwards(litellm.model_cost["gpt-6.1-sol"], level)
-    dropped = config.map_openai_params(
+    forwarded: Final = _chat_row_forwards(litellm.model_cost["gpt-6.1-sol"], level)
+    dropped: Final = config.map_openai_params(
         non_default_params={"reasoning_effort": level},
         optional_params={},
         model="gpt-6.1-sol",
@@ -455,7 +457,7 @@ def test_gpt6_1_sol_forwards_exactly_the_effort_levels_its_map_row_allows(config
     )
     assert ("reasoning_effort" in dropped) is forwarded
     if forwarded:
-        kept = config.map_openai_params(
+        kept: Final = config.map_openai_params(
             non_default_params={"reasoning_effort": level},
             optional_params={},
             model="gpt-6.1-sol",
@@ -478,12 +480,12 @@ def test_gpt6_1_sol_row_turns_none_and_minimal_off():
     (https://developers.openai.com/api/docs/models/gpt-6.1-sol, read 2026-09-30 via #43910), and a
     local proxy got OpenAI's 400 for both on 2026-09-30. When OpenAI adds a level, flip the row and
     this assertion together."""
-    row = litellm.model_cost["gpt-6.1-sol"]
+    row: Final = litellm.model_cost["gpt-6.1-sol"]
     assert row["supports_none_reasoning_effort"] is False
     assert row["supports_minimal_reasoning_effort"] is False
 
 
-def _row_without_effort_flags(row: dict) -> dict:
+def _row_without_effort_flags(row: Mapping[str, object]) -> dict[str, object]:
     return {
         field: value
         for field, value in row.items()
@@ -506,14 +508,14 @@ def _row_without_effort_flags(row: dict) -> dict:
     ],
 )
 def test_the_row_flags_alone_decide_whether_a_chat_level_is_forwarded(
-    config: OpenAIConfig, monkeypatch: pytest.MonkeyPatch, flags: dict, level: str, forwarded: bool
+    config: OpenAIConfig, monkeypatch: pytest.MonkeyPatch, flags: dict[str, bool], level: str, forwarded: bool
 ):
     """Same model name, rewritten row: the gate flips with the flags and nothing else, so breaking the
     gate fails here while the pinned test above catches the real row losing a flag."""
     monkeypatch.setitem(
         litellm.model_cost, "gpt-6.1-sol", {**_row_without_effort_flags(litellm.model_cost["gpt-6.1-sol"]), **flags}
     )
-    dropped = config.map_openai_params(
+    dropped: Final = config.map_openai_params(
         non_default_params={"reasoning_effort": level},
         optional_params={},
         model="gpt-6.1-sol",
