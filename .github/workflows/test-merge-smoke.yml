@@ -53,7 +53,7 @@ jobs:
           version: "0.10.9"
 
       - name: Install dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python ${{ matrix.python-version }}
+        run: uv sync --frozen --extra proxy --extra cli --group dev --group proxy-dev --python ${{ matrix.python-version }}
 
       - name: Create the loopback-only network namespace
         run: |
@@ -118,7 +118,7 @@ jobs:
           version: "0.10.9"
 
       - name: Install every extra and dependency group
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python ${{ matrix.python-version }}
+        run: uv sync --frozen --all-groups --all-extras --python ${{ matrix.python-version }}
 
       - name: Import the SDK, the proxy server and the enterprise package
         run: .venv/bin/python -c "import litellm, litellm.proxy.proxy_server, litellm_enterprise"
@@ -149,7 +149,7 @@ jobs:
           version: "0.10.9"
 
       - name: Install dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --no-install-workspace --group dev --python 3.11
+        run: uv sync --frozen --no-install-workspace --group dev --python 3.11
 
       - name: Run the Windows tests
         run: uv run --no-sync python -m pytest --tb=short -v tests/windows_tests
@@ -189,7 +189,7 @@ jobs:
           version: "0.10.9"
 
       - name: Install the test client dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --no-install-workspace --extra proxy --group dev --python 3.12
+        run: uv sync --frozen --no-install-workspace --extra proxy --group dev --python 3.12
 
       - name: Build the image from the published package
         run: docker build -t litellm-build-from-pip:smoke -f docker/build_from_pip/Dockerfile.build_from_pip .
