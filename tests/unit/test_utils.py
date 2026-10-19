@@ -114,10 +114,22 @@ from litellm.utils import (
 )
 
 
-def test_get_base_model_from_metadata_returns_unvalidated_root_value():
+@pytest.mark.parametrize("root_base_model", [42, ["gemini-3.5-flash"], {"model": "gemini-3.5-flash"}])
+def test_get_base_model_from_metadata_ignores_a_non_string_root_value(root_base_model: object):
     from litellm.utils import get_base_model_from_metadata
 
-    assert get_base_model_from_metadata({"litellm_params": {"base_model": 42}}) == 42
+    assert get_base_model_from_metadata({"litellm_params": {"base_model": root_base_model}}) is None
+    assert (
+        get_base_model_from_metadata(
+            {
+                "litellm_params": {
+                    "base_model": root_base_model,
+                    "metadata": {"model_info": {"base_model": "vertex_ai/gemini-3.5-flash"}},
+                }
+            }
+        )
+        == "vertex_ai/gemini-3.5-flash"
+    )
 
 
 def _reject_short_post_call_response(input: str, model: str | None = None) -> dict[str, object]:
@@ -1138,6 +1150,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_box_questions": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
+                "token_count_framing": {"type": "integer"},
+                "token_count_model": {
+                    "type": "object",
+                    "properties": {"model": {"type": "string"}, "region": {"type": "string"}},
+                    "required": ["model"],
+                },
+                "token_count_tokenizer": {"type": "string", "enum": ["kimi_k3"]},
                 "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},

@@ -36,7 +36,7 @@ _KEY_ID: Final = "integration-signing-key"
 _UPSTREAM_KEY: Final = "synthetic-openai-key"
 _CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _CHAT_BODY: Final = TypeAdapter(dict[str, JsonValue])
-pytestmark: Final = pytest.mark.timeout(180)
+pytestmark: Final = [pytest.mark.timeout(180), pytest.mark.shares_worker_state]
 
 
 class _Usage(BaseModel):

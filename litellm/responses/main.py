@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -28,6 +28,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     configured_injection_points,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -72,7 +73,7 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, all_litellm_params
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypes, all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -1654,6 +1655,17 @@ def responses(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
+        fake_stream: Final = responses_api_provider_config.should_fake_stream(
+            model=model, stream=stream, custom_llm_provider=custom_llm_provider
+        )
+        applied_timeout: Final = CompletionTimeout.for_stream(
+            (StreamKind.FAKED if fake_stream else StreamKind.LIVE) if stream is True else StreamKind.NOT_STREAMED,
+            CompletionTimeout.as_limit(timeout or request_timeout),
+            None
+            if stream is not True or litellm_params.stream_timeout is None
+            else float(litellm_params.stream_timeout),
+        )
+        litellm_logging_obj.record_applied_timeout(applied_timeout)
         response = base_llm_http_handler.response_api_handler(
             model=model,
             input=input,
@@ -1664,12 +1676,10 @@ def responses(
             logging_obj=litellm_logging_obj,
             extra_headers=effective_extra_headers,
             extra_body=extra_body,
-            timeout=timeout or request_timeout,
+            timeout=applied_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
-            fake_stream=responses_api_provider_config.should_fake_stream(
-                model=model, stream=stream, custom_llm_provider=custom_llm_provider
-            ),
+            fake_stream=fake_stream,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
             shared_session=kwargs.get("shared_session"),
         )
@@ -2599,6 +2609,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
+    turn_admission: Callable[[], Awaitable[None]] | None = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:
@@ -2614,7 +2625,7 @@ async def _aresponses_websocket(
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     user: Final = kwargs.get("user", None)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = {**get_litellm_params(**kwargs), CallTypes.aresponses_websocket.value: True}
 
     (
         provider_model,
@@ -2692,6 +2703,7 @@ async def _aresponses_websocket(
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
+        turn_admission=turn_admission,
         frame_guard=responses_ws_frame_guard,
         **remaining_kwargs,
     )

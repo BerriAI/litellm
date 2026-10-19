@@ -130,8 +130,6 @@ class _BulkBudgetUpdateResponse(BaseModel):
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
-        response: Final = client.get("/__observations")
-        assert response.status_code == 200, response.text
         yield client
 
 
@@ -304,7 +302,7 @@ def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gatewa
         counted: Final = eventually(lambda: cache.get(counter_key), lambda value: value is not None, seconds=10)
         assert float(counted) == pytest.approx(0.06), counted
         cache.set(counter_key, "0.01")
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -346,6 +344,7 @@ def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
         assert peer_first.status_code == 200, peer_first.text
         observed_before_update: Final = _observed_models(upstream)
         assert observed_before_update == (provider_model, provider_model), repr(observed_before_update)
+        upstream.delete("/__observations").raise_for_status()
         accrued: Final = eventually(
             lambda: _budget_state(team, user),
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.12,
@@ -466,6 +465,7 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(
         assert first.status_code == 200, first.text
         observed_before_block: Final = _observed_models(upstream)
         assert observed_before_block == (provider_model,), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
         accrued: Final = eventually(
             lambda: _budget_state(team, user),
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.06,
@@ -701,6 +701,7 @@ def test_member_update_by_email_sets_models_role_and_forks_the_team_default_budg
         assert _ErrorResponse.model_validate_json(denied.text).error.type == "team_model_access_denied", denied.text
         observed_before_clear: Final = _observed_models(upstream)
         assert observed_before_clear == (provider_one,), repr(observed_before_clear)
+        upstream.delete("/__observations").raise_for_status()
 
         cleared_models: Final = _member_update(
             gateway,
@@ -815,6 +816,7 @@ def test_bulk_update_is_a_merge_patch_per_member(gateway: Gateway, upstream: htt
         assert first_chat.status_code == 200, first_chat.text
         observed_before_update: Final = _observed_models(upstream)
         assert observed_before_update == (provider_spend,), repr(observed_before_update)
+        upstream.delete("/__observations").raise_for_status()
         accrued: Final = eventually(
             lambda: _budget_state(team, user_one),
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.06,
@@ -889,6 +891,7 @@ def test_bulk_update_is_a_merge_patch_per_member(gateway: Gateway, upstream: htt
         )
         observed_after_first_patch: Final = _observed_models(upstream)
         assert observed_after_first_patch == (provider_one,), repr(observed_after_first_patch)
+        upstream.delete("/__observations").raise_for_status()
 
         cleared_max: Final = gateway.request(
             "POST",
@@ -974,6 +977,7 @@ def test_bulk_update_restores_team_default_when_last_member_limit_is_cleared(
         assert first_chat.status_code == 200, first_chat.text
         first_observations: Final = _observed_models(upstream)
         assert first_observations == (provider_model,), repr(first_observations)
+        upstream.delete("/__observations").raise_for_status()
         accrued: Final = eventually(
             lambda: _budget_state(team, user),
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.06,
@@ -984,6 +988,7 @@ def test_bulk_update_restores_team_default_when_last_member_limit_is_cleared(
         assert second_chat.status_code == 200, second_chat.text
         second_observations: Final = _observed_models(upstream)
         assert second_observations == (provider_model,), repr(second_observations)
+        upstream.delete("/__observations").raise_for_status()
         cleared: Final = gateway.request(
             "POST",
             f"/management/v1/teams/{team}/members/bulk_update",
@@ -1019,11 +1024,3 @@ def test_bulk_update_restores_team_default_when_last_member_limit_is_cleared(
         assert first_observations + second_observations == (provider_model, provider_model), repr(
             (first_observations, second_observations)
         )
-
-
-@pytest.fixture(autouse=True)
-def _drain_unobserved_requests(gateway: Gateway) -> Iterator[None]:
-    yield
-    with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
-        response: Final = client.get("/__observations")
-        assert response.status_code == 200, response.text

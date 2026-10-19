@@ -67,6 +67,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_type_for_status,
 )
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.litellm_pre_call_utils import (
@@ -77,7 +78,8 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
-from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard
+from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -86,6 +88,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.token_count import TokenCountSourceFields
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
@@ -1373,7 +1376,7 @@ class _ResponsesApiErrorBody(TypedDict):
     error: ReadOnly[_ResponsesApiErrorDetail]
 
 
-class _ResponsesInputTokensResult(TypedDict):
+class _ResponsesInputTokensResult(TokenCountSourceFields):
     object: ReadOnly[str]
     input_tokens: ReadOnly[int]
 
@@ -1610,6 +1613,7 @@ async def responses_input_tokens(
     result: Final[_ResponsesInputTokensResult] = {
         "object": "response.input_tokens",
         "input_tokens": token_response.total_tokens,
+        **count_source_fields(token_response),
     }
     return result
 
@@ -1858,12 +1862,14 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
 
 
 def _responses_ws_failure_frame(failure: Exception) -> str:
-    raw_status: Final = getattr(failure, "status_code", None)
-    status: Final = raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else 500
+    proxy_exception: Final = handle_exception_on_proxy(failure)
+    status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
     error_type: Final = (
         "rate_limit_exceeded" if status == 429 else "invalid_request_error" if 400 <= status < 500 else "server_error"
     )
-    return json.dumps({"type": "error", "status": status, "error": {"type": error_type, "message": str(failure)}})
+    return json.dumps(
+        {"type": "error", "status": status, "error": {"type": error_type, "message": proxy_exception.message}}
+    )
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
@@ -1931,7 +1937,10 @@ class _PreCallGuardrailWalk(Protocol):
 
 
 def _responses_ws_frame_guard(
-    admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: _PreCallGuardrailWalk
+    admitted: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: _PreCallGuardrailWalk,
+    record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
@@ -1990,10 +1999,12 @@ def _responses_ws_frame_guard(
             if isinstance(nested, dict)
             else {**kept, **guarded_fields}
         )
+        guardrail_information: Final = _recorded_guardrail_information(guarded_data.get(metadata_key))
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
-            guardrail_information=_recorded_guardrail_information(guarded_data.get(metadata_key)),
+            guardrail_information=guardrail_information,
             pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
+            bill_refusal=partial(record_refused_turn, guardrail_information),
         )
 
     return guard
@@ -2037,6 +2048,33 @@ def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
 
 
 _NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+@dataclass(slots=True)
+class _RefusedTurns:
+    """Turns the deployment refused after their guardrails passed. The socket's close-time failure row bills their
+    guardrail records, so its failure hooks, model group and call type cover those turns too, and the first refusal
+    is that row's exception when the session limit cancels the relay before it returns one."""
+
+    first: Exception | None = None
+    records: tuple[Mapping[str, object], ...] = ()
+
+    def add(self, records: tuple[Mapping[str, object], ...], refusal: Exception) -> None:
+        self.records = (*self.records, *records)
+        if self.first is None:
+            self.first = refusal
+
+    def billed_on(self, request_data: Mapping[str, object]) -> Mapping[str, object]:
+        if not self.records:
+            return request_data
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
+        bucket: Final = request_data.get(metadata_key)
+        fields: Final = _WS_FRAME.validate_python(bucket) if isinstance(bucket, dict) else {}
+        recorded: Final = (*_recorded_guardrail_information(fields), *self.records)
+        return {
+            **request_data,
+            metadata_key: {**fields, _GUARDRAIL_INFORMATION_KEY: [dict(record) for record in recorded]},
+        }
 
 
 def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:
@@ -2142,39 +2180,58 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
+    refused_turns: Final = _RefusedTurns()
     routed_data: Final = dict(
         data,
         user_api_key_dict=user_api_key_dict,
-        responses_ws_frame_guard=_responses_ws_frame_guard(data, user_api_key_dict, proxy_logging_obj),
+        responses_ws_frame_guard=_responses_ws_frame_guard(
+            data, user_api_key_dict, proxy_logging_obj, refused_turns.add
+        ),
         **_routing_hints_from_first_ws_frame(first_message),
     )
-    # Phase 2: route to upstream provider
-    try:
-        llm_call: Final = await route_request(
-            data=routed_data,
-            route_type="_aresponses_websocket",
-            llm_router=llm_router,
-            user_model=user_model,
-        )
-        failure: Final = await llm_call
-        if isinstance(failure, Exception):
-            await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=failure,
-                request_data=routed_data,
-            )
-    except Exception as e:
-        verbose_proxy_logger.exception("Responses WebSocket error")
-        with contextlib.suppress(Exception):
-            await websocket.send_text(_responses_ws_failure_frame(e))
+
+    async def write_failure_row(exception: Exception) -> None:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=routed_data,
+            original_exception=exception,
+            request_data=dict(refused_turns.billed_on(routed_data)),
         )
-        await websocket.close(code=1011, reason="Internal server error")
+
+    def bill_socket_failure(exception: Exception) -> asyncio.Task[object]:
+        return spawn_logging_task(
+            asyncio.get_running_loop(), write_failure_row(exception), task_name="Responses WebSocket failure row"
+        )
+
+    async def relay_and_bill_failure() -> asyncio.Task[object] | None:
+        try:
+            llm_call: Final = await route_request(
+                data=routed_data,
+                route_type="_aresponses_websocket",
+                llm_router=llm_router,
+                user_model=user_model,
+            )
+            outcome: Final = await llm_call
+        except asyncio.CancelledError:
+            if refused_turns.first is not None:
+                _ = bill_socket_failure(refused_turns.first)
+            raise
+        except Exception as e:
+            crash_row: Final = bill_socket_failure(e)
+            with contextlib.suppress(Exception):
+                await websocket.send_text(_responses_ws_failure_frame(e))
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1011, reason="Internal server error")
+            return crash_row
+        return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
+
+    # Phase 2: route to upstream provider
+    try:
+        failure_row: Final = await relay_and_bill_failure()
     finally:
         await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+    if failure_row is not None:
+        with contextlib.suppress(Exception):
+            await asyncio.shield(failure_row)
 
 
 @router.websocket("/v1/responses")
