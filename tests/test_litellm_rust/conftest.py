@@ -1,11 +1,11 @@
 from collections.abc import AsyncIterator, Generator
-from importlib import import_module
-from typing import Final
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
 import litellm
+from tests._support.native_suite import NativeSuite
 from tests.test_litellm_rust.support.clickhouse import clickhouse_url as clickhouse_url
 from tests.test_litellm_rust.support.isolation import isolated_test_state
 from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
@@ -23,14 +23,8 @@ def recording_server() -> Generator[RecordingServer]:
         yield server
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    try:
-        import_module("litellm.rust_bridge._native")
-    except ImportError:
-        skip: Final = pytest.mark.skip(reason="requires a compiled litellm.rust_bridge._native extension")
-        for item in items:
-            if "test_litellm_rust" in item.path.parts:
-                item.add_marker(skip)
+def pytest_configure(config: pytest.Config) -> None:
+    config.pluginmanager.register(NativeSuite(Path(__file__).parent), "native-suite")
 
 
 @pytest.fixture
