@@ -3,6 +3,7 @@ Tests for the DeepSeek Search provider (POST https://api.deepseek.com/v1/tools/s
 """
 
 from typing import Final
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -87,7 +88,9 @@ def test_max_results_clamps_to_deepseek_count_range(max_results, expected_count)
 
 
 def test_query_over_deepseek_limit_fails_before_the_call():
-    with pytest.raises(litellm.BadRequestError, match="at most 128 characters, got 144 .3 search_domain_filter"):
+    with pytest.raises(
+        litellm.BadRequestError, match=re.escape("at most 128 characters, got 144 (3 search_domain_filter")
+    ):
         DeepSeekSearchConfig().transform_search_request(
             query="litellm proxy search endpoint configuration guide for enterprise deployments with",
             optional_params={"search_domain_filter": ["docs.litellm.ai", "github.com", "huggingface.co"]},
