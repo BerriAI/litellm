@@ -1489,6 +1489,45 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
 
 
 @pytest.mark.asyncio
+async def test_one_tag_from_two_teams_is_queued_as_two_team_attributed_entries():
+    """The queue merges entries by key before the upsert ever sees them, so a key without the
+    team would fold both teams' spend on a shared tag into one entry."""
+    writer = DBSpendUpdateWriter()
+    prisma = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+
+    def tagged(team_id: str | None, spend: float) -> dict:
+        return {
+            "request_id": f"req-{team_id}",
+            "request_tags": '["cost-center:cc-42"]',
+            "team_id": team_id,
+            "user": "user-1",
+            "startTime": "2026-10-17T00:00:00",
+            "api_key": "key-1",
+            "model": "gpt-4o",
+            "custom_llm_provider": "openai",
+            "model_group": "gpt-4o",
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "spend": spend,
+            "metadata": '{"usage_object": {}}',
+        }
+
+    for team_id, spend in (("team-a", 1.0), ("team-b", 2.0), (None, 0.5)):
+        await writer.add_spend_log_transaction_to_daily_tag_transaction(
+            payload=tagged(team_id, spend), prisma_client=prisma
+        )
+
+    queued = await writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+
+    assert sorted((txn["tag"], txn["team_id"], txn["spend"]) for txn in queued.values()) == [
+        ("cost-center:cc-42", "", 0.5),
+        ("cost-center:cc-42", "team-a", 1.0),
+        ("cost-center:cc-42", "team-b", 2.0),
+    ], queued
+
+
+@pytest.mark.asyncio
 async def test_add_spend_log_transaction_to_daily_org_transaction_injects_org_id_and_queues_update():
     """
     Verify org_id is injected into payload for daily aggregation and the update is queued.
