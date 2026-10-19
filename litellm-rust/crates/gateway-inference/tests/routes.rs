@@ -68,7 +68,6 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
 }
 
 #[rstest]
-#[case::streaming(json!({"messages": [{"role": "user", "content": "hi"}], "stream": true}), 501)]
 #[case::missing_messages(json!({}), 400)]
 #[case::malformed_messages(json!({"messages": "hi"}), 400)]
 #[case::invalid_streaming_request(json!({"messages": [], "stream": true}), 400)]

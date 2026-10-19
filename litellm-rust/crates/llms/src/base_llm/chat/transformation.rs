@@ -71,6 +71,11 @@ pub trait BaseConfig: Sync {
         None
     }
 
+    /// The URL and body of the same call made as a stream.
+    fn streaming_request(&self, _url: String, _body: Value) -> Result<(String, Value), Error> {
+        Err(Error::Unsupported("streaming"))
+    }
+
     /// Shapes the forwarded headers and names the credential, the way Python's
     /// `validate_environment` does, without applying it: `resolve_auth` does that once
     /// for every config.

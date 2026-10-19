@@ -11,6 +11,9 @@ const FINISH_REASONS: &[(&str, &str)] = &[
     ("end_turn", "stop"),
     ("stop_sequence", "stop"),
     ("max_tokens", "length"),
+    ("tool_use", "tool_calls"),
+    ("tool_calls", "tool_calls"),
+    ("function_call", "function_call"),
     ("refusal", "content_filter"),
     ("compaction", "length"),
     ("guardrail_intervened", "content_filter"),
@@ -44,7 +47,9 @@ pub fn usage_from_parts(
             cached_tokens: cache_read_tokens,
             cache_creation_tokens,
             text_tokens: input_tokens,
+            ..PromptTokensDetails::default()
         },
+        ..ChatCompletionsUsage::default()
     }
 }
 
@@ -74,6 +79,7 @@ mod tests {
     #[case::end_turn("end_turn", "stop")]
     #[case::stop_sequence("stop_sequence", "stop")]
     #[case::max_tokens("max_tokens", "length")]
+    #[case::tool_use("tool_use", "tool_calls")]
     #[case::refusal("refusal", "content_filter")]
     #[case::guardrail_intervened("guardrail_intervened", "content_filter")]
     #[case::content_filtered("content_filtered", "content_filter")]

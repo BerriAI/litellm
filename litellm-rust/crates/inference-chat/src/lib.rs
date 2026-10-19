@@ -10,6 +10,7 @@ pub mod constants;
 pub(crate) mod handler;
 pub mod openai;
 mod prepare;
+pub mod stream;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use prepare::{prepare_provider_request, resolve_request};
 

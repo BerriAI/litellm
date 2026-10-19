@@ -12,7 +12,7 @@ http-body-util = "0.1"
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true
 litellm-gateway-mcp.workspace = true
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["codec"] }
 thiserror.workspace = true
 futures-util.workspace = true
 http.workspace = true
@@ -44,6 +44,8 @@ tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
 wiremock.workspace = true
+litellm-framer.workspace = true
+bytes.workspace = true
 litellm-db-testing.workspace = true
 sqlx.workspace = true
 rstest.workspace = true
