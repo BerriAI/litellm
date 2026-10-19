@@ -366,9 +366,7 @@ async def test_cohere_embed_v4_with_optional_params(respx_mock: respx.MockRouter
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, sync_mode: bool) -> None:
-    image: Final = (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
-    )
+    image: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
     route: Final = respx_mock.post(COHERE_V2_EMBED_URL).mock(
         return_value=httpx.Response(
             200,
@@ -391,3 +389,64 @@ async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, syn
         "input_type": "image",
     }
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.125, -0.375]}]
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_cohere_embed_v4_timeout(respx_mock: respx.MockRouter, sync_mode: bool) -> None:
+    text: Final = "Test timeout propagation"
+    route: Final = respx_mock.post(COHERE_V2_EMBED_URL).mock(
+        return_value=httpx.Response(200, json=_cohere_v2_embed_response([[0.1, 0.2]], [text]))
+    )
+
+    await _embed(sync_mode, input=[text], timeout=7.0)
+
+    assert route.calls[0].request.extensions["timeout"] == {"connect": 7.0, "read": 7.0, "write": 7.0, "pool": 7.0}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_sync_embedding_timeout_propagation(respx_mock: respx.MockRouter) -> None:
+    from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
+
+    route: Final = respx_mock.post("https://api.cohere.ai/v1/embed").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "test-id",
+                "embeddings": {"float": [[0.1, 0.2]]},
+                "texts": ["hello"],
+                "meta": {"api_version": {"version": "1"}, "billed_units": {"input_tokens": 1}},
+                "response_type": "embeddings_by_type",
+            },
+        )
+    )
+
+    logging_obj = Logging(
+        model="embed-english-v3.0",
+        messages=[],
+        stream=False,
+        call_type="embedding",
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+
+    cohere_embedding(
+        model="embed-english-v3.0",
+        input=["hello"],
+        model_response=EmbeddingResponse(),
+        logging_obj=logging_obj,
+        optional_params={},
+        headers={},
+        encoding=None,
+        timeout=12.5,
+        api_key="fake-cohere-key",
+    )
+
+    assert route.calls[0].request.extensions["timeout"] == {
+        "connect": 12.5,
+        "read": 12.5,
+        "write": 12.5,
+        "pool": 12.5,
+    }
