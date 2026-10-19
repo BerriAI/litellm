@@ -834,7 +834,9 @@ async def test_generic_api_full_queue_send_survives_logging_worker_timeout(
     owned_tasks: Final = frozenset(asyncio.all_tasks()) - before_tasks
     log_event: Final = logger.async_log_success_event if event_type == "success" else logger.async_log_failure_event
     try:
-        worker.ensure_initialized_and_enqueue(log_event({"standard_logging_object": {"id": "queued"}}, None, None, None))
+        worker.ensure_initialized_and_enqueue(
+            log_event({"standard_logging_object": {"id": "queued"}}, None, None, None)
+        )
         await worker.flush()
         await sink.arrived.wait()
         sink.release.set()
@@ -843,6 +845,37 @@ async def test_generic_api_full_queue_send_survives_logging_worker_timeout(
     finally:
         sink.release.set()
         await worker.stop()
+        for task in owned_tasks:
+            task.cancel()
+        await asyncio.gather(*owned_tasks, return_exceptions=True)
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_full_queue_starts_no_extra_send_while_one_is_stuck() -> None:
+    sink: Final = _InProcessLogSink(hold_first=True)
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    before_tasks: Final = frozenset(asyncio.all_tasks())
+    logger: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        async_httpx_client=handler,
+        batch_size=1,
+        flush_interval=3600,
+    )
+    owned_tasks: Final = frozenset(asyncio.all_tasks()) - before_tasks
+    later_ids: Final = tuple(f"later-{index}" for index in range(50))
+    try:
+        await logger.async_log_success_event({"standard_logging_object": {"id": "stuck"}}, None, None, None)
+        await sink.arrived.wait()
+        tasks_while_stuck: Final = frozenset(asyncio.all_tasks())
+        for log_id in later_ids:
+            await logger.async_log_success_event({"standard_logging_object": {"id": log_id}}, None, None, None)
+        assert frozenset(asyncio.all_tasks()) - tasks_while_stuck == frozenset()
+        sink.release.set()
+        await logger.flush_queue()
+        assert tuple(_received_log_ids(sink.requests, "json_array")) == ("stuck", *later_ids)
+    finally:
+        sink.release.set()
         for task in owned_tasks:
             task.cancel()
         await asyncio.gather(*owned_tasks, return_exceptions=True)
