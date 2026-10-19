@@ -71,7 +71,7 @@ impl ReportedUsage {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    fn set(&self, usage: ChatCompletionsUsage) {
+    pub(crate) fn set(&self, usage: ChatCompletionsUsage) {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(usage);
     }
 }

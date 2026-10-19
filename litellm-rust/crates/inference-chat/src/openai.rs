@@ -24,8 +24,11 @@ use litellm_llms::{
 use serde_json::{Map, Value};
 
 use crate::{
-    ChatCompletionsRoute, Error, common_utils::string_headers,
+    ChatCompletionsRoute, Error,
+    common_utils::string_headers,
     constants::CHAT_COMPLETIONS_TIMEOUT_SECS,
+    openai_compatible::{ResponseAdapter, compatible_chat_config},
+    stream::ReportedUsage,
 };
 
 pub struct OpenAiChatCompletions;
@@ -61,6 +64,9 @@ pub struct OpenAiChatCall {
     pub drop_params: bool,
     /// The model cost map, which Azure's param rules read.
     pub model_info: Option<Arc<dyn ModelInfo>>,
+    /// Where a stream's usage is recorded for the host when the client did not ask to see
+    /// it.
+    pub usage: ReportedUsage,
 }
 
 /// A provider request ready to go out: where, with which headers and body, and who serves it.
@@ -71,17 +77,18 @@ pub(crate) struct PreparedCall {
     pub(crate) headers: Headers,
     pub(crate) body: Map<String, Value>,
     pub(crate) api_key: Option<String>,
+    pub(crate) adapter: Option<ResponseAdapter>,
 }
 
 impl ChatCompletionsRoute {
-    /// Whether the deployment is served by the OpenAI wire passthrough: OpenAI itself, or
-    /// Azure OpenAI.
+    /// Whether the deployment is served by the OpenAI wire passthrough: OpenAI itself, Azure
+    /// OpenAI, or an OpenAI-compatible provider.
     pub fn serves_openai(model: &str, custom_llm_provider: Option<&str>) -> bool {
         resolve_llm_provider(model, custom_llm_provider, "chat completions").is_ok_and(|resolved| {
             matches!(
                 resolved.provider,
                 LlmProviders::Openai | LlmProviders::Azure
-            )
+            ) || compatible_chat_config(resolved.provider).is_some()
         })
     }
 
@@ -149,10 +156,14 @@ impl ChatCompletionsRoute {
                 "chat completions",
             )?;
             let model = resolved.model.to_string();
-            let prepared = match resolved.provider {
-                LlmProviders::Openai => self.prepare_openai(model, call).await?,
-                LlmProviders::Azure => self.prepare_azure(model, call).await?,
-                other => return Err(Error::InvalidProvider(<&str>::from(other).to_string())),
+            let usage = call.usage.clone();
+            let prepared = match (resolved.provider, compatible_chat_config(resolved.provider)) {
+                (LlmProviders::Openai, _) => self.prepare_openai(model, call).await?,
+                (LlmProviders::Azure, _) => self.prepare_azure(model, call).await?,
+                (_, Some(config)) => self.prepare_openai_compatible(config, model, call).await?,
+                (other, None) => {
+                    return Err(Error::InvalidProvider(<&str>::from(other).to_string()));
+                }
             };
             let PreparedCall {
                 model,
@@ -161,6 +172,7 @@ impl ChatCompletionsRoute {
                 headers,
                 body,
                 api_key,
+                adapter,
             } = prepared;
             litellm_inference::diagnostic::provider(&model, provider);
             let request_context = RequestContext {
@@ -192,12 +204,20 @@ impl ChatCompletionsRoute {
                 .unwrap_or(false);
             let response = send(&self.http, wire, stream, timeout).await?;
             let output = if stream {
+                let chunks = chunks(response, timeout);
                 CallOutput::Stream {
                     head: (),
-                    chunks: chunks(response, timeout),
+                    chunks: match adapter {
+                        Some(adapter) => adapter.stream(chunks, usage),
+                        None => chunks,
+                    },
                 }
             } else {
                 let body = response.bytes().await.map_err(network)?;
+                let body = match &adapter {
+                    Some(adapter) => adapter.complete(body),
+                    None => body,
+                };
                 context
                     .response_received(&String::from_utf8_lossy(&body))
                     .await?;
@@ -246,6 +266,7 @@ impl ChatCompletionsRoute {
             headers: authenticated.headers,
             body,
             api_key: call.api_key,
+            adapter: None,
         })
     }
 }
@@ -354,6 +375,9 @@ mod tests {
     #[case::azure("azure/gpt-4o", None, true)]
     #[case::azure_ai("azure_ai/gpt-4o", None, false)]
     #[case::openai_like("openai_like/gpt-6-astra", None, false)]
+    #[case::groq("groq/llama-3.1-8b-instant", None, true)]
+    #[case::hosted_vllm("meta-llama/Llama-3.1-8B", Some("hosted_vllm"), true)]
+    #[case::nvidia_nim("nvidia_nim/meta/llama3-70b-instruct", None, true)]
     #[case::anthropic("anthropic/claude", None, false)]
     #[case::unprefixed("gpt-6-astra", None, false)]
     fn only_openai_deployments_take_the_passthrough(
