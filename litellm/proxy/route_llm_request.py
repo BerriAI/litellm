@@ -356,6 +356,26 @@ def raise_if_required_body_param_missing(
     )
 
 
+def endpoint_unsupported_by_model(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+    team_id: str | None,
+) -> litellm.BadRequestError | None:
+    model: Final = data.get("model")
+    if not isinstance(model, str) or llm_router is None:
+        return None
+    metadata: Final = data.get("metadata")
+    request_kwargs: Final = {
+        **data,
+        "metadata": {
+            **(metadata if isinstance(metadata, Mapping) else {}),
+            "user_api_key_team_id": team_id,
+        },
+    }
+    return llm_router.endpoint_error_for_request(model, route_type, request_kwargs)
+
+
 class MockTestingParamsDisabledError(HTTPException):
     def __init__(self, params: tuple[str, ...]):
         super().__init__(

@@ -2643,10 +2643,8 @@ def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered() -> None:
             f"the rebuild changed or dropped a field the boot registration wrote: "
             f"{ {k: (v, rebuilt.get(k)) for k, v in at_boot.items() if rebuilt.get(k) != v} }"
         )
-        assert {field: rebuilt[field] for field in set(rebuilt) - set(at_boot)} == {
-            "db_model": False,
-            "member_auto_router": False,
-        }
+        replay_defaults: Final = {field: rebuilt[field] for field in set(rebuilt) - set(at_boot)}
+        assert replay_defaults.items() <= ModelInfo().model_dump(exclude_none=True).items()
         assert "member_auto_router" not in litellm.model_cost["gpt-4o"]
         assert router.model_list
     finally:

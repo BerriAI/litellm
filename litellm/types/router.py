@@ -255,6 +255,7 @@ def _whole_float_as_int(value: object) -> object:
 
 
 class ModelInfo(MirroredPricingParams):
+    enforce_supported_endpoints: bool = False
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None

@@ -10,7 +10,10 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm.proxy.route_llm_request import (
+    ProxyModelNotFoundError,
+    route_request,
+)
 
 
 @pytest.mark.parametrize(
@@ -1524,6 +1527,8 @@ async def test_route_request_read_through_recovers_model_created_on_sibling_repl
     assert table.find_many_wheres[0] == {"model_name": model_name}
 
 
+
+
 @pytest.mark.asyncio
 async def test_route_request_unknown_model_raises_and_hits_db_once_within_ttl(monkeypatch):
     import litellm
@@ -1763,6 +1768,8 @@ async def test_route_request_router_settings_override_skips_null_fields():
     assert "context_window_fallbacks" not in call_kwargs
     assert "num_retries" not in call_kwargs
     assert "model_group_retry_policy" not in call_kwargs
+
+
 
 
 def _router_with_defaults(default_litellm_params: dict[str, object]):

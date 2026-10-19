@@ -120,6 +120,7 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
+    endpoint_unsupported_by_model,
     route_request,
 )
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
@@ -132,6 +133,7 @@ from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
+from litellm.router_utils.endpoint_eligibility import UnsupportedEndpointError
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import validate_router_weights
@@ -2557,6 +2559,17 @@ class ProxyBaseLLMRequestProcessing:
                 original_model,
                 fallback_models,
             )
+            raw_router_settings: Final = _DECODED_JSON.validate_python(
+                _REQUEST_FIELDS.validate_python(rate_limited_data).get("router_settings_override")
+            )
+            group_alias: Final = _DECODED_JSON.validate_python(
+                _REQUEST_FIELDS.validate_python(raw_router_settings).get("model_group_alias")
+                if isinstance(raw_router_settings, Mapping)
+                else None
+            )
+            key_aliases: Final[object] = cast(  # cast-ok: auth aliases are dynamically typed at runtime
+                object, user_api_key_dict.aliases
+            )
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
@@ -2572,6 +2585,20 @@ class ProxyBaseLLMRequestProcessing:
                     self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
                     try:
+                        probe_data = {
+                            **_REQUEST_FIELDS.validate_python(pristine),
+                            "model": resolve_served_model(
+                                fallback_model,
+                                _DECODED_JSON.validate_python(litellm.model_alias_map),
+                                key_aliases,
+                                group_alias,
+                            ),
+                        }
+                        if (
+                            endpoint_unsupported_by_model(route_type, probe_data, llm_router, user_api_key_dict.team_id)
+                            is not None
+                        ):
+                            continue
                         return await self.common_processing_pre_call_logic(
                             request=request,
                             general_settings=general_settings,
@@ -2589,6 +2616,8 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
+                    except UnsupportedEndpointError:
+                        continue
                     except ProxyRateLimitError as fallback_exc:
                         if is_hard_per_model_limit(fallback_exc):
                             raise
