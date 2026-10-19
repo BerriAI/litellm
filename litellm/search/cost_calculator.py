@@ -43,7 +43,8 @@ def _pricing_model(
         return model
     mode: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get(mode_param)
     mode_model: Final = f"{custom_llm_provider}/search-{mode}"
-    return mode_model if mode_model in litellm.model_cost else model
+    priced: Final = mode_model in litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+    return mode_model if priced else model
 
 
 def search_provider_cost_per_query(
