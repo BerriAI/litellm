@@ -3,11 +3,13 @@ import copy
 import json
 import uuid
 from types import SimpleNamespace
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
@@ -482,7 +484,7 @@ def test_output_config_format_converted_for_bedrock_chat_invoke_request():
 
     with patch(  # test-quality-ok: pin non-native path
         "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key: key == "supports_output_config",
+        side_effect=lambda _model, key, *_: key == "supports_output_config",
     ):
         result = config.transform_request(
             model="anthropic.claude-opus-4-7",
@@ -504,10 +506,12 @@ def test_output_config_format_converted_for_bedrock_chat_invoke_request():
 
 
 @pytest.mark.parametrize("model", ["anthropic.claude-opus-4-7", "us.anthropic.claude-opus-4-8"])
-def test_output_config_format_inlined_for_bedrock_chat_invoke_opus_4_7_and_4_8(local_model_cost_map, model):
-    """Bedrock rejects ``output_config.format`` on Claude Opus 4.7 and 4.8, so the
-    Invoke chat path inlines the schema into the last user message and keeps effort,
-    driven by the cost map alone (no capability stub)."""
+def test_output_config_format_inlined_for_bedrock_chat_invoke_profile_without_native_output(
+    set_native_structured_output, model
+):
+    """On a profile without native structured output the Invoke chat path inlines the
+    schema into the last user message and keeps effort."""
+    set_native_structured_output(model, None)
     schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
 
     result = AmazonAnthropicClaudeConfig().transform_request(
@@ -525,12 +529,155 @@ def test_output_config_format_inlined_for_bedrock_chat_invoke_opus_4_7_and_4_8(l
     assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
 
 
+TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"root": {"$ref": "#/$defs/Node"}},
+    "$defs": {
+        "Node": {
+            "type": "object",
+            "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+        }
+    },
+}
+OPEN_OBJECT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"counts": {"type": "object", "additionalProperties": {"type": "integer"}}},
+}
+
+
+def _invoke_params_for_schema(
+    model: str, schema: Mapping[str, object], thinking_params: Mapping[str, object] | None = None
+) -> Mapping[str, object]:
+    return AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}},
+            **({"thinking": {"type": "adaptive"}} if thinking_params is None else thinking_params),
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("native_key", "thinking_params", "native"),
+    [
+        ("legacy", {}, True),
+        ("bedrock", {}, False),
+        ("bedrock", {"thinking": {"type": "adaptive"}}, True),
+        ("bedrock", {"reasoning_effort": "low"}, True),
+    ],
+    ids=["legacy-key", "bedrock-key-no-thinking", "bedrock-key-adaptive", "bedrock-key-effort"],
+)
+def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
+    set_native_structured_output, native_key, thinking_params, native
+):
+    model = "us.anthropic.claude-haiku-5-5"
+    set_native_structured_output(model, native_key)
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+
+    result = _invoke_params_for_schema(model, schema, thinking_params)
+
+    assert ("output_format" in result) is native
+    assert ("tools" in result) is not native
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+@pytest.mark.parametrize("schema", [TREE_SCHEMA, OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"])
+def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profile(
+    set_native_structured_output, schema, native_key
+):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+
+    result = _invoke_params_for_schema(model, schema)
+
+    assert "output_format" not in result
+    assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_closed_schema_goes_native_on_either_native_key(set_native_structured_output, native_key):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+    schema = {"type": "object", "properties": {"age": {"type": "integer", "minimum": 0}}, "required": ["age"]}
+
+    result = _invoke_params_for_schema(model, schema)
+
+    assert result["output_format"]["schema"]["properties"]["age"]["type"] == "integer"
+    assert "minimum" not in result["output_format"]["schema"]["properties"]["age"]
+    assert "tools" not in result
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_native_structured_output, native_key):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+    party_ref = {"$ref": "#/$defs/Party"}
+    schema = {
+        "type": "object",
+        "properties": {"buyer": party_ref, "seller": party_ref},
+        "required": ["buyer", "seller"],
+        "$defs": {
+            "Party": {
+                "type": "object",
+                "properties": {"email": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+                "required": ["email"],
+            }
+        },
+    }
+
+    result = _invoke_params_for_schema(model, schema)
+
+    sent = result["output_format"]["schema"]
+    assert sent["properties"]["buyer"] == party_ref
+    assert json.dumps(sent).count('"anyOf"') == 1
+    assert "tools" not in result
+
+
+
+class Relabel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    box: str
+    new_label: str
+
+
+class PuzzleAnswer(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    relabels: list[Relabel]
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_resolve(
+    set_native_structured_output, native_key
+):
+    model = "us.anthropic.claude-haiku-5-5"
+    set_native_structured_output(model, native_key)
+    config: Final = AmazonAnthropicClaudeConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={
+            "response_format": config.get_json_schema_from_pydantic_object(PuzzleAnswer),
+            "thinking": {"type": "adaptive"},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    sent: Final = result["output_format"]["schema"]
+    item_ref: Final = sent["properties"]["relabels"]["items"]["$ref"]
+    assert item_ref.removeprefix("#/$defs/") in sent["$defs"]
+    assert "tools" not in result
+
 def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
     for models with native structured-output support (Claude Sonnet 4.6)."""
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "additionalProperties": False},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(
@@ -671,7 +818,7 @@ def test_bedrock_chat_invoke_drop_params_keeps_native_output_config_format(local
     monkeypatch.setattr(litellm, "drop_params", True)
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(
@@ -713,10 +860,11 @@ def test_bedrock_chat_invoke_drop_params_still_inlines_for_non_native(local_mode
     "model",
     ["us.anthropic.claude-fable-5-1", "anthropic.claude-fable-5-1"],
 )
-def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice(local_model_cost_map, model):
-    """Regression: Bedrock rejects both native ``output_config.format`` and forced
-    tool_choice for Fable 5.1, so invoke must use the tool-based path without a
+def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice(set_native_structured_output, model):
+    """Regression: Bedrock rejects forced tool_choice for Fable 5.1, so on a profile
+    without native structured output invoke must use the tool-based path without a
     forced ``tool_choice``."""
+    set_native_structured_output(model, None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -738,7 +886,10 @@ def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice
 
 
 @pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5", "us.anthropic.claude-fable-5-1"])
-def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_thinking(local_model_cost_map, model):
+def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_thinking(
+    set_native_structured_output, model
+):
+    set_native_structured_output(model, None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -761,9 +912,10 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     assert result["output_config"] == {"effort": "high"}
 
 
-def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(local_model_cost_map):
+def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(set_native_structured_output):
     """Anthropic accepts a forced tool_choice next to adaptive thinking, and dropping
     it lets the model answer in prose instead of the requested JSON."""
+    set_native_structured_output("us.anthropic.claude-opus-5", None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -1085,6 +1237,35 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
     )
 
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+
+
+DANGEROUS_TOOL_USE_BETA: Final = "dangerous-tool-use-2026-09-03"
+
+
+def _chat_invoke_betas(extra_optional_params: dict[str, object]) -> object:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 64}, optional_params={}, model=model, drop_params=False
+    )
+    return config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={**optional_params, **extra_optional_params},
+        litellm_params={},
+        headers={"anthropic-beta": f"claude-code-20250219,{DANGEROUS_TOOL_USE_BETA}"},
+    ).get("anthropic_beta")
+
+
+def test_bedrock_chat_invoke_drops_client_dangerous_tool_use_beta_without_safeguards() -> None:
+    assert _chat_invoke_betas({}) == ["claude-code-20250219"]
+
+
+def test_bedrock_chat_invoke_keeps_client_dangerous_tool_use_beta_with_safeguards() -> None:
+    assert _chat_invoke_betas({"safeguards": [{"type": "dangerous_tool_use"}]}) == [
+        "claude-code-20250219",
+        DANGEROUS_TOOL_USE_BETA,
+    ]
 
 
 def _mid_conversation_system_conversation() -> list[dict]:
@@ -1767,3 +1948,63 @@ def test_refusal_stop_details_kept_through_bedrock_invoke_transform():
     provider_fields: Final = result.choices[0].message.provider_specific_fields
     assert provider_fields["stop_reason"] == "refusal"
     assert provider_fields["stop_details"] == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+
+
+_CITY_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+    "additionalProperties": False,
+}
+_CITY_RESPONSE_FORMAT: Final = {"type": "json_schema", "json_schema": {"name": "city", "schema": _CITY_SCHEMA}}
+
+
+def _invoke_chat_params(
+    model: str, model_info: Mapping[str, object] | None, non_default_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    return AmazonAnthropicClaudeConfig(model_info=model_info).map_openai_params(
+        non_default_params=dict(non_default_params), optional_params={}, model=model, drop_params=False
+    )
+
+
+@pytest.mark.parametrize(
+    "thinking_params",
+    [{"thinking": {"type": "adaptive"}}, {"reasoning_effort": "low"}],
+    ids=["adaptive", "reasoning_effort"],
+)
+@pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
+def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
+    local_model_cost_map, model, thinking_params
+):
+    optional_params: Final = _invoke_chat_params(
+        model, None, {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
+    )
+
+    assert AmazonAnthropicClaudeConfig().uses_opt_in_native_output(model, optional_params, {})
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "request_params"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, {"response_format": _CITY_RESPONSE_FORMAT}),
+        (
+            "us.anthropic.claude-opus-4-8",
+            {"supports_bedrock_native_structured_output": False},
+            {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "adaptive"}},
+        ),
+        (
+            "us.anthropic.claude-sonnet-4-6",
+            None,
+            {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "adaptive"}},
+        ),
+    ],
+    ids=["no_thinking", "deployment_opt_out", "native_model"],
+)
+def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from_the_opt_in(
+    local_model_cost_map, model, model_info, request_params
+):
+    optional_params: Final = _invoke_chat_params(model, model_info, request_params)
+
+    assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
+        model, optional_params, {"model_info": model_info}
+    )

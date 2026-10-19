@@ -8,13 +8,21 @@ import statistics
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final
 
 from e2e_http import NoBody, get_external, post_external, unwrap
 from memory_readings import RssCapture, RssReading, WorkerKey
 from pydantic import BaseModel
 
-from setup.datastore import DbCounters, RedisCounters
+from setup.datastore import (
+    DbCounters,
+    RedisCommand,
+    RedisCounters,
+    StatementCalls,
+    calls_in,
+    statement_deltas,
+)
 from setup.mocks.reply_common import Provider
 from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase
 from setup.wire import WireRecord
@@ -105,12 +113,35 @@ class Observation:
     db_after: DbCounters | None = None
     redis_before: RedisCounters | None = None
     redis_after: RedisCounters | None = None
+    redis_commands: tuple[RedisCommand, ...] | None = None
     gateway_cpu_seconds: float | None = None
 
     def per_request(self, before: int | None, after: int | None) -> float | None:
         if before is None or after is None or not self.records:
             return None
         return (after - before) / len(self.records)
+
+    def count_per_request(self, count: int | None) -> float | None:
+        return None if count is None or not self.records else count / len(self.records)
+
+    @property
+    def statements(self) -> tuple[StatementCalls, ...] | None:
+        return statement_deltas(self.db_before, self.db_after)
+
+    @property
+    def busiest_awaited_statement(self) -> StatementCalls | None:
+        """The awaited statement with the most calls: a lookup added to every request shows up here at
+        1.0 per request while cache refreshes stay fractional, which the awaited total cannot tell apart."""
+        awaited: Final = tuple(item for item in self.statements or () if item.bucket == "awaited")
+        return max(awaited, key=_item_count, default=None)
+
+    def busiest_background_statement(self, exempt_tables: frozenset[str]) -> StatementCalls | None:
+        """The background statement with the most calls, skipping the case's per-flush exemptions: a rollup
+        written once per request reads 1.0 here while batched writers stay below it."""
+        background: Final = tuple(
+            item for item in self.statements or () if item.bucket == "background" and item.table not in exempt_tables
+        )
+        return max(background, key=_item_count, default=None)
 
     @property
     def retried_markers(self) -> frozenset[str]:
@@ -179,7 +210,9 @@ def _text_sha1(text: str, *, intervened: bool) -> str:
     return hashlib.sha1(original.encode()).hexdigest()
 
 
-def observe(metric: Metric, percentile_rank: int | None, observation: Observation) -> float | None:
+def observe(
+    metric: Metric, percentile_rank: int | None, observation: Observation, exempt_tables: frozenset[str] = frozenset()
+) -> float | None:
     """The observed value of one metric, at a percentile when the metric is per request."""
     per_request: dict[str, list[float]] = {
         "gateway_added_seconds": observation.gateway_added_seconds(),
@@ -190,11 +223,23 @@ def observe(metric: Metric, percentile_rank: int | None, observation: Observatio
     if metric == "unexpected_status_count":
         return float(observation.unexpected_status_count())
     if metric == "postgres_calls_per_request":
-        db_before, db_after = observation.db_before, observation.db_after
-        return observation.per_request(db_before and db_before.commits, db_after and db_after.commits)
+        return observation.count_per_request(calls_in("awaited", observation.statements))
+    if metric == "postgres_background_calls_per_request":
+        return observation.count_per_request(calls_in("background", observation.statements))
+    if metric == "postgres_max_statement_per_request":
+        if observation.statements is None:
+            return None
+        busiest: Final = observation.busiest_awaited_statement
+        return observation.count_per_request(0 if busiest is None else busiest.calls)
+    if metric == "postgres_max_background_statement_per_request":
+        if observation.statements is None:
+            return None
+        busiest_background: Final = observation.busiest_background_statement(exempt_tables)
+        return observation.count_per_request(0 if busiest_background is None else busiest_background.calls)
     if metric == "redis_calls_per_request":
-        redis_before, redis_after = observation.redis_before, observation.redis_after
-        return observation.per_request(redis_before and redis_before.commands, redis_after and redis_after.commands)
+        return observation.count_per_request(calls_in("awaited", observation.redis_commands))
+    if metric == "redis_background_calls_per_request":
+        return observation.count_per_request(calls_in("background", observation.redis_commands))
     if metric == "cpu_seconds_per_request":
         cpu: Final = observation.gateway_cpu_seconds
         return None if cpu is None or not observation.records else cpu / len(observation.records)
@@ -203,9 +248,19 @@ def observe(metric: Metric, percentile_rank: int | None, observation: Observatio
 
 @dataclass(frozen=True, slots=True)
 class Row:
-    label: str
+    metric: Metric
+    percentile: int | None
     observed: float | None
     limit: float | None
+    detail: str = ""
+
+    @property
+    def label(self) -> str:
+        return f"{self.metric} percentile {self.percentile}" if self.percentile is not None else self.metric
+
+    @property
+    def property_name(self) -> str:
+        return f"perf_{self.metric}" if self.percentile is None else f"perf_{self.metric}_p{self.percentile}"
 
     @property
     def over(self) -> bool:
@@ -224,7 +279,11 @@ REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("time_to_first_token_seconds", 99),
     ("memory_growth_megabytes", None),
     ("postgres_calls_per_request", None),
+    ("postgres_background_calls_per_request", None),
+    ("postgres_max_statement_per_request", None),
+    ("postgres_max_background_statement_per_request", None),
     ("redis_calls_per_request", None),
+    ("redis_background_calls_per_request", None),
     ("cpu_seconds_per_request", None),
 )
 
@@ -240,16 +299,43 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
     rows: list[Row] = []
     for metric, rank in keys:
         limit = limits.get((metric, rank))
-        label = f"{metric} percentile {rank}" if rank is not None else metric
-        rows.append(Row(label=label, observed=observe(metric, rank, observation), limit=limit.max if limit else None))
+        rows.append(
+            Row(
+                metric=metric,
+                percentile=rank,
+                observed=observe(metric, rank, observation, case.background_cap_exempt_tables),
+                limit=limit.max if limit else None,
+                detail=_detail(metric, observation, case.background_cap_exempt_tables),
+            )
+        )
     exceeded: Final = [
-        f"{row.label}: observed {row.observed:.4f} > limit {row.limit:.4f}"
+        f"{row.label}: observed {row.observed:.4f} > limit {row.limit:.4f}{f' ({row.detail})' if row.detail else ''}"
         if row.over and row.observed is not None and row.limit is not None
         else f"{row.label}: limit set but nothing observed"
         for row in rows
         if row.over or row.missing
     ]
     return rows, exceeded
+
+
+def _detail(metric: Metric, observation: Observation, exempt_tables: frozenset[str]) -> str:
+    if metric == "postgres_max_statement_per_request":
+        busiest: Final = observation.busiest_awaited_statement
+        return "" if busiest is None else busiest.summary
+    if metric == "postgres_max_background_statement_per_request":
+        busiest_background: Final = observation.busiest_background_statement(exempt_tables)
+        return "" if busiest_background is None else busiest_background.summary
+    return ""
+
+
+def _row_properties(row: Row) -> tuple[tuple[str, float], ...]:
+    observed: Final = ((row.property_name, row.observed),) if row.observed is not None else ()
+    limit: Final = ((f"{row.property_name}_limit", row.limit),) if row.limit is not None else ()
+    return observed + limit
+
+
+def junit_properties(rows: Iterable[Row]) -> tuple[tuple[str, float], ...]:
+    return tuple(chain.from_iterable(map(_row_properties, rows)))
 
 
 def render(case: PerformanceTestCase, observation: Observation, rows: list[Row]) -> str:
@@ -272,6 +358,7 @@ def render(case: PerformanceTestCase, observation: Observation, rows: list[Row])
         flag = "  OVER" if row.over else "  MISSING" if row.missing else ""
         lines.append(f"  {row.label:32} {observed:>12} {limit:>12}{flag}")
     lines.extend(_diagnostics(observation))
+    lines.extend(_datastore_lines(observation))
     for record in failures:
         lines.append(
             f"  wrong: seq {record.seq} {record.caller} {record.endpoint}{' stream' if record.stream else ''} status {record.status}: {record.error}"
@@ -290,8 +377,48 @@ def _diagnostics(observation: Observation) -> list[str]:
         f"    guardrail missed {observation.guardrail_missed() if observation.guardrail_calls else 'n/a'}",
         f"    retried share {len(observation.retried_markers) / count:.4f}",
         f"    spend logged share {'n/a' if share is None else f'{share:.3f}'}",
+        f"    postgres transactions per request {_fmt(observation.per_request(_commits(observation.db_before), _commits(observation.db_after)))}",
+        f"    redis commands per request {_fmt(observation.per_request(_commands(observation.redis_before), _commands(observation.redis_after)))}",
         f"    redis connected clients {_clients(observation.redis_before)} -> {_clients(observation.redis_after)}",
     ]
+
+
+def _datastore_lines(observation: Observation) -> list[str]:
+    """What the per-request Postgres and Redis counts are made of, so a red run names the statement or
+    command that grew. `plumbing` (BEGIN, COMMIT, session settings) and `unclassified` count in neither limit."""
+    count: Final = max(1, len(observation.records))
+    lines: list[str] = []
+    for title, items in (
+        ("postgres statements", observation.statements),
+        ("redis commands", observation.redis_commands),
+    ):
+        if items is None:
+            lines.append(f"  {title}: n/a")
+            continue
+        for bucket in ("awaited", "background", "plumbing", "unclassified"):
+            in_bucket = sorted((item for item in items if item.bucket == bucket), key=_item_count, reverse=True)
+            total = sum(_item_count(item) for item in in_bucket)
+            if not in_bucket:
+                continue
+            lines.append(f"  {title} {bucket}: {total / count:.3f} per request, {len(in_bucket)} distinct")
+            lines.extend(f"    {_item_count(item) / count:8.3f}  {item.summary}" for item in in_bucket[:8])
+    return lines
+
+
+def _item_count(item: StatementCalls | RedisCommand) -> int:
+    return item.calls if isinstance(item, StatementCalls) else item.count
+
+
+def _commits(counters: DbCounters | None) -> int | None:
+    return None if counters is None else counters.commits
+
+
+def _commands(counters: RedisCounters | None) -> int | None:
+    return None if counters is None else counters.commands
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}"
 
 
 def _clients(counters: RedisCounters | None) -> str:

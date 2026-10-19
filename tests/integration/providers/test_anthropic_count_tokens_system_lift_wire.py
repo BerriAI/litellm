@@ -1,6 +1,5 @@
 import asyncio
 import json
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -18,6 +17,7 @@ import pytest
 from anthropic.types import MessageParam
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
     ANTHROPIC_VERSION,
     ASSISTANT,
@@ -131,12 +131,6 @@ def _listening(deployment: _Deployment, count: Callable[[Request], Reply] = _cou
     return wire_server(_peer(deployment.provider, count), port=deployment.port)
 
 
-def _reserved_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return _CLIENT_ADDRESS.validate_python(reserve.getsockname())[1]
-
-
 def _cmdline(process: psutil.Process) -> tuple[str, ...]:
     try:
         return _ARGUMENTS.validate_python(process.cmdline())
@@ -211,7 +205,7 @@ def _settled_on_every_worker(gateway: Gateway, body: Mapping[str, JsonValue]) ->
 
 
 def _deploy(gateway: Gateway, scenario: Scenario, provider: _Provider) -> _Deployment:
-    port: Final = _reserved_port()
+    port: Final = allocate_port()
     model: Final = scenario.model(
         model_info=None, model=f"{provider.prefix}/{_MODEL}", api_base=f"http://127.0.0.1:{port}", api_key=_API_KEY
     )
@@ -280,7 +274,7 @@ def test_messages_count_tokens_lifts_the_leading_system_run(
 ) -> None:
     with _listening(deployment) as peer:
         response: Final = _count(gateway, count_request(deployment.model, case))
-        assert _payload(response) == {"input_tokens": _COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, response.text
         assert _bodies(peer, deployment.provider) == (expected_count_body(_MODEL, case),)
 
 
@@ -335,7 +329,11 @@ def test_responses_input_tokens_lifts_instructions(deployment: _Deployment, gate
             "/v1/responses/input_tokens",
             {"model": deployment.model, "input": USER_TEXT, "instructions": INSTRUCTION},
         )
-        assert _payload(response) == {"object": "response.input_tokens", "input_tokens": _COUNT}, response.text
+        assert _payload(response) == {
+            "object": "response.input_tokens",
+            "input_tokens": _COUNT,
+            "litellm_count_source": "provider",
+        }, response.text
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,)
 
 
@@ -348,7 +346,11 @@ def test_responses_input_tokens_lifts_instructions_ahead_of_a_leading_system_ite
             "/v1/responses/input_tokens",
             {"model": deployment.model, "input": [MID_SYSTEM, USER], "instructions": INSTRUCTION},
         )
-        assert _payload(response) == {"object": "response.input_tokens", "input_tokens": _COUNT}, response.text
+        assert _payload(response) == {
+            "object": "response.input_tokens",
+            "input_tokens": _COUNT,
+            "litellm_count_source": "provider",
+        }, response.text
         assert _bodies(peer, deployment.provider) == (
             {"model": _MODEL, "messages": [USER], "system": [LIFTED, {"type": "text", "text": REMINDER}]},
         )
@@ -379,7 +381,7 @@ def test_messages_count_tokens_forwards_tools_beside_the_lifted_system(
 ) -> None:
     with _listening(deployment) as peer:
         response: Final = _count(gateway, {**count_request(deployment.model, STRING_CASE), "tools": TOOLS})
-        assert _payload(response) == {"input_tokens": _COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, response.text
         assert _bodies(peer, deployment.provider) == ({**_STRING_BODY, "tools": TOOLS},)
 
 
@@ -392,7 +394,7 @@ def test_messages_count_tokens_keeps_a_mid_conversation_system_in_place(
             "messages": [LEADING, USER, MID_SYSTEM, ASSISTANT, FOLLOW_UP],
         }
         response: Final = _count(gateway, body)
-        assert _payload(response) == {"input_tokens": _COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, response.text
         assert _bodies(peer, deployment.provider) == (
             {"model": _MODEL, "messages": [USER, MID_SYSTEM, ASSISTANT, FOLLOW_UP], "system": [LIFTED]},
         )
@@ -424,7 +426,7 @@ def test_messages_count_tokens_repeated_request_lifts_each_time(deployment: _Dep
         answers: Final = tuple(
             _payload(_count(gateway, count_request(deployment.model, STRING_CASE))) for _ in range(2)
         )
-        assert answers == ({"input_tokens": _COUNT},) * 2
+        assert answers == ({"input_tokens": _COUNT, "litellm_count_source": "provider"},) * 2
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,) * 2
 
 
@@ -438,7 +440,7 @@ def test_messages_count_tokens_surfaces_the_counting_error_for_a_leading_system_
         assert "input_tokens" not in response.text, response.text
         assert peer.drain() == ()
         follow_up: Final = _count(gateway, count_request(deployment.model, STRING_CASE))
-        assert _payload(follow_up) == {"input_tokens": _COUNT}, follow_up.text
+        assert _payload(follow_up) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, follow_up.text
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,)
 
 
@@ -453,7 +455,7 @@ def test_messages_count_tokens_duplicate_messages_key_lifts_the_last_value(
             content=f'{{"model": "{deployment.model}", "messages": {first}, "messages": {last}}}',
             headers={"Authorization": f"Bearer {gateway.key}", "Content-Type": "application/json"},
         )
-        assert _payload(response) == {"input_tokens": _COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, response.text
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,)
 
 
