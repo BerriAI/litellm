@@ -5,9 +5,9 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional, TypeAlias, TypedDict, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
 
 import litellm
@@ -1222,8 +1222,32 @@ def concatenate_base64_list(base64_strings: Sequence[str]) -> str:
     return base64.b64encode(combined_bytes).decode("utf-8")
 
 
-def _as_text_completion_chunk(chunk: TextCompletionResponse | Mapping[str, object]) -> TextCompletionResponse:
-    return chunk if isinstance(chunk, TextCompletionResponse) else TextCompletionResponse.model_validate(chunk)
+_CHOICE_DICTS: Final = TypeAdapter(list[dict[str, object]])
+
+
+def _text_completion_chunk_from_mapping(chunk: Mapping[str, object]) -> TextCompletionResponse:
+    try:
+        return TextCompletionResponse.model_validate(chunk)
+    except ValidationError:
+        choices: Final = _CHOICE_DICTS.validate_python(chunk.get("choices", []))
+        return TextCompletionResponse.model_validate(
+            {**chunk, "choices": [{**choice, "logprobs": None} for choice in choices]}
+        )
+
+
+def _as_text_completion_chunk(
+    chunk: TextCompletionResponse | ModelResponseStream | Mapping[str, object],
+) -> TextCompletionResponse:
+    if isinstance(chunk, TextCompletionResponse):
+        return chunk
+    if isinstance(chunk, ModelResponseStream):
+        return TextCompletionResponse(
+            id=chunk.id,
+            created=chunk.created,
+            model=chunk.model,
+            choices=[TextChoices(index=choice.index, finish_reason=choice.finish_reason) for choice in chunk.choices],
+        )
+    return _text_completion_chunk_from_mapping(chunk)
 
 
 _LogprobsValue: Final = TypeVar("_LogprobsValue")
@@ -1234,10 +1258,19 @@ def _joined_or_none(fields: Iterable[Sequence[_LogprobsValue] | None]) -> list[_
     return list(chain.from_iterable(sent)) if sent else None
 
 
-def _merged_logprobs(choices: Sequence[TextChoices]) -> Logprobs | None:
-    parts: Final = tuple(choice.logprobs for choice in choices if isinstance(choice.logprobs, Logprobs))
+class _CarriesLogprobs(Protocol):
+    @property
+    def logprobs(self) -> object: ...
+
+
+def _sent_logprobs(choice: _CarriesLogprobs) -> object:
+    return choice.logprobs
+
+
+def _merged_logprobs(choices: Sequence[TextChoices]) -> object:
+    parts: Final = tuple(logprobs for logprobs in map(_sent_logprobs, choices) if isinstance(logprobs, Logprobs))
     if not parts:
-        return None
+        return next((logprobs for logprobs in map(_sent_logprobs, reversed(choices)) if logprobs is not None), None)
     return Logprobs(
         text_offset=_joined_or_none(part.text_offset for part in parts),
         token_logprobs=_joined_or_none(part.token_logprobs for part in parts),
@@ -1269,7 +1302,7 @@ def _reported_usage(chunk: TextCompletionResponse) -> Usage | None:
 
 
 def stream_chunk_builder_text_completion(
-    chunks: Sequence[TextCompletionResponse | Mapping[str, object]],
+    chunks: Sequence[TextCompletionResponse | ModelResponseStream | Mapping[str, object]],
     messages: Sequence[AllMessageValues | Message] | None = None,
 ) -> TextCompletionResponse:
     text_chunks: Final = tuple(_as_text_completion_chunk(chunk) for chunk in chunks)
