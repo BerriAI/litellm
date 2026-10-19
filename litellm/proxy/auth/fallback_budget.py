@@ -11,13 +11,13 @@ attempted, mirroring `fallback_model_access.py`. It deliberately leaves the prim
 a zero-cost model is never blocked by budget, and only the paid fallback is refused. On by default;
 set `general_settings.enforce_fallback_budget: false` to restore the unguarded behaviour.
 
-Scope: the key's and the user's `max_budget`. Not covered yet, and each needs a read-only evaluation
-path before it can be: team, team-member, end-user, org, global and per-model budgets, whose
-auth-path functions enforce rather than report (they raise), so reusing them would fire threshold
-alerts and take spend reservations for a target that is then skipped; and the key's rolling
-`budget_limits` windows, whose accumulated spend lives only in per-window counters
-(`spend:key:{token}:window:{budget_duration}`), so enforcing them means more counter reads on the
-fallback path rather than reusing state auth already loaded.
+Scope: the key's and the user's `max_budget`, plus the team member's per-model caps. Not covered yet,
+and each needs a read-only evaluation path before it can be: team and team-member overall, end-user,
+org, global and other per-model budgets, whose auth-path functions enforce rather than report (they
+raise), so reusing them would fire threshold alerts and take spend reservations for a target that is
+then skipped; and the key's rolling `budget_limits` windows, whose accumulated spend lives only in
+per-window counters (`spend:key:{token}:window:{budget_duration}`), so enforcing them means more
+counter reads on the fallback path rather than reusing state auth already loaded.
 
 Two known limitations of that narrow scope, both shared with `fallback_model_access.py`:
 
@@ -33,24 +33,37 @@ Two known limitations of that narrow scope, both shared with `fallback_model_acc
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import (
-    _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # the zero-cost predicate the auth-time budget checks use; no public equivalent
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # the zero-cost predicate the auth-time budget checks use; no public equivalent
 )
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _RequestMetadata(BaseModel):
+class _RequestMetadata(LiteLLMBaseModel):
     user_api_key_auth: UserAPIKeyAuth | None = None
 
 
-class _FallbackBudgetSettings(BaseModel):
+class _FallbackBudgetSettings(LiteLLMBaseModel):
     enforce_fallback_budget: bool = True
+
+
+class _TeamMemberModelBudgetLimiter(Protocol):
+    async def is_team_member_within_model_budget(
+        self,
+        user_id: str,
+        team_id: str,
+        team_member_model_max_budget: Mapping[str, object],
+        model: str,
+    ) -> bool: ...
 
 
 def _token_in_metadata(metadata: object) -> UserAPIKeyAuth | None:
@@ -101,14 +114,20 @@ async def _counter_spend(counter_key: str, fallback_spend: float, max_budget: fl
     )
 
 
-async def is_token_within_budget_for_model(*, model: str, valid_token: UserAPIKeyAuth, llm_router: Router) -> bool:
+async def is_token_within_budget_for_model(
+    *,
+    model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: Router,
+    team_member_model_budget_limiter: _TeamMemberModelBudgetLimiter | None = None,
+) -> bool:
     """
     True when the key and the user behind it can still pay for `model`.
 
     A zero-cost fallback target is always allowed: refusing it would deny a request on spend some
     other model accrued, which is the same reasoning behind the auth-time bypass.
     """
-    if _is_model_cost_zero(model=model, llm_router=llm_router):
+    if is_model_cost_zero(model=model, llm_router=llm_router):
         return True
 
     key_budget: Final = valid_token.max_budget
@@ -137,6 +156,23 @@ async def is_token_within_budget_for_model(*, model: str, valid_token: UserAPIKe
         if user_spend >= user_budget:
             return False
 
+    team_member_model_max_budget: Final = valid_token.team_member_model_max_budget
+    if (
+        team_member_model_budget_limiter is not None
+        and team_member_model_max_budget
+        and isinstance(valid_token.user_id, str)
+        and isinstance(valid_token.team_id, str)
+    ):
+        try:
+            await team_member_model_budget_limiter.is_team_member_within_model_budget(
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_member_model_max_budget=team_member_model_max_budget,
+                model=model,
+            )
+        except litellm.BudgetExceededError:
+            return False
+
     return True
 
 
@@ -149,6 +185,7 @@ class RouterFallbackBudgetCheck:
     """
 
     is_enforced: Callable[[], bool]
+    team_member_model_budget_limiter: _TeamMemberModelBudgetLimiter | None = None
 
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
         if not self.is_enforced():
@@ -156,11 +193,20 @@ class RouterFallbackBudgetCheck:
         valid_token: Final = _user_api_key_auth_from_request(request_kwargs)
         if valid_token is None:
             return True
-        try:
-            return await is_token_within_budget_for_model(model=model, valid_token=valid_token, llm_router=llm_router)
-        except Exception as e:  # noqa: BLE001  # fail closed: a spend lookup failure must not bill the caller
-            verbose_proxy_logger.warning("Skipping fallback to model=%s: budget lookup failed: %s", model, e)
-            return False
+        budget_models: Final = tuple(dict.fromkeys((model, llm_router.routable_model_group(model))))
+        for budget_model in budget_models:
+            try:
+                if not await is_token_within_budget_for_model(
+                    model=budget_model,
+                    valid_token=valid_token,
+                    llm_router=llm_router,
+                    team_member_model_budget_limiter=self.team_member_model_budget_limiter,
+                ):
+                    return False
+            except Exception as e:  # noqa: BLE001  # fail closed: a spend lookup failure must not bill the caller
+                verbose_proxy_logger.warning("Skipping fallback to model=%s: budget lookup failed: %s", model, e)
+                return False
+        return True
 
 
 router_fallback_budget_check: Final = RouterFallbackBudgetCheck(is_enforced=_enforced_by_general_settings)

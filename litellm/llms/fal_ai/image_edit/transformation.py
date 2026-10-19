@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -23,6 +24,8 @@ from litellm.types.utils import FileTypes, ImageResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 DEFAULT_BASE_URL: Final[str] = "https://fal.run"
 EDIT_SUFFIX: Final[str] = "/edit"
 SUPPORTED_OPENAI_PARAMS: Final[tuple[str, ...]] = ("background", "mask", "n", "quality", "size")
@@ -82,7 +85,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
     """
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a list
-        return list(SUPPORTED_OPENAI_PARAMS)  # mutable-ok: base class contract returns a list
+        return list(SUPPORTED_OPENAI_PARAMS)
 
     def map_openai_params(
         self,
@@ -90,7 +93,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return {  # mutable-ok: base class contract returns a dict
+        return {
             PARAM_TRANSLATION.get(key, key): self._translate_value(key, value, model)
             for key, value in image_edit_optional_params.items()
             if value is not None
@@ -114,7 +117,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         final_api_key: Final = api_key or get_secret_str("FAL_AI_API_KEY")
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
-        return {**headers, "Authorization": f"Key {final_api_key}"}  # mutable-ok: base class contract returns a dict
+        return {**headers, "Authorization": f"Key {final_api_key}"}
 
     def use_multipart_form_data(self) -> bool:
         return False
@@ -163,7 +166,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         logging_obj: "LiteLLMLoggingObj",
     ) -> ImageResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _JSON_VALUE.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Fal AI image edit response: {e}",
@@ -171,7 +174,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
         model_response: Final = ImageResponse()
-        model_response.data = list(  # mutable-ok: ImageResponse.data is typed as a list
-            fal_images_to_image_objects(response_json.get("images", ()))
+        model_response.data = list(
+            fal_images_to_image_objects(_JSON_OBJECT.validate_python(response_json).get("images", ()))
         )
         return model_response

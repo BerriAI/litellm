@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -124,6 +125,94 @@ def test_no_safeguards_leaves_dangerous_tool_use_beta_header_out():
         )
 
     assert "dangerous-tool-use-2026-09-03" not in updated_headers.get("anthropic-beta", "")
+
+
+def _validate_vertex_headers(client_headers, messages):
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "global",
+        "vertex_credentials": "{}",
+    }
+
+    with (
+        patch.object(config, "_ensure_access_token", return_value=("token", "test-project")),
+        patch.object(config, "get_complete_vertex_url", return_value="https://mock-url"),
+    ):
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers=client_headers,
+            model="claude-opus-5-5",
+            messages=messages,
+            optional_params={"max_tokens": 64},
+            litellm_params=litellm_params,
+            api_base=None,
+        )
+    return updated_headers
+
+
+@pytest.mark.parametrize(
+    "client_headers",
+    [{"anthropic-beta": "per-turn-control-2026-07-01"}, {}],
+    ids=["client_sends_beta", "client_omits_beta"],
+)
+def test_per_message_output_config_reaches_vertex_with_per_turn_control_beta(client_headers, monkeypatch):
+    """Vertex rejects a message-level `output_config` as an extra input unless the per-turn-control beta is present, so the beta must survive the Vertex beta filter."""
+    from litellm import anthropic_beta_headers_manager
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        {"role": "system", "content": [{"type": "text", "text": "# Environment"}], "output_config": {"effort": "low"}},
+    ]
+
+    filtered = update_headers_with_filtered_beta(
+        headers=_validate_vertex_headers(client_headers, messages), provider="vertex_ai"
+    )
+
+    assert filtered["anthropic-beta"].split(",").count("per-turn-control-2026-07-01") == 1
+
+
+def test_no_per_message_output_config_leaves_per_turn_control_beta_out():
+    headers = _validate_vertex_headers({}, [{"role": "user", "content": "Hello"}])
+
+    assert "per-turn-control-2026-07-01" not in headers.get("anthropic-beta", "")
+
+
+def test_inline_tools_beta_reaches_the_vertex_messages_request(local_beta_headers_config: None) -> None:
+    """Vertex rejects a `tool_addition` system message unless inline-tools-2026-09-15 is on the request, so the
+    /v1/messages beta filter must keep the header the client sent (source and date in
+    tests/unit/test_anthropic_beta_headers_filtering.py)."""
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "tool_addition",
+                    "tool": {
+                        "type": "tool_definition",
+                        "definition": {
+                            "name": "db_query",
+                            "description": "Run a read-only SQL query",
+                            "input_schema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+                        },
+                    },
+                }
+            ],
+        },
+    ]
+
+    filtered: Final = update_headers_with_filtered_beta(
+        headers=_validate_vertex_headers({"anthropic-beta": "inline-tools-2026-09-15"}, messages),
+        provider="vertex_ai",
+    )
+
+    assert filtered["anthropic-beta"].split(",").count("inline-tools-2026-09-15") == 1
 
 
 def test_web_search_header_not_added_without_tool():
@@ -423,6 +512,29 @@ def test_messages_request_strips_effort_for_haiku_45():
         headers={},
     )
     assert opus_result["output_config"] == {"effort": "high"}
+
+
+def test_messages_request_moves_output_format_into_output_config():
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    output_format: Final = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}, "required": ["answer"]},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "What is 6 times 7?"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "output_format": output_format,
+            "output_config": {"effort": "high"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_format" not in result
+    assert result["output_config"] == {"effort": "high", "format": output_format}
 
 
 def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instance():

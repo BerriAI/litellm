@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from fastapi import HTTPException, status
 
@@ -10,15 +10,22 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import can_access_m
 from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
+if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
+
 
 class MCPServerRegistry(Protocol):
     def get_mcp_server_by_id(self, server_id: str) -> MCPServer | None: ...
 
     def get_mcp_server_by_name(self, server_name: str, client_ip: str | None = None) -> MCPServer | None: ...
 
-    def _is_server_accessible_from_ip(self, server: MCPServer, client_ip: str | None) -> bool: ...
+    def is_server_accessible_from_ip(self, server: MCPServer, client_ip: str | None) -> bool: ...
 
-    def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable: ...
+    _is_server_accessible_from_ip = is_server_accessible_from_ip
+
+    def build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable: ...
+
+    _build_mcp_server_table = build_mcp_server_table
 
     async def get_allowed_mcp_servers(self, user_api_key_auth: UserAPIKeyAuth) -> list[str]: ...
 
@@ -47,7 +54,7 @@ async def resolve_mcp_server(
         temporary_server: Final[MCPServer | None] = await temp_lookup(server_id)
         if temporary_server is not None:
             return ResolvedMCPServer(
-                table=manager._build_mcp_server_table(temporary_server),
+                table=manager.build_mcp_server_table(temporary_server),
                 runtime=temporary_server,
                 source="temp",
             )
@@ -61,12 +68,12 @@ async def resolve_mcp_server(
     registry_server: Final[MCPServer | None] = (
         registry_candidate
         if registry_candidate is not None
-        and (id_client_ip is None or manager._is_server_accessible_from_ip(registry_candidate, id_client_ip))
+        and (id_client_ip is None or manager.is_server_accessible_from_ip(registry_candidate, id_client_ip))
         else None
     )
     if registry_server is not None:
         return ResolvedMCPServer(
-            table=manager._build_mcp_server_table(registry_server),
+            table=manager.build_mcp_server_table(registry_server),
             runtime=registry_server,
             source="registry",
         )
@@ -75,7 +82,7 @@ async def resolve_mcp_server(
         named_server: Final[MCPServer | None] = manager.get_mcp_server_by_name(server_id, client_ip=name_client_ip)
         if named_server is not None:
             return ResolvedMCPServer(
-                table=manager._build_mcp_server_table(named_server),
+                table=manager.build_mcp_server_table(named_server),
                 runtime=named_server,
                 source="registry",
             )
@@ -120,3 +127,48 @@ async def authorize_mcp_server(
         )
 
     return resolved
+
+
+@dataclass(frozen=True, slots=True)
+class MCPServerTargetCatalog:
+    manager: MCPServerRegistry
+    db_lookup: Callable[[str], Awaitable[LiteLLM_MCPServerTable | None]] | None = None
+    temp_lookup: Callable[[str], Awaitable[MCPServer | None]] | None = None
+    id_client_ip: str | None = None
+    name_client_ip: str | None = None
+    match_name: bool = False
+    listing: Callable[[OperationContext, CatalogListRequest], Awaitable[CatalogListResult]] | None = None
+
+    async def list(self, context: OperationContext, request: CatalogListRequest) -> CatalogListResult:
+        if self.listing is None:
+            raise RuntimeError("Catalog listing dependency is not configured")
+        return await self.listing(context, request)
+
+    async def resolve(
+        self,
+        server_id: str,
+        caller: UserAPIKeyAuth,
+        *,
+        is_admin_view: bool,
+        not_found_detail: Mapping[str, str],
+        forbidden_detail: Mapping[str, str],
+        non_admin_missing: Literal["not_found", "forbidden"],
+    ) -> ResolvedMCPServer:
+        resolved: Final = await resolve_mcp_server(
+            server_id,
+            manager=self.manager,
+            db_lookup=self.db_lookup,
+            temp_lookup=self.temp_lookup,
+            id_client_ip=self.id_client_ip,
+            name_client_ip=self.name_client_ip,
+            match_name=self.match_name,
+        )
+        return await authorize_mcp_server(
+            resolved,
+            caller,
+            manager=self.manager,
+            is_admin_view=is_admin_view,
+            not_found_detail=not_found_detail,
+            forbidden_detail=forbidden_detail,
+            non_admin_missing=non_admin_missing,
+        )

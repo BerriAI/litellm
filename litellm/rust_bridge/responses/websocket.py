@@ -8,8 +8,8 @@ from typing import Final, Protocol
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
+from litellm.rust_bridge.host.timeouts import timeout_to_seconds
 from litellm.rust_bridge.loader import get_native_bridge
-from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
 class RustResponsesWebSocket(Protocol):

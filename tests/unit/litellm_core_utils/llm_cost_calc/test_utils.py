@@ -78,6 +78,64 @@ def test_completion_cost_bills_the_price_columns_of_the_service_tier(
     assert cost == pytest.approx(_cost_at(TIER_ROW, column_suffix))
 
 
+LONG_CONTEXT_TIER_MODEL: Final = "long-context-tier-priced-test-model"
+LONG_CONTEXT_TIER_ROW: Final[Mapping[str, float]] = MappingProxyType(
+    {
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 8e-06,
+        "input_cost_per_token_ultrafast": 1e-05,
+        "output_cost_per_token_ultrafast": 2e-05,
+        "input_cost_per_token_above_272k_tokens_ultrafast": 5e-05,
+        "output_cost_per_token_above_272k_tokens_ultrafast": 6e-05,
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("service_tier", "prompt_tokens", "input_rate", "output_rate"),
+    (
+        pytest.param("ultrafast", 300_000, 5e-05, 6e-05, id="long-ultrafast"),
+        pytest.param(None, 300_000, 4e-06, 8e-06, id="long-standard"),
+        pytest.param("ultrafast", 1_000, 1e-05, 2e-05, id="short-ultrafast"),
+        pytest.param("priority", 300_000, 4e-06, 8e-06, id="long-priority-falls-back"),
+    ),
+)
+def test_completion_cost_uses_only_the_request_tiers_long_context_rates(
+    local_model_cost_map: None,
+    service_tier: str | None,
+    prompt_tokens: int,
+    input_rate: float,
+    output_rate: float,
+) -> None:
+    litellm.register_model(
+        {
+            LONG_CONTEXT_TIER_MODEL: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                **dict(LONG_CONTEXT_TIER_ROW),
+            }
+        }
+    )
+    completion_tokens: Final = 100
+    response: Final = ModelResponse(
+        model=LONG_CONTEXT_TIER_MODEL,
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+
+    cost: Final = litellm.completion_cost(
+        completion_response=response,
+        model=LONG_CONTEXT_TIER_MODEL,
+        custom_llm_provider="openai",
+        service_tier=service_tier,
+    )
+
+    assert cost == pytest.approx(prompt_tokens * input_rate + completion_tokens * output_rate)
+
+
 class _CostRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

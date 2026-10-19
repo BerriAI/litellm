@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 import httpx
 import soundfile
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -45,6 +45,7 @@ from litellm.proxy.common_utils.resource_ownership import (
     is_proxy_admin,
     user_can_access_resource_owner,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import StandardPassThroughResponseObject
 
@@ -64,26 +65,26 @@ TRANSCRIBE_MEDIA_BUCKETS_SETTING: Final = "transcribe_media_buckets"
 TRANSCRIBE_ROLE_MEMBERS: Final = ("DataAccessRoleArn", "JobExecutionSettings")
 TRANSCRIBE_MEDIA_URI_MEMBERS: Final = ("MediaFileUri", "RedactedMediaFileUri")
 
-JobLookup: TypeAlias = Callable[[str], Awaitable[Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
-MediaDurationProbe: TypeAlias = Callable[[str, float], Awaitable[float | None]]  # mutable-ok: Callable parameter syntax
+JobLookup: TypeAlias = Callable[[str], Awaitable[Mapping[str, object]]]
+MediaDurationProbe: TypeAlias = Callable[[str, float], Awaitable[float | None]]
 
 
 class GetTranscriptionJobRequest(TypedDict):
     TranscriptionJobName: ReadOnly[str]
 
 
-class _MediaRef(BaseModel):
+class _MediaRef(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     MediaFileUri: str | None = None
 
 
-class _JobTag(BaseModel):
+class _JobTag(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     Key: str | None = None
     Value: str | None = None
 
 
-class TranscriptionJobRecord(BaseModel):
+class TranscriptionJobRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     TranscriptionJobStatus: str | None = None
     CreationTime: float | None = None
@@ -91,7 +92,7 @@ class TranscriptionJobRecord(BaseModel):
     Tags: tuple[_JobTag, ...] = ()
 
 
-class _TranscriptionJobResponse(BaseModel):
+class _TranscriptionJobResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     TranscriptionJob: TranscriptionJobRecord | None = None
 
@@ -102,10 +103,10 @@ class MissingJob:
 
 
 StartedJob: TypeAlias = TranscriptionJobRecord | None
-JobPricer: TypeAlias = Callable[[str, str, float, StartedJob], Awaitable[float]]  # mutable-ok: Callable params
+JobPricer: TypeAlias = Callable[[str, str, float, StartedJob], Awaitable[float]]
 
 
-class _PricedCostMapEntry(BaseModel):
+class _PricedCostMapEntry(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
     input_cost_per_second: float
 
@@ -312,7 +313,7 @@ def transcribe_owned_start_request(
             400, f"The {TRANSCRIBE_OWNER_TAG} tag is assigned by LiteLLM and cannot be supplied by the caller"
         )
     owner_tag: Final = _JobTag(Key=TRANSCRIBE_OWNER_TAG, Value=owner).model_dump()
-    return {**request_body, "Tags": (*tags, owner_tag)}  # mutable-ok: json.dumps and the body state key take a dict
+    return {**request_body, "Tags": (*tags, owner_tag)}
 
 
 async def transcribe_job_access_refusal(
@@ -468,7 +469,7 @@ def transcribe_job_lookup(aws_region_name: str) -> JobLookup:
             headers=headers,
         )
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint)
-        signed_headers: Final = dict(prepped.headers.items())  # mutable-ok: AsyncHTTPHandler.post takes a dict
+        signed_headers: Final = dict(prepped.headers.items())
         return _as_json_object(await client.post(str(prepped.url), data=payload, headers=signed_headers))
 
     return get_job
@@ -528,7 +529,7 @@ def transcribe_media_duration_probe(aws_region_name: str, download_slots: asynci
         aws_request: Final = AWSRequest(method="GET", url=url)
         credentials: Final = BaseAWSLLM().get_credentials(aws_region_name=aws_region_name)
         S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
-        return dict(aws_request.prepare().headers.items())  # mutable-ok: httpx request headers take a dict
+        return dict(aws_request.prepare().headers.items())
 
     async def media_seconds(media_uri: str, job_created_at: float) -> float | None:
         url: Final = s3_media_url(media_uri, aws_region_name)
@@ -591,7 +592,7 @@ class TranscribePassthroughLoggingHandler:
     @staticmethod
     def _operation_from_response(httpx_response: httpx.Response) -> str:
         headers: Final[Mapping[str, str]] = httpx_response.request.headers
-        target: Final = headers.get("x-amz-target", "")
+        target: Final[str] = headers.get("x-amz-target", "")
         return target.split(".")[-1]
 
     @staticmethod
@@ -698,7 +699,7 @@ class TranscribePassthroughLoggingHandler:
             operation: Final = TranscribePassthroughLoggingHandler._operation_from_response(httpx_response)
             model_name: Final = f"{TRANSCRIBE_CUSTOM_LLM_PROVIDER}/{operation}"
 
-            updated_kwargs: Final = {  # mutable-ok: the logging pipeline requires a plain kwargs dict
+            updated_kwargs: Final = {
                 **kwargs,
                 "model": model_name,
                 "custom_llm_provider": TRANSCRIBE_CUSTOM_LLM_PROVIDER,

@@ -131,7 +131,9 @@ class PangeaHandler(CustomGuardrail):
             "Pangea Guardrail (%s): Calling endpoint %s with payload: %s", hook_name, endpoint, payload
         )
 
-        response: Final = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
+        response: Final = await self.async_handler.post(
+            url=endpoint, json=payload, headers=headers, timeout=self.timeout
+        )
         response.raise_for_status()
 
         result: Final = response.json()
