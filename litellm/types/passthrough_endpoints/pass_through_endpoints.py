@@ -25,6 +25,12 @@ LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: Final = "litellm_pass_thro
 # on a collision FastAPI dispatches the built-in handler, which does not carry this flag.
 LITELLM_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_pass_through_endpoint__"
 
+SETTLES_BACKGROUND_RESPONSE_KWARG: Final = "settles_background_response"
+
+
+class BackgroundResponseSettlement(str, Enum):
+    SETTLES = "settles"
+
 
 class EndpointType(str, Enum):
     VERTEX_AI = "vertex-ai"
