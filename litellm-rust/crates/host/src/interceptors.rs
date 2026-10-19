@@ -30,6 +30,7 @@ pub struct RequestContext {
     pub secret_fields: Vec<String>,
     /// The credential the route resolved for the provider call.
     pub api_key: Option<litellm_auth::SecretValue>,
+    pub gateway_injected_cache_blocks: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,6 +218,7 @@ mod tests {
             optional_params: json!({}),
             secret_fields: Vec::new(),
             api_key: None,
+            gateway_injected_cache_blocks: 0,
         }
     }
 

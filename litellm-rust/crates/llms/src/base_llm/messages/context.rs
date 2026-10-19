@@ -42,6 +42,8 @@ pub struct MessagesModelCapabilities {
     #[serde(default)]
     pub supports_mid_conversation_system: bool,
     #[serde(default)]
+    pub supports_prompt_caching: bool,
+    #[serde(default)]
     pub effort_tiers: SupportedEffortTiers,
 }
 
@@ -60,6 +62,7 @@ impl Default for MessagesModelCapabilities {
             supports_sampling_params: true,
             supports_speed: false,
             supports_mid_conversation_system: false,
+            supports_prompt_caching: false,
             effort_tiers: SupportedEffortTiers::default(),
         }
     }

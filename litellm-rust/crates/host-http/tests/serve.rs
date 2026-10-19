@@ -230,6 +230,7 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(intercept
                         optional_params: json!({}),
                         secret_fields: Vec::new(),
                         api_key: None,
+                        gateway_injected_cache_blocks: 0,
                     },
                 )
                 .await?;
@@ -538,6 +539,7 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
                             optional_params: json!({}),
                             secret_fields: Vec::new(),
                             api_key: None,
+                            gateway_injected_cache_blocks: 0,
                         },
                     )
                     .await?;
@@ -652,6 +654,7 @@ async fn unary_calls_use_into_response_after_hooks_and_before_success(intercepto
                         optional_params: json!({}),
                         secret_fields: Vec::new(),
                         api_key: None,
+                        gateway_injected_cache_blocks: 0,
                     },
                 )
                 .await?;

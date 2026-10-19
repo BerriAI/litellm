@@ -35,6 +35,8 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
     monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
     monkeypatch.setattr(litellm, "request_timeout", 1800)
     monkeypatch.setattr(litellm, "request_timeout_explicitly_set", True)
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", None)
 
     projected: Final = messages_host.settings({"drop_params": "true", "additional_drop_params": ["metadata.user_id"]})
 
@@ -43,7 +45,62 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "reasoning_auto_summary": True,
         "additional_drop_params": ("metadata.user_id",),
         "request_timeout": 1800.0,
+        "cache_control_injection_points": (),
+        "enable_prompt_caching": False,
+        "prompt_caching_ttl": None,
+        "user_agent": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("global_flag", "request_flag", "expected"),
+    [
+        (False, None, False),
+        (False, True, True),
+        (False, False, False),
+        (True, None, True),
+        (True, False, True),
+    ],
+)
+def test_prompt_caching_uses_global_or_true_request_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    global_flag: bool,
+    request_flag: bool | None,
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", global_flag)
+    kwargs: Final = {} if request_flag is None else {"enable_prompt_caching": request_flag}
+
+    assert messages_host.settings(kwargs)["enable_prompt_caching"] is expected
+
+
+@pytest.mark.parametrize(
+    ("ttl", "expected"),
+    [("5m", "5m"), ("1h", "1h"), ("5m ", None), ("forever", None), (None, None)],
+)
+def test_prompt_caching_ttl_accepts_only_supported_values(
+    monkeypatch: pytest.MonkeyPatch, ttl: object, expected: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", ttl)
+
+    assert messages_host.settings({})["prompt_caching_ttl"] == expected
+
+
+def test_settings_project_cache_injection_points_and_case_insensitive_user_agent() -> None:
+    point: Final = {"location": "message", "index": "-1"}
+    projected: Final = messages_host.settings(
+        {
+            "cache_control_injection_points": [point, "ignored"],
+            "proxy_server_request": {"headers": {"X-Other": "x", "USER-AGENT": "claude-code/1.0"}},
+        }
+    )
+
+    assert projected["cache_control_injection_points"] == (point,)
+    assert projected["user_agent"] == "claude-code/1.0"
+    assert "cache_control_injection_points" not in messages_host.body_params(
+        {"cache_control_injection_points": [point], "enable_prompt_caching": True}
+    )
+    assert "enable_prompt_caching" not in messages_host.body_params({"enable_prompt_caching": True})
 
 
 @pytest.mark.parametrize(

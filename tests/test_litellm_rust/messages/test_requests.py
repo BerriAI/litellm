@@ -146,3 +146,37 @@ async def test_optional_positional_body_parameters_reach_the_wire(server: Record
     assert response["id"] == MESSAGES_RESPONSE["id"]
     body, _ = sent(server)
     assert (body["metadata"], body["system"], body["temperature"]) == (args[3], args[6], args[7])
+
+
+@pytest.mark.asyncio
+async def test_client_cache_control_is_preserved_and_suppresses_gateway_defaults(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = "claude-test-client-cache-control"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "anthropic", "mode": "chat", "supports_prompt_caching": True},
+    )
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "client marked",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                }
+            ],
+        }
+    ]
+
+    await call(server, model=f"anthropic/{model}", messages=messages, system="stable prefix")
+
+    assert_served_natively(server)
+    body: Final = server.requests[0].body
+    assert isinstance(body, dict)
+    assert body["system"] == "stable prefix"
+    assert body["messages"] == messages
+    assert messages[0]["content"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}

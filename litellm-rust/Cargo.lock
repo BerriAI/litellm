@@ -4035,6 +4035,7 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-inference-testing",
+ "litellm-integrations",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router-types",

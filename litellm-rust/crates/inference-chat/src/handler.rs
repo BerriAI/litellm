@@ -42,6 +42,7 @@ pub(super) async fn execute(
         optional_params: Value::Object(optional_params),
         secret_fields: Vec::new(),
         api_key,
+        gateway_injected_cache_blocks: 0,
     };
     let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {

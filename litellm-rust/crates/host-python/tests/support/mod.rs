@@ -125,6 +125,7 @@ pub fn context() -> RequestContext {
         optional_params: serde_json::json!({}),
         secret_fields: Vec::new(),
         api_key: None,
+        gateway_injected_cache_blocks: 0,
     }
 }
 

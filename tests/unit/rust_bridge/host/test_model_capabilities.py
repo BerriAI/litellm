@@ -73,3 +73,11 @@ def test_capability_source_observes_runtime_registration_changes(monkeypatch: py
     assert before["supports_output_config"] is True
     assert after["supports_reasoning"] is False
     assert after["supports_output_config"] is False
+
+
+def test_prompt_caching_capability_comes_from_the_model_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    _flag_model(monkeypatch, "claude-test-cache", supports_prompt_caching=True)
+
+    capabilities: Final = anthropic_model_capabilities("anthropic/claude-test-cache", None)
+
+    assert capabilities["supports_prompt_caching"] is True

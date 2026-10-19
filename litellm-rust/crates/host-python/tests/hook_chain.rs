@@ -284,6 +284,7 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
             optional_params: serde_json::Value::Null,
             secret_fields: vec![],
             api_key: None,
+            gateway_injected_cache_blocks: 0,
         };
         let wire = Box::new(WireRequest {
             url: "url".into(),
