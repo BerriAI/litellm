@@ -130,16 +130,14 @@ impl BaseConfig for AnthropicConfig {
             serde_json::from_value(response.body).map_err(|error| {
                 Error::InvalidResponse(crate::ErrorDetail::invalid("messages response", error))
             })?;
-        // The route declines tool and thinking requests, so a non-text block
-        // means the response carries something this path never asked for.
-        // The provider has already answered, so the handler re-tags this as a
-        // terminal response error instead of letting the host retry.
         if body
             .content
             .iter()
             .any(|block| matches!(block, TextResponseBlock::Other))
         {
-            return Err(Error::Unsupported("non-text response content block"));
+            return Err(Error::InvalidResponse(
+                "non-text response content block".into(),
+            ));
         }
         let text: String = body
             .content
@@ -667,7 +665,10 @@ mod tests {
             "usage": {"input_tokens": 1, "output_tokens": 1}
         }))
         .expect_err("non-text block");
-        assert_eq!(err, Error::Unsupported("non-text response content block"));
+        assert_eq!(
+            err,
+            Error::InvalidResponse("non-text response content block".into())
+        );
     }
 
     #[rstest::rstest]

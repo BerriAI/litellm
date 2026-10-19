@@ -204,3 +204,75 @@ where
         asynchronous,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use pyo3::types::PyDict;
+    use rstest::rstest;
+
+    use super::*;
+
+    const MODULE: &str = "bridge_inference_host_error_test";
+
+    fn host_with_recording_map_failure(py: Python<'_>) -> (InferenceHost, Bound<'_, PyAny>) {
+        let scope = PyDict::new(py);
+        py.run(
+            c"
+import types
+module = types.ModuleType('bridge_inference_host_error_test')
+module.mapped = []
+def map_failure(error, request):
+    module.mapped.append(error)
+    return RuntimeError('mapped by python')
+module.map_failure = map_failure
+",
+            Some(&scope),
+            None,
+        )
+        .unwrap();
+        let module = scope.get_item("module").unwrap().unwrap();
+        py.import("sys")
+            .unwrap()
+            .getattr("modules")
+            .unwrap()
+            .set_item(MODULE, &module)
+            .unwrap();
+        let empty = PyDict::new(py);
+        let view = RequestView::new(&empty, &empty).unwrap();
+        (InferenceHost::new(view, MODULE), module)
+    }
+
+    #[rstest]
+    #[case::unsupported_declines_without_asking_python(
+        RouteError::Unsupported("native streaming"),
+        true,
+        0
+    )]
+    #[case::other_route_errors_are_mapped_by_python(RouteError::MissingField("usage"), false, 1)]
+    fn error_hands_only_non_declines_to_map_failure(
+        #[case] error: RouteError,
+        #[case] declined: bool,
+        #[case] mapped_calls: usize,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let (host, module) = host_with_recording_map_failure(py);
+            let public = host.error(py, error).unwrap();
+            assert_eq!(public.is_instance_of::<RustBridgeDeclined>(py), declined);
+            assert_eq!(
+                public.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py),
+                !declined
+            );
+            assert_eq!(
+                module.getattr("mapped").unwrap().len().unwrap(),
+                mapped_calls
+            );
+            py.import("sys")
+                .unwrap()
+                .getattr("modules")
+                .unwrap()
+                .del_item(MODULE)
+                .unwrap();
+        });
+    }
+}

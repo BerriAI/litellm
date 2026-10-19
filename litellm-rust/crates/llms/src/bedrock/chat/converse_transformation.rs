@@ -169,12 +169,10 @@ impl BaseConfig for AmazonConverseConfig {
         let response: ConverseResponse = serde_json::from_value(body).map_err(|error| {
             Error::InvalidResponse(format!("invalid Converse response: {error}").into())
         })?;
-        // The route declines tool requests, so anything other than a text block
-        // is something this path never asked for. The provider has already
-        // answered, so the handler re-tags this as a terminal response error
-        // instead of letting the host retry.
         if response.message_content_is_non_text() {
-            return Err(Error::Unsupported("non-text response content block"));
+            return Err(Error::InvalidResponse(
+                "non-text response content block".into(),
+            ));
         }
         let text = response.content_text();
         let computed = usage_from_parts(
@@ -857,7 +855,10 @@ mod tests {
             "usage": {"inputTokens": 1, "outputTokens": 1}
         }))
         .expect_err("tool use block");
-        assert_eq!(err, Error::Unsupported("non-text response content block"));
+        assert_eq!(
+            err,
+            Error::InvalidResponse("non-text response content block".into())
+        );
     }
 
     #[test]
