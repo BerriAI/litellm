@@ -1,5 +1,5 @@
-import io
 import json
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -59,18 +59,20 @@ class TestEndpointsConfig:
 
     @pytest.mark.parametrize("document", ['["only-in-the-file"]', '"only-in-the-file"', "null"])
     def test_a_packaged_file_that_is_not_a_json_object_is_rejected_without_quoting_it(
-        self, monkeypatch: pytest.MonkeyPatch, document: str
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, document: str
     ):
-        monkeypatch.setattr(endpoint_factory, "open", lambda _path: io.StringIO(document), raising=False)
+        (tmp_path / "endpoints.json").write_text(document)
+        monkeypatch.setattr(endpoint_factory, "__file__", str(tmp_path / "endpoint_factory.py"))
 
         with pytest.raises(ValidationError) as rejected:
             _load_endpoints_config()
 
         assert "only-in-the-file" not in str(rejected.value)
 
-    def test_a_packaged_json_object_is_returned_as_written(self, monkeypatch: pytest.MonkeyPatch):
+    def test_a_packaged_json_object_is_returned_as_written(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         document: Final = {"endpoints": [{"name": "list_container_files"}], "schema_version": 2}
-        monkeypatch.setattr(endpoint_factory, "open", lambda _path: io.StringIO(json.dumps(document)), raising=False)
+        (tmp_path / "endpoints.json").write_text(json.dumps(document))
+        monkeypatch.setattr(endpoint_factory, "__file__", str(tmp_path / "endpoint_factory.py"))
 
         assert _load_endpoints_config() == document
 
