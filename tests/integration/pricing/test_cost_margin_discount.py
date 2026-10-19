@@ -63,7 +63,7 @@ def _upstream_chat(content: str, streamed: bool) -> dict[str, JsonValue]:
 
 def _chat_cost(gateway: Gateway, upstream: httpx.Client, model: str, key: str, expected: float) -> str:
     content: Final = f"margin {uuid.uuid4().hex}"
-    _observed(upstream)
+    upstream.delete("/__observations").raise_for_status()
     response: Final = gateway.request(
         "POST",
         "/v1/chat/completions",
@@ -79,7 +79,7 @@ def _chat_cost(gateway: Gateway, upstream: httpx.Client, model: str, key: str, e
 
 def _streamed_chat(gateway: Gateway, upstream: httpx.Client, model: str, key: str) -> str:
     content: Final = f"margin stream {uuid.uuid4().hex}"
-    _observed(upstream)
+    upstream.delete("/__observations").raise_for_status()
     response: Final = gateway.request(
         "POST",
         "/v1/chat/completions",
@@ -301,7 +301,7 @@ def test_streamed_response_cost_header_matches_billed_spend(gateway: Gateway) ->
             "Cost margin configuration updated successfully",
         )
         content: Final = f"margin stream header {uuid.uuid4().hex}"
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         response: Final = gateway.request(
             "POST",
             "/v1/chat/completions",

@@ -2,14 +2,17 @@ import asyncio
 import json
 import threading
 import time
-from typing import Final, NoReturn, Optional
+from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
+from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
@@ -1379,7 +1382,187 @@ async def test_async_streaming_read_timeout_triggers_midstream_fallback(
         await response.__anext__()
 
     assert excinfo.value.is_pre_first_chunk is True
-    assert isinstance(excinfo.value.original_exception, Exception)
+    assert isinstance(excinfo.value.original_exception, litellm.Timeout)
+
+
+def _raw_read_timeout() -> NoReturn:
+    raise httpx.ReadTimeout("")
+
+
+def _bridged_read_timeout() -> NoReturn:
+    raise litellm.Timeout(
+        message="APITimeoutError - Request timed out. Error_str: ReadTimeout", model="glm", llm_provider="hosted_vllm"
+    ) from httpx.ReadTimeout("")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stall", [_raw_read_timeout, _bridged_read_timeout], ids=["raw", "responses_bridge"])
+async def test_async_streaming_read_timeout_after_first_chunk_surfaces_timeout(
+    logging_obj: Logging, stall: Callable[[], NoReturn]
+):
+    from litellm.exceptions import MidStreamFallbackError
+
+    class _OneChunkThenStall:
+        def __init__(self) -> None:
+            self.sent = False
+
+        def __aiter__(self) -> "_OneChunkThenStall":
+            return self
+
+        async def __anext__(self) -> ModelResponseStream:
+            if self.sent:
+                stall()
+            self.sent = True
+            return ModelResponseStream(choices=[{"index": 0, "delta": {"content": "hello"}}])
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=_OneChunkThenStall(),
+        model="glm",
+        logging_obj=logging_obj,
+        custom_llm_provider="hosted_vllm",
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        async for _ in response:
+            pass
+
+    assert excinfo.value.is_pre_first_chunk is False
+    assert isinstance(excinfo.value.original_exception, litellm.Timeout)
+    assert excinfo.value.original_exception.status_code == 408
+
+
+_AZURE_DEPLOYMENT_API_BASE: Final = "https://mid-stream-debug.openai.azure.com"
+_AZURE_DEPLOYMENT_REQUEST_URL: Final = (
+    f"{_AZURE_DEPLOYMENT_API_BASE}/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2025-04-01-preview"
+)
+_MID_STREAM_START_TIME: Final = 1_790_000_000.0
+
+
+def _azure_deployment_logging_obj(logged_api_base: str | None, routed_api_base: str | None) -> Logging:
+    logging_obj: Final = Logging(
+        model="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "Count from 1 to 40"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=_MID_STREAM_START_TIME,
+        litellm_call_id="mid-stream-debug-info",
+        function_id="mid-stream-debug-info",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-mini",
+        optional_params={},
+        litellm_params=get_litellm_params(
+            api_base=logged_api_base,
+            custom_llm_provider="azure",
+            metadata={
+                "model_group": "gpt-5.4-mini-azure",
+                "deployment": "azure/gpt-5.4-mini",
+                "api_base": routed_api_base,
+            },
+        ),
+    )
+    return logging_obj
+
+
+def _content_then_failure(failure: Literal["transport_error", "unparseable_chunk"]) -> Iterator[object]:
+    yield ModelResponseStream(
+        model="gpt-5.4-mini-2026-03-17",
+        choices=[StreamingChoices(index=0, delta=Delta(content="1", role="assistant"))],
+    )
+    if failure == "transport_error":
+        raise httpx.ReadError("Response payload is not completed")
+    yield object()
+
+
+async def _as_async(chunks: Iterator[object]) -> AsyncIterator[object]:
+    for chunk in chunks:
+        yield chunk
+
+
+async def _drain(wrapper: CustomStreamWrapper, sync_mode: bool) -> None:
+    if sync_mode:
+        for _ in wrapper:
+            pass
+        return
+    async for _ in wrapper:
+        pass
+
+
+async def _mid_stream_debug_info(
+    logged_api_base: str | None,
+    routed_api_base: str | None,
+    failure: Literal["transport_error", "unparseable_chunk"],
+    sync_mode: bool,
+) -> str:
+    chunks: Final = _content_then_failure(failure)
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=chunks if sync_mode else _as_async(chunks),
+        model="gpt-5.4-mini-2026-03-17",
+        logging_obj=_azure_deployment_logging_obj(logged_api_base, routed_api_base),
+        custom_llm_provider="azure",
+    )
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _drain(wrapper, sync_mode)
+    assert excinfo.value.is_pre_first_chunk is False
+    debug_info: Final = getattr(excinfo.value.original_exception, "litellm_debug_info", None)
+    assert isinstance(debug_info, str)
+    return debug_info
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("failure", ["transport_error", "unparseable_chunk"])
+@pytest.mark.parametrize(
+    ("logged_api_base", "routed_api_base"),
+    [
+        (_AZURE_DEPLOYMENT_REQUEST_URL, _AZURE_DEPLOYMENT_API_BASE),
+        (_AZURE_DEPLOYMENT_API_BASE, None),
+        (_AZURE_DEPLOYMENT_API_BASE, ""),
+    ],
+    ids=["routed", "sdk", "empty_routed"],
+)
+async def test_mid_stream_error_reports_the_deployment_it_was_sent_to(
+    logged_api_base: str,
+    routed_api_base: str | None,
+    failure: Literal["transport_error", "unparseable_chunk"],
+    sync_mode: bool,
+):
+    debug_info: Final = await _mid_stream_debug_info(logged_api_base, routed_api_base, failure, sync_mode)
+
+    assert f"API Base: `{_AZURE_DEPLOYMENT_API_BASE}`" in debug_info
+    assert "model_group: `gpt-5.4-mini-azure`" in debug_info
+    assert "deployment: `azure/gpt-5.4-mini`" in debug_info
+    assert "Count from 1 to 40" not in debug_info
+    assert "api.openai.com" not in debug_info
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_error_leaves_out_an_api_base_it_cannot_resolve():
+    debug_info: Final = await _mid_stream_debug_info(None, None, "transport_error", sync_mode=False)
+
+    assert "model_group: `gpt-5.4-mini-azure`" in debug_info
+    assert "API Base:" not in debug_info
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routed_api_base",
+    [
+        f"{_AZURE_DEPLOYMENT_API_BASE}?subscription-key=deployment-secret-value",
+        f"{_AZURE_DEPLOYMENT_API_BASE}?code=deployment-secret-value",
+        _AZURE_DEPLOYMENT_API_BASE.replace("https://", "https://qa-user:deployment-secret-value@"),
+    ],
+    ids=["subscription_key", "function_code", "userinfo"],
+)
+async def test_mid_stream_error_keeps_credentials_in_the_api_base_out(routed_api_base: str):
+    debug_info: Final = await _mid_stream_debug_info(
+        _AZURE_DEPLOYMENT_REQUEST_URL, routed_api_base, "transport_error", sync_mode=False
+    )
+
+    assert f"API Base: `{_AZURE_DEPLOYMENT_API_BASE}`" in debug_info
+    assert "deployment-secret" not in debug_info
+
 
 
 def test_streaming_handler_with_created_time_propagation(

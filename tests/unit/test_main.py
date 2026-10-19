@@ -48,6 +48,11 @@ from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_sync_client,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -1300,6 +1305,50 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat
     assert model_info.get("mode") != "responses"
 
 
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, reasoning_effort",
+    [
+        ("gpt-6.1-sol", "openai", "none"),
+        ("gpt-6.1-sol", "openai", {"effort": "none"}),
+        ("gpt-6-astra", "azure", "none"),
+    ],
+)
+def test_responses_api_bridge_check_tools_with_a_none_the_row_refuses_routes_to_responses(
+    local_model_cost_map: None, model: str, custom_llm_provider: str, reasoning_effort: object
+) -> None:
+    """The ``none`` escape hatch only holds when the chat gate forwards it. These rows refuse
+    ``none``, so the gate drops it (or refuses the call) and the provider runs its default effort,
+    under which Chat Completions rejects function tools; the bridge has to fire the way it does
+    for an unset effort. Row-derived: the test follows the flag, never the vendor's answer."""
+    from litellm.main import responses_api_bridge_check
+
+    row_key: Final = model if custom_llm_provider == "openai" else f"{custom_llm_provider}/{model}"
+    assert litellm.model_cost[row_key]["supports_none_reasoning_effort"] is False
+
+    model_info, _ = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=reasoning_effort,
+    )
+
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_a_none_the_row_refuses_stays_chat_without_tools(
+    local_model_cost_map: None,
+) -> None:
+    """Without function tools nothing forces the Responses route: the dropped ``none`` leaves a
+    plain chat call at the default effort, as for any other dropped level."""
+    from litellm.main import responses_api_bridge_check
+
+    model_info, _ = responses_api_bridge_check(
+        model="gpt-6.1-sol", custom_llm_provider="openai", reasoning_effort="none"
+    )
+
+    assert model_info.get("mode") != "responses"
+
+
 def test_responses_api_bridge_check_reasoning_none_with_summary_still_routes_to_responses():
     """A reasoning summary is Responses-only regardless of effort value."""
     from litellm.main import responses_api_bridge_check
@@ -1707,11 +1756,15 @@ _FOUNDRY_FUNCTION_TOOL: Final = ({"type": "function", "function": {"name": "get_
         pytest.param("gpt-6-astra", "https://myresource.openai.azure.com", None, id="gpt-6-azure-openai-host"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "low", id="gpt-5.6-explicit-effort"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, {"effort": "high"}, id="gpt-5.6-explicit-effort-dict"),
+        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "none", id="gpt-6-row-refused-none"),
     ],
 )
 def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_responses(
     model_name, api_base, reasoning_effort
 ):
+    """The explicit ``none`` only keeps a Foundry gpt-6 request on chat while the deployment takes
+    it; the ``azure_ai/gpt-6-astra`` row says it does not, so the gate drops it and the call runs at
+    the default effort, under which Foundry rejects function tools from gpt-6 on."""
     from litellm.main import responses_api_bridge_check
 
     model_info, model = responses_api_bridge_check(
@@ -1729,7 +1782,6 @@ def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_res
 @pytest.mark.parametrize(
     "model_name, api_base, reasoning_effort",
     [
-        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "none", id="explicit-none-stays-chat"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, None, id="gpt-5.6-unset-effort-stays-chat"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "none", id="gpt-5.6-explicit-none-stays-chat"),
         pytest.param("gpt-5.5", _FOUNDRY_API_BASE, "high", id="gpt-5.5-explicit-effort-stays-chat"),
@@ -1935,6 +1987,60 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
 
     request_body: Final = json.loads(response_route.calls[0].request.content)
     assert request_body["reasoning"] == {"effort": "high"}
+
+
+_BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
+    {
+        "id": "resp_slow",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "slow-responses-model",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        "tool_choice": "auto",
+        "tools": [],
+    }
+).encode()
+
+
+def test_responses_bridge_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
+    restore_model_registry: None,
+) -> None:
+    model: Final = "openai/slow-responses-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "responses",
+                "supports_native_streaming": False,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        api_key="fake-key",
+        client=slow_upstream_sync_client(_BRIDGED_RESPONSE_ANSWER),
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in response) == "hi"
 
 
 _FOUNDRY_RESPONSES_FUNCTION_CALL_BODY: Final = {
@@ -4319,18 +4425,27 @@ class _RecordedSpeechSuccess:
     spend_metadata: Mapping[str, object]
     response_cost: float | None
     logged_response_cost: float | None
+    logged_tokens: tuple[object, object]
+    logged_cache_hit: object
+    logged_saved_cache_cost: object
+    logged_cache_key: object
 
 
 def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess:
     call_type: Final = payload.get("call_type")
     response_cost: Final = payload.get("response_cost")
     logging_payload: Final = payload.get("standard_logging_object")
-    logged_cost: Final = logging_payload.get("response_cost") if isinstance(logging_payload, dict) else None
+    logged: Final[Mapping[str, object]] = logging_payload if isinstance(logging_payload, dict) else {}
+    logged_cost: Final = logged.get("response_cost")
     return _RecordedSpeechSuccess(
         call_type=call_type if isinstance(call_type, str) else None,
         spend_metadata=get_litellm_metadata_from_kwargs(payload),
         response_cost=response_cost if isinstance(response_cost, float) else None,
         logged_response_cost=logged_cost if isinstance(logged_cost, float) else None,
+        logged_tokens=(logged.get("prompt_tokens"), logged.get("completion_tokens")),
+        logged_cache_hit=logged.get("cache_hit"),
+        logged_saved_cache_cost=logged.get("saved_cache_cost"),
+        logged_cache_key=logged.get("cache_key"),
     )
 
 
@@ -4338,6 +4453,11 @@ class _SuccessEventRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.events: list[_RecordedSpeechSuccess] = []  # mutable-ok: test recorder of success-callback events
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_speech_success(kwargs))
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
@@ -4351,6 +4471,16 @@ async def _wait_for_success_event(recorder: _SuccessEventRecorder, call_type: st
             return event
         await asyncio.sleep(0.05)
     pytest.fail(f"no {call_type} success event; got {[e.call_type for e in recorder.events]}")
+
+
+async def _wait_for_success_events(
+    recorder: _SuccessEventRecorder, call_type: str, count: int
+) -> tuple[_RecordedSpeechSuccess, ...]:
+    for _ in range(100):
+        if len(events := tuple(e for e in recorder.events if e.call_type == call_type)) >= count:
+            return events
+        await asyncio.sleep(0.05)
+    pytest.fail(f"expected {count} {call_type} success events; got {[e.call_type for e in recorder.events]}")
 
 
 def _gemini_tts_generate_content_response() -> dict[str, object]:
@@ -4384,7 +4514,7 @@ def _gemini_tts_generate_content_response() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
+async def test_aspeech_gemini_bridge_bills_one_call_with_proxy_metadata_and_completion_tokens(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -4404,9 +4534,11 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
         metadata={"user_api_key": "hashed-virtual-key", "user_api_key_user_id": "user-1"},
     )
 
-    assert mock_route.called
+    assert mock_route.call_count == 1
     assert mock_route.calls.last.request.headers["x-goog-api-key"] == "fake-gemini-key"
     speech_event: Final = await _wait_for_success_event(recorder, call_type="aspeech")
+    assert recorder.events == [speech_event]
+    assert speech_event.logged_tokens == (5, 60)
     assert speech_event.spend_metadata["user_api_key"] == "hashed-virtual-key"
     assert speech_event.spend_metadata["user_api_key_user_id"] == "user-1"
     expected_prompt_cost, expected_completion_cost = litellm.cost_per_token(
@@ -4417,6 +4549,39 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
     assert expected_cost > 0
     assert speech_event.response_cost == pytest.approx(expected_cost)
     assert speech_event.logged_response_cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_logs_a_cached_reply_as_a_free_cache_hit(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    recorder: Final = _SuccessEventRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    mock_route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+
+    for _ in range(2):
+        await litellm.aspeech(
+            model="gemini/gemini-2.5-flash-preview-tts",
+            input="cache hit check",
+            voice="Kore",
+            api_key="fake-gemini-key",
+        )
+
+    first, cached = await _wait_for_success_events(recorder, call_type="aspeech", count=2)
+    assert mock_route.call_count == 1
+    assert len(recorder.events) == 2
+    assert first.logged_cache_hit is not True
+    assert first.logged_response_cost is not None and first.logged_response_cost > 0
+    assert cached.logged_cache_hit is True
+    assert cached.logged_response_cost == 0.0
+    assert cached.logged_saved_cache_cost == pytest.approx(first.logged_response_cost)
+    assert isinstance(cached.logged_cache_key, str) and cached.logged_cache_key
 
 
 def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:
@@ -6976,6 +7141,23 @@ def test_mock_request_with_mock_timeout_raises_litellm_timeout():
         )
 
     assert error.value.model == "gpt-5.6"
+
+
+@pytest.mark.asyncio
+async def test_async_mock_timeout_on_a_stream_waits_only_for_the_stream_timeout() -> None:
+    with pytest.raises(litellm.Timeout):
+        await asyncio.wait_for(
+            litellm.acompletion(
+                model="gpt-5.6",
+                messages=[{"role": "user", "content": "hello"}],
+                stream=True,
+                timeout=30.0,
+                stream_timeout=0.01,
+                mock_timeout=True,
+                num_retries=0,
+            ),
+            timeout=5,
+        )
 
 
 def test_router_mock_request_with_mock_timeout_raises_litellm_timeout():

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -2585,6 +2585,10 @@ def _membership_from_cached_payload(
     return cached_membership if cached_membership is not None else _TEAM_MEMBERSHIP_CACHE_MISS
 
 
+def _raise_no_db_connected() -> NoReturn:
+    raise Exception("No db connected")
+
+
 @log_db_metrics
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _fetch_team_membership_from_db(
@@ -2594,9 +2598,13 @@ async def _fetch_team_membership_from_db(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    *,
+    use_writer: bool = False,
 ) -> LiteLLM_TeamMembership | None:
     _ = parent_otel_span, proxy_logging_obj
-    response: Final = await _dictable_table(TeamMembershipRepository(prisma_client), "team_membership").find_unique(
+    response: Final = await _dictable_table(
+        TeamMembershipRepository(prisma_client, use_writer=use_writer), "team_membership"
+    ).find_unique(
         where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
         include={"litellm_budget_table": True},
     )
@@ -2650,6 +2658,8 @@ async def get_team_membership(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    *,
+    check_db_only: bool = False,
 ) -> Optional["LiteLLM_TeamMembership"]:
     """
     Returns team membership object if user is member of team.
@@ -2661,6 +2671,19 @@ async def get_team_membership(
 
     _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
+    if check_db_only:
+        if prisma_client is None:
+            _raise_no_db_connected()
+        return await _fetch_team_membership_from_db(
+            user_id=user_id,
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            use_writer=True,
+        )
+
     l1_cached: Final[object] = await user_api_key_cache.async_get_cache(key=_key, local_only=True)
     l1_membership: Final = _membership_from_cached_payload(l1_cached)
     if not isinstance(l1_membership, _TeamMembershipCacheMiss):
@@ -2671,7 +2694,7 @@ async def get_team_membership(
         return _membership_from_shared_load(await asyncio.shield(inflight))
 
     if prisma_client is None:
-        raise Exception("No db connected")
+        _raise_no_db_connected()
 
     task: Final = asyncio.ensure_future(
         _load_team_membership_on_cache_miss(
@@ -4674,6 +4697,8 @@ async def get_mcp_server_ids_from_access_groups(
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     check_db_only: bool = False,
+    *,
+    strict_errors: bool = False,
 ) -> list[str]:
     """
     Collect MCP server IDs from unified access groups.
@@ -4686,6 +4711,7 @@ async def get_mcp_server_ids_from_access_groups(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=check_db_only,
+        strict_errors=strict_errors,
     )
 
 
@@ -4784,7 +4810,7 @@ def check_model_access_helper(
     if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
         return True
 
-    if _model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=filtered_models):
+    if model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=filtered_models):
         return True
 
     all_model_access: bool = False
@@ -4801,6 +4827,24 @@ def check_model_access_helper(
 
 
 _check_model_access_helper: Final = check_model_access_helper
+
+
+def _owning_team_names_for_team_deployment(
+    model: str,
+    llm_router: Router | None,
+    team_id: str | None,
+    team_model_aliases: Mapping[str, str] | None,
+) -> tuple[str, ...]:
+    if llm_router is None or team_id is None or not model.startswith(f"model_name_{team_id}_"):
+        return ()
+    deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+    public_name: Final = (
+        deployment.model_info.team_public_model_name
+        if deployment is not None and deployment.model_info.team_id == team_id
+        else None
+    )
+    legacy_aliases: Final = tuple(alias for alias, target in (team_model_aliases or {}).items() if target == model)
+    return (*((public_name,) if public_name else ()), *legacy_aliases)
 
 
 def _can_object_call_model(
@@ -4874,6 +4918,13 @@ def _can_object_call_model(
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
         )
     )
+    owning_team_names: Final = (
+        ()
+        if key_alias_applied
+        else _owning_team_names_for_team_deployment(
+            model=model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
+        )
+    )
 
     ## check model access for alias + underlying model - allow if either is in allowed models
     for m in potential_models:
@@ -4885,6 +4936,11 @@ def _can_object_call_model(
             team_id=team_id,
         ):
             return True
+    if any(
+        check_model_access_helper(model=name, llm_router=llm_router, models=models, team_id=team_id)
+        for name in owning_team_names
+    ):
+        return True
 
     internal_message: Final = (
         f"{object_type} not allowed to access model. This {object_type} can only access models={models}. "
@@ -5440,6 +5496,8 @@ async def _personal_key_owner(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    *,
+    check_db_only: bool = False,
 ) -> LiteLLM_UserTable | None:
     if valid_token.user_id is None:
         return None
@@ -5451,6 +5509,7 @@ async def _personal_key_owner(
             user_id_upsert=False,
             parent_otel_span=valid_token.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=check_db_only,
         )
     except Exception as e:  # noqa: BLE001  # fail closed: an owner that cannot be loaded grants nothing
         verbose_proxy_logger.warning(
@@ -5840,13 +5899,32 @@ def personal_key_team_model_access_applies(valid_token: UserAPIKeyAuth | None) -
     )
 
 
-async def _load_personal_key_team(
+def personal_key_inherits_team_grants(valid_token: UserAPIKeyAuth | None) -> bool:
+    """MCP server, MCP tool and agent inheritance is for a virtual key only. A keyless auth with no
+    team (one grant source of an admitted subject, a JWT user) resolves as the plain caller it is."""
+    return (
+        personal_key_team_model_access_applies(valid_token)
+        and valid_token is not None
+        and valid_token.api_key is not None
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _PersonalKeyTeamLoad:
+    team: LiteLLM_TeamTableCachedObj | None
+    unreadable: bool
+    withheld_team: LiteLLM_TeamTableCachedObj | None
+
+
+async def _load_personal_key_team_with_status(
     team_id: str,
     valid_token: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
-) -> LiteLLM_TeamTableCachedObj | None:
+    *,
+    check_db_only: bool = False,
+) -> _PersonalKeyTeamLoad:
     try:
         team_object: Final = await get_team_object(
             team_id=team_id,
@@ -5854,13 +5932,36 @@ async def _load_personal_key_team(
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=valid_token.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=check_db_only,
         )
     except Exception as e:  # noqa: BLE001  # fail closed: a team that cannot be loaded grants nothing
         verbose_proxy_logger.warning(
             "Personal key team model access: team=%s lookup failed, granting nothing: %s", team_id, e
         )
-        return None
-    return None if team_object.blocked is True else team_object
+        return _PersonalKeyTeamLoad(team=None, unreadable=True, withheld_team=None)
+    if team_object.blocked is True:
+        return _PersonalKeyTeamLoad(team=None, unreadable=False, withheld_team=team_object)
+    return _PersonalKeyTeamLoad(team=team_object, unreadable=False, withheld_team=None)
+
+
+async def _load_personal_key_team(
+    team_id: str,
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    *,
+    check_db_only: bool = False,
+) -> LiteLLM_TeamTableCachedObj | None:
+    loaded: Final = await _load_personal_key_team_with_status(
+        team_id=team_id,
+        valid_token=valid_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
+    )
+    return loaded.team
 
 
 async def _load_personal_key_teams(
@@ -5869,6 +5970,8 @@ async def _load_personal_key_teams(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    *,
+    check_db_only: bool = False,
 ) -> tuple[LiteLLM_TeamTableCachedObj | None, ...]:
     return tuple(
         await asyncio.gather(
@@ -5879,6 +5982,7 @@ async def _load_personal_key_teams(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    check_db_only=check_db_only,
                 )
                 for team_id in dict.fromkeys(user_object.teams)
             )
@@ -5958,6 +6062,8 @@ async def _personal_key_listing_teams(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache | None,
     proxy_logging_obj: ProxyLogging | None,
+    *,
+    check_db_only: bool = False,
 ) -> tuple[LiteLLM_TeamTableCachedObj | None, ...]:
     if (
         user_api_key_dict.user_id is None
@@ -5971,6 +6077,7 @@ async def _personal_key_listing_teams(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
     )
     if owner is None:
         return ()
@@ -5980,7 +6087,175 @@ async def _personal_key_listing_teams(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
     )
+
+
+async def _personal_key_team_within_budget(
+    team: LiteLLM_TeamTableCachedObj,
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    *,
+    check_db_only: bool = False,
+) -> bool:
+    source: Final = valid_token.model_copy(
+        update={"team_id": team.team_id, "org_id": valid_token.org_id or team.organization_id}
+    )
+    try:
+        await team_max_budget_check(
+            team_object=team,
+            valid_token=source,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        await _team_multi_budget_check(team_object=team)
+        if check_db_only:
+            team_member_user_id: Final = valid_token.user_id
+            if team_member_user_id is None:
+                return False
+            team_membership: Final = await get_team_membership(
+                user_id=team_member_user_id,
+                team_id=team.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=True,
+            )
+            await _check_team_member_budget(
+                team_object=team,
+                user_object=None,
+                valid_token=source,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                team_membership=team_membership,
+                team_membership_loaded=True,
+            )
+        else:
+            await _check_team_member_budget(
+                team_object=team,
+                user_object=None,
+                valid_token=source,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        await organization_max_budget_check(
+            valid_token=source,
+            team_object=team,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except litellm.BudgetExceededError:
+        return False
+    except Exception as e:  # noqa: BLE001  # fail closed: a team whose budget cannot be checked grants nothing
+        verbose_proxy_logger.warning("Failed to check budget for personal key team %s, skipping: %s", team.team_id, e)
+        return False
+    return True
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalKeyOwnerTeams:
+    teams: tuple[LiteLLM_TeamTableCachedObj, ...]
+    unreadable: bool
+    withheld: tuple[LiteLLM_TeamTableCachedObj, ...]
+
+
+async def personal_key_owner_teams_with_status(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache | None,
+    proxy_logging_obj: ProxyLogging | None,
+    *,
+    check_db_only: bool = False,
+) -> PersonalKeyOwnerTeams:
+    """The owner's current, loadable, unblocked, within-budget teams: the grant sources a personal key inherits
+    MCP server, MCP tool and agent access from under ``personal_key_model_access_from_teams``."""
+    if valid_token.user_id is None or prisma_client is None or user_api_key_cache is None or proxy_logging_obj is None:
+        return PersonalKeyOwnerTeams(teams=(), unreadable=False, withheld=())
+    owner: Final = await _personal_key_owner(
+        valid_token=valid_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
+    )
+    if owner is None:
+        return PersonalKeyOwnerTeams(teams=(), unreadable=False, withheld=())
+    team_ids: Final = tuple(team_id for team_id in dict.fromkeys(owner.teams) if team_id and team_id != UI_TEAM_ID)
+    team_loads: Final = await asyncio.gather(
+        *(
+            _load_personal_key_team_with_status(
+                team_id=team_id,
+                valid_token=valid_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=check_db_only,
+            )
+            for team_id in team_ids
+        )
+    )
+    blocked_teams: Final = tuple(
+        load.withheld_team
+        for load in team_loads
+        if load.withheld_team is not None
+        and (valid_token.org_id is None or load.withheld_team.organization_id in (None, valid_token.org_id))
+    )
+    loaded_teams: Final = tuple(load.team for load in team_loads if load.team is not None)
+    eligible: Final = tuple(
+        team
+        for team in loaded_teams
+        if valid_token.org_id is None or team.organization_id in (None, valid_token.org_id)
+    )
+    if not eligible:
+        return PersonalKeyOwnerTeams(
+            teams=(),
+            unreadable=any(load.unreadable for load in team_loads),
+            withheld=blocked_teams,
+        )
+    within_budget: Final = await asyncio.gather(
+        *(
+            _personal_key_team_within_budget(
+                team=team,
+                valid_token=valid_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=check_db_only,
+            )
+            for team in eligible
+        )
+    )
+    return PersonalKeyOwnerTeams(
+        teams=tuple(team for team, allowed in zip(eligible, within_budget, strict=True) if allowed),
+        unreadable=any(load.unreadable for load in team_loads),
+        withheld=(
+            *blocked_teams,
+            *(team for team, allowed in zip(eligible, within_budget, strict=True) if not allowed),
+        ),
+    )
+
+
+async def personal_key_owner_teams(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache | None,
+    proxy_logging_obj: ProxyLogging | None,
+    *,
+    check_db_only: bool = False,
+) -> tuple[LiteLLM_TeamTableCachedObj, ...]:
+    return (
+        await personal_key_owner_teams_with_status(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=check_db_only,
+        )
+    ).teams
 
 
 async def personal_key_team_visible_models(
@@ -7434,7 +7709,7 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
     return False
 
 
-def _model_matches_any_wildcard_pattern_in_list(model: str, allowed_model_list: list) -> bool:
+def model_matches_any_wildcard_pattern_in_list(model: str, allowed_model_list: Sequence[str]) -> bool:
     """
     Returns True if a model matches any wildcard pattern in a list.
 

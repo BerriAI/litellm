@@ -3472,12 +3472,11 @@ def test_add_litellm_metadata_from_request_headers_x_litellm_trace_id_sets_chain
     assert data["litellm_trace_id"] == "foo"
 
 
-@pytest.mark.parametrize(("correlation_in_logs", "expected_spend_log_session"), [(True, "convo-1"), (False, None)])
+@pytest.mark.parametrize("correlation_in_logs", [True, False], ids=["correlation-on", "correlation-off"])
 @pytest.mark.parametrize("session_in_metadata", [False, True], ids=["top-level", "metadata"])
-def test_x_litellm_trace_id_keeps_the_body_session_for_spend_logs_only(
+def test_x_litellm_trace_id_keeps_the_body_session_beside_it_whatever_the_log_setting(
     monkeypatch: pytest.MonkeyPatch,
     correlation_in_logs: bool,
-    expected_spend_log_session: str | None,
     session_in_metadata: bool,
 ):
     monkeypatch.setattr(litellm, "request_correlation_in_logs", correlation_in_logs)
@@ -3488,7 +3487,7 @@ def test_x_litellm_trace_id_keeps_the_body_session_for_spend_logs_only(
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers={"x-litellm-trace-id": "req-trace-1"}, data=data, _metadata_variable_name="metadata"
     )
-    assert metadata.get(CALLER_SESSION_ID_METADATA_KEY) == expected_spend_log_session
+    assert metadata.get(CALLER_SESSION_ID_METADATA_KEY) == "convo-1"
     assert data["litellm_session_id"] == "req-trace-1"
     assert metadata["session_id"] == "req-trace-1"
     assert data["litellm_trace_id"] == "req-trace-1"

@@ -50,10 +50,12 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
@@ -64,6 +66,7 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
@@ -264,6 +267,29 @@ _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, F
 _SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
 _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
 _ADDITIONAL_HEADERS: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_LOGGED_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_NO_LOGGED_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _logged_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _LOGGED_FIELDS.validate_python(value)
+    except ValidationError:
+        return _NO_LOGGED_FIELDS
+
+
+def _is_llm_provider(name: str) -> bool:
+    routable: Final = (
+        name in litellm.provider_list or JSONProviderRegistry.exists(name) or is_registered_custom_provider(name)
+    )
+    return routable and name not in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the router treats these prefixes as prompt-management deployments
+
+
+def _deployment_model_provider(deployment: object) -> str:
+    if not isinstance(deployment, str):
+        return ""
+    prefix, separator, _ = deployment.partition("/")
+    return prefix if separator and _is_llm_provider(prefix) else ""
 
 
 def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
@@ -337,16 +363,6 @@ def _get_proxy_llm_router() -> Router | None:
     except Exception:
         return None
     return llm_router
-
-
-_LOGGED_FIELDS: Final = TypeAdapter(Mapping[str, object])
-
-
-def _logged_fields(value: object) -> Mapping[str, object]:
-    try:
-        return _LOGGED_FIELDS.validate_python(value)
-    except ValidationError:
-        return MappingProxyType({})
 
 
 _CALLER_CREDENTIAL_FIELDS: Final = frozenset(
@@ -2945,6 +2961,25 @@ class PrometheusLogger(CustomLogger):
             return None
 
     @staticmethod
+    def _extract_deployment_api_provider(request_kwargs: Mapping[str, object]) -> str:
+        """
+        Provider of the deployment a failed call was routed to: the resolved
+        ``custom_llm_provider`` on ``litellm_params``, then the one recorded on
+        ``standard_logging_object``, then the provider prefix of the deployment
+        model the router wrote into the request metadata (``azure/my-gpt`` ->
+        ``azure``) when that prefix is an LLM provider the router accepts.
+        Returns an empty string otherwise.
+        """
+        litellm_params: Final = _logged_fields(request_kwargs.get("litellm_params"))
+        provider: Final = litellm_params.get("custom_llm_provider") or _logged_fields(
+            request_kwargs.get("standard_logging_object")
+        ).get("custom_llm_provider")
+        if isinstance(provider, str) and provider:
+            return provider
+        deployment_metadata: Final = find_deployment_metadata(litellm_params)
+        return _deployment_model_provider(deployment_metadata.get("deployment") if deployment_metadata else None)
+
+    @staticmethod
     def _extract_api_provider_from_exception(exception: Exception) -> str | None:
         if not isinstance(exception, litellm.exceptions.RateLimitError):
             return None
@@ -3222,7 +3257,9 @@ class PrometheusLogger(CustomLogger):
                 label_litellm_model_name = litellm_model_name
                 label_model_id = model_id
                 label_api_base = api_base
-                label_api_provider = llm_provider
+                label_api_provider = self._extract_deployment_api_provider(
+                    _LOGGED_FIELDS.validate_python(request_kwargs)
+                )
                 label_requested_model = model_group or litellm_model_name
                 label_model_group = model_group
             else:
