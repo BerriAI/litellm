@@ -12,7 +12,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _KIMI: Final = "global.moonshotai.kimi-k3"

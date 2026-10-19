@@ -11,7 +11,7 @@ import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value, until_asserted
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 JSON_ARRAY: Final = TypeAdapter(list[JsonValue])

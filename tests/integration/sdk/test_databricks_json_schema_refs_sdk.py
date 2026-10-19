@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping
 from typing import Final
 
 import pytest
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 import litellm

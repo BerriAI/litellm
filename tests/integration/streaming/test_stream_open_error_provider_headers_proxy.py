@@ -27,7 +27,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, configless_proxy_process, graceful_stop_seconds
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from openai.types.responses import ResponseFailedEvent
 from pydantic import JsonValue

@@ -7,7 +7,7 @@ import pytest
 import pytest_asyncio
 
 from tests.test_litellm_rust.support.isolation import isolated_test_state
-from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
+from tests._support.provider import SharedProvider, shared_provider
 
 PARITY_ROOT: Final = Path(__file__).parent
 
@@ -19,8 +19,8 @@ async def isolate_test_state() -> AsyncIterator[None]:
 
 
 @pytest.fixture
-def recording_server() -> Generator[RecordingServer]:
-    with recording_service() as server:
+def recording_server(request: pytest.FixtureRequest) -> Generator[SharedProvider]:
+    with shared_provider() as server, server.checked(request.node.nodeid):
         yield server
 
 

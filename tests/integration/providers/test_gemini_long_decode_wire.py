@@ -25,7 +25,7 @@ from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply, posted_targets
 from integration._support.otlp_sink import Span, owned_sinks, recorded_spans
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._gemini_long_decode_support import (
     API_KEY,
     BACKEND,

@@ -4,7 +4,7 @@ from queue import SimpleQueue
 from typing import Final, cast
 
 import litellm
-from integration._support.wire import wire_server
+from tests._support.wire import wire_server
 from integration.providers._tool_search_support import (
     MODEL,
     SEARCH_RESULT,

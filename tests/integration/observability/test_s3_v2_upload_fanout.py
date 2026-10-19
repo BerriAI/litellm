@@ -18,7 +18,7 @@ from _s3_v2_support import s3_config as _recording_s3_config
 from integration._support.client import Gateway, JsonValue, eventually
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.timing import assert_enforced_within
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 BUCKET: Final = "integration-bucket"
 PREFIX: Final = "integration-logs"

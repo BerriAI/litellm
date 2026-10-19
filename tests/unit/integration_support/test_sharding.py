@@ -17,6 +17,7 @@ from tests.integration.conftest import INVENTORY as WORKER_INVENTORY
 
 INVENTORY: Final = ("test_owned.py::test_first", "test_owned.py::test_skipped", "test_owned.py::test_last")
 INTEGRATION_PACKAGE: Final = Path(__file__).resolve().parents[2] / "integration"
+TEST_SUPPORT_PACKAGE: Final = Path(__file__).resolve().parents[2] / "_support"
 HEALTHY: Final = "tests/integration/providers/test_healthy.py"
 BROKEN: Final = "tests/integration/providers/test_broken.py"
 RENAMED: Final = "tests/integration/providers/test_renamed.py"
@@ -142,6 +143,7 @@ def _run_shard(
     (package / "providers").mkdir(parents=True)
     (root / "pytest.ini").write_text("[pytest]\n")
     (root / "tests" / "__init__.py").write_text("")
+    (root / "tests" / "_support").symlink_to(TEST_SUPPORT_PACKAGE)
     for name in ("__init__.py", "conftest.py", "run.py", "_support"):
         (package / name).symlink_to(INTEGRATION_PACKAGE / name)
     for file in selected:

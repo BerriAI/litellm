@@ -7,7 +7,7 @@ from typing import Final
 import yaml
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 
 def _completion(content: str) -> Reply:

@@ -38,7 +38,7 @@ from integration._support.client import Scenario, eventually, object_value, stri
 from integration._support.database import read_rows
 from integration._support.mcp import JsonRpc, McpCaller, McpPeer, ScriptedTool, echo_tool, register_mcp, scripted_peer
 from integration._support.oauth_server import oauth_server
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from integration.security._canary import MARKER, Canary, canary, find_canary
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Caller, Rig, canary_rig, chat_upstream, settle
 from integration.security._sweeps import Hit, assert_marker_seen, assert_no_hits, record_route_sweep, sweep_all

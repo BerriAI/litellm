@@ -19,7 +19,7 @@ from integration._support.anthropic_thinking import (
     streams,
 )
 from integration._support.client import eventually
-from integration._support.wire import Reply, Request, Wire
+from tests._support.wire import Reply, Request, Wire
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 

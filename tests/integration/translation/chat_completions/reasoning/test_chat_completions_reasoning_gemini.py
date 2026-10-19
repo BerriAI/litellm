@@ -10,8 +10,8 @@ from uuid import uuid4
 import pytest
 from integration._support.client import Gateway, list_value, object_value, string_value
 from integration._support.process import graceful_stop_seconds
-from integration._support.provider import SharedProvider
-from integration._support.wire import Reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from integration.caching.response_cache_case import await_entry, redis_store
 from integration.translation.case import SSEFrame, TranslationTestCase
 from integration.translation.chat_completions.bases.gemini import GEMINI_3_8_FLASH_TEST_CASE

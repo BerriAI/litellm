@@ -10,8 +10,8 @@ from typing import Final
 
 import aiohttp
 import pytest
-from tests.integration._support.provider import SharedProvider
-from tests.integration._support.wire import Reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 
 PROXY_URL: Final = os.environ.get("INTEGRATION_PROXY_URL", "http://0.0.0.0:4000")

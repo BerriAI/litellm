@@ -40,7 +40,7 @@ from integration._support.database import scratch_database
 from integration._support.database_relay import dropped_connection_relay
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 WORKERS: Final = 2

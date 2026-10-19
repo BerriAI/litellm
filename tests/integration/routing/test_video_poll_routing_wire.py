@@ -18,7 +18,7 @@ from integration._support.client import (
     object_value,
     string_value,
 )
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._dashscope_video_support import (
     API_KEY,
     MODEL,

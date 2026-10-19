@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from integration._support.openai_wire import responses_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     ANTHROPIC_MODEL,
     ASK_LABEL,

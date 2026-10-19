@@ -19,7 +19,7 @@ from integration._support.client import Gateway, eventually, object_value, strin
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.timing import assert_not_delayed_by, assert_within_factor_of_control, timed
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.shares_worker_state

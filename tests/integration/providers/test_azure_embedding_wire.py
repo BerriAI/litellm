@@ -6,7 +6,7 @@ from urllib.parse import parse_qs
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _DEPLOYMENT: Final = "embedding-deployment"

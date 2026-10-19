@@ -9,7 +9,7 @@ from integration._support.anthropic_sse import user_prompt
 from integration._support.client import JSON_OBJECT, Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 _SERVED_MODEL: Final = "Qwen/Qwen2.5-0.5B-Instruct"

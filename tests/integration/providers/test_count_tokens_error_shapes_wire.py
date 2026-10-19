@@ -7,7 +7,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)

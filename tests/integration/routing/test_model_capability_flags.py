@@ -22,9 +22,9 @@ from integration._support.client import Gateway, Scenario, eventually, list_valu
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply, responses_reply
 from integration._support.process import WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
-from integration._support.provider import MODEL_DISCOVERY
+from tests._support.provider import MODEL_DISCOVERY
 from integration._support.upstream import aws_event_stream_frame
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _MARKER: Final = re.compile(r"capflag-[0-9a-f]{32}")

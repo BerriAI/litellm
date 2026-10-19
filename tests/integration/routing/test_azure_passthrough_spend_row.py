@@ -9,7 +9,7 @@ import pytest
 from integration._support.client import JSON_OBJECT, Gateway, held
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, responses_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 _DEPLOYMENT: Final = "relay-deployment"

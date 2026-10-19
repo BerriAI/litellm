@@ -11,7 +11,7 @@ from integration._support.anthropic_thinking import JSON_LIST, JSON_OBJECT, aws_
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._tool_search_support import (
     BEDROCK_MODEL,
     MODEL,

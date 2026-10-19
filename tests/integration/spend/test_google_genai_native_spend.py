@@ -5,7 +5,7 @@ from typing import Final
 import pytest
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _GEMINI_MODEL: Final = "gemini/gemini-2.5-flash"
 _GEMINI_DEPLOYMENT_KEY: Final = "synthetic-gemini-deployment-key"

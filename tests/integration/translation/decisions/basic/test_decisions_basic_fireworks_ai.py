@@ -1,6 +1,6 @@
 import pytest
 from integration._support.client import Gateway
-from integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.decisions.bases.fireworks_ai import RUNE_SYSTEMONE_TEST_CASE, RUNE_TEST_CASE
 from integration.translation.runner import assert_translation

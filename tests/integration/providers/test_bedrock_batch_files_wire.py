@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, list_value, object_value
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 MODEL: Final = "bedrock/anthropic.claude-3-haiku-20240307-v1:0"
 BUCKET: Final = "integration-batch-bucket"

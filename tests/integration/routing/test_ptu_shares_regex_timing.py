@@ -15,7 +15,7 @@ from integration._support.client import Gateway, gateway_from_environment, strin
 from integration._support.openai_wire import chat_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.timing import assert_within_factor_of_control, timed
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 240), pytest.mark.shares_worker_state]

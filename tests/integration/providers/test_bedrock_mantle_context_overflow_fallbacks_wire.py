@@ -10,7 +10,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark = pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120))

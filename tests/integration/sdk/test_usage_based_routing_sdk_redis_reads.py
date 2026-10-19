@@ -16,7 +16,7 @@ import litellm
 import pytest
 from integration._support.client import eventually
 from integration._support.redis_process import owned_redis
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from litellm import Router
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis

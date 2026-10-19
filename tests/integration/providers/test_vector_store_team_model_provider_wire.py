@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import Final
 
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])

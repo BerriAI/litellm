@@ -15,7 +15,7 @@ from integration._support.client import JSON_OBJECT, Gateway, eventually, gatewa
 from integration._support.database import read_rows
 from integration._support.forward_proxy import ForwardProxy, refusing_forward_proxy
 from integration._support.process import owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 from pydantic import JsonValue, TypeAdapter

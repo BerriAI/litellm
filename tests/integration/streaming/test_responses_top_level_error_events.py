@@ -32,7 +32,7 @@ from integration._support.responses_stream import (
     spend_row,
     sse_events,
 )
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from openai.types.responses import ResponseFailedEvent, ResponseStreamEvent
 from pydantic import JsonValue
 

@@ -1,3 +1,4 @@
+import json
 from typing import Final
 
 import pytest
@@ -8,8 +9,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.models.credentials import CredentialItem
 from litellm.types.utils import CallTypes, ModelResponse
 from tests.test_litellm_rust.chat_completions.data import call
+from tests.test_litellm_rust.messages.data import MESSAGES_RESPONSE
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -20,7 +23,7 @@ _OBJECT: Final = TypeAdapter(dict[str, object])
 @pytest.mark.asyncio
 @pytest.mark.parametrize("from_credentials", (False, True))
 async def test_resource_setup_uses_deployment_hook_arguments(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, from_credentials: bool
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch, from_credentials: bool
 ) -> None:
     invalid_settings: Final = {"ssl_verify": object()}
     credential: Final = CredentialItem(
@@ -39,22 +42,21 @@ async def test_resource_setup_uses_deployment_hook_arguments(
 
     litellm.callbacks.append(Prepare())
     recorder: Final = RecordingLogger()
-    server.expected_requests = 0
-
     with pytest.raises(ValueError, match=r"request\.ssl_verify") as caught:
         await call(server, callbacks=[recorder])
 
     failure: Final = await recorder.wait_for_async("async_log_failure_event")
     assert len(failure) == 1
     assert _OBJECT.validate_python(failure[0].kwargs)["exception"] is caught.value
-    assert not server.requests
+    requests: Final = server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True))
 @pytest.mark.parametrize("source", ("explicit", "base_url", "global", "provider", "environment", "empty"))
 async def test_connection_settings_reach_the_provider(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, source: str
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, source: str
 ) -> None:
     key: Final = "selected-key"
     explicit: Final = source in ("explicit", "base_url")
@@ -63,20 +65,21 @@ async def test_connection_settings_reach_the_provider(
     monkeypatch.setattr(
         litellm,
         "api_base",
-        None if source == "environment" else ("http://127.0.0.1:1" if explicit else server.base_url),
+        None if source == "environment" else ("http://127.0.0.1:1" if explicit else server.wire.url),
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", key if source == "environment" else "unused")
     for name in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_BASE"):
-        monkeypatch.setenv(name, server.base_url if source == "environment" else "http://127.0.0.1:1")
+        monkeypatch.setenv(name, server.wire.url if source == "environment" else "http://127.0.0.1:1")
 
+    server.expect(Reply(body=json.dumps(MESSAGES_RESPONSE).encode()))
     result: Final = await call(
         server,
         asynchronous=asynchronous,
         api_key=key if explicit else ("" if source == "empty" else None),
-        api_base=server.base_url if source == "explicit" else ("" if source == "empty" else None),
-        **({"base_url": server.base_url} if source == "base_url" else {}),
+        api_base=server.wire.url if source == "explicit" else ("" if source == "empty" else None),
+        **({"base_url": server.wire.url} if source == "base_url" else {}),
     )
 
     assert isinstance(result, ModelResponse)
-    assert_served_natively(server)
-    assert server.requests[0].headers["x-api-key"] == key
+    requests: Final = assert_served_natively(server, result)
+    assert requests[0].headers["x-api-key"] == key

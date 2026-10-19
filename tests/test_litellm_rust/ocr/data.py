@@ -1,8 +1,10 @@
+import json
 from typing import Final
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 OCR_DOCUMENT: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
 OCR_MODEL: Final = "mistral/mistral-ocr-latest"
@@ -14,26 +16,34 @@ OCR_RESPONSE: Final = {
 }
 
 
-def ocr_arguments(server: RecordingServer, **kwargs: object) -> dict[str, object]:
+def ocr_arguments(server: SharedProvider, **kwargs: object) -> dict[str, object]:
     return {
         "model": OCR_MODEL,
         "document": dict(OCR_DOCUMENT),
         "api_key": "test-key",
-        "api_base": server.base_url,
+        "api_base": server.wire.url,
         **kwargs,
     }
 
 
-def call_ocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
+def call_ocr(server: SharedProvider, **kwargs: object) -> OCRResponse:
     response: Final = litellm.ocr(**ocr_arguments(server, **kwargs))
     if not isinstance(response, OCRResponse):
         raise TypeError(f"Expected OCRResponse, got {type(response).__name__}")
     return response
 
 
-async def call_aocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
+async def call_aocr(server: SharedProvider, **kwargs: object) -> OCRResponse:
     return await litellm.aocr(**ocr_arguments(server, **kwargs))
 
 
-async def call(server: RecordingServer, asynchronous: bool, **kwargs: object) -> OCRResponse:
+async def call(server: SharedProvider, asynchronous: bool, **kwargs: object) -> OCRResponse:
     return await call_aocr(server, **kwargs) if asynchronous else call_ocr(server, **kwargs)
+
+
+def ocr_reply(
+    payload: object = OCR_RESPONSE,
+    status: int = 200,
+    headers: dict[str, str] | None = None,
+) -> Reply:
+    return Reply(body=json.dumps(payload).encode(), status=status, headers=headers or {})

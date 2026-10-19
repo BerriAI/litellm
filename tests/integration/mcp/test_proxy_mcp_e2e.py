@@ -43,8 +43,8 @@ from litellm.proxy.proxy_server import (
 from tests._master_key import MASTER_KEY
 from tests.integration._support.process import stop_child
 from tests.integration._support.timing import assert_enforced_within
-from tests.integration._support.wire import Reply, Wire, wire_server
-from tests.integration._support.wire import Request as WireRequest
+from tests._support.wire import Reply, Wire, wire_server
+from tests._support.wire import Request as WireRequest
 from tests.integration._support.ports import allocate_port
 
 CONFIG_TEMPLATE_PATH = Path("tests/integration/mcp/_config_mcp_e2e.yaml")

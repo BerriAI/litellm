@@ -16,7 +16,7 @@ from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventual
 from integration._support.database import read_rows, scratch_database, write_rows
 from integration._support.mcp import McpPeer, echo_tool, register_mcp, scripted_peer, tool_calls
 from integration._support.process import owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from jwt.algorithms import RSAAlgorithm
 from pydantic import BaseModel, JsonValue
 

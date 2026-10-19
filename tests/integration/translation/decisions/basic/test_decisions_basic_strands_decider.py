@@ -1,6 +1,6 @@
 import pytest
 from integration._support.client import Gateway
-from integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.decisions.bases.strands_decider import (
     STRANDS_DECIDER_2B_HOBSON_V19_TEST_CASE,

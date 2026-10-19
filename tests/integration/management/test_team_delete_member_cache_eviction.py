@@ -33,7 +33,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows, write_rows
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _USAGE: Final = {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15}
 _CACHE_KEY_HEADER: Final = "x-litellm-cache-key"

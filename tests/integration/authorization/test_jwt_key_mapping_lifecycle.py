@@ -27,7 +27,7 @@ from tests.integration._support.client import (
 )
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 _AUDIENCE: Final = "litellm-integration"
 _CLIENT_CLAIM: Final = "client_id"

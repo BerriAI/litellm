@@ -24,7 +24,7 @@ from integration._support.anthropic_sse import (
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_stream, openai_error, posted_targets
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "gpt-4o-mini"

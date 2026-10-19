@@ -8,7 +8,7 @@ import yaml
 
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 
 def _span_attributes(body: bytes) -> tuple[dict[str, object], ...]:

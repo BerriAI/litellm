@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway, object_value
-from integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.bases.gemini import GEMINI_3_8_FLASH_TEST_CASE
 from integration.translation.runner import assert_translation

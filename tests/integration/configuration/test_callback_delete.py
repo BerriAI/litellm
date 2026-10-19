@@ -13,7 +13,7 @@ import yaml
 from integration._support.client import JSON_OBJECT, Gateway, JsonValue, eventually, list_value, object_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 CALLBACK: Final = "generic_api"
 SIBLING: Final = "langsmith"

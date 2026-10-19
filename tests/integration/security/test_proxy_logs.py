@@ -21,7 +21,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import string_value
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from integration.security._canary import MARKER, Canary, canary, find_canary
 from integration.security._sinks import CONFIG_MODEL, PROVIDER_4XX, canary_rig, chat_upstream, settle, team_caller
 from integration.security._sweeps import Hit, assert_no_hits

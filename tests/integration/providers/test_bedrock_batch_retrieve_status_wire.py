@@ -9,7 +9,7 @@ from typing import Final
 import pytest
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.providers.test_bedrock_batch_blank_s3_env_wire import (
     BUCKET,
     JOB_ARN_PREFIX,

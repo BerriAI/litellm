@@ -21,7 +21,7 @@ from integration._support.client import (
 )
 from integration._support.openai_wire import chat_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from litellm.litellm_core_utils.default_encoding import encoding as cl100k_base
 from pydantic import JsonValue
 

@@ -27,7 +27,7 @@ from integration._support.openai_wire import answering_model_discovery, chat_rep
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.redis_process import OwnedRedis, owned_redis
 from integration._support.timing import assert_cut_short
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 

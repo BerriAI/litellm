@@ -9,7 +9,7 @@ from typing import Final
 
 import litellm
 import pytest
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 

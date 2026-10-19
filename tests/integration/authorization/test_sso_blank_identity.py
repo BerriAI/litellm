@@ -28,7 +28,7 @@ from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, ga
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.database_relay import dropped_connection_relay
 from tests.integration._support.process import OwnedProxy, owned_proxy_process
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 

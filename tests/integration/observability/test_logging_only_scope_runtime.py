@@ -54,7 +54,7 @@ from _logging_only_scope_support import (
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.process import owned_proxy
 from integration._support.upstream import delete_scenario, register_scenario
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse

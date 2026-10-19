@@ -4,7 +4,7 @@ from typing import Final
 
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, JsonValue
 
 _REDACTED: Final = "REDACTED_BY_LITELM"

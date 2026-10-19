@@ -15,7 +15,7 @@ from integration._support.responses_stream import (
     error_body,
     openai_error_stream,
 )
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)

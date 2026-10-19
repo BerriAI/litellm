@@ -3,7 +3,7 @@ import uuid
 from typing import Final
 
 from tests.integration._support.client import Gateway, object_value, string_value
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 
 def _delete_model_if_present(gateway: Gateway, identity: str) -> None:

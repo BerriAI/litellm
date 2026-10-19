@@ -9,7 +9,7 @@ import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.streaming.faked_responses_case import (
     NO_CACHE,
     answering,

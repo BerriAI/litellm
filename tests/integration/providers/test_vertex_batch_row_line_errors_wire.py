@@ -6,7 +6,7 @@ import anthropic
 import openai
 import pytest
 from integration._support.client import Gateway, Scenario
-from integration._support.wire import Reply, wire_server
+from tests._support.wire import Reply, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 

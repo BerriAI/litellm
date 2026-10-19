@@ -13,7 +13,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
 from integration._support.responses_vendor import same_response
-from integration._support.wire import wire_server
+from tests._support.wire import wire_server
 from integration.authorization._responses_compact import (
     ALIASES,
     MODEL,

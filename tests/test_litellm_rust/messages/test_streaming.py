@@ -1,29 +1,23 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from typing import Final
 
 import pytest
 
-from tests.test_litellm_rust.messages.data import MESSAGES_EVENTS, MESSAGES_RESPONSE, call
+from tests.test_litellm_rust.messages.data import MESSAGES_RESPONSE, MESSAGES_SSE, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
 from tests.test_litellm_rust.support.results import consume
 from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 pytestmark = pytest.mark.requires_rust_extension
 
-STREAM: Final = ResponseSpec(body=None, events=MESSAGES_EVENTS)
-
-
-@pytest.fixture
-def server(server: RecordingServer) -> Iterator[RecordingServer]:
-    yield from relaxed(server)
-
-
 @pytest.mark.asyncio
 async def test_stream_relays_provider_events_and_logs_success_once_after_the_last_chunk(
-    server: RecordingServer,
+    server: SharedProvider,
 ) -> None:
-    server.enqueue(STREAM)
+    stream_reply: Final = Reply(chunks=MESSAGES_SSE, content_type="text/event-stream")
+    server.expect(stream_reply)
     recorder: Final = RecordingLogger()
 
     stream: Final = await call(server, stream=True, callbacks=[recorder])
@@ -34,7 +28,7 @@ async def test_stream_relays_provider_events_and_logs_success_once_after_the_las
     rest: Final = [chunk async for chunk in stream]
 
     assert_served_natively(server)
-    assert first + b"".join(rest) == b"".join(STREAM.payloads())
+    assert first + b"".join(rest) == b"".join(MESSAGES_SSE)
     success: Final = await recorder.wait_for_async("async_log_success_event")
     assert len(success) == 1
     assert isinstance(success[0].kwargs, dict)
@@ -46,21 +40,21 @@ async def test_stream_relays_provider_events_and_logs_success_once_after_the_las
 
 
 @pytest.mark.asyncio
-async def test_sync_stream_relays_provider_events_and_logs_success_once(server: RecordingServer) -> None:
-    server.enqueue(STREAM)
+async def test_sync_stream_relays_provider_events_and_logs_success_once(server: SharedProvider) -> None:
+    server.expect(Reply(chunks=MESSAGES_SSE, content_type="text/event-stream"))
     recorder: Final = RecordingLogger()
 
     stream: Final = await call(server, asynchronous=False, stream=True, callbacks=[recorder])
     chunks: Final = await consume(stream)
 
     assert_served_natively(server)
-    assert b"".join(chunks) == b"".join(STREAM.payloads())
+    assert b"".join(chunks) == b"".join(MESSAGES_SSE)
     assert len(await recorder.wait_for_async("async_log_success_event")) == 1
 
 
 @pytest.mark.asyncio
-async def test_stream_closed_early_logs_success_once(server: RecordingServer) -> None:
-    server.enqueue(STREAM)
+async def test_stream_closed_early_logs_success_once(server: SharedProvider) -> None:
+    server.expect(Reply(chunks=MESSAGES_SSE, content_type="text/event-stream"))
     recorder: Final = RecordingLogger()
 
     stream: Final = await call(server, stream=True, callbacks=[recorder])
@@ -71,3 +65,4 @@ async def test_stream_closed_early_logs_success_once(server: RecordingServer) ->
     assert len(await recorder.wait_for_async("async_log_success_event")) == 1
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
+    assert_served_natively(server)

@@ -14,8 +14,8 @@ from litellm.rust_bridge.host import settings
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, messages_reply
+from tests._support.provider import shared_provider
 
 pytest.importorskip("litellm.rust_bridge._native")
 
@@ -98,12 +98,12 @@ async def test_secret_manager_supplies_the_anthropic_key_and_base(
 ) -> None:
     for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
         monkeypatch.delenv(name, raising=False)
-    with recording_service() as server:
-        server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    with shared_provider() as server, server.checked("test_secret_manager_supplies_the_anthropic_key_and_base"):
+        server.expect(messages_reply())
         monkeypatch.setattr(
             litellm,
             "secret_manager_client",
-            _ManagedSecrets({"ANTHROPIC_API_KEY": "vault-key", "ANTHROPIC_BASE_URL": server.base_url}),
+            _ManagedSecrets({"ANTHROPIC_API_KEY": "vault-key", "ANTHROPIC_BASE_URL": server.wire.url}),
         )
         monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
         monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
@@ -111,6 +111,7 @@ async def test_secret_manager_supplies_the_anthropic_key_and_base(
         monkeypatch.setattr(settings, "secret_manager", lambda: replace(configured(), native=True))
 
         await messages()
+        requests: Final = server.received()
 
-    assert len(server.requests) == 1
-    assert server.requests[0].headers["x-api-key"] == "vault-key"
+    assert len(requests) == 1
+    assert requests[0].headers["x-api-key"] == "vault-key"

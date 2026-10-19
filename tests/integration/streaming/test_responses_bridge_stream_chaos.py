@@ -33,7 +33,7 @@ from integration._support.responses_stream import (
     openai_error_stream,
     rate_limited_stream,
 )
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 

@@ -22,7 +22,7 @@ import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, isolated_gateway, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with

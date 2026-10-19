@@ -14,7 +14,7 @@ import openai
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, Wire
+from tests._support.wire import Reply, Request, Wire
 from pydantic import JsonValue
 
 PROVIDER: Final = "coralbricks"

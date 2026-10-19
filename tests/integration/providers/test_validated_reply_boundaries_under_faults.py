@@ -21,7 +21,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _API_KEY: Final = "synthetic-provider-key"

@@ -6,8 +6,8 @@ from unittest.mock import ANY
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.provider import SharedProvider
-from integration._support.wire import Reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.bases.bedrock_chat_completions import GROK_4_7_TEST_CASE
 from integration.translation.runner import assert_translation

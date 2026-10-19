@@ -23,7 +23,7 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, responses_reply
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers.test_bedrock_auth_wire import RESPONSE as CONVERSE_RESPONSE
 from openai.types.responses import ResponseToolSearchCall
 from pydantic import JsonValue, TypeAdapter

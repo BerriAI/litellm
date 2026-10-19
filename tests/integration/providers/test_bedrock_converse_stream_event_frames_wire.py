@@ -23,7 +23,7 @@ from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import _aws_event_frame, aws_event_stream_frame
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with

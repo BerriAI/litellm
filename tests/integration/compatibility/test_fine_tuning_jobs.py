@@ -14,7 +14,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 

@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Final
 from urllib.parse import unquote
 
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue, TypeAdapter
 
 ACCESS_KEY: Final = "AKIAINTEGRATION000004"

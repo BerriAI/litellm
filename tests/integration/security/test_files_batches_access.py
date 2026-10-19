@@ -27,7 +27,7 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI, PermissionDeniedError
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from typing_extensions import assert_never

@@ -28,7 +28,7 @@ from openai.types.realtime import (
 from pydantic import BaseModel, JsonValue
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 DEPLOYMENT_KEY: Final = "synthetic-openai-realtime-key"
 REALTIME_MODEL: Final = "gpt-realtime"

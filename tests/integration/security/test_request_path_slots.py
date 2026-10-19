@@ -45,7 +45,7 @@ import httpx
 import pytest
 from integration._support.client import Scenario, eventually, string_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from integration.security._canary import MARKER, Canary, canary, find_canary
 from integration.security._sinks import GENERIC_SINK, PROVIDER_4XX, Caller, Rig, canary_rig
 from integration.security._sweeps import Hit, assert_marker_seen, assert_no_hits, record_route_sweep, sweep_all

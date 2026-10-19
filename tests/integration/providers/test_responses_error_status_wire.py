@@ -2,7 +2,7 @@ import json
 from typing import Final
 
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 
 def test_unknown_model_provider_404_surfaces_to_client_as_404(gateway: Gateway) -> None:

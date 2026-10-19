@@ -4,7 +4,7 @@ from typing import Final
 
 import openai
 from integration._support.anthropic_sse import dropping_reply
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError

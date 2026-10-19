@@ -37,7 +37,7 @@ from integration._support.safeguards_rig import (
     tool_use_ids,
     unavailable,
 )
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 
 pytestmark = pytest.mark.timeout(graceful_stop_seconds() + 240)

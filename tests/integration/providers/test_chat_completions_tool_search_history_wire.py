@@ -11,7 +11,7 @@ from integration._support import responses_vendor as rv
 from integration._support.anthropic_thinking import BEDROCK_MODEL
 from integration._support.client import Gateway, Scenario
 from integration._support.openai_wire import chat_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers.test_bedrock_auth_wire import RESPONSE as CONVERSE_RESPONSE
 from integration.providers.test_chat_completions_tool_search_wire import (
     assert_lands_once_as,

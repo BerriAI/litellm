@@ -25,7 +25,7 @@ from integration._support.responses_stream import (
     spend_row,
 )
 from integration._support.upstream import _aws_event_frame, aws_event_stream_frame
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 import litellm

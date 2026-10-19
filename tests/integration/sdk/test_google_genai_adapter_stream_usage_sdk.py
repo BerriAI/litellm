@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 from integration._support.client import eventually, held
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 import litellm

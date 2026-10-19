@@ -11,7 +11,7 @@ import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.process import owned_proxy_process
 from integration._support.redis_process import owned_redis
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from prometheus_client.parser import text_string_to_metric_families
 from test_cache_hit_guardrail_metrics import (
     DEPLOYMENT_FAILURE,

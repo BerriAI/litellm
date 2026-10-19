@@ -19,7 +19,7 @@ from integration._support.anthropic_thinking import (
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 
 Event = dict[str, JsonValue]

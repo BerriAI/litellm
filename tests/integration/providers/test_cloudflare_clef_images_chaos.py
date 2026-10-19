@@ -21,7 +21,7 @@ from integration._support.bedrock_runtime_peer import PNG_1X1
 from integration._support.client import Gateway, eventually, list_value, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 Route = Literal["/v1/systemone", "/systemone", "/v1/decisions", "/decisions"]

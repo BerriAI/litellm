@@ -8,7 +8,7 @@ from urllib.parse import unquote
 import pytest
 from integration._support.client import Gateway
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 CLAUDE_MODEL_ID: Final = "us.anthropic.claude-sonnet-4-6"

@@ -9,8 +9,8 @@ from typing import Final, Literal
 import pytest
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
-from tests.integration._support.provider import PROVIDER_URL, SharedProvider
-from tests.integration._support.wire import Reply
+from tests._support.provider import PROVIDER_URL, SharedProvider
+from tests._support.wire import Reply
 
 _Denial = Literal["key_model_access_denied", "team_model_access_denied"]
 

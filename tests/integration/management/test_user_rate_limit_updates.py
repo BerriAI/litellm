@@ -16,7 +16,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _HEADER_VALUE_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _UPSTREAM_REPLIES: Final[Mapping[str, Mapping[str, JsonValue]]] = {

@@ -4,9 +4,9 @@ from collections.abc import Mapping
 from typing import Final
 
 from integration._support.client import JSON_OBJECT, Gateway
-from integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 from integration._support.upstream import aws_event_stream_frame
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from integration.translation.case import EventStreamFrame, SSEFrame, StreamingTranslationTestCase, TranslationTestCase
 from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types.chat import ChatCompletionChunk

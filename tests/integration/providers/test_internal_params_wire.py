@@ -10,7 +10,7 @@ from typing import Final
 
 import pytest
 from integration._support.upstream import INTERNAL_FIELDS
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 import litellm
 from tests._support.stream_chunk_size import keys_at_every_depth

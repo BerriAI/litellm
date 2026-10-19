@@ -37,7 +37,7 @@ from integration._support.client import (
 )
 from integration._support.openai_wire import chat_reply, openai_error, responses_reply
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from openai import AsyncOpenAI, OpenAI
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis

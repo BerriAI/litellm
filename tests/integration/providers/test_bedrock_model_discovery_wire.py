@@ -62,7 +62,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds
-from integration._support.wire import Reply, Wire, wire_server
+from tests._support.wire import Reply, Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)

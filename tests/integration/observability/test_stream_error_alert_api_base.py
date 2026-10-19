@@ -29,7 +29,7 @@ from integration._support.responses_stream import created, delta, failed, frame
 from integration._support.responses_ws_peer import PROVIDER_MODEL, Script, events, responses_peer, session
 from integration._support.tls import write_self_signed_cert
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import ResponseFailedEvent, ResponseTextDeltaEvent
 from pydantic import JsonValue

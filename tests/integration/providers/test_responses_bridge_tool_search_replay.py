@@ -11,7 +11,7 @@ from integration._support import prompt_cache_breakpoint as pcb
 from integration._support import responses_vendor as rv
 from integration._support import tool_search as ts
 from integration._support.client import Gateway, Scenario, eventually, string_value
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolUnionParam
 from pydantic import JsonValue

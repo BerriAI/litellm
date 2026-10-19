@@ -40,7 +40,7 @@ from integration._support.mcp import (
 from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
 
 pytestmark: Final = pytest.mark.shares_worker_state

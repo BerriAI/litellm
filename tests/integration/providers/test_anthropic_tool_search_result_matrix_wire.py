@@ -9,7 +9,7 @@ import openai
 import pytest
 from integration._support.anthropic_thinking import JSON_LIST, JSON_OBJECT, chunks_of, deltas_of
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.providers._cache_control_marks_support import (
     ASK_LABEL,
     EPHEMERAL,

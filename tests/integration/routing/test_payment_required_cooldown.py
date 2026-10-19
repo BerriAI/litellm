@@ -20,7 +20,7 @@ from integration._support.openai_wire import chat_reply, responses_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.prometheus_series import PROXY_FAILURES, Sample, scrape
 from integration._support.redis_process import OwnedRedis, owned_redis
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.routing.test_payment_required_mapping import (
     OPENAI_MODEL,
     PAYMENT_REQUIRED,

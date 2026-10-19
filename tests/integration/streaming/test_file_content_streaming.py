@@ -5,7 +5,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 STREAM_CHUNK_BYTES: Final = 1024 * 1024
 HEAD: Final = b"h" * STREAM_CHUNK_BYTES

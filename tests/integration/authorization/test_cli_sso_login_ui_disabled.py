@@ -31,8 +31,8 @@ from tests.integration._support.client import (
 )
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import OwnedProxy, group_members, owned_proxy_process
-from tests.integration._support.provider import SharedProvider
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 

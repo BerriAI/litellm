@@ -10,7 +10,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark = pytest.mark.timeout(240)

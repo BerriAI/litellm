@@ -24,7 +24,7 @@ from integration._support.client import (
 from integration._support.database import read_rows, write_rows
 from integration._support.prisma_clients import connected_proxy_prisma
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import PTU_SENTINEL_API_KEY

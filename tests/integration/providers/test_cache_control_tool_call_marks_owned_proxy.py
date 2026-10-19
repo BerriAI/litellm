@@ -15,7 +15,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from integration.providers._cache_control_marks_support import (
     CITIES,

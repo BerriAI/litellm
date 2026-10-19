@@ -8,7 +8,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.translation.chat_completions.cross_model.contracts import assert_completion
 from pydantic import JsonValue, TypeAdapter
 

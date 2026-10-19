@@ -18,7 +18,7 @@ import yaml
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.process import owned_proxy
 from integration._support.redis_process import owned_redis
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 from redis.exceptions import TimeoutError as RedisTimeoutError

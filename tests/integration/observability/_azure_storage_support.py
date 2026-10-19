@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlsplit
 
 import yaml
 from integration._support.client import JsonValue, eventually, object_value
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 
 ACCOUNT: Final = "litellmaudit"
 FILE_SYSTEM: Final = "litellm-logs"

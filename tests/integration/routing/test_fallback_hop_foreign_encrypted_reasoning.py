@@ -45,7 +45,7 @@ from integration._support.client import (
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.upstream import delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, SseResponse, StoredResponse
 from pydantic import JsonValue

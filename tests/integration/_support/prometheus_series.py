@@ -21,7 +21,7 @@ from integration._support.client import Gateway, Scenario, eventually, gateway_f
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, OwnedState, owned_proxy_process
 from integration._support.responses_vendor import ResponsesVendor, same_response
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from prometheus_client.mmap_dict import MmapedDict
 from prometheus_client.parser import text_string_to_metric_families
 from pydantic import JsonValue

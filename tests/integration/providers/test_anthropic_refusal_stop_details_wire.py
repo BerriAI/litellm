@@ -55,7 +55,7 @@ from integration._support.client import Gateway, Scenario, eventually, gateway_f
 from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import Reply, Wire, wire_server
+from tests._support.wire import Reply, Wire, wire_server
 from pydantic import BaseModel, JsonValue
 
 pytestmark: Final = [

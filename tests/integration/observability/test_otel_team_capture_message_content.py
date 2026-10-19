@@ -23,7 +23,7 @@ from integration._support.otlp_sink import (
     recorded_spans,
 )
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 MARKER: Final = re.compile(rb"cmc-(?:tool-|fail-)?[0-9a-f]{32}")

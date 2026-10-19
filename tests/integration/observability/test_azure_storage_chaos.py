@@ -16,7 +16,7 @@ from _s3_v2_support import matched_ids, mixed_burst, surface_reply
 from integration._support.client import Gateway, JsonValue, eventually
 from integration._support.process import group_members, owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import wire_server
+from tests._support.wire import wire_server
 
 WORKERS: Final = 2
 FLUSH_SECONDS: Final = "1"

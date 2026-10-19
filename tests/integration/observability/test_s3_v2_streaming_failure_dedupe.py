@@ -12,7 +12,7 @@ import pytest
 from _s3_v2_support import RecordingS3Sink, call_surface, collect_payloads, matched_ids, s3_config, surface_reply
 from integration._support.client import Gateway, JsonValue, Scenario, eventually, object_value
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 Surface = Literal["chat", "messages", "responses"]
 SURFACES: Final[tuple[Surface, ...]] = ("chat", "messages", "responses")

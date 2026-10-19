@@ -18,7 +18,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, gateway_from_environment
 from tests.integration._support.process import graceful_stop_seconds, owned_proxy
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 _NATIVE_MODEL: Final = "safeguards-timing-deepseek"
 _CLASSIFIER_MODEL: Final = "safeguards-timing-classifier"

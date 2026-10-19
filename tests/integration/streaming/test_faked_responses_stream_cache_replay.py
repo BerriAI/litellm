@@ -5,7 +5,7 @@ from typing import Final
 
 import openai
 from integration._support.client import Gateway, eventually, string_value
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from integration.streaming.faked_responses_case import (
     ANSWER,
     ARGUMENTS,

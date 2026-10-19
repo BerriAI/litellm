@@ -1,4 +1,5 @@
 import json
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
@@ -15,9 +16,12 @@ from tests.test_litellm_rust.ocr.data import (
     call,
     call_aocr,
     call_ocr,
+    ocr_reply,
 )
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -25,11 +29,11 @@ pytestmark = pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_ocr_contract_upstream_status(
-    server: RecordingServer,
+    server: SharedProvider,
     asynchronous: bool,
 ) -> None:
-    upstream: Final = ResponseSpec(body={"detail": "invalid provider option"}, status=422)
-    server.enqueue(upstream)
+    upstream: Final = ocr_reply({"detail": "invalid provider option"}, status=422)
+    server.expect(upstream)
     arguments: Final = {
         "model": "vertex_ai/mistral-ocr-latest",
         "vertex_project": "test-project",
@@ -40,22 +44,24 @@ async def test_ocr_contract_upstream_status(
         await call(server, asynchronous, **arguments)
     assert caught.value.status_code == upstream.status
     assert caught.value.response.status_code == upstream.status
+    assert_served_natively(server)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("preserved", ["body", "headers"])
 async def test_ocr_contract_provider_error_details(
-    server: RecordingServer,
+    server: SharedProvider,
     asynchronous: bool,
     preserved: str,
 ) -> None:
     payload: Final = {"message": "rate limited"}
     headers: Final = {"Retry-After": "17", "X-Request-ID": "ocr-request-123", "X-Future-Header": "retained"}
-    server.enqueue(ResponseSpec(body=payload, status=429, headers=headers))
+    server.expect(ocr_reply(payload, status=429, headers=headers))
     with pytest.raises(litellm.RateLimitError) as caught:
         await call(server, asynchronous, num_retries=0)
     response: Final = caught.value.response
+    assert_served_natively(server)
     assert isinstance(response, httpx.Response)
     if preserved == "body":
         assert response.content == json.dumps(payload).encode()
@@ -68,16 +74,16 @@ async def test_ocr_contract_provider_error_details(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_ocr_contract_invalid_response_format(
-    server: RecordingServer,
+    server: SharedProvider,
     asynchronous: bool,
 ) -> None:
-    server.expected_requests = 0
     with pytest.raises(litellm.UnsupportedParamsError) as caught:
         await call(server, asynchronous, req_format="bogus", num_retries=0)
     assert caught.value.status_code == 400
     for value in ("req_format", "bogus", "native", "litellm"):
         assert value in str(caught.value)
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
@@ -91,42 +97,42 @@ async def test_ocr_contract_invalid_response_format(
     ],
 )
 async def test_ocr_contract_malformed_document_is_actionable(
-    server: RecordingServer,
+    server: SharedProvider,
     asynchronous: bool,
     document: JsonValue,
     field: str,
 ) -> None:
-    server.expected_requests = None
     with pytest.raises(litellm.BadRequestError) as caught:
         await call(server, asynchronous, document=document, num_retries=0)
     assert caught.value.status_code == 400
     assert field.lower() in str(caught.value).lower()
     assert "NoneType: None" not in str(caught.value)
     assert "indices must be" not in str(caught.value)
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("option,value,field", [("pages", [-1], "pages"), ("features", [1], "features")])
 async def test_ocr_contract_azure_invalid_options_are_bad_requests(
-    server: RecordingServer,
+    server: SharedProvider,
     asynchronous: bool,
     option: str,
     value: JsonValue,
     field: str,
 ) -> None:
-    server.expected_requests = 0
     arguments: Final = {"model": "azure_ai/doc-intelligence/prebuilt-read", option: value, "num_retries": 0}
     with pytest.raises(litellm.BadRequestError) as caught:
         await call(server, asynchronous, **arguments)
     assert caught.value.status_code == 400
     assert field in str(caught.value)
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
-def test_native_ocr_maps_provider_400_with_public_provider_details(server: RecordingServer) -> None:
-    server.enqueue(ResponseSpec(body={"message": "invalid OCR request"}, status=400))
+def test_native_ocr_maps_provider_400_with_public_provider_details(server: SharedProvider) -> None:
+    server.expect(ocr_reply({"message": "invalid OCR request"}, status=400))
 
     with pytest.raises(litellm.BadRequestError) as caught:
         call_ocr(server)
@@ -135,6 +141,7 @@ def test_native_ocr_maps_provider_400_with_public_provider_details(server: Recor
     assert caught.value.model == "mistral-ocr-latest"
     assert caught.value.llm_provider == "mistral"
     assert "invalid OCR request" in str(caught.value)
+    assert_served_natively(server)
 
 
 class TokenAbort(BaseException):
@@ -145,12 +152,11 @@ class TokenAbort(BaseException):
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("failure", ["ordinary", "abort"], ids=["value-error", "base-exception"])
 async def test_native_azure_ocr_token_provider_failure_prevents_pre_call_callback_and_request(
-    server: RecordingServer,
+    server: SharedProvider,
     isolated_azure_auth: None,
     asynchronous: bool,
     failure: str,
 ) -> None:
-    server.expected_requests = 0
     calls: Final = []
     recorder: Final = RecordingLogger()
     original: Final = {"ordinary": ValueError("token unavailable"), "abort": TokenAbort("abort")}
@@ -169,7 +175,8 @@ async def test_native_azure_ocr_token_provider_failure_prevents_pre_call_callbac
     with pytest.raises(expected) as caught:
         await call_aocr(server, **arguments) if asynchronous else call_ocr(server, **arguments)
     assert calls == ["token"]
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
     assert "log_pre_api_call" not in recorder.names
     if failure == "ordinary":
         assert "Failed to get Azure AD token: token unavailable" in str(caught.value)
@@ -181,8 +188,7 @@ async def test_native_azure_ocr_token_provider_failure_prevents_pre_call_callbac
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_native_file_preparation_preserves_reader_exception(server: RecordingServer, asynchronous: bool) -> None:
-    server.expected_requests = 0
+async def test_native_file_preparation_preserves_reader_exception(server: SharedProvider, asynchronous: bool) -> None:
     failure: Final = RuntimeError("reader failed")
 
     class Reader:
@@ -193,6 +199,8 @@ async def test_native_file_preparation_preserves_reader_exception(server: Record
     with pytest.raises(litellm.APIConnectionError, match="reader failed") as caught:
         await call_aocr(server, document=document) if asynchronous else call_ocr(server, document=document)
     assert caught.value.__context__ is failure
+    requests: Final = server.received()
+    assert requests == ()
 
 
 COHERE_IMAGE: Final = {"type": "image_url", "image_url": "data:image/png;base64,YWJj"}
@@ -227,7 +235,8 @@ class PublicFailure:
     error: type[Exception]
     match: str
     provider_requests: int = 0
-    response: ResponseSpec | None = None
+    response: Reply | None = None
+    gated: bool = False
     cause: type[BaseException] | None = None
 
 
@@ -288,14 +297,14 @@ PUBLIC_FAILURES: Final = {
         litellm.InternalServerError,
         "provider unavailable",
         provider_requests=1,
-        response=ResponseSpec(body={"message": "provider unavailable"}, status=500),
+        response=ocr_reply({"message": "provider unavailable"}, status=500),
     ),
     "invalid-provider-response": PublicFailure(
         lambda _: {},
         litellm.APIConnectionError,
         "pages",
         provider_requests=1,
-        response=ResponseSpec(body={"pages": "invalid"}),
+        response=ocr_reply({"pages": "invalid"}),
     ),
     "response-over-limit": PublicFailure(
         lambda _: {"max_response_bytes": len(json.dumps(OCR_RESPONSE).encode()) - 1},
@@ -308,7 +317,7 @@ PUBLIC_FAILURES: Final = {
         litellm.Timeout,
         "",
         provider_requests=1,
-        response=ResponseSpec(body=OCR_RESPONSE, delay=0.2),
+        gated=True,
     ),
 }
 
@@ -317,19 +326,27 @@ PUBLIC_FAILURES: Final = {
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("failure", PUBLIC_FAILURES.values(), ids=PUBLIC_FAILURES.keys())
 async def test_native_failures_raise_the_public_exception_class(
-    server: RecordingServer,
+    server: SharedProvider,
     isolated_azure_auth: None,
     tmp_path: Path,
     asynchronous: bool,
     failure: PublicFailure,
 ) -> None:
-    server.expected_requests = failure.provider_requests
-    if failure.response is not None:
-        server.enqueue(failure.response)
+    gate: Final = threading.Event()
+    if failure.gated:
+        server.expect(Reply(chunks=(json.dumps(OCR_RESPONSE).encode(),), gate_before_first=gate))
+    elif failure.response is not None:
+        server.expect(failure.response)
+    elif failure.provider_requests:
+        server.expect(ocr_reply())
 
-    with pytest.raises(failure.error, match=failure.match) as caught:
-        await call(server, asynchronous, **failure.arguments(tmp_path))
+    try:
+        with pytest.raises(failure.error, match=failure.match) as caught:
+            await call(server, asynchronous, **failure.arguments(tmp_path))
+    finally:
+        gate.set()
 
-    assert len(server.requests) == failure.provider_requests
+    requests: Final = assert_served_natively(server, count=failure.provider_requests)
+    assert len(requests) == failure.provider_requests
     if failure.cause is not None:
         assert isinstance(caught.value.__context__, failure.cause)

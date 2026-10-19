@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from integration._support.client import JSON_OBJECT, Gateway, object_value, string_value
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _MODEL: Final = "bytedance/seedance-2.5/text-to-video"
 _H3_MODEL: Final = "minimax/h3/text-to-video"

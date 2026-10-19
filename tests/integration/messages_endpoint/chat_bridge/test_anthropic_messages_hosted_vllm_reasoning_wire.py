@@ -5,7 +5,7 @@ from typing import Final
 import anthropic
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Wire, wire_server
+from tests._support.wire import Reply, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "glm-reasoning"

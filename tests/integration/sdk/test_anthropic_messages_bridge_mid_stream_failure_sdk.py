@@ -17,7 +17,7 @@ from integration._support.anthropic_sse import (
 )
 from integration._support.client import eventually, object_value
 from integration._support.openai_wire import answering_model_discovery, chat_stream, posted_targets
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
 
 import litellm

@@ -4,7 +4,7 @@ from typing import Final
 
 from integration._support.client import Gateway
 from integration._support.openai_wire import responses_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 TOKEN: Final = "scripted-openai-search-key"

@@ -17,7 +17,7 @@ from litellm.types.integrations.prometheus import LATENCY_BUCKETS
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.prometheus_series import Sample, label_values, scrape
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 _GOOD: Final = "prometheus-good-endpoint"
 _LIMITED: Final = "prometheus-rate-limited-endpoint"

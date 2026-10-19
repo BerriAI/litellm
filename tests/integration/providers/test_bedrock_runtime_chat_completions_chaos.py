@@ -29,7 +29,7 @@ from integration._support.bedrock_runtime_peer import MARKER, marker_of, respond
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
 from integration._support.process import kill_stray_process, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 

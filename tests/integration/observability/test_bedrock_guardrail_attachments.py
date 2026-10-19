@@ -13,7 +13,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 _GUARDRAIL_ID: Final = "synthetic-attachment-guard"

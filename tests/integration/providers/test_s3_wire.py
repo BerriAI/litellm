@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from integration._support.sigv4 import encoded_path, signature
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 ACCESS: Final = "AKIAIOSFODNN7EXAMPLE"
 SECRET: Final = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"

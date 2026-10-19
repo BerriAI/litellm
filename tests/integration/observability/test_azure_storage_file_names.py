@@ -14,7 +14,7 @@ from _s3_v2_support import surface_reply
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 from litellm.constants import MAX_LITELLM_CALL_ID_LENGTH
 

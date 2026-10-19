@@ -33,7 +33,7 @@ from integration._support.daily_activity import (
 )
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 from litellm.proxy._types import LiteLLM_UserTable

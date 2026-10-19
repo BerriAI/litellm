@@ -28,7 +28,7 @@ from urllib.parse import quote
 
 import pytest
 from integration._support.client import Scenario
-from integration._support.wire import Request, wire_server
+from tests._support.wire import Request, wire_server
 from integration.security._callback_traffic import (
     ENDPOINTS,
     EXPECTED_STATUS,

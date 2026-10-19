@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from tests.integration._support.client import Gateway, eventually, object_value, string_value, team_admin_permissions
 from tests.integration._support.database import read_rows
 from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _CHAT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _EXPECTED_CHAT: Final = ("POST", "/v1/chat/completions")

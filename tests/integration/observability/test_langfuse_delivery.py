@@ -27,7 +27,7 @@ from integration._support.client import (
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.timing import assert_cut_short, assert_within_factor_of_control, timed
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import KeyValue
 from opentelemetry.proto.trace.v1.trace_pb2 import Span

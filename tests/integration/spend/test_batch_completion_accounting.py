@@ -13,7 +13,7 @@ import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue

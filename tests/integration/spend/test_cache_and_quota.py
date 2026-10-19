@@ -17,7 +17,7 @@ from integration._support.database_relay import database_relay
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 from integration._support.process import owned_proxy
 from integration._support.upstream import delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse
 
 

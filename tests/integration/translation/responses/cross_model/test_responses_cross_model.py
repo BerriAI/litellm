@@ -9,7 +9,7 @@ import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
-from integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 from integration._support.responses_vendor import same_response
 from integration.translation.case import TranslationTestCase
 from integration.translation.response_contracts import responses_structure

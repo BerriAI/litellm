@@ -10,7 +10,7 @@ from typing import Final
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 # https://platform.claude.com/docs/en/build-with-claude/prompt-caching (read 2026-09-28): at most 4 blocks with cache_control

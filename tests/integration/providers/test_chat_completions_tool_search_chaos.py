@@ -20,7 +20,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from integration.providers.test_chat_completions_tool_search_wire import (
     DEFERRED_NAMES,

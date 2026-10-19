@@ -12,7 +12,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
 from openai.types import CreateEmbeddingResponse
 from pydantic import JsonValue

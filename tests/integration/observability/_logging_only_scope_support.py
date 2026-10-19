@@ -25,8 +25,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually, object_value
 from integration._support.database import read_rows, write_rows
 from integration._support.upstream import delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, Wire
-from integration._support.wire import wire_server as _wire_server
+from tests._support.wire import Reply, Request, Wire
+from tests._support.wire import wire_server as _wire_server
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionChunk
 from pydantic import JsonValue, TypeAdapter

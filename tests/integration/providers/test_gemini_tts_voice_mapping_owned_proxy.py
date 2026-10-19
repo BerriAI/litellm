@@ -29,7 +29,7 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._gemini_tts_voice_support import (
     BACKEND,
     GEMINI_API_KEY,

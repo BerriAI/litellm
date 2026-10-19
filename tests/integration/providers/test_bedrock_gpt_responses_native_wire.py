@@ -7,7 +7,7 @@ import openai
 from integration._support.bedrock_runtime_peer import NATIVE_RESPONSES, answer, respond, target_of
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Request, Wire, wire_server
+from tests._support.wire import Request, Wire, wire_server
 from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
 from pydantic import JsonValue, TypeAdapter
 

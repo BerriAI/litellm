@@ -8,7 +8,7 @@ from typing import Final
 import openai
 import pytest
 from integration._support.client import Gateway, Scenario, object_value, string_value
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
 from openai.types.responses import ResponseCompletedEvent
 from pydantic import JsonValue, TypeAdapter

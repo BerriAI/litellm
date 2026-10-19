@@ -27,7 +27,7 @@ from websockets.exceptions import ConnectionClosed
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
 from tests.integration._support.upstream import delete_scenario, register_scenario
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from tests.integration._support.ports import allocate_port
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 

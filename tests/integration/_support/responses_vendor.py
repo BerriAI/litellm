@@ -12,7 +12,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 from integration._support import claude_code as cc
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue, TypeAdapter
 
 MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")

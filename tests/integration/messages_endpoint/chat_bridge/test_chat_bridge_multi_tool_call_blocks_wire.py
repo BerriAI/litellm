@@ -20,7 +20,7 @@ from integration._support.client import Gateway, eventually, object_value, strin
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, posted_targets
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from openai.types.responses import FunctionToolParam, ResponseFunctionToolCall, ResponseOutputItemDoneEvent

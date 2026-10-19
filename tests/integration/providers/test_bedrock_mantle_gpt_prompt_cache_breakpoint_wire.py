@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.process import isolated_gateway
-from integration._support.wire import Request, wire_server
+from tests._support.wire import Request, wire_server
 from integration.providers._mantle_gpt_prompt_cache_support import (
     ANTHROPIC_PATH,
     AZURE,

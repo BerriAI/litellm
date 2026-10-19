@@ -20,7 +20,7 @@ from integration._support.process import owned_proxy_process
 from integration._support.upstream import (
     _aws_event_frame,  # pyright: ignore[reportPrivateUsage]  # project Bedrock event-stream encoder
 )
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
 
 import litellm

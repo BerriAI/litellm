@@ -26,7 +26,7 @@ from integration._support.budget import case_timeout_seconds
 from integration._support.client import Gateway, JsonValue
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import aws_event_stream_frame
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 ROUTER_MODEL: Final = "aws-errors"

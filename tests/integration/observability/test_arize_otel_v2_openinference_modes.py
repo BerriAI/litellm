@@ -24,7 +24,7 @@ from _openinference_support import (
     _rig,
 )
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 
 _DEFAULT_METADATA: Final = {
     "requester_ip_address": "127.0.0.1",

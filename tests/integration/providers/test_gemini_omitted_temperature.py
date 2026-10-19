@@ -8,8 +8,8 @@ from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, object_value
-from integration._support.provider import SharedProvider
-from integration._support.wire import Reply, Request
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply, Request
 from integration.translation.case import TranslationTestCase
 from integration.translation.chat_completions.bases.gemini import (
     GEMINI_3_8_FLASH_TEST_CASE as CHAT_COMPLETIONS_TEST_CASE,

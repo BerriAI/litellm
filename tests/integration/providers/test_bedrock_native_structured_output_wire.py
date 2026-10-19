@@ -12,7 +12,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, held, list_value, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.upstream import aws_event_stream_frame
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _HAIKU: Final = "us.anthropic.claude-haiku-5-5"

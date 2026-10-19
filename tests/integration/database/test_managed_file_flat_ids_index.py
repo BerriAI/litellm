@@ -14,7 +14,7 @@ import pytest
 from integration._support.client import Gateway, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy, proxy_database_environment
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from psycopg import sql
 from pydantic import JsonValue, TypeAdapter
 

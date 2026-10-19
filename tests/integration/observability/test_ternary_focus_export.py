@@ -33,7 +33,7 @@ from _ternary_support import (
 from integration._support.client import Gateway, eventually
 from integration._support.database import scratch_database
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _INTERVAL_EXPORT: Final = MappingProxyType(
     {"TERNARY_EXPORT_FREQUENCY": "interval", "TERNARY_EXPORT_INTERVAL_SECONDS": "1"}

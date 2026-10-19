@@ -3,7 +3,7 @@ from typing import Final
 
 from integration._support.client import Gateway
 from integration._support.openai_wire import MODEL_DISCOVERY, answering_model_discovery
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "gpt-4o-mini"

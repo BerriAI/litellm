@@ -14,7 +14,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply, openai_error
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS

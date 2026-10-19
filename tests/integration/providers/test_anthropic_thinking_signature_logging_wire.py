@@ -34,7 +34,7 @@ from integration._support.anthropic_thinking import (
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]

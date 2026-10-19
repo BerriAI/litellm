@@ -8,7 +8,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, gateway_from_environment, object_value
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     ASK,
     ASK_LABEL,

@@ -22,7 +22,7 @@ from integration._support.process import (
     graceful_stop_seconds,
     owned_proxy_process,
 )
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from integration.providers._anthropic_safeguards_beta_support import (
     ANTHROPIC_DEPLOYMENT,
     ANTHROPIC_KEY,

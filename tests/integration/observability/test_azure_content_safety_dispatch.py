@@ -13,7 +13,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
-from integration._support.wire import Wire
+from tests._support.wire import Wire
 from integration.observability.azure_dispatch_support import (
     ATTACK_MARKER,
     AzureBehavior,

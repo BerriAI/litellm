@@ -3,7 +3,7 @@ from typing import Final
 
 from integration._support import claude_code as cc
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 
 def test_mid_loop_model_switch_replays_thinking_history_and_reasoning_unchanged(gateway: Gateway) -> None:

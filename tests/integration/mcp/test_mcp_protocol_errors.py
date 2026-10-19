@@ -7,7 +7,7 @@ import pytest
 
 from integration._support.client import Gateway
 from integration._support.mcp import McpPeer, call_tool, register_mcp, tool_names
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 pytestmark: Final = pytest.mark.shares_worker_state
 

@@ -82,7 +82,7 @@ from urllib.parse import quote, urlencode
 import httpx
 import psycopg
 from integration._support.client import Gateway
-from integration._support.wire import Request
+from tests._support.wire import Request
 from integration.security._canary import MARKER, Canary, find_canary
 from psycopg import sql
 from redis import Redis

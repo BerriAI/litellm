@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCache

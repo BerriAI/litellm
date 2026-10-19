@@ -29,7 +29,7 @@ from integration._support.anthropic_sse import (
 )
 from integration._support.client import Gateway, gateway_from_environment, object_value
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 _PRIMARY: Final = "claude-under-test"

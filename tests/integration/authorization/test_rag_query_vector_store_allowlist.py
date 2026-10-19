@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.authorization._guardrail_opt_out import upstream_observations
 from openai.types.chat import ChatCompletion
 from pydantic import JsonValue, TypeAdapter

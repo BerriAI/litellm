@@ -1,6 +1,6 @@
 import pytest
 from integration._support.client import Gateway
-from integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.chat_completions.bases.bedrock_mantle import (
     CLAUDE_HAIKU_4_5_TEST_CASE,

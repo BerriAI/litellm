@@ -26,8 +26,8 @@ from integration._support.pdf_document import (
     rendered_tokens,
     text_document,
 )
-from integration._support.provider import SharedProvider
-from integration._support.wire import Reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from pydantic import JsonValue, TypeAdapter
 from pypdf import PdfReader, PdfWriter
 

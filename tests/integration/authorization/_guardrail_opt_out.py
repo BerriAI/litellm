@@ -10,7 +10,7 @@ from pydantic import JsonValue
 
 from integration._support.client import Gateway, Scenario, object_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 
 MANAGEMENT_ROUTES: Final = ["/key/*", "/team/new", "/team/update", "/v1/chat/completions"]
 

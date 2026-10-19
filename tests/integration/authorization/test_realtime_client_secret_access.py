@@ -20,7 +20,7 @@ from openai.types.realtime import ClientSecretCreateResponse
 from pydantic import BaseModel, JsonValue
 
 from tests.integration._support.client import Gateway, Scenario, object_value
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 DEPLOYMENT_KEY: Final = "synthetic-openai-realtime-key"
 OFFER: Final = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"

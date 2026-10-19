@@ -25,7 +25,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows, write_rows
 from integration._support.process import CONFIGURATION, OwnedProxy, group_members, owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 from litellm.models.user import LiteLLM_UserTable

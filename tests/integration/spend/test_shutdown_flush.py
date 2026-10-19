@@ -16,7 +16,7 @@ import yaml
 from integration._support.client import Gateway, delete_key_if_present, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from psycopg import sql
 
 REQUESTS_WHILE_BLOCKED: Final = 6

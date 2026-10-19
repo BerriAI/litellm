@@ -21,7 +21,7 @@ from integration._support.bedrock_runtime_peer import answer, marker_of, target_
 from integration._support.bedrock_runtime_peer import respond as runtime_generation
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
     ASSISTANT,

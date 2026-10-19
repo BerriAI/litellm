@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel
 
 _PDF_BYTES: Final = b"%PDF-1.4\n%integration\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"

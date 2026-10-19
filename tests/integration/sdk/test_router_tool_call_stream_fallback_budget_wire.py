@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Final
 
 import pytest
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 import litellm
 from litellm import Router

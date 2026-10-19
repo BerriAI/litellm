@@ -6,8 +6,8 @@ from unittest.mock import ANY
 import pytest
 from integration._support.client import Gateway, list_value, object_value
 from integration._support.process import graceful_stop_seconds
-from integration._support.provider import SharedProvider
-from integration._support.wire import Reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from integration.translation.case import SSEFrame, TranslationTestCase
 from integration.translation.gemini_thoughts import LONG_SUMMARY, thoughts_off, with_thinking_config
 from integration.translation.responses.bases.gemini import GEMINI_3_8_FLASH_TEST_CASE, GEMINI_RESPONSES_RESPONSE

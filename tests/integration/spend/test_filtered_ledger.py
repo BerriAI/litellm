@@ -8,7 +8,7 @@ import pytest
 
 from integration._support.client import Gateway, delete_key_if_present, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 
 @pytest.mark.covers("quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals")

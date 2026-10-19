@@ -15,7 +15,7 @@ from integration._support import claude_code as cc
 from integration._support import responses_vendor as rv
 from integration._support.anthropic_thinking import BEDROCK_MODEL, Event, sse_chunks
 from integration._support.client import Gateway, Scenario
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _CLAUDE: Final = cc.OPUS

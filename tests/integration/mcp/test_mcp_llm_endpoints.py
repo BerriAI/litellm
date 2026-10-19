@@ -33,7 +33,7 @@ from integration._support.mcp import (
 )
 from integration._support.mcp_grants import create_toolset
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.workers import worker_services
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam

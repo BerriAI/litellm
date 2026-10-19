@@ -36,7 +36,7 @@ from litellm_enterprise.enterprise_callbacks.secret_detection import _ENTERPRISE
 from starlette.datastructures import URL
 from integration._support.client import Scenario, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.security._canary import MARKER, Canary, canary
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Caller, Recorder, Rig, canary_rig, settle
 from integration.security._sweeps import assert_marker_seen, assert_no_hits, record_route_sweep, sweep_all

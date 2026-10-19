@@ -14,7 +14,7 @@ import httpx
 from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client

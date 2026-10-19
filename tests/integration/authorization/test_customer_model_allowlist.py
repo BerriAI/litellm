@@ -11,7 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, Scenario, object_value, string_value
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _CHAT_RESPONSE: Final = {

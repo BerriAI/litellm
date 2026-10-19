@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 from integration._support.anthropic_sse import CONTENT_TAIL, message_start, sse
 from integration._support.client import JSON_OBJECT, Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 _MODEL: Final = "claude-sonnet-5-5"

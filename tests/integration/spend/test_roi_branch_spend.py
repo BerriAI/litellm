@@ -89,7 +89,7 @@ def test_documented_header_and_body_tags_reach_recorded_branch_and_pr_cost(gatew
     from litellm.proxy.roi_calculator.branch_spend import attribute_branch_keys
     from tests.integration._support.client import eventually
     from tests.integration._support.database import read_rows
-    from tests.integration._support.wire import Reply, Request, wire_server
+    from tests._support.wire import Reply, Request, wire_server
 
     marker: Final = uuid.uuid4().hex
     repo: Final = f"github.com/integration/{marker}"

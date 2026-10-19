@@ -15,7 +15,7 @@ from botocore.config import Config
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 _MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"

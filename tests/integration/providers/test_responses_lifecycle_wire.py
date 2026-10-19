@@ -10,7 +10,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.responses_vendor import same_response
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
 from openai.types.responses import Response, ResponseStreamEvent
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter

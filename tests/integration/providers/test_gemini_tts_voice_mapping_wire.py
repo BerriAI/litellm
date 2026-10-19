@@ -22,7 +22,7 @@ import httpx
 import openai
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from integration.providers._gemini_tts_voice_support import (
     AUDIO_TOKENS,

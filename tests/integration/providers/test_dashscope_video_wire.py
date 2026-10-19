@@ -5,7 +5,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, object_value
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.providers._dashscope_video_support import (
     API_KEY,
     CREATE_PATH,

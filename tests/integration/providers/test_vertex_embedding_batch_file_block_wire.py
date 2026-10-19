@@ -7,7 +7,7 @@ from urllib.parse import unquote
 import httpx
 from integration._support.client import Gateway, Scenario
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 BACKEND: Final = "gemini-embedding-2-preview"

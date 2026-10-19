@@ -7,7 +7,7 @@ from functools import reduce
 from itertools import chain
 from typing import Final
 
-from integration._support.wire import Request
+from tests._support.wire import Request
 from pydantic import JsonValue, TypeAdapter
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])

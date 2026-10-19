@@ -14,7 +14,7 @@ from typing import Final
 import pytest
 from integration._support.client import eventually
 from integration._support.openai_wire import chat_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 import litellm

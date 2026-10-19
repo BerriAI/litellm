@@ -10,7 +10,7 @@ import yaml
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 
 def _write_access_config(directory: Path, *, default_deny: bool, model_name: str, api_base: str) -> Path:

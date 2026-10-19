@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 import yaml
 from integration._support import responses_vendor as rv
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 
 TOKEN: Final = "synthetic-chatgpt-token"

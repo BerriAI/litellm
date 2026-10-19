@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 from integration._support import interception_vendor as iv
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from openai.types.responses import WebSearchToolParam
 
 import litellm

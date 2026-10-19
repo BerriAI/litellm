@@ -14,7 +14,7 @@ import pytest
 
 import litellm
 from tests._wait_helpers import await_until
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 REQUEST_COUNT: Final = 20
 

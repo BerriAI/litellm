@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Iterator
 from importlib import import_module
 from typing import Final
 
@@ -8,7 +8,7 @@ import pytest_asyncio
 import litellm
 from tests.test_litellm_rust.support.clickhouse import clickhouse_url as clickhouse_url
 from tests.test_litellm_rust.support.isolation import isolated_test_state
-from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
+from tests._support.provider import SharedProvider, shared_provider
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="function")
@@ -18,9 +18,22 @@ async def isolate_test_state() -> AsyncIterator[None]:
 
 
 @pytest.fixture
-def recording_server() -> Generator[RecordingServer]:
-    with recording_service() as server:
+def recording_server() -> Iterator[SharedProvider]:
+    with shared_provider() as server:
         yield server
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Iterator[None]:
+    if not isinstance(item, pytest.Function):
+        yield
+        return
+    server: Final = item.funcargs.get("recording_server")
+    if isinstance(server, SharedProvider):
+        with server.checked(item.nodeid):
+            yield
+    else:
+        yield
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

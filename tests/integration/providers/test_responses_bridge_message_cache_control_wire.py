@@ -12,7 +12,7 @@ from integration._support import prompt_cache_breakpoint as pcb
 from integration._support.client import Gateway, Scenario, object_value
 from integration._support.openai_wire import answering_model_discovery, chat_reply
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     ANTHROPIC_MODEL,
     ASK,

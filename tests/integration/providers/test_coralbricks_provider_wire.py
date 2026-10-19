@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.responses_vendor import same_response
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from integration.providers._coralbricks import (
     ANSWER,

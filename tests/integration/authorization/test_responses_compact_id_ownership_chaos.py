@@ -14,7 +14,7 @@ import psutil
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from integration._support.ports import allocate_port
 from integration.authorization._responses_compact import (
     ALIASES,

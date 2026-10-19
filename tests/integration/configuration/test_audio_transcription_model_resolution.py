@@ -12,7 +12,7 @@ from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _WAV_BYTES: Final = (
     b"RIFF\x30\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"

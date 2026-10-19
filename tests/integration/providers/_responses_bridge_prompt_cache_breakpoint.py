@@ -15,7 +15,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from litellm.responses.utils import ResponsesAPIRequestUtils as _RU
 
 _MODEL: Final = "openai/gpt-5.6"

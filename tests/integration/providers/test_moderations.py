@@ -2,7 +2,7 @@ import json
 from typing import Final
 
 from tests.integration._support.client import Gateway
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _MODERATION_RESULT: Final = {
     "id": "modr-integration",

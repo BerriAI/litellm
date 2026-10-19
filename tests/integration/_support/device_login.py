@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from integration._support import responses_vendor as rv
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 CHATGPT_AUTH_HOST: Final = "auth.openai.com"

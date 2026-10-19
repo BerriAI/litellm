@@ -18,7 +18,7 @@ import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.otlp_sink import Span, SpanSinks, configure_sink, recorded_spans, spans_for_trace
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 MARKER: Final = re.compile(rb"excl-[0-9a-f]{32}")

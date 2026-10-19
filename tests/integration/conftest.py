@@ -24,7 +24,7 @@ from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.ordering import collected_case, fixture_groups, scheduling_groups
 from tests.integration._support.process import OWNED_STATE_VARIABLE, OwnedState
-from tests.integration._support.provider import SharedProvider, shared_provider
+from tests._support.provider import PROVIDER_PORT, SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 from tests.integration._support.sdk_models import build_sdk_models
 from tests.integration._support.workers import gateway_profile, start_worker_stacks, worker_stack
@@ -389,7 +389,7 @@ async def resources(db: ManagementDatabase) -> AsyncIterator[ScratchResources]:
 def shared_provider_server() -> Iterator[SharedProvider]:
     if os.environ.get("PYTEST_XDIST_WORKER") and os.environ.get("INTEGRATION_WORKER_ISOLATION") != "1":
         pytest.fail("the shared fake provider needs tests to run one at a time; this group runs under pytest-xdist")
-    with shared_provider() as server:
+    with shared_provider(PROVIDER_PORT) as server:
         yield server
         late: Final = server.received()
         assert late == (), (
@@ -399,19 +399,8 @@ def shared_provider_server() -> Iterator[SharedProvider]:
 
 @pytest.fixture
 def provider(shared_provider_server: SharedProvider, request: pytest.FixtureRequest) -> Iterator[SharedProvider]:
-    stray: Final = shared_provider_server.received()
-    shared_provider_server.replies.clear()
-    assert stray == (), (
-        f"the shared fake provider got {[item.target for item in stray]} "
-        f"after {shared_provider_server.last_test} finished"
-    )
-    yield shared_provider_server
-    shared_provider_server.last_test = request.node.nodeid
-    unused: Final = len(shared_provider_server.replies)
-    unread: Final = shared_provider_server.received()
-    shared_provider_server.replies.clear()
-    assert unused == 0, f"{unused} queued provider replies were never requested"
-    assert unread == (), f"the test never read the provider requests {[item.target for item in unread]}"
+    with shared_provider_server.checked(request.node.nodeid):
+        yield shared_provider_server
 
 
 @pytest.fixture

@@ -10,7 +10,7 @@ from typing import Final
 import httpx
 import pytest
 from integration._support.client import Gateway, string_value
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 CARD: Final = "4111-1111-1111-1111"

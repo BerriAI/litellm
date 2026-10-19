@@ -43,7 +43,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.sigv4 import encoded_path, signature
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, JsonValue
 from integration.security._canary import MARKER, Canary, canary, find_canary
 from integration.security._sinks import (

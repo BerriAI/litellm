@@ -7,7 +7,7 @@ import httpx
 import openai
 
 from tests.integration._support.client import Gateway
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _CHAT_CHUNKS: Final = (
     {

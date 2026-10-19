@@ -9,7 +9,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 MODEL: Final = "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0"
 TOKEN: Final = "synthetic-bedrock-bearer"

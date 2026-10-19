@@ -12,7 +12,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 MODEL: Final = "gpt-6.1-sol"
 PHONE: Final = "4251234567"

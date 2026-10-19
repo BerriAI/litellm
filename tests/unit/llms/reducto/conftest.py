@@ -2,10 +2,10 @@ from collections.abc import Generator
 
 import pytest
 
-from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
+from tests._support.provider import SharedProvider, shared_provider
 
 
 @pytest.fixture
-def reducto_server() -> Generator[RecordingServer]:
-    with recording_service() as server:
+def reducto_server(request: pytest.FixtureRequest) -> Generator[SharedProvider]:
+    with shared_provider() as server, server.checked(request.node.nodeid):
         yield server

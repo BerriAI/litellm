@@ -8,7 +8,7 @@ from typing import Final
 import litellm
 import pytest
 from integration._support.openai_wire import chat_reply
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from litellm import Router
 from pydantic import JsonValue, TypeAdapter
 

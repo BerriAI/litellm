@@ -12,7 +12,7 @@ from integration._support.bedrock_runtime_peer import answer, respond, target_of
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.sigv4 import signature
-from integration._support.wire import Request, Wire, wire_server
+from tests._support.wire import Request, Wire, wire_server
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from pydantic import JsonValue, TypeAdapter

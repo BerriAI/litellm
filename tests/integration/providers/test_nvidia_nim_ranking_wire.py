@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 MODEL: Final = "nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2"
 QUERY: Final = "which passage shows the gateway diagram"

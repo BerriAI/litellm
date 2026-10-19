@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Final, Literal, Protocol, cast
 
 import pytest
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 import litellm

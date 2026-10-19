@@ -9,7 +9,7 @@ import psycopg
 import pytest
 from integration._support.client import Gateway, delete_key_if_present, eventually, string_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from psycopg import sql
 
 

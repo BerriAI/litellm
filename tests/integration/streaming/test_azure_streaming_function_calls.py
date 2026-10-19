@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Final
 
 from integration._support.client import JSON_OBJECT, Gateway, eventually, list_value, object_value
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 from redis import Redis
 

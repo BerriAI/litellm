@@ -21,7 +21,7 @@ from typing import Final
 import httpx
 from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from integration.security._canary import Canary, find_canary
 from integration.security._sinks import PROVIDER_4XX, Recorder
 from pydantic import JsonValue

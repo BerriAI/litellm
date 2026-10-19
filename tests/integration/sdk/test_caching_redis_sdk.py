@@ -10,7 +10,7 @@ import pytest
 import redis
 import respx
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 import litellm
 from litellm import Router, acompletion, aembedding, completion

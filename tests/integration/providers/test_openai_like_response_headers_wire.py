@@ -15,7 +15,7 @@ from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.prometheus_series import Sample, scrape, series_cap_config
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
 from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter

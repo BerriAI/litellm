@@ -20,7 +20,7 @@ from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, Scenario, gateway_from_environment, until_asserted
 from integration._support.process import owned_proxy
 from integration._support.prometheus_series import Sample, scrape
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 _GPT: Final = "prometheus-shared-label-gpt"
