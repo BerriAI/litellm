@@ -12,6 +12,8 @@ pub enum LlmProviders {
     Anthropic,
     #[strum(serialize = "aws_textract")]
     AwsTextract,
+    #[strum(serialize = "azure")]
+    Azure,
     #[strum(serialize = "azure_ai")]
     AzureAi,
     #[strum(serialize = "bedrock")]
