@@ -22,6 +22,7 @@ from litellm.constants import (
     MAX_ITERATIONS_TO_CLEAR_QUEUE,
     MAX_TIME_TO_CLEAR_QUEUE,
 )
+from litellm.litellm_core_utils.hook_pairing import end_queued_async_runs
 
 _CALLBACK_DEADLINE: Final[contextvars.ContextVar[float | None]] = contextvars.ContextVar(
     "logging_callback_deadline", default=None
@@ -591,7 +592,15 @@ class LoggingWorker:
             # Silently ignore logging errors to prevent breaking shutdown
             pass
 
-    def _flush_on_exit(self):
+    def _flush_on_exit(self) -> None:
+        """Runs the remaining events before process exit, then ends the async runs it could not start, so the sync
+        hooks they held back still run."""
+        try:
+            self._run_remaining_on_exit()
+        finally:
+            end_queued_async_runs()
+
+    def _run_remaining_on_exit(self):
         """
         Flush remaining events synchronously before process exit.
         Called automatically via atexit handler.

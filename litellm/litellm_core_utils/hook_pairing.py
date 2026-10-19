@@ -72,11 +72,15 @@ class HookPairing:
     def async_run(self, coroutine: Coroutine[object, object, None]) -> Coroutine[object, object, None]:
         """Returns the async run's ``coroutine``, set to end the async run once it is discarded, so held hooks still run
         when a full or stopping logging queue drops it before it starts. Interpreter exit leaves a still-queued run to
-        the logging worker's exit flush."""
+        the logging worker's exit flush, which ends the runs it could not start with ``end_queued_async_runs``."""
+        with _queued_async_runs_lock:
+            _queued_async_runs.add(self)
         weakref.finalize(coroutine, self.end_async_run).atexit = False
         return coroutine
 
     def end_async_run(self) -> None:
+        with _queued_async_runs_lock:
+            _queued_async_runs.discard(self)
         with self._lock:
             self._async_run_ended = True
             unreached: Final = self._take_unreached()
@@ -89,6 +93,18 @@ class HookPairing:
         unreached: Final = tuple(self._held.values())
         self._held = {}
         return unreached
+
+
+_queued_async_runs: Final[weakref.WeakSet[HookPairing]] = weakref.WeakSet()
+_queued_async_runs_lock: Final = threading.Lock()
+
+
+def end_queued_async_runs() -> None:
+    """Ends every async run handed to ``async_run`` that has not ended, for when nothing will run them any more."""
+    with _queued_async_runs_lock:
+        queued: Final = tuple(_queued_async_runs)
+    for hook_pairing in queued:
+        hook_pairing.end_async_run()
 
 
 def sync_run(hook_pairing: HookPairing | None) -> contextlib.AbstractContextManager[None]:

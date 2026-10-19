@@ -107,6 +107,44 @@ def test_async_run_still_queued_at_exit_is_left_to_the_exit_flush() -> None:
     assert completed.stdout.split() == ["async_hook"]
 
 
+@pytest.mark.parametrize(("seconds_to_clear_queue", "expected"), [(0, ["sync_hook"]), (5, ["async_hook"])])
+def test_async_run_the_exit_flush_cannot_start_still_runs_the_held_hook(
+    seconds_to_clear_queue: int, expected: list[str]
+) -> None:
+    script: Final = textwrap.dedent(
+        f"""
+        import asyncio
+
+        from litellm.litellm_core_utils import logging_worker
+        from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_now
+
+        logging_worker.MAX_TIME_TO_CLEAR_QUEUE = {seconds_to_clear_queue}
+        logger = object()
+        pairing = HookPairing(run_held_hook_now)
+
+
+        async def async_run():
+            pairing.reach(logger)
+            print("async_hook")
+            pairing.end_async_run()
+
+
+        async def main():
+            with pairing.sync_run():
+                pairing.hold(logger, lambda: print("sync_hook"))
+            logging_worker.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(pairing.async_run(async_run()))
+
+
+        asyncio.run(main())
+        """
+    )
+
+    completed: Final = run_child_interpreter(script, timeout=120)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.split() == expected
+
+
 def test_async_run_reaching_one_logger_leaves_another_loggers_held_hook_to_run() -> None:
     ran: Final[list[str]] = []
     reached: Final = _Logger()

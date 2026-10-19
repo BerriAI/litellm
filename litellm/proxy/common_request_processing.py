@@ -2907,6 +2907,16 @@ class ProxyBaseLLMRequestProcessing:
                 responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
             else:
                 responses = await llm_responses
+        except BaseException:
+            try:
+                await _cancel_pending_gather_tasks(tasks)
+            finally:
+                # a during_call guardrail can raise after the LLM call parked its deferred success
+                ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+                    logging_obj=logging_obj,
+                    exception_raised=True,
+                )
+            raise
         finally:
             await _cancel_pending_gather_tasks(tasks)
 
@@ -3864,7 +3874,8 @@ class ProxyBaseLLMRequestProcessing:
         Called from the finally block around post_call_success_hook so the
         StandardLoggingPayload is built after post-call guardrails write to
         metadata (deferred logging is enabled for non-streaming requests with
-        a registered post_call guardrail).
+        a registered post_call guardrail), and as an exception when the LLM
+        call's gather with the during_call guardrails raises.
 
         On exception (e.g. a post-call guardrail blocks the response), skip
         firing the closure — the exception propagates to post_call_failure_hook
