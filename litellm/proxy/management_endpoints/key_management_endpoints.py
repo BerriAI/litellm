@@ -3432,6 +3432,8 @@ async def _validate_update_key_data(
     #   enforcement.
     _is_budget_change: Final = (
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
+        or (data.budget_duration is not None and data.budget_duration != existing_key_row.budget_duration)
+        or (data.budget_id is not None and data.budget_id != getattr(existing_key_row, "budget_id", None))
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
         or "soft_budget" in data.model_fields_set
