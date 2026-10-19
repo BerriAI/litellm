@@ -113,6 +113,31 @@ def test_hosted_vllm_supports_thinking():
     )
     assert optional_params["reasoning_effort"] == "low"
 
+    # Test output_config.effort is mapped to reasoning_effort
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "low"},
+        },
+        optional_params={},
+        model="hosted_vllm/GLM-4.6-FP8",
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert "output_config" not in optional_params
+    assert optional_params["reasoning_effort"] == "low"
+
+    # Test adaptive thinking with effort inside thinking dict
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive", "effort": "max"},
+        },
+        optional_params={},
+        model="hosted_vllm/GLM-4.6-FP8",
+        drop_params=False,
+    )
+    assert optional_params["reasoning_effort"] == "max"
+
 
 def test_hosted_vllm_reasoning_content_kept_and_thinking_blocks_removed():
     """
