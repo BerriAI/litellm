@@ -369,16 +369,16 @@ class TestProxyInitializationHelpers:
         assert config_file.resolve() in yielded_paths
 
     def test_dev_env_hot_reload_enabled_reads_flag(self, monkeypatch):
-        import litellm
+        from litellm._process_defaults import _dev_env_hot_reload_enabled
 
         monkeypatch.setenv("LITELLM_DEV_ENV_HOT_RELOAD", "True")
-        assert litellm._dev_env_hot_reload_enabled() is True
+        assert _dev_env_hot_reload_enabled() is True
 
         monkeypatch.setenv("LITELLM_DEV_ENV_HOT_RELOAD", "false")
-        assert litellm._dev_env_hot_reload_enabled() is False
+        assert _dev_env_hot_reload_enabled() is False
 
         monkeypatch.delenv("LITELLM_DEV_ENV_HOT_RELOAD", raising=False)
-        assert litellm._dev_env_hot_reload_enabled() is False
+        assert _dev_env_hot_reload_enabled() is False
 
     @patch("asyncio.run")
     @patch("builtins.print")
@@ -525,6 +525,12 @@ class TestProxyInitializationHelpers:
         # Test on Linux
         with patch("sys.platform", "linux"):
             assert ProxyInitializationHelpers._get_loop_type() == "uvloop"
+
+    @pytest.mark.parametrize(("env_value", "expected"), [("asyncio", "asyncio"), ("uvloop", "uvloop"), ("", "uvloop")])
+    def test_get_loop_type_honors_litellm_event_loop_env(self, env_value: str, expected: str, monkeypatch) -> None:
+        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setenv("LITELLM_EVENT_LOOP", env_value)
+        assert ProxyInitializationHelpers._get_loop_type() == expected
 
     def test_selected_loop_factory_imports_on_this_interpreter(self):
         loop_type = ProxyInitializationHelpers._get_loop_type()

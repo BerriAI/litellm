@@ -106,7 +106,7 @@ class _OptionalCliContextObjView(Protocol):
     def obj(self) -> CliContextObj | None: ...
 
 
-def _cli_context_obj(view: _CliContextObjView) -> CliContextObj:
+def cli_context_obj(view: _CliContextObjView) -> CliContextObj:
     return view.obj
 
 
@@ -191,26 +191,26 @@ def storage_notice(outcome: SecretSave) -> str:
             )
 
 
-def keychain_unreadable_notice(vault: SecretVault) -> str:
+def keychain_unreadable_notice(vault: SecretVault, login_command: str = "lite login") -> str:
     """Explain why the secret half of a stored login cannot be produced, and what fixes it"""
     match vault.read():
         case KeyringNotInstalled():
             return (
                 "Your credential is in your OS keychain, which this install cannot read without the "
-                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run 'lite login' to start over."
+                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run '{login_command}' to start over."
             )
         case KeyringDisabled():
             return (
                 f"Your credential is in your OS keychain, which {DISABLE_KEYRING_ENV_VAR} is blocking. "
-                "Unset it, or run 'lite login' to start over."
+                f"Unset it, or run '{login_command}' to start over."
             )
         case KeyringUnreachable():
             return (
                 "Your credential is in your OS keychain, which could not be read. Unlock it, or run "
-                "'lite login' to start over."
+                f"'{login_command}' to start over."
             )
         case SecretFound() | SecretMissing():
-            return "Your credential could not be read from your OS keychain. Run 'lite login' to start over."
+            return f"Your credential could not be read from your OS keychain. Run '{login_command}' to start over."
 
 
 def context_secret_vault(ctx: click.Context) -> SecretVault:
@@ -898,7 +898,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
-    ctx_obj: Final = _cli_context_obj(ctx)
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     if config_claude:
         settings_path: Final = claude_settings_path(os.environ)
@@ -1048,7 +1048,7 @@ def print_token(ctx: click.Context):
     # explicitly pointed us at a server, trust whichever one `lite login`
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
-    ctx_obj: Final = _cli_context_obj(ctx)
+    ctx_obj: Final = cli_context_obj(ctx)
     issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
     if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
         click.echo("Not authenticated for this server. Run 'lite login'.", err=True)

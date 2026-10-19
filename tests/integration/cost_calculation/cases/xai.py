@@ -19,7 +19,6 @@ XAI_GROK_4_7_STREAM: Final = CostTrackingTestCase(
     name="xai-grok-4.7-stream",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
     model="xai/grok-4.7",
-    known_bug="streamed xai responses bill the right total but the spend row splits it as input_cost 0 and output_cost = total: _stamp_streaming_usage_cost writes the stream total onto usage.cost and litellm/llms/xai/cost_calculator.py::cost_per_token reads usage.cost as an xAI reported price",
     endpoint="/v1/chat/completions",
     request={
         "model": "$MODEL",
@@ -67,6 +66,7 @@ XAI_GROK_4_7_STREAM: Final = CostTrackingTestCase(
                 "usage": {
                     "prompt_tokens": 1840,
                     "completion_tokens": 412,
+                    "cost_in_usd_ticks": 48600000,
                     "total_tokens": 2252,
                     "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
                     "completion_tokens_details": {
@@ -83,7 +83,7 @@ XAI_GROK_4_7_STREAM: Final = CostTrackingTestCase(
         ),
     ),
     expected=ExactExpected(
-        spend=0.006152, input_cost=0.00368, output_cost=0.002472, prompt_tokens=1840, completion_tokens=412
+        spend=0.00486, input_cost=0.002907282, output_cost=0.001952718, prompt_tokens=1840, completion_tokens=412
     ),
 )
 
@@ -148,6 +148,7 @@ XAI_GROK_4_7_TOOL_CALL: Final = CostTrackingTestCase(
             "usage": {
                 "prompt_tokens": 1840,
                 "completion_tokens": 412,
+                "cost_in_usd_ticks": 61520000,
                 "total_tokens": 2252,
                 "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
                 "completion_tokens_details": {
@@ -200,6 +201,7 @@ XAI_GROK_4_7_REASONING: Final = CostTrackingTestCase(
             "usage": {
                 "prompt_tokens": 1840,
                 "completion_tokens": 412,
+                "cost_in_usd_ticks": 61520000,
                 "total_tokens": 2252,
                 "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
                 "completion_tokens_details": {
@@ -224,6 +226,7 @@ XAI_GROK_4_7_CACHE_READ: Final = with_usage(
     {
         "prompt_tokens": 1840,
         "completion_tokens": 412,
+        "cost_in_usd_ticks": 51920000,
         "total_tokens": 2252,
         "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 640},
         "completion_tokens_details": {
@@ -242,6 +245,7 @@ XAI_GROK_4_7_TIERED_INPUT_ABOVE_200K: Final = with_usage(
     {
         "prompt_tokens": 300000,
         "completion_tokens": 412,
+        "cost_in_usd_ticks": 12049440000,
         "total_tokens": 300412,
         "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
         "completion_tokens_details": {
@@ -260,6 +264,7 @@ XAI_GROK_4_7_TIERED_CACHE_READ_ABOVE_200K: Final = with_usage(
     {
         "prompt_tokens": 300000,
         "completion_tokens": 412,
+        "cost_in_usd_ticks": 6049440000,
         "total_tokens": 300412,
         "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
         "completion_tokens_details": {
@@ -278,6 +283,7 @@ XAI_GROK_4_7_TIERED_AT_200K_BOUNDARY: Final = with_usage(
     {
         "prompt_tokens": 200000,
         "completion_tokens": 412,
+        "cost_in_usd_ticks": 8049440000,
         "total_tokens": 200412,
         "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
         "completion_tokens_details": {

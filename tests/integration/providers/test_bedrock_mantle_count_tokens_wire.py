@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -23,6 +22,7 @@ from integration._support.bedrock_runtime_peer import respond as runtime_generat
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
     ASSISTANT,
     FOLLOW_UP,
@@ -181,19 +181,13 @@ def _mantle_environment(port: int) -> Mapping[str, str]:
 _INHERITED_BEARER: Final = ("AWS_BEARER_TOKEN_BEDROCK",)
 
 
-def _reserved_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 def _closed_port_url() -> str:
-    return f"http://127.0.0.1:{_reserved_port()}"
+    return f"http://127.0.0.1:{allocate_port()}"
 
 
 @pytest.fixture(scope="module")
 def mantle_port() -> int:
-    return _reserved_port()
+    return allocate_port()
 
 
 @pytest.fixture(scope="module")
@@ -384,7 +378,7 @@ def test_messages_count_tokens_counts_through_mantle_when_the_runtime_cannot(
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = _count(gateway, {**_bare(model), "system": system, "tools": _TOOLS})
-        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
         assert _runtime_count_targets(runtime) == (f"/model/{_OPUS_BASE}/count-tokens",)
         assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
 
@@ -400,7 +394,7 @@ def test_messages_count_tokens_without_system_or_tools_sends_a_bare_body_to_mant
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = _count(gateway, _bare(model))
-        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_MANTLE_BARE,)
 
@@ -435,7 +429,11 @@ def test_gemini_count_tokens_route_reports_the_mantle_total(counting_proxy: Owne
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = gateway.request("POST", f"/v1beta/models/{model}:countTokens", _GEMINI_BODY)
-        assert _payload(response) == {"totalTokens": _MANTLE_COUNT, "promptTokensDetails": []}, response.text
+        assert _payload(response) == {
+            "totalTokens": _MANTLE_COUNT,
+            "promptTokensDetails": [],
+            "litellm_count_source": "provider",
+        }, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == ({"model": _OPUS_BASE, "messages": _GEMINI_MESSAGES},)
 
@@ -451,9 +449,155 @@ def test_gemini_count_tokens_route_reports_the_runtime_total_for_a_model_bedrock
     ):
         model: Final = _deployment(scenario, runtime.url, _SONNET)
         response: Final = gateway.request("POST", f"/v1beta/models/{model}:countTokens", _GEMINI_BODY)
-        assert _payload(response) == {"totalTokens": _RUNTIME_COUNT, "promptTokensDetails": []}, response.text
+        assert _payload(response) == {
+            "totalTokens": _RUNTIME_COUNT,
+            "promptTokensDetails": [],
+            "litellm_count_source": "provider",
+        }, response.text
         assert _runtime_count_targets(runtime) == (f"/model/{_SONNET}/count-tokens",)
         assert mantle.drain() == ()
+
+
+def test_runtime_404_on_claude_falls_back_to_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
+    gateway: Final = counting_proxy.gateway
+    system: Final = f"{_SYSTEM} status=404"
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = _count(gateway, {**_bare(model), "system": system, "tools": _TOOLS})
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
+
+
+def test_runtime_404_and_mantle_404_surface_provider_error(counting_proxy: OwnedProxy, mantle_port: int) -> None:
+    gateway: Final = counting_proxy.gateway
+    system: Final = f"{_SYSTEM} status=404"
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(_rejecting(404)), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = _count(gateway, {**_bare(model), "system": system, "tools": _TOOLS})
+        assert response.status_code == 404, response.text
+        assert _REJECTION in response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
+
+
+def test_runtime_404_on_nova_does_not_call_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url, _NOVA)
+        body: Final = {**_bare(model), "messages": [{"role": "user", "content": "status=404"}]}
+        response: Final = _count(gateway, body)
+        assert response.status_code == 404, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert mantle.drain() == ()
+
+
+def test_google_count_tokens_forwards_system_and_tools_to_mantle(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    system_text: Final = "Use the provided tool"
+    tool_schema: Final = {"type": "object", "properties": {"location": {"type": "string"}}}
+    body: Final[dict[str, JsonValue]] = {
+        "contents": [{"role": "user", "parts": [{"text": "status=404"}]}],
+        "systemInstruction": {"parts": [{"text": system_text}]},
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {"name": "get_weather", "description": "Look up weather", "parameters": tool_schema}
+                ]
+            }
+        ],
+    }
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = gateway.request("POST", f"/v1beta/models/{model}:countTokens", body)
+        assert _payload(response) == {
+            "totalTokens": _MANTLE_COUNT,
+            "promptTokensDetails": [],
+            "litellm_count_source": "provider",
+        }, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (
+            _mantle_body(
+                messages=[{"role": "user", "content": "status=404"}],
+                system=[{"type": "text", "text": system_text}],
+                tools=[
+                    {
+                        "name": "get_weather",
+                        "description": "Look up weather",
+                        "input_schema": tool_schema,
+                    }
+                ],
+            ),
+        )
+
+
+def test_google_count_tokens_normalizes_uppercase_parameters_for_mantle(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    body: Final[dict[str, JsonValue]] = {
+        "contents": [{"role": "user", "parts": [{"text": "status=404"}]}],
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "get_weather",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {"location": {"type": "STRING"}},
+                            "required": ["location"],
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = gateway.request("POST", f"/v1beta/models/{model}:countTokens", body)
+        assert _payload(response) == {
+            "totalTokens": _MANTLE_COUNT,
+            "promptTokensDetails": [],
+            "litellm_count_source": "provider",
+        }, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (
+            _mantle_body(
+                messages=[{"role": "user", "content": "status=404"}],
+                tools=[
+                    {
+                        "name": "get_weather",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    }
+                ],
+            ),
+        )
 
 
 def test_responses_input_tokens_counts_through_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
@@ -467,7 +611,11 @@ def test_responses_input_tokens_counts_through_mantle(counting_proxy: OwnedProxy
         response: Final = gateway.request(
             "POST", "/v1/responses/input_tokens", {"model": model, "input": "Count this message"}
         )
-        assert _payload(response) == {"object": "response.input_tokens", "input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {
+            "object": "response.input_tokens",
+            "input_tokens": _MANTLE_COUNT,
+            "litellm_count_source": "provider",
+        }, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_MANTLE_BARE,)
 
@@ -512,7 +660,10 @@ def test_model_the_runtime_counts_never_reaches_mantle(counting_proxy: OwnedProx
         gateway.scenario() as scenario,
     ):
         model: Final = _deployment(scenario, runtime.url, _SONNET)
-        assert _payload(_count(gateway, _full(model))) == {"input_tokens": _RUNTIME_COUNT}
+        assert _payload(_count(gateway, _full(model))) == {
+            "input_tokens": _RUNTIME_COUNT,
+            "litellm_count_source": "provider",
+        }
         detailed: Final = gateway.request(
             "POST", "/utils/token_counter", _full(model), params={"call_endpoint": "true"}
         )
@@ -600,7 +751,11 @@ def test_responses_input_tokens_with_instructions_counts_through_mantle(
             "/v1/responses/input_tokens",
             {"model": model, "input": "Count this message", "instructions": "Be terse"},
         )
-        assert _payload(response) == {"object": "response.input_tokens", "input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {
+            "object": "response.input_tokens",
+            "input_tokens": _MANTLE_COUNT,
+            "litellm_count_source": "provider",
+        }, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_mantle_body(system=[{"type": "text", "text": "Be terse"}]),)
 
@@ -617,7 +772,7 @@ def test_messages_count_tokens_lifts_the_leading_system_run_for_mantle(
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = _count(gateway, count_request(model, case))
-        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (expected_count_body(_OPUS_BASE, case),)
 
@@ -730,7 +885,11 @@ def test_responses_input_tokens_lifts_instructions_ahead_of_a_leading_system_ite
             "/v1/responses/input_tokens",
             {"model": model, "input": [MID_SYSTEM, USER], "instructions": INSTRUCTION},
         )
-        assert _payload(response) == {"object": "response.input_tokens", "input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {
+            "object": "response.input_tokens",
+            "input_tokens": _MANTLE_COUNT,
+            "litellm_count_source": "provider",
+        }, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_mantle_body(system=[LIFTED, {"type": "text", "text": REMINDER}]),)
 
@@ -746,7 +905,7 @@ def test_messages_count_tokens_forwards_tools_beside_the_lifted_system_to_mantle
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = _count(gateway, {**count_request(model, STRING_CASE), "tools": _TOOLS})
-        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_mantle_body(system=[LIFTED], tools=_TOOLS),)
 
@@ -766,7 +925,7 @@ def test_messages_count_tokens_keeps_a_mid_conversation_system_in_place_for_mant
             "messages": [LEADING, USER, MID_SYSTEM, ASSISTANT, FOLLOW_UP],
         }
         response: Final = _count(gateway, body)
-        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (
             _mantle_body(messages=[USER, MID_SYSTEM, ASSISTANT, FOLLOW_UP], system=[LIFTED]),
@@ -819,7 +978,7 @@ def test_messages_count_tokens_repeated_request_lifts_the_leading_system_each_ti
     ):
         model: Final = _deployment(scenario, runtime.url)
         answers: Final = tuple(_payload(_count(gateway, count_request(model, STRING_CASE))) for _ in range(2))
-        assert answers == ({"input_tokens": _MANTLE_COUNT},) * 2
+        assert answers == ({"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"},) * 2
         assert _runtime_count_targets(runtime) == (f"/model/{_OPUS_BASE}/count-tokens",) * 2
         assert _mantle_bodies(mantle) == (_MANTLE_LIFTED,) * 2
 
@@ -840,7 +999,9 @@ def test_messages_count_tokens_surfaces_the_counting_error_for_a_leading_system_
         assert "input_tokens" not in response.text, response.text
         assert mantle.drain() == ()
         follow_up: Final = _count(gateway, count_request(model, STRING_CASE))
-        assert _payload(follow_up) == {"input_tokens": _MANTLE_COUNT}, follow_up.text
+        assert _payload(follow_up) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, (
+            follow_up.text
+        )
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_MANTLE_LIFTED,)
 
@@ -862,7 +1023,7 @@ def test_messages_count_tokens_duplicate_messages_key_lifts_the_last_value_for_m
             content=f'{{"model": "{model}", "messages": {first}, "messages": {last}}}',
             headers={"Authorization": f"Bearer {gateway.key}", "Content-Type": "application/json"},
         )
-        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_MANTLE_LIFTED,)
 
@@ -887,7 +1048,9 @@ def test_disabled_token_counter_counts_a_leading_system_through_mantle(
         )
         with wire_server(_mantle(_strict), port=mantle_port) as strict:
             counted: Final = _count(owned.gateway, count_request(_OWNED_OPUS, STRING_CASE))
-            assert _payload(counted) == {"input_tokens": _MANTLE_COUNT}, counted.text
+            assert _payload(counted) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, (
+                counted.text
+            )
             assert _mantle_bodies(strict) == (_MANTLE_LIFTED,)
         assert len(_runtime_count_targets(runtime)) == 1
 
@@ -1033,8 +1196,8 @@ def test_messages_count_tokens_rejects_malformed_tools_without_calling_either_pe
     ):
         model: Final = _deployment(scenario, runtime.url)
         refused: Final = _count(gateway, {**_bare(model), "tools": tools})
-        assert 400 <= refused.status_code < 600, refused.text
-        assert "input_tokens" not in refused.text, refused.text
+        assert refused.status_code == 400, refused.text
+        assert object_value(_JSON_OBJECT.validate_json(refused.content)["error"])["type"] == "invalid_request_error"
         assert runtime.drain() == () and mantle.drain() == ()
         assert _generated_then_counted(gateway.client, gateway.key, model, _bare(model)) == (200, 200, _MANTLE_COUNT)
         assert _mantle_bodies(mantle) == (_MANTLE_BARE,)
@@ -1057,8 +1220,13 @@ def test_messages_count_tokens_without_messages_is_rejected(
         assert runtime.drain() == () and mantle.drain() == ()
 
 
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"tools": 5}, {"web_search_options": None}],
+    ids=["well_formed", "int_tools", "null_web_search_options"],
+)
 def test_messages_count_tokens_unauthenticated_request_never_reaches_either_peer(
-    counting_proxy: OwnedProxy, mantle_port: int
+    counting_proxy: OwnedProxy, mantle_port: int, fields: dict[str, JsonValue]
 ) -> None:
     gateway: Final = counting_proxy.gateway
     with (
@@ -1068,7 +1236,7 @@ def test_messages_count_tokens_unauthenticated_request_never_reaches_either_peer
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = gateway.request(
-            "POST", "/v1/messages/count_tokens", _full(model), key="sk-not-a-key-this-proxy-issued"
+            "POST", "/v1/messages/count_tokens", {**_full(model), **fields}, key="sk-not-a-key-this-proxy-issued"
         )
         assert response.status_code == 401, response.text
         assert "input_tokens" not in response.text, response.text
@@ -1087,7 +1255,7 @@ def test_messages_count_tokens_forwards_a_5kb_system_verbatim_to_mantle(
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = _count(gateway, {**_bare(model), "system": system})
-        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_mantle_body(system=system),)
 
@@ -1108,7 +1276,7 @@ def test_messages_count_tokens_duplicate_system_and_tools_keys_forward_one_value
             content=f'{{"model": "{model}", "messages": {json.dumps(_MESSAGES)}, {fields}, {fields}}}',
             headers={"Authorization": f"Bearer {gateway.key}", "Content-Type": "application/json"},
         )
-        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         (sent,) = mantle.drain()
         assert _mantle_requests((sent,)) == (_MANTLE_FULL,)
@@ -1126,7 +1294,7 @@ def test_messages_count_tokens_leaves_empty_tools_and_system_out_of_the_mantle_b
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = _count(gateway, {**_bare(model), "tools": [], "system": ""})
-        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"}, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_MANTLE_BARE,)
 
@@ -1142,7 +1310,7 @@ def test_messages_count_tokens_repeated_request_reaches_both_peers_each_time(
     ):
         model: Final = _deployment(scenario, runtime.url)
         answers: Final = tuple(_payload(_count(gateway, _bare(model))) for _ in range(2))
-        assert answers == ({"input_tokens": _MANTLE_COUNT},) * 2
+        assert answers == ({"input_tokens": _MANTLE_COUNT, "litellm_count_source": "provider"},) * 2
         assert _runtime_count_targets(runtime) == (f"/model/{_OPUS_BASE}/count-tokens",) * 2
         assert _mantle_bodies(mantle) == (_MANTLE_BARE,) * 2
 
@@ -1171,9 +1339,15 @@ def test_disabled_token_counter_surfaces_the_mantle_error_instead_of_counting_lo
             assert _REJECTION in refused.text and "input_tokens" not in refused.text, refused.text
             assert _mantle_bodies(refusing) == (_MANTLE_FULL,)
         with wire_server(_mantle(), port=mantle_port) as counting:
-            assert _payload(_count(owned.gateway, _full(_OWNED_OPUS))) == {"input_tokens": _MANTLE_COUNT}
+            assert _payload(_count(owned.gateway, _full(_OWNED_OPUS))) == {
+                "input_tokens": _MANTLE_COUNT,
+                "litellm_count_source": "provider",
+            }
             assert _mantle_bodies(counting) == (_MANTLE_FULL,)
-            assert _payload(_count(owned.gateway, _full(_OWNED_SONNET))) == {"input_tokens": _RUNTIME_COUNT}
+            assert _payload(_count(owned.gateway, _full(_OWNED_SONNET))) == {
+                "input_tokens": _RUNTIME_COUNT,
+                "litellm_count_source": "provider",
+            }
             rejected: Final = _count(owned.gateway, _full(_OWNED_NOVA))
             assert rejected.status_code == 400, rejected.text
             assert _UNSUPPORTED in rejected.text and "input_tokens" not in rejected.text, rejected.text

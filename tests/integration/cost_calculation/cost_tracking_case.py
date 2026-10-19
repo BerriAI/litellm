@@ -9,6 +9,7 @@ from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 PRIOR_RESPONSE_ID_MARKER: Final = "$PRIOR_RESPONSE_ID"
+ALIAS_MARKER: Final = "$MARKER"
 
 
 class SearchContextCostPerQuery(BaseModel):
@@ -47,6 +48,7 @@ class CostMapEntry(BaseModel):
     supports_reasoning: bool | None = None
     supports_prompt_caching: bool | None = None
     supported_endpoints: tuple[str, ...] | None = None
+    use_openai_responses_path: bool | None = None
     supports_bedrock_runtime_chat_completions_tools_with_reasoning: bool | None = None
     supports_bedrock_runtime_chat_completions_response_format: bool | None = None
     cache_creation_input_token_cost_above_100k_tokens: float | None = None
@@ -106,11 +108,41 @@ class CostMapEntry(BaseModel):
     output_cost_per_token_flex: float | None = None
     input_cost_per_token_priority: float | None = None
     output_cost_per_token_priority: float | None = None
+    input_cost_per_token_ultrafast: float | None = None
+    output_cost_per_token_ultrafast: float | None = None
+    input_cost_per_token_above_272k_tokens_ultrafast: float | None = None
+    output_cost_per_token_above_272k_tokens_ultrafast: float | None = None
+    input_cost_per_token_above_200k_tokens_priority: float | None = None
+    output_cost_per_token_above_200k_tokens_priority: float | None = None
+    cache_read_input_token_cost_flex: float | None = None
+    cache_read_input_token_cost_priority: float | None = None
+    cache_read_input_token_cost_ultrafast: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_ultrafast: float | None = None
+    cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
+    cache_creation_input_token_cost_flex: float | None = None
+    cache_creation_input_token_cost_priority: float | None = None
+    cache_creation_input_token_cost_ultrafast: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_priority: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_ultrafast: float | None = None
     search_context_cost_per_query: SearchContextCostPerQuery | None = None
     web_search_billing_unit: str | None = None
     google_maps_grounding_cost_per_query: float | None = None
     file_search_cost_per_1k_calls: float | None = None
     provider_specific_entry: ProviderSpecificEntry | None = None
+
+
+class OffPeakPricing(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    hours_utc: str
+    input_cost_per_token: float
+    output_cost_per_token: float
+
+
+ALWAYS_OPEN_OFF_PEAK_WINDOW: Final = "00:00-00:00"
 
 
 class Deployment(BaseModel):
@@ -121,6 +153,7 @@ class Deployment(BaseModel):
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     search_cost_per_query: float | None = None
+    off_peak_pricing: OffPeakPricing | None = None
 
 
 class WavUpload(BaseModel):
@@ -203,6 +236,8 @@ class RealtimeResponse(BaseModel):
     session_type: str | None = None
     created_event: Literal["session.created", "transcription_session.created"] = "session.created"
     created_repeats: int = 1
+    created_after_first_frame: bool = False
+    dialect: Literal["openai", "xai"] = "openai"
 
 
 StoredResponse: TypeAlias = Annotated[
@@ -267,6 +302,7 @@ class CostTrackingTestCase(BaseModel):
     covers: str
     known_bug: str | None = None
     model: str
+    alias: str | None = None
     endpoint: (
         Literal[
             "/v1/chat/completions",
@@ -293,6 +329,13 @@ class CostTrackingTestCase(BaseModel):
     fallback_from: StoredResponse | None = None
     disconnect_after_frames: int | None = Field(default=None, ge=1)
     upstream_body: dict[str, JsonValue] | None = None
+
+    @field_validator("alias")
+    @classmethod
+    def validate_alias(cls, value: str | None) -> str | None:
+        if value is not None and ALIAS_MARKER not in value:
+            raise ValueError(f"alias must contain {ALIAS_MARKER} so every run registers a unique model_name")
+        return value
 
     @property
     def rates(self) -> CostMapEntry:
@@ -530,8 +573,10 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
         "deepgram": "deepgram",
         "text-completion-openai": "text-completion-openai",
         "cohere": "cohere",
+        "vertex_ai": "vertex_ai",
         "vertex_ai-language-models": "vertex_ai",
         "vertex_ai-image-models": "vertex_ai",
+        "vertex_ai-anthropic_models": "vertex_ai",
         "vertex_ai-embedding-models": "vertex_ai",
         "gemini": "",
         "together_ai": "",
@@ -578,10 +623,16 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "deepgram": MappingProxyType({}),
         "text-completion-openai": MappingProxyType({}),
         "cohere": MappingProxyType({}),
+        "vertex_ai": MappingProxyType(
+            {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
+        ),
         "vertex_ai-language-models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
         ),
         "vertex_ai-image-models": MappingProxyType(
+            {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
+        ),
+        "vertex_ai-anthropic_models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
         ),
         "vertex_ai-embedding-models": MappingProxyType(
@@ -629,3 +680,32 @@ def with_usage(
             "expected": expected,
         }
     )
+
+
+def with_response_usage(
+    base: CostTrackingTestCase,
+    name: str,
+    usage: Mapping[str, JsonValue],
+    expected: Expected,
+    choice_updates: Mapping[str, JsonValue] | None = None,
+) -> CostTrackingTestCase:
+    if not isinstance(base.response, JsonResponse):
+        raise TypeError(f"{base.name}: with_response_usage needs a JsonResponse base")
+    body: Final = {**base.response.body, "usage": dict(usage)}
+    response_body: Final = _with_choice_updates(body, choice_updates) if choice_updates is not None else body
+    return base.model_copy(
+        update={
+            "name": name,
+            "response": base.response.model_copy(update={"body": response_body}),
+            "expected": expected,
+        }
+    )
+
+
+def _with_choice_updates(
+    body: Mapping[str, JsonValue], choice_updates: Mapping[str, JsonValue]
+) -> dict[str, JsonValue]:
+    choices: Final = body.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise TypeError("stored body has no choice object")
+    return {**body, "choices": [{**choices[0], **choice_updates}, *choices[1:]]}
