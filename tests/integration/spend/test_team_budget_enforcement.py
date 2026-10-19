@@ -50,7 +50,7 @@ def exhausted(gateway: Gateway) -> Iterator[ExhaustedTeam]:
             seconds=70,
         )
         eventually(lambda: _chat(gateway, model, key), lambda response: response.status_code != 200, seconds=30)
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         yield ExhaustedTeam(scenario, upstream, model, team_id, key)
 
 

@@ -1,7 +1,9 @@
 import asyncio
 import re
+import sys
 import time
 from collections.abc import Mapping, Sequence
+from types import ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -294,6 +296,84 @@ async def test_find_team_with_model_access_uses_request_method_for_passthrough_a
 
     assert exc_info.value.status_code == 403
     assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
+
+class _TeamClaims(set[str]):
+    def __init__(self, claim_order: tuple[str, ...]):
+        super().__init__(claim_order)
+        self.claim_order = claim_order
+
+    def __iter__(self):
+        return iter(self.claim_order)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claim_order", [("team-a", "team-b"), ("team-b", "team-a")])
+async def test_a_jwt_in_two_teams_resolves_the_same_team_in_any_claim_order(claim_order: tuple[str, ...]):
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    teams = {team_id: LiteLLM_TeamTable(team_id=team_id, models=["gpt-4"], metadata={}) for team_id in claim_order}
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=lambda team_id, **_: teams[team_id],
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.can_team_access_model",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+            team_ids=_TeamClaims(claim_order),
+            requested_model="gpt-4",
+            route="/v1/rag/query",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert team_id == "team-a"
+    assert team_obj == teams["team-a"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stray_claim", [1, None])
+async def test_a_jwt_team_claim_with_a_non_string_entry_still_resolves_the_string_team(stray_claim: object):
+    jwt_handler: Final = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_ids_jwt_field="groups")
+    team: Final = LiteLLM_TeamTable(team_id="aa-team", models=["gpt-4"], metadata={})
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=lambda team_id, **_: {"aa-team": team}[team_id],
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.can_team_access_model",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+            team_ids=set(jwt_handler.get_team_ids_from_jwt({"groups": ["aa-team", stray_claim]})),
+            requested_model="gpt-4",
+            route="/chat/completions",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert team_id == "aa-team"
+    assert team_obj == team
 
 
 _AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
@@ -1483,8 +1563,13 @@ async def test_find_team_with_model_access_v1_messages_default_routes(monkeypatc
     [
         ("/v1/messages", True),
         ("/v1/messages/count_tokens", True),
+        ("/rag/ingest", True),
+        ("/v1/rag/ingest", True),
+        ("/rag/query", True),
+        ("/v1/rag/query", True),
         ("/v1/skills", False),
         ("/v1/skills/skill_abc123", False),
+        ("/lens", False),
     ],
 )
 def test_default_team_allowed_routes_cover_messages_but_not_skills(route, expected):
@@ -1497,6 +1582,40 @@ def test_default_team_allowed_routes_cover_messages_but_not_skills(route, expect
             litellm_proxy_roles=LiteLLM_JWTAuth(),
         )
         is expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_reports_team_route_allowlist_denial():
+    jwt_handler: Final = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=["/chat/completions"])
+    team: Final = LiteLLM_TeamTable(team_id="team-route-denied", models=["gpt-4o-mini"])
+    user_api_key_cache: Final = DualCache()
+    user_api_key_cache.set_cache(key="team_id:team-route-denied", value=team)
+    prisma_client: Final = MagicMock()
+    prisma_team_table: Final = prisma_client.db.litellm_teamtable
+    prisma_team_table.find_unique = AsyncMock()
+    proxy_server_module: Final = ModuleType("proxy_server")
+    proxy_server_module.llm_router = None
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": proxy_server_module}):
+        with pytest.raises(HTTPException) as exc_info:
+            await JWTAuthManager.find_team_with_model_access(
+                team_ids={"team-route-denied"},
+                requested_model="gpt-4o-mini",
+                route="/rag/query",
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=MagicMock(),
+            )
+
+    prisma_team_table.find_unique.assert_not_awaited()
+    assert exc_info.value.status_code == 403
+    assert (
+        exc_info.value.detail == "Team team-route-denied can access model gpt-4o-mini but route /rag/query "
+        "is not in litellm_jwtauth.team_allowed_routes"
     )
 
 
@@ -7009,6 +7128,23 @@ async def test_resolve_team_from_header_denies_aliases_of_teams_the_jwt_does_not
         "x-litellm-team-id 'no_such' does not resolve to a team id or a unique team alias in your JWT's allowed "
         "teams. Allowed team ids: ['team_a']"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stray_claim", [1, None])
+async def test_resolve_team_from_header_denies_an_unknown_team_with_403_when_the_jwt_claim_holds_a_non_string(
+    stray_claim: object,
+):
+    jwt_handler: Final = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_ids_jwt_field="groups")
+    allowed_team_ids: Final = set(jwt_handler.get_team_ids_from_jwt({"groups": ["team_a", stray_claim]}))
+
+    with pytest.raises(HTTPException) as denied:
+        await _resolve_header("no_such", allowed_team_ids, False, _team_lookup_404, _teams_by_alias({}))
+
+    assert denied.value.status_code == 403
+    assert "'no_such' does not resolve" in denied.value.detail
+    assert "'team_a'" in denied.value.detail
 
 
 @pytest.mark.asyncio
