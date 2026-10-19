@@ -254,7 +254,7 @@ test.describe("Proxy Admin - Keys", () => {
     // verify it can call /chat/completions for the model it was scoped to.
     // The mock LLM server (fixtures/mock_llm_server/server.py) replies with
     // a fixed "This is a mock response." body.
-    const apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").innerText()).trim();
+    const apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").filter({ hasText: /^sk-/ }).innerText()).trim();
     expect(apiKey).toMatch(/^sk-/);
 
     const response = await page.request.post("/chat/completions", {
