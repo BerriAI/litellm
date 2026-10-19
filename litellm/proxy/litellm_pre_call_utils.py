@@ -93,9 +93,6 @@ _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names
     {"cookie", "proxy-authorization"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
-_PROVIDER_CREDENTIAL_HEADER_NAMES: Final = frozenset(
-    {"api-key", "authorization", "ocp-apim-subscription-key", "x-api-key", "x-goog-api-key"}
-)
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
@@ -1346,22 +1343,17 @@ def _request_entries(value: object) -> tuple[object, ...]:
         return (value,)
 
 
-def _names_a_provider_credential_header(headers: object) -> bool:
-    return headers is not None and not _PROVIDER_CREDENTIAL_HEADER_NAMES.isdisjoint(
-        name.lower() for name in _request_fields(headers)
-    )
-
-
 def _caller_credential_fields(data: Mapping[str, object]) -> tuple[str, ...]:
-    """Names of the request fields that carry the caller's own provider credential: ``api_key``, and ``headers``,
-    ``extra_headers`` or a ``provider_specific_header`` entry's ``extra_headers`` that name a provider credential
-    header."""
+    """Names of the request fields through which the caller can change how the provider authenticates the call:
+    ``api_key``, ``organization``, and ``headers``, ``extra_headers`` or a ``provider_specific_header`` entry's
+    ``extra_headers`` that carry any header."""
     carried: Final = {
         "api_key": "api_key" in data,
-        "extra_headers": _names_a_provider_credential_header(data.get("extra_headers")),
-        "headers": _names_a_provider_credential_header(data.get("headers")),
+        "extra_headers": bool(_request_fields(data.get("extra_headers"))),
+        "headers": bool(_request_fields(data.get("headers"))),
+        "organization": "organization" in data,
         "provider_specific_header": any(
-            _names_a_provider_credential_header(_request_fields(entry).get("extra_headers"))
+            _request_fields(_request_fields(entry).get("extra_headers"))
             for entry in _request_entries(data.get("provider_specific_header"))
         ),
     }

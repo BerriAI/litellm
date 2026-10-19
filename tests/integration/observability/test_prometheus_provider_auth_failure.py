@@ -32,6 +32,8 @@ RECOVERS: Final = "provider-rejects-once"
 HEALTHY: Final = "provider-healthy"
 AGENT_365_GUARDRAIL: Final = f"agent-365-{RUN}"
 CALLER_OAUTH_TOKEN: Final = f"sk-ant-oat01-caller-{RUN}"
+REVOKED_GATEWAY_KEY: Final = f"revoked-gateway-key-{RUN}"
+UNKNOWN_ORGANIZATION: Final = f"org-unknown-{RUN}"
 AZURE_API_VERSION: Final = "2024-02-01"
 CALLER_AZURE_CELLS: Final = (
     ("chat", False),
@@ -86,7 +88,8 @@ REJECTED_CELLS: Final = (
     "forwarded-plain-header",
 )
 GATED_CELLS: Final = ("invalid-key", "missing-key", "expired-key", "blocked-key", "no-model-access")
-HEALTHY_CELLS: Final = (*GATED_CELLS, "healthy", "key-rpm-limit")
+CALLER_SCOPE_CELLS: Final = ("forwarded-gateway-key", "caller-organization", "forwarded-organization")
+HEALTHY_CELLS: Final = (*GATED_CELLS, *CALLER_SCOPE_CELLS, "healthy", "key-rpm-limit")
 GUARDRAIL_ROWS: Final = (
     "SELECT COALESCE(jsonb_path_query_first(metadata, "
     "'$.guardrail_information[*] ? (@.guardrail_name == $name).guardrail_status', "
@@ -133,6 +136,15 @@ class Provider:
     def __call__(self, request: Request) -> Reply:
         sent: Final = json.loads(request.body)
         model: Final = str(sent.get("model") or sent["model_id"])
+        if request.headers.get("x-portkey-api-key") == REVOKED_GATEWAY_KEY:
+            return _error(401, "Invalid gateway API key", "invalid_request_error", "invalid_api_key")
+        if request.headers.get("openai-organization") == UNKNOWN_ORGANIZATION:
+            return _error(
+                401,
+                "OpenAI-Organization header should match organization for API key",
+                "invalid_request_error",
+                "mismatched_organization",
+            )
         with self._lock:
             self._seen[model] += 1
             attempt: Final = self._seen[model]
@@ -277,9 +289,14 @@ def config(directory: Path, upstream: Wire) -> Path:
     ]
     configuration["litellm_settings"]["callbacks"] = ["prometheus"]
     configuration["litellm_settings"]["model_group_settings"] = {
-        "forward_client_headers_to_llm_api": [name("forwarded-provider-header"), name("forwarded-plain-header")]
+        "forward_client_headers_to_llm_api": [
+            name("forwarded-provider-header"),
+            name("forwarded-plain-header"),
+            name("forwarded-gateway-key"),
+        ]
     }
     configuration["general_settings"]["forward_llm_provider_auth_headers"] = True
+    configuration["general_settings"]["forward_openai_org_id"] = True
     configuration.setdefault("router_settings", {}).update({"num_retries": 0, "disable_cooldowns": True})
     path: Final = directory / "prometheus-provider-auth-failure.yaml"
     path.write_text(yaml.safe_dump(configuration))
@@ -394,6 +411,13 @@ def series_of(samples: Sequence[Sample], **labels: str) -> tuple[Sample, ...]:
         if sample.name.startswith("litellm_")
         and all(sample.labels.get(label) == value for label, value in labels.items())
     )
+
+
+def assert_kept_out_of_the_deployment_metrics(rig: Rig, cell: str) -> None:
+    samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name(cell))
+    assert {metric: values(samples, metric, model_id=identity(cell)) for metric in DEPLOYMENT_SERIES} == {
+        metric: [] for metric in DEPLOYMENT_SERIES
+    }, recorded(samples, model_id=identity(cell))
 
 
 def assert_recorded_as_a_deployment_failure(rig: Rig, cell: str, status: str, count: float = 1.0) -> None:
@@ -583,7 +607,7 @@ def test_a_provider_401_on_an_authorization_header_the_caller_sends_stays_out_of
         ("plain-provider-specific-header", "provider_specific_header"),
     ],
 )
-def test_a_provider_401_on_the_deployments_own_key_counts_when_the_caller_sends_a_plain_header(
+def test_a_provider_401_on_the_deployments_own_key_stays_out_when_the_caller_sends_a_plain_header(
     rig: Rig, cell: str, field: str
 ) -> None:
     trace: Final = f"{cell}-{uuid.uuid4().hex}"
@@ -598,7 +622,7 @@ def test_a_provider_401_on_the_deployments_own_key_counts_when_the_caller_sends_
     assert [(request.headers["authorization"], request.headers.get("x-caller-trace")) for request in reached] == [
         (f"Bearer sk-deployment-credential-{cell}", trace)
     ]
-    assert_recorded_as_a_deployment_failure(rig, cell, "401")
+    assert_kept_out_of_the_deployment_metrics(rig, cell)
 
 
 def test_a_provider_401_on_a_provider_credential_header_the_proxy_forwards_stays_out_of_the_deployment_metrics(
@@ -622,7 +646,7 @@ def test_a_provider_401_on_a_provider_credential_header_the_proxy_forwards_stays
     assert values(samples, STATE, model_id=identity("forwarded-provider-header")) == [], observed
 
 
-def test_a_provider_401_on_the_deployments_own_key_counts_when_the_proxy_forwards_a_plain_header(rig: Rig) -> None:
+def test_a_provider_401_on_the_deployments_own_key_stays_out_when_the_proxy_forwards_a_plain_header(rig: Rig) -> None:
     trace: Final = f"forwarded-plain-header-{uuid.uuid4().hex}"
     rig.upstream.drain()
     response: Final = rig.gateway.request(
@@ -635,7 +659,46 @@ def test_a_provider_401_on_the_deployments_own_key_counts_when_the_proxy_forward
     assert [
         (request.headers["authorization"], request.headers.get("x-caller-trace")) for request in rig.upstream.drain()
     ] == [("Bearer sk-deployment-credential-forwarded-plain-header", trace)]
-    assert_recorded_as_a_deployment_failure(rig, "forwarded-plain-header", "401")
+    assert_kept_out_of_the_deployment_metrics(rig, "forwarded-plain-header")
+
+
+def test_a_provider_401_on_a_gateway_key_the_proxy_forwards_stays_out_of_a_healthy_deployments_metrics(
+    rig: Rig,
+) -> None:
+    rig.upstream.drain()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": name("forwarded-gateway-key"), "messages": messages("forwarded-gateway-key")},
+        headers={"x-portkey-api-key": REVOKED_GATEWAY_KEY},
+    )
+    assert response.status_code == 401, response.text
+    assert [
+        (request.headers["authorization"], request.headers.get("x-portkey-api-key")) for request in rig.upstream.drain()
+    ] == [("Bearer sk-deployment-credential-forwarded-gateway-key", REVOKED_GATEWAY_KEY)]
+    assert_kept_out_of_the_deployment_metrics(rig, "forwarded-gateway-key")
+
+
+@pytest.mark.parametrize(
+    "cell,body,headers",
+    [
+        ("caller-organization", {"organization": UNKNOWN_ORGANIZATION}, {}),
+        ("forwarded-organization", {}, {"OpenAI-Organization": UNKNOWN_ORGANIZATION}),
+    ],
+)
+def test_a_provider_401_on_an_organization_the_caller_sends_stays_out_of_a_healthy_deployments_metrics(
+    rig: Rig, cell: str, body: dict[str, JsonValue], headers: dict[str, str]
+) -> None:
+    rig.upstream.drain()
+    response: Final = rig.gateway.request(
+        "POST", "/v1/chat/completions", {"model": name(cell), "messages": messages(cell), **body}, headers=headers
+    )
+    assert response.status_code == 401, response.text
+    assert [
+        (request.headers["authorization"], request.headers.get("openai-organization"))
+        for request in rig.upstream.drain()
+    ] == [(f"Bearer sk-deployment-credential-{cell}", UNKNOWN_ORGANIZATION)]
+    assert_kept_out_of_the_deployment_metrics(rig, cell)
 
 
 def test_a_provider_401_on_an_anthropic_deployments_own_key_is_recorded(rig: Rig) -> None:

@@ -379,7 +379,9 @@ _CALLER_CREDENTIAL_FIELDS: Final = frozenset(
 )
 
 
-_CALLER_TRANSPORT_FIELDS: Final = frozenset({"api_key", "extra_headers", "headers", "provider_specific_header"})
+_CALLER_TRANSPORT_FIELDS: Final = frozenset(
+    {"api_key", "extra_headers", "headers", "organization", "provider_specific_header"}
+)
 
 
 def _sent_a_provider_credential(caller_body: Mapping[str, object]) -> bool:
@@ -392,9 +394,9 @@ def _sent_a_provider_credential(caller_body: Mapping[str, object]) -> bool:
 
 def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
     """True when the provider was called with a credential that belongs to the caller rather than the
-    deployment: an api_key, credential header or other provider credential field the caller sent with the request,
-    the caller's own Anthropic OAuth token, the caller's own GitHub Copilot connection, or the caller's identity
-    token that a token-exchange deployment trades in on every call."""
+    deployment: an api_key, header, OpenAI organization or other provider credential field the caller sent with the
+    request, the caller's own Anthropic OAuth token, the caller's own GitHub Copilot connection, or the caller's
+    identity token that a token-exchange deployment trades in on every call."""
     litellm_params: Final = _logged_fields(logged_call.get("litellm_params"))
     proxy_server_request: Final = _logged_fields(litellm_params.get("proxy_server_request"))
     credential_fields: Final = proxy_server_request.get("credential_fields")

@@ -246,6 +246,7 @@ class TestSkipMetricsValidation:
             ),
             ({"litellm_params": {"proxy_server_request": {"body": {"extra_body": "azure_ad_token"}}}}, False),
             ({"litellm_params": {"proxy_server_request": {"credential_fields": ("extra_headers",)}}}, True),
+            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("organization",)}}}, True),
             (
                 {
                     "litellm_params": {
@@ -269,6 +270,7 @@ class TestSkipMetricsValidation:
             "deployment-azure-ad-token",
             "malformed-extra-body",
             "caller-supplied-extra-headers",
+            "caller-supplied-organization",
             "extra-headers-not-stamped-by-the-proxy",
         ],
     )
