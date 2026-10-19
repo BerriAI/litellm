@@ -9,12 +9,13 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from setup.corpus.session import Endpoint as CorpusEndpoint
 from setup.corpus.session import request_body as corpus_body
 
 Endpoint = Literal["chat_completions", "responses", "messages"]
+_PAYLOAD: Final = TypeAdapter(dict[str, object])
 
 
 class TokenSource(BaseModel):
@@ -70,6 +71,33 @@ class WireRecord(BaseModel):
     mock_delay_s: float | None
     call_id: str | None
     error: str | None
+    response_id: str | None = None
+
+
+def response_id(payload: Mapping[str, object]) -> str | None:
+    nested: Final = payload.get("response") or payload.get("message")
+    source: Final = _PAYLOAD.validate_python(nested) if isinstance(nested, Mapping) else payload
+    identifier: Final = source.get("id")
+    return identifier if isinstance(identifier, str) else None
+
+
+class PlanProgress:
+    def __init__(self, total: int) -> None:
+        self.total: Final = total
+        self.issued = 0
+        self.completed = 0
+        self.stopped = False
+
+    def take(self, *, stop: bool) -> bool:
+        self.stopped = self.stopped or stop
+        if self.stopped or self.issued >= self.total:
+            return False
+        self.issued += 1
+        return True
+
+    @property
+    def drained(self) -> bool:
+        return (self.stopped or self.issued == self.total) and self.completed == self.issued
 
 
 _CORPUS_ENDPOINT: Final[Mapping[Endpoint, CorpusEndpoint]] = MappingProxyType(

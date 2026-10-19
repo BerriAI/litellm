@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -39,12 +40,16 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
+    is_bedrock_native_output_rejection,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    requests_opt_in_native_output,
+    requests_output_config_format,
     strip_unsupported_bedrock_invoke_output_config_keys,
     supports_bedrock_prompt_cache_ttl,
     tools_without_eager_input_streaming,
+    warn_bedrock_native_output_rejected,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -69,6 +74,9 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
 class AmazonAnthropicClaudeMessagesConfig(
     AnthropicMessagesConfig,
     AmazonInvokeConfig,
@@ -90,6 +98,12 @@ class AmazonAnthropicClaudeMessagesConfig(
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
+    def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
+        return True
+
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
     def get_error_class(
@@ -103,6 +117,29 @@ class AmazonAnthropicClaudeMessagesConfig(
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
+
+    def native_output_fallback_litellm_params(
+        self,
+        model: str,
+        anthropic_messages_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> GenericLiteLLMParams | None:
+        model_info: Final = _MODEL_INFO.validate_python(litellm_params.model_info)
+        if not requests_opt_in_native_output(model, anthropic_messages_optional_request_params, model_info):
+            return None
+        return litellm_params.model_copy(
+            update={"model_info": {**(model_info or {}), "supports_bedrock_native_structured_output": False}}
+        )
+
+    def should_retry_anthropic_messages_without_native_output(
+        self, e: httpx.HTTPStatusError, request_body: Mapping[str, object], model: str
+    ) -> bool:
+        if not requests_output_config_format(request_body) or not is_bedrock_native_output_rejection(
+            e.response.status_code, e.response.text
+        ):
+            return False
+        warn_bedrock_native_output_rejected(model, e.response.text)
+        return True
 
     def validate_anthropic_messages_environment(
         self,
@@ -552,8 +589,17 @@ class AmazonAnthropicClaudeMessagesConfig(
         if anthropic_model_info.is_eager_input_streaming_used(tools):
             beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
+        dangerous_tool_use_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
         if anthropic_messages_optional_request_params.get("safeguards") is not None:
-            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
+            beta_set.add(dangerous_tool_use_beta)
+        elif dangerous_tool_use_beta in beta_set and self.drops_dangerous_tool_use_beta_without_safeguards():
+            beta_set.discard(dangerous_tool_use_beta)
+            verbose_logger.debug(
+                "Bedrock Invoke: dropping %s from client headers because the request has no safeguards. Bedrock "
+                "answers it with 'invalid beta flag' next to structured outputs before Opus 4.7, and on Sonnet 4.5, "
+                "Opus 4.5, and Opus 4.6 even alone.",
+                dangerous_tool_use_beta,
+            )
 
         self._filter_context_management_for_bedrock_invoke(
             anthropic_messages_request=anthropic_messages_request,
@@ -739,6 +785,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_messages_request,
+            model_info=_MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
         )
         normalize_bedrock_opus_output_config_effort(
             model=model,

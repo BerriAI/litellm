@@ -24,6 +24,8 @@ from tests.integration._support.client import Gateway, Scenario, eventually, obj
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 METRIC: Final = "litellm_team_members_metric"
 METRICS_ROUTE: Final = "/metrics/"
 MEMBERS: Final = 3
