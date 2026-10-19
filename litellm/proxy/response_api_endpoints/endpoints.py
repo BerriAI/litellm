@@ -1630,8 +1630,11 @@ async def responses_input_tokens(
             message=f"Invalid request for token counting: {e}", param=None, code=None
         )
 
+    request_fields: Final = _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data)
     responses_request: Final = _with_authorized_previous_response(
-        _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data), response_id_security, user_api_key_dict
+        {**{name: value for name, value in request_fields.items() if name not in counted_fields}, **token_fields},
+        response_id_security,
+        user_api_key_dict,
     )
     try:
         token_response: Final = await token_counter(

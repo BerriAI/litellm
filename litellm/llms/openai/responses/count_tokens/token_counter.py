@@ -4,6 +4,7 @@ OpenAI Token Counter implementation using the Responses API /input_tokens endpoi
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final
 
 import openai
@@ -146,6 +147,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.

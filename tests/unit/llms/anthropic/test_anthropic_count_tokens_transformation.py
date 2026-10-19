@@ -1,8 +1,10 @@
 import asyncio
 from base64 import b64encode
+from collections.abc import Mapping
 from copy import deepcopy
 from queue import SimpleQueue
 from threading import get_ident
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -11,6 +13,7 @@ import respx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.anthropic.count_tokens.transformation import (
@@ -478,6 +481,7 @@ async def _counted_body(
     messages: list[dict[str, JsonValue]],
     tools: list[dict[str, JsonValue]] | None,
     messages_format: TokenCountMessagesFormat,
+    chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> tuple[TokenCountResponse | None, tuple[dict[str, JsonValue], ...]]:
     sent: Final[SimpleQueue[bytes]] = SimpleQueue()
 
@@ -495,6 +499,7 @@ async def _counted_body(
             request_model="claude-opus-5-5",
             tools=tools,
             messages_format=messages_format,
+            chat_params=chat_params,
         )
     return result, tuple(TypeAdapter(dict[str, JsonValue]).validate_json(sent.get()) for _ in range(sent.qsize()))
 
@@ -608,3 +613,71 @@ async def test_counter_rejects_a_tool_call_chat_inference_rejects_without_callin
     assert result.status_code == 400
     assert result.rejected_before_provider_call is True
     assert "Failed to parse tool call arguments for tool 'get_weather'" in (result.error_message or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_rejects_a_chat_tool_without_a_name_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    result, bodies = await _counted_body(
+        counter_type,
+        count_endpoint,
+        [{"role": "user", "content": "Weather in SF?"}],
+        [{"type": "function", "function": {"parameters": _WEATHER_SCHEMA}}],
+        "openai",
+    )
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+
+
+_ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_sends_the_structured_output_tool_choice_and_thinking_chat_inference_sends(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    """count_tokens refuses the beta output_format that chat inference sends, so the count carries the same
+    schema as output_config.format, next to the inference request's thinking and tool_choice."""
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": "Weather in SF?"}]
+    tool: Final[dict[str, JsonValue]] = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": _WEATHER_SCHEMA},
+    }
+    chat_params: Final[dict[str, JsonValue]] = {
+        "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": _ANSWER_SCHEMA}},
+        "reasoning_effort": "low",
+        "tool_choice": "auto",
+    }
+    config: Final = AnthropicConfig()
+    inference: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=deepcopy(messages),
+        optional_params=config.map_openai_params(
+            {**chat_params, "tools": [tool]}, {}, "claude-opus-5-5", drop_params=False
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    _, bodies = await _counted_body(counter_type, count_endpoint, messages, [tool], "openai", chat_params)
+
+    (body,) = bodies
+    assert "output_format" not in body
+    assert body["output_config"] == {**inference.get("output_config", {}), "format": inference["output_format"]}
+    assert (body["thinking"], body["tool_choice"], body["tools"]) == (
+        inference["thinking"],
+        inference["tool_choice"],
+        inference["tools"],
+    )

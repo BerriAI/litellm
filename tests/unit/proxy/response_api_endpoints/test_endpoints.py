@@ -4324,6 +4324,7 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools == [{"type": "web_search"}]
+        assert counter.await_args.kwargs["responses_request"]["tools"] == [{"type": "web_search"}]
 
     def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self) -> None:
         router: Final = litellm.Router(
@@ -4345,6 +4346,7 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools is None
+        assert "tools" not in counter.await_args.kwargs["responses_request"]
 
     def test_malformed_tools_for_a_model_outside_the_router_get_a_clean_400(self) -> None:
         router: Final = litellm.Router(

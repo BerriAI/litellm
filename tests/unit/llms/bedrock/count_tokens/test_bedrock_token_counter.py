@@ -1,3 +1,4 @@
+import base64
 from collections.abc import Mapping
 from typing import Final
 
@@ -174,3 +175,44 @@ async def test_claude_runtime_404_retries_with_system_and_tools_on_mantle() -> N
         "system": "You are a terse assistant.",
         "tools": tools,
     }
+
+
+@pytest.mark.asyncio
+async def test_claude_chat_tool_use_is_counted_in_the_shape_claude_inference_sends() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    schema: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[
+            {"role": "user", "content": "Weather in SF?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": schema}}],
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 412)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    invoke_model: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)["input"]
+    assert isinstance(invoke_model, dict)
+    encoded: Final = invoke_model["invokeModel"]
+    assert isinstance(encoded, dict) and isinstance(encoded["body"], str)
+    body: Final = _JSON_BODY.validate_json(base64.b64decode(encoded["body"]))
+    assert body["tools"] == [{"name": "get_weather", "input_schema": schema, "type": "custom"}]
+    assert body["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "Weather in SF?"}]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]},
+    ]

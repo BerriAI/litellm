@@ -157,3 +157,36 @@ def test_acount_tokens_no_api_key_falls_back(monkeypatch):
     assert result.tokenizer_type == "local_tokenizer"
 
 
+
+
+def test_acount_tokens_sends_chat_tool_use_to_anthropic_in_the_shape_claude_inference_sends():
+    schema = {"type": "object", "properties": {"city": {"type": "string"}}}
+    with patch(
+        "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler.handle_count_tokens_request",
+        new_callable=AsyncMock,
+        return_value={"input_tokens": 52},
+    ) as mock_handler:
+        result = asyncio.run(
+            litellm.acount_tokens(
+                model="anthropic/claude-opus-5-5",
+                messages=[
+                    {"role": "user", "content": "Weather in SF?"},
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+                ],
+                tools=[{"type": "function", "function": {"name": "get_weather", "parameters": schema}}],
+                api_key="sk-ant-test-key",
+            )
+        )
+
+    assert (result.error, result.total_tokens) == (False, 52)
+    sent = mock_handler.call_args.kwargs
+    assert list(sent["tools"]) == [{"name": "get_weather", "input_schema": schema, "type": "custom"}]
+    assert [message["role"] for message in sent["messages"]] == ["user", "assistant", "user"]
+    assert sent["messages"][2]["content"] == [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]

@@ -14661,6 +14661,10 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.responses.litellm_completion_transformation.count_request import (
+    ChatCountBridgeError,
+    chat_count_request,
+)
 
 
 def _get_provider_token_counter(
@@ -14744,6 +14748,7 @@ async def _try_provider_token_count(
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
+    chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14770,6 +14775,7 @@ async def _try_provider_token_count(
             messages_format=messages_format,
             output_format=output_format,
             context_management=context_management,
+            chat_params=chat_params,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
@@ -15189,6 +15195,10 @@ def _native_responses_count(
     )
 
 
+def _deployment_api_base(deployment: _TokenCountDeployment) -> str | None:
+    return _non_empty_str(deployment.get("litellm_params", {}).get("api_base"))
+
+
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     if not isinstance(system, (str, list)) or not system:
         return None
@@ -15289,6 +15299,15 @@ async def count_request_tokens(
     prompt_only: Final = bool(prompt) and conversation_empty
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    chat_count: Final = (
+        None
+        if responses_request is None or provider_counter is None or isinstance(provider_counter, OpenAITokenCounter)
+        else chat_count_request(
+            model_to_use, custom_llm_provider, _deployment_api_base(deployment_view), responses_request
+        )
+    )
+    if isinstance(chat_count, ChatCountBridgeError):
+        raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
     ladder: Final = (
         None
         if provider_counter is None
@@ -15304,15 +15323,22 @@ async def count_request_tokens(
                 _try_provider_token_count,
                 provider_counter,
                 custom_llm_provider,
-                messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
+                messages=(
+                    [dict(message) for message in chat_count.messages]
+                    if chat_count is not None
+                    else [{"role": "user", "content": prompt}]
+                    if prompt_as_message
+                    else messages
+                ),
                 contents=None if prompt_as_message else contents,
                 deployment=deployment,
                 request_model=request.model,
-                tools=tools,
+                tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
                 system=system,
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=_count_context_management(context_management, request.model, request_litellm_params),
+                chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
             ),
             model_to_use=model_to_use,
             settings=settings,

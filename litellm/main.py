@@ -9220,6 +9220,7 @@ async def acount_tokens(
                     request_model=model,
                     tools=tools,
                     system=system,
+                    messages_format="openai",
                 )
                 if result is not None and not result.error:
                     return result

@@ -28,6 +28,7 @@ from litellm.llms.vertex_ai.common_utils import (
     vertex_request_labels_from_litellm_params,
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 
 
@@ -64,7 +65,9 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
         "google/gemma-4-26b-a4b-it-maas",
     ),
 )
-async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(model: str) -> None:
+async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(
+    model: str,
+) -> None:
     result: Final = await VertexAITokenCounter().count_tokens(
         model_to_use=model,
         messages=[{"role": "user", "content": "Count this"}],
@@ -416,7 +419,6 @@ def test_anyof_conversion_forwards_a_non_object_branch_for_the_provider_to_judge
     assert schema == {"type": "object", "properties": {"example": {"anyOf": expected}}}
 
 
-
 @pytest.mark.parametrize(
     ("field", "expected"),
     [
@@ -461,6 +463,7 @@ def test_vertex_schema_folds_every_null_branch_into_nullable(field: JsonValue, e
     schema: Final = build_vertex_schema({"type": "object", "properties": {"value": field}})
 
     assert schema["properties"]["value"] == expected
+
 
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
@@ -1644,7 +1647,9 @@ _PARTNER_RESPONSES_TOOL: Final[dict[str, object]] = {
 }
 
 
-async def _partner_counted_bodies(model: str) -> tuple[dict[str, object], ...]:
+async def _partner_counted_bodies(
+    model: str, chat_params: dict[str, JsonValue] | None = None
+) -> tuple[dict[str, object], ...]:
     from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
 
     class FakeResponse:
@@ -1656,7 +1661,9 @@ async def _partner_counted_bodies(model: str) -> tuple[dict[str, object], ...]:
     class FakeHttpClient:
         posted_bodies: tuple[dict[str, object], ...] = ()
 
-        async def post(self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float) -> FakeResponse:
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
             self.posted_bodies = (*self.posted_bodies, json)
             return FakeResponse()
 
@@ -1675,6 +1682,7 @@ async def _partner_counted_bodies(model: str) -> tuple[dict[str, object], ...]:
             contents=None,
             deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
             tools=[_PARTNER_RESPONSES_TOOL],
+            chat_params=chat_params or {},
         )
 
     assert result is not None
@@ -1704,6 +1712,53 @@ async def test_vertex_claude_count_sends_chat_tool_use_in_the_shape_chat_inferen
                 }
             ],
         },
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_the_structured_output_vertex_inference_sends() -> None:
+    model: Final = "claude-haiku-4-5"
+    chat_params: Final[dict[str, JsonValue]] = {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
+            },
+        }
+    }
+    config: Final = VertexAIAnthropicConfig()
+    inference: Final = config.transform_request(
+        model=model,
+        messages=copy.deepcopy(_PARTNER_CHAT_TOOL_TURNS),
+        optional_params=config.map_openai_params(
+            {
+                **chat_params,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "",
+                            "parameters": _PARTNER_RESPONSES_TOOL["parameters"],
+                        },
+                    }
+                ],
+            },
+            {},
+            model,
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    (body,) = await _partner_counted_bodies(model, chat_params)
+
+    assert (body["tools"], body.get("tool_choice"), body.get("output_config")) == (
+        inference["tools"],
+        inference.get("tool_choice"),
+        inference.get("output_config"),
     )
 
 

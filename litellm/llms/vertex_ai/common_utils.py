@@ -1274,6 +1274,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
         context_management: CountContextManagement | None,
+        chat_params: Mapping[str, JsonValue],
     ) -> TokenCountResponse | None:
         from litellm.llms.anthropic.count_tokens.transformation import (
             AnthropicCountFields,
@@ -1284,7 +1285,11 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         if count_tokens_publisher(model_to_use) != "anthropic":
             return None
-        match translated := await anthropic_count_fields(model_to_use, messages or [], system, tools, messages_format):
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+
+        match translated := await anthropic_count_fields(
+            model_to_use, messages or [], system, tools, messages_format, VertexAIAnthropicConfig(), chat_params
+        ):
             case ChatCountTranslationError():
                 return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
             case AnthropicCountFields():
@@ -1299,6 +1304,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                     messages_format="anthropic",
                     output_format=output_format,
                     context_management=context_management,
+                    count_options=translated.options,
                 )
             case None:
                 return None
@@ -1315,6 +1321,8 @@ class VertexAITokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
 
@@ -1363,6 +1371,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=context_management,
+                chat_params=chat_params,
             )
             if translated_count is not None:
                 return translated_count
@@ -1397,6 +1406,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                     vertex_credentials=vertex_credentials,
                     system=system,
                     tools=tools,
+                    count_options=count_options,
                 )
             except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
                 status_code: Final = e.response.status_code

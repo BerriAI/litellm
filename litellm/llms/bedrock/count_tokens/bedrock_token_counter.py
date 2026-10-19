@@ -4,12 +4,15 @@ Bedrock Token Counter implementation using the CountTokens API.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import JsonValue
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -58,6 +61,17 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
     )
 
 
+def _request_data(
+    model: str, messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]] | None, system: object
+) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "messages": [dict(message) for message in messages],
+        **({"tools": [dict(tool) for tool in tools]} if tools else {}),
+        **({"system": system} if system else {}),
+    }
+
+
 class BedrockTokenCounter(BaseTokenCounter):
     """Token counter for AWS Bedrock: bedrock-runtime CountTokens first, and Anthropic's count_tokens
     on bedrock-mantle for Claude models bedrock-runtime answers 400 or 404 for"""
@@ -82,13 +96,13 @@ class BedrockTokenCounter(BaseTokenCounter):
         self,
         handler: BedrockCountTokensHandler | BedrockMantleCountTokensHandler,
         tokenizer_type: str,
-        request_data: dict[str, object],
+        request_data: Mapping[str, object],
         litellm_params: dict[str, object],
         resolved_model: str,
     ) -> CountTokensOutcome:
         try:
             result: Final = await handler.handle_count_tokens_request(
-                request_data=request_data,
+                request_data=dict(request_data),
                 litellm_params=litellm_params,
                 resolved_model=resolved_model,
                 client=self._client,
@@ -116,18 +130,30 @@ class BedrockTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         if not messages:
             return None
 
-        litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        request_data: Final[dict[str, object]] = {
-            "model": model_to_use,
-            "messages": messages,
-            **({"tools": tools} if tools else {}),
-            **({"system": system} if system else {}),
-        }
         resolved_model: Final = get_bedrock_base_model(model_to_use)
+        translated: Final = (
+            await anthropic_count_fields(
+                model_to_use, messages, system, tools, messages_format, AnthropicConfig(), chat_params
+            )
+            if is_mantle_claude_model(resolved_model)
+            else None
+        )
+        if isinstance(translated, ChatCountTranslationError):
+            return translated.response(request_model, model_to_use, RUNTIME_TOKENIZER_TYPE)
+        litellm_params: Final = (deployment or {}).get("litellm_params", {})
+        request_data: Final[Mapping[str, object]] = (
+            _request_data(model_to_use, messages, tools, system)
+            if translated is None
+            else {
+                **_request_data(model_to_use, translated.messages, translated.tools, translated.system),
+                **translated.options,
+            }
+        )
 
         runtime: Final = await self._count_with(
             self._runtime_handler, RUNTIME_TOKENIZER_TYPE, request_data, litellm_params, resolved_model

@@ -1300,6 +1300,7 @@ class _ScriptedCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
         context_management: object = None,
+        chat_params: object = None,
     ) -> TokenCountResponse | None:
         self.calls.append((model_to_use, messages, tools, system))
         self.regions.append(None if deployment is None else deployment["litellm_params"].get("aws_region_name"))
@@ -3225,3 +3226,73 @@ async def test_responses_count_goes_to_the_deployment_that_served_the_previous_r
         ]
 
     assert counts == [_PINNED_COUNTS[f"{pinned}.test"]] * 8
+
+
+_ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.asyncio
+async def test_responses_count_on_claude_counts_the_chat_request_responses_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-counted",
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-5-5",
+                    "api_key": "test-key",
+                    "api_base": "https://count-tokens.test",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    bodies: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"input_tokens": 77}, request=request)
+
+    responses_tools: Final[list[dict[str, JsonValue]]] = [
+        {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        {"type": "web_search"},
+        {"type": "file_search", "vector_store_ids": ["vs_docs"]},
+    ]
+    with patch.object(
+        anthropic_count_tokens_handler,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+    ):
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="claude-counted", messages=[{"role": "user", "content": "Weather?"}], tools=responses_tools
+            ),
+            call_endpoint=True,
+            responses_request={
+                "model": "claude-counted",
+                "input": "Weather?",
+                "tools": responses_tools,
+                "tool_choice": "auto",
+                "text": {"format": {"type": "json_schema", "name": "answer", "schema": _ANSWER_SCHEMA}},
+                "reasoning": {"effort": "low"},
+            },
+        )
+
+    assert (result.error, result.total_tokens) == (False, 77)
+    (body,) = bodies
+    tools: Final = body["tools"]
+    assert isinstance(tools, list)
+    tool_names: Final = [tool["name"] for tool in tools if isinstance(tool, dict)]
+    assert sorted(tool_names) == ["get_weather", "litellm_file_search", "web_search"]
+    assert any(isinstance(tool, dict) and str(tool.get("type")).startswith("web_search") for tool in tools)
+    assert body["tool_choice"] == {"type": "auto"}
+    output_config: Final = body["output_config"]
+    assert isinstance(output_config, dict)
+    assert output_config["format"] == {"type": "json_schema", "schema": _ANSWER_SCHEMA}
+    assert "thinking" in body

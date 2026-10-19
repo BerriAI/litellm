@@ -2,6 +2,8 @@
 Anthropic Token Counter implementation using the CountTokens API.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import JsonValue
@@ -43,6 +45,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
         Count tokens using Anthropic's CountTokens API.
@@ -62,7 +66,11 @@ class AnthropicTokenCounter(BaseTokenCounter):
         if not messages:
             return None
 
-        match translated := await anthropic_count_fields(model_to_use, messages, system, tools, messages_format):
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        match translated := await anthropic_count_fields(
+            model_to_use, messages, system, tools, messages_format, AnthropicConfig(), chat_params
+        ):
             case ChatCountTranslationError():
                 return translated.response(request_model, model_to_use, "anthropic_api")
             case AnthropicCountFields():
@@ -77,6 +85,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     messages_format="anthropic",
                     output_format=output_format,
                     context_management=context_management,
+                    count_options=translated.options,
                 )
             case None:
                 pass
@@ -113,6 +122,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 api_base=api_base,
                 tools=tools,
                 system=system,
+                optional_params=count_options,
             )
 
             if result is not None:

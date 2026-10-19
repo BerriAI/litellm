@@ -8,6 +8,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
@@ -39,6 +40,7 @@ class BaseTokenCounter(ABC):
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         pass
 

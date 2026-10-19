@@ -90,6 +90,7 @@ class AnthropicCountFields:
     messages: tuple[Mapping[str, JsonValue], ...]
     system: JsonValue
     tools: tuple[Mapping[str, JsonValue], ...] | None
+    options: Mapping[str, JsonValue] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +115,10 @@ class _AnthropicChatRequest(TypedDict):
     messages: ReadOnly[tuple[Mapping[str, JsonValue], ...]]
     system: NotRequired[ReadOnly[JsonValue]]
     tools: NotRequired[ReadOnly[tuple[Mapping[str, JsonValue], ...]]]
+    thinking: NotRequired[ReadOnly[JsonValue]]
+    tool_choice: NotRequired[ReadOnly[JsonValue]]
+    output_config: NotRequired[ReadOnly[JsonValue]]
+    output_format: NotRequired[ReadOnly[JsonValue]]
 
 
 _ANTHROPIC_CHAT_REQUEST: Final = TypeAdapter(_AnthropicChatRequest)
@@ -151,41 +156,80 @@ def _system_messages(system: object) -> tuple[Mapping[str, object], ...]:
     return (message,) if isinstance(system, (str, list)) and system else ()
 
 
+def _count_options(request: _AnthropicChatRequest) -> Mapping[str, JsonValue]:
+    """Structured output reaches chat inference as the beta ``output_format``, which count_tokens
+    refuses; its GA ``output_config.format`` form counts the same schema the same way."""
+    output_config: Final = request.get("output_config")
+    output_format: Final = request.get("output_format")
+    counted_config: Final = {
+        **(output_config if isinstance(output_config, dict) else {}),
+        **({} if output_format is None else {"format": output_format}),
+    }
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (
+                ("thinking", request.get("thinking")),
+                ("tool_choice", request.get("tool_choice")),
+                ("output_config", counted_config or None),
+            )
+            if value is not None
+        }
+    )
+
+
+def _translated_chat_request(
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]],
+    chat_params: Mapping[str, object],
+    translator: _ChatRequestTranslator,
+) -> _ChatParams:
+    from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
+
+    chat_tools: Final = [dict(chat_tool) for chat_tool in chain.from_iterable(map(chat_completion_tools_for, tools))]
+    mapped_params: Final = {**chat_params, **({"tools": chat_tools} if chat_tools else {})}
+    chat_messages: Final = cast(  # cast-ok: chat-shaped request messages, read the way chat inference reads them
+        _ChatMessages, copy.deepcopy([*_system_messages(system), *messages])
+    )
+    return translator.transform_request(
+        model=model,
+        messages=chat_messages,
+        optional_params=translator.map_openai_params(mapped_params, {}, model, drop_params=False)
+        if mapped_params
+        else {},
+        litellm_params={},
+        headers={},
+    )
+
+
 def anthropic_fields_for_chat_tool_use(
     model: str,
     messages: Sequence[Mapping[str, object]],
     system: object,
     tools: Sequence[Mapping[str, object]] | None,
     translator: _ChatRequestTranslator,
+    chat_params: Mapping[str, object] = MappingProxyType({}),
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
-    if not any(map(_is_chat_tool, counted_tools)) and not any(map(_is_chat_tool_turn, messages)):
+    if not chat_params and not any(map(_is_chat_tool, counted_tools)) and not any(map(_is_chat_tool_turn, messages)):
         return None
     from litellm.exceptions import BadRequestError
-    from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
     from litellm.llms.anthropic.common_utils import AnthropicError
 
-    chat_tools: Final = [
-        dict(chat_tool) for chat_tool in chain.from_iterable(map(chat_completion_tools_for, counted_tools))
-    ]
-    chat_messages: Final = cast(  # cast-ok: chat-shaped request messages, read the way chat inference reads them
-        _ChatMessages, copy.deepcopy([*_system_messages(system), *messages])
-    )
     try:
-        request: Final = translator.transform_request(
-            model=model,
-            messages=chat_messages,
-            optional_params=translator.map_openai_params({"tools": chat_tools}, {}, model, drop_params=False)
-            if chat_tools
-            else {},
-            litellm_params={},
-            headers={},
-        )
+        request: Final = _translated_chat_request(model, messages, system, counted_tools, chat_params, translator)
     except (AnthropicError, BadRequestError) as e:
         return ChatCountTranslationError(message=str(e.message))
+    except (ValueError, KeyError) as e:
+        return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
     translated: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
     return AnthropicCountFields(
-        messages=translated["messages"], system=translated.get("system"), tools=translated.get("tools")
+        messages=translated["messages"],
+        system=translated.get("system"),
+        tools=translated.get("tools"),
+        options=_count_options(translated),
     )
 
 
@@ -195,12 +239,12 @@ async def anthropic_count_fields(
     system: object,
     tools: Sequence[Mapping[str, object]] | None,
     messages_format: TokenCountMessagesFormat,
+    translator: _ChatRequestTranslator,
+    chat_params: Mapping[str, object] = MappingProxyType({}),
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
-    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-
     if messages_format != "openai":
         return None
-    return await asyncify(anthropic_fields_for_chat_tool_use)(model, messages, system, tools, AnthropicConfig())
+    return await asyncify(anthropic_fields_for_chat_tool_use)(model, messages, system, tools, translator, chat_params)
 
 
 class AnthropicCountTokensConfig:
