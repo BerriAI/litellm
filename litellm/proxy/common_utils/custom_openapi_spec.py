@@ -31,7 +31,7 @@ class CustomOpenAPISpec:
         "/openai/deployments/{model}/embeddings",
     ]
 
-    RESPONSES_API_PATHS = ["/v1/responses", "/responses", "/openai/v1/responses"]
+    RESPONSES_API_PATHS = ["/v1/responses", "/responses", "/openai/v1/responses", "/openai/responses"]
 
     @staticmethod
     def _as_object(node: JsonValue) -> JsonObject:
