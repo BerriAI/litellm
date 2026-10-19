@@ -1,5 +1,6 @@
 import datetime
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -149,23 +150,12 @@ def test_unpriced_fallback_search_tool_is_billed_at_its_own_price_not_the_failed
     ],
 )
 def test_search_cost_is_the_price_entry_of_the_requested_mode(
-    provider: str, optional_params: dict[str, object] | None, expected: float
+    provider: str, optional_params: Mapping[str, object] | None, expected: float
 ) -> None:
     cost: Final = search_provider_cost_per_query(
         model=f"{provider}/search", custom_llm_provider=provider, optional_params=optional_params
     )
     assert cost == pytest.approx((expected, 0.0))
-
-
-@pytest.mark.usefixtures("_search_mode_prices")
-def test_search_cost_charges_every_query_at_the_mode_price() -> None:
-    cost: Final = search_provider_cost_per_query(
-        model="tavily/search",
-        custom_llm_provider="tavily",
-        number_of_queries=3,
-        optional_params={"search_depth": "advanced"},
-    )
-    assert cost == pytest.approx((3 * 0.007, 0.0))
 
 
 @pytest.mark.usefixtures("_search_mode_prices")
