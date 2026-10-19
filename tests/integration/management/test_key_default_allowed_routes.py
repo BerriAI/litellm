@@ -1,5 +1,5 @@
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import date
 from hashlib import sha256
 from pathlib import Path
@@ -38,24 +38,38 @@ async def report_routes_for_probes(request):
 '''
 
 
-@pytest.fixture(scope="module")
-def defaults(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
-    directory: Final = tmp_path_factory.mktemp("default-allowed-routes")
+def _config_with_default_routes(
+    directory: Path, default_routes: list[JsonValue], general_settings: Mapping[str, JsonValue]
+) -> Path:
     raw: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     configured: Final[dict[str, JsonValue]] = {
         **raw,
         "litellm_settings": {
             **object_value(raw.get("litellm_settings") or {}),
-            "default_key_generate_params": {"allowed_routes": list(DEFAULT_ROUTES)},
+            "default_key_generate_params": {"allowed_routes": default_routes},
         },
-        "general_settings": {
-            **object_value(raw.get("general_settings") or {}),
-            "custom_key_policy": "route_probe.report_routes_for_probes",
-        },
+        "general_settings": {**object_value(raw.get("general_settings") or {}), **general_settings},
     }
-    (directory / "route_probe.py").write_text(_POLICY_SOURCE)
     config: Final = directory / "default-allowed-routes.yaml"
     config.write_text(yaml.safe_dump(configured))
+    return config
+
+
+@pytest.fixture(scope="module")
+def defaults(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("default-allowed-routes")
+    (directory / "route_probe.py").write_text(_POLICY_SOURCE)
+    config: Final = _config_with_default_routes(
+        directory, list(DEFAULT_ROUTES), {"custom_key_policy": "route_probe.report_routes_for_probes"}
+    )
+    with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=config) as candidate:
+        yield candidate
+
+
+@pytest.fixture(scope="module")
+def non_string_default(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("non-string-default-allowed-routes")
+    config: Final = _config_with_default_routes(directory, ["llm_api_routes", 123], {})
     with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=config) as candidate:
         yield candidate
 
@@ -98,6 +112,22 @@ def test_admin_created_key_routes(defaults: Gateway, body: dict[str, JsonValue],
     with defaults.scenario() as scenario:
         user: Final = scenario.user(user_role="internal_user")
         created: Final = defaults.post("/key/generate", {"user_id": user, **body})
+        token: Final = _created_key(scenario, created)
+
+        assert (created["allowed_routes"], _stored_routes(token)) == (expected, expected)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    (({}, []), ({"key_type": "llm_api"}, ["llm_api_routes"])),
+    ids=("unset", "llm_api"),
+)
+def test_default_with_a_non_string_route_is_ignored(
+    non_string_default: Gateway, body: dict[str, JsonValue], expected: list[str]
+) -> None:
+    with non_string_default.scenario() as scenario:
+        user: Final = scenario.user(user_role="internal_user")
+        created: Final = non_string_default.post("/key/generate", {"user_id": user, **body})
         token: Final = _created_key(scenario, created)
 
         assert (created["allowed_routes"], _stored_routes(token)) == (expected, expected)
