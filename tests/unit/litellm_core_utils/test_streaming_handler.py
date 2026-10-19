@@ -5160,6 +5160,59 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
     assert chunk2_delta["provider_specific_fields"] is None
 
 
+def test_openai_chunk_creator_keeps_custom_tool_name_key_on_later_chunks(
+    logging_obj: Logging,
+) -> None:
+    chunks: Final = (
+        ChatCompletionChunk.model_construct(
+            id="chunk-1",
+            created=1,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {"index": 0, "id": "call_1", "type": "custom", "custom": {"name": "run_python", "input": ""}}
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        ),
+        ChatCompletionChunk.model_construct(
+            id="chunk-2",
+            created=1,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "custom": {"input": "print"}}]},
+                    "finish_reason": None,
+                }
+            ],
+        ),
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    emitted_chunks: Final = tuple(
+        output for output in (wrapper.chunk_creator(chunk=chunk) for chunk in chunks) if output is not None
+    )
+
+    assert [chunk.model_dump()["choices"][0]["delta"]["tool_calls"][0]["custom"] for chunk in emitted_chunks] == [
+        {"name": "run_python", "input": ""},
+        {"name": None, "input": "print"},
+    ]
+
+
 def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chunk():
     wrapper = CustomStreamWrapper(
         completion_stream=None,

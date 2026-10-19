@@ -88,6 +88,11 @@ def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, o
         setattr(response, key, value)
 
 
+def _holds_only_scalars(model: BaseModel) -> bool:
+    values: Final[Mapping[str, object]] = dict(model)
+    return all(value is None or isinstance(value, (str, int, float, bool)) for value in values.values())
+
+
 def _is_transport_timeout(error: BaseException) -> bool:
     return isinstance(error, httpx.TimeoutException) or (
         isinstance(error, Timeout) and isinstance(error.__cause__, httpx.TimeoutException)
@@ -948,6 +953,9 @@ class CustomStreamWrapper:
         if self.sent_first_chunk is False:
             delta.role = "assistant"
             self.sent_first_chunk = True
+            return
+        if not _holds_only_scalars(delta):
+            self.strip_role_from_delta(model_response)
             return
         delta.role = None
         if "provider_specific_fields" not in delta.model_fields_set:
