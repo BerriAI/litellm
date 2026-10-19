@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -21,6 +22,14 @@ class RecoOptionalParams(BaseModel):
     )
     api_base: str = Field(
         description="Base URL for the Reco guardrail API. Reco's endpoint is per-region and per-silo, so this must be set explicitly rather than defaulted.",
+    )
+    unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_open",
+        description="Behavior when Reco is unreachable. 'fail_open' (default) lets the request through uninspected; 'fail_closed' blocks it, but only takes effect when fail_on_error is true.",
+    )
+    fail_on_error: bool = Field(
+        default=False,
+        description="Behavior on any Reco error, including unreachability. False (default) lets the request through uninspected; True blocks it.",
     )
 
     @field_validator("reco_tenant_id")
