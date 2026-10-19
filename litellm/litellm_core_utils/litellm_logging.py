@@ -151,6 +151,7 @@ from litellm.types.llms.openai import (
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
+from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     CachingDetails,
@@ -6692,6 +6693,7 @@ class StandardLoggingPayloadSetup:
         rate_limit_category: Final = validate_rate_limit_category(getattr(original_exception, "category", None))
         rate_limit_type: Final = validate_rate_limit_type(getattr(original_exception, "rate_limit_type", None))
         budget_error: Final = original_exception if isinstance(original_exception, BudgetExceededError) else None
+        router_error: Final = original_exception if isinstance(original_exception, RouterRateLimitError) else None
         provider_request_id: Final = _get_provider_request_id(original_exception) if original_exception else None
 
         return StandardLoggingPayloadErrorInformation(
@@ -6707,6 +6709,7 @@ class StandardLoggingPayloadSetup:
             error_budget_entity_id=budget_error.entity_id if budget_error else None,
             error_budget_limit=budget_error.max_budget if budget_error else None,
             error_budget_spend=budget_error.current_cost if budget_error else None,
+            error_cooldown_deployments=router_error.cooldown_deployments if router_error else None,
             normalized_error=normalize_error(original_exception, error_status, error_message),
         )
 

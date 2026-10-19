@@ -43,6 +43,7 @@ from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
 from .utils import (
+    CooldownDeploymentInfo,
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     ModelResponse,
@@ -1106,6 +1107,7 @@ class RouterErrorTypes(str, enum.Enum):
 
 class RouterRateLimitError(ValueError):
     status_code: Final = 429
+    cooldown_deployments: tuple[CooldownDeploymentInfo, ...] | None = None
 
     def __init__(
         self,
@@ -1114,11 +1116,13 @@ class RouterRateLimitError(ValueError):
         enable_pre_call_checks: bool,
         cooldown_list: list,
         model_ids: Sequence[str] = (),
+        cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
+        self.cooldown_deployments = None if cooldown_deployments is None else tuple(cooldown_deployments)
         self.all_deployments_in_cooldown = bool(model_ids) and frozenset(model_ids) <= frozenset(cooldown_list)
         self.type = (
             RouterErrorTypes.all_deployments_in_cooldown.value
