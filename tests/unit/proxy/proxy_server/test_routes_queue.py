@@ -82,6 +82,23 @@ def test_queue_chat_completions_happy(client, auth_as, patched_queue):
     }
 
 
+def test_queue_chat_completions_drops_client_sent_stream_usage_flags(client, auth_as, patched_queue):
+    payload = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "priority": 0,
+        "_litellm_strip_stream_usage": True,
+        "_litellm_stream_usage_injected": True,
+    }
+    with auth_as():
+        response = client.post("/queue/chat/completions", json=payload)
+    assert response.status_code == 200
+    forwarded = patched_queue.schedule_acompletion.call_args.kwargs
+    assert "_litellm_strip_stream_usage" not in forwarded
+    assert "_litellm_stream_usage_injected" not in forwarded
+    assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
+
+
 def test_queue_chat_completions_no_router_error(client, auth_as, queue_no_router):
     """Pins ``POST /queue/chat/completions`` (error: no llm_router)."""
     payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}

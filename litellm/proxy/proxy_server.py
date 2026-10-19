@@ -965,6 +965,7 @@ from litellm.secret_managers.main import (
 )
 from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -18125,6 +18126,7 @@ async def async_queue_request(
     try:
         data = await request.json()
         data.pop("_litellm_strip_stream_usage", None)
+        data.pop(STREAM_USAGE_INJECTED_FIELD, None)
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
