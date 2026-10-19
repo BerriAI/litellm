@@ -4,18 +4,22 @@ OpenAI Responses API token counting transformation logic.
 This module handles the transformation of requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
+import copy
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, TypeAlias
 
+from openai.types.responses.input_token_count_params import InputTokenCountParams
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
+from litellm.types.utils import all_litellm_params
 
 
 class ResponsesInputTextPart(TypedDict):
@@ -337,3 +341,28 @@ class OpenAICountTokensConfig:
         input_items: object, instructions: object, tools: object, text: object = None
     ) -> ResponsesCountRequestParts:
         return _RESPONSES_COUNT_REQUEST_PARTS.validate_python((input_items, instructions, tools, text))
+
+
+_COUNT_REQUEST_FIELDS: Final = InputTokenCountParams.__required_keys__ | InputTokenCountParams.__optional_keys__
+_LITELLM_REQUEST_FIELDS: Final = frozenset((*all_litellm_params, "drop_params", "additional_drop_params"))
+
+
+def _forwards(field: str, policy: DropPolicy) -> bool:
+    if field in _LITELLM_REQUEST_FIELDS or field in policy.additional_drop_params:
+        return False
+    return not policy.drop_params or field in _COUNT_REQUEST_FIELDS
+
+
+def _restored(field: str, value: object) -> object:
+    match field, value:
+        case "input", _:
+            return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(value))
+        case "previous_response_id", str():
+            return ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(value)
+        case _:
+            return value
+
+
+def native_count_request(request: Mapping[str, object], model: str, policy: DropPolicy) -> Mapping[str, object]:
+    forwarded: Final = {field: _restored(field, value) for field, value in request.items() if _forwards(field, policy)}
+    return {**forwarded, "model": model}

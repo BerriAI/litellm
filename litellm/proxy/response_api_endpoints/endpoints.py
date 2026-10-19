@@ -1388,13 +1388,15 @@ class _TokenCountPayload(TypedDict):
 
 
 class _TokenCounter(Protocol):
-    def __call__(self, request: TokenCountRequest, call_endpoint: bool) -> Awaitable[TokenCountResponse]: ...
+    def __call__(
+        self, *, request: TokenCountRequest, call_endpoint: bool, responses_request: Mapping[str, object] | None
+    ) -> Awaitable[TokenCountResponse]: ...
 
 
 def _proxy_token_counter() -> _TokenCounter:
-    from litellm.proxy.proxy_server import token_counter
+    from litellm.proxy.proxy_server import count_request_tokens
 
-    return token_counter
+    return count_request_tokens
 
 
 _token_counter_dep: Final = Depends(_proxy_token_counter)
@@ -1407,6 +1409,29 @@ def _proxy_llm_router() -> Router | None:
 
 
 _llm_router_dep: Final = Depends(_proxy_llm_router)
+
+
+def _proxy_response_id_security() -> ResponsesIDSecurity | None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    security_hook: Final = proxy_logging_obj.get_proxy_hook("responses_id_security")
+    return security_hook if isinstance(security_hook, ResponsesIDSecurity) else None
+
+
+_response_id_security_dep: Final = Depends(_proxy_response_id_security)
+
+
+def _with_authorized_previous_response(
+    data: Mapping[str, object], security: ResponsesIDSecurity | None, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    previous_response_id: Final = data.get("previous_response_id")
+    if security is None or not isinstance(previous_response_id, str) or not previous_response_id:
+        return data
+    try:
+        authorized_id: Final = security.authorize_response_id(previous_response_id, user_api_key_dict)
+    except HTTPException as e:
+        raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
+    return {**data, "previous_response_id": authorized_id}
 
 
 def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
@@ -1546,6 +1571,7 @@ async def responses_input_tokens(
     token_counter: _TokenCounter = _token_counter_dep,
     llm_router: Router | None = _llm_router_dep,
     user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
+    response_id_security: ResponsesIDSecurity | None = _response_id_security_dep,
 ):
     """
     Count the input tokens of a Responses API request without calling the model.
@@ -1604,8 +1630,13 @@ async def responses_input_tokens(
             message=f"Invalid request for token counting: {e}", param=None, code=None
         )
 
+    responses_request: Final = _with_authorized_previous_response(
+        _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data), response_id_security, user_api_key_dict
+    )
     try:
-        token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+        token_response: Final = await token_counter(
+            request=token_request, call_endpoint=True, responses_request=responses_request
+        )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:
             raise

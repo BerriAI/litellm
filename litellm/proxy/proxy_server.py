@@ -14646,7 +14646,9 @@ async def run_thread(
 #     dependencies=[Depends(user_api_key_auth)],
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
+from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -14716,6 +14718,18 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+def _provider_count_outcome(
+    result: Union["TokenCountResponse", None],
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    if result is not None and result.error is True:
+        return ProviderCountFailure(
+            status_code=result.status_code or 500,
+            message=result.error_message or "Token counting failed",
+            rejected_before_provider_call=result.rejected_before_provider_call,
+        )
+    return result
+
+
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
@@ -14762,13 +14776,30 @@ async def _try_provider_token_count(
             status_code=getattr(e, "status_code", None) or e.response.status_code,
             message=getattr(e, "message", None) or str(e),
         )
-    if result is not None and result.error is True:
-        return ProviderCountFailure(
-            status_code=result.status_code or 500,
-            message=result.error_message or "Token counting failed",
-            rejected_before_provider_call=result.rejected_before_provider_call,
+    return _provider_count_outcome(result)
+
+
+async def _try_native_responses_count(
+    provider_counter: OpenAITokenCounter,
+    custom_llm_provider: str | None,
+    model_to_use: str,
+    _region: str | None,
+    responses_request: Mapping[str, object],
+    policy: DropPolicy,
+    deployment: Mapping[str, object] | None,
+    request_model: str,
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
+        return None
+    return _provider_count_outcome(
+        await provider_counter.count_responses_request(
+            model_to_use=model_to_use,
+            request=responses_request,
+            policy=policy,
+            deployment=deployment,
+            request_model=request_model,
         )
-    return result
+    )
 
 
 async def _provider_token_count(
@@ -15045,6 +15076,7 @@ class _TokenCountDeployment(TypedDict, total=False):
 
 
 _TOKEN_COUNT_DEPLOYMENT: Final = TypeAdapter(_TokenCountDeployment)
+_ROUTED_DEPLOYMENT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[str, object] | None:
@@ -15128,6 +15160,35 @@ def _count_context_management(
     )
 
 
+def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) -> Mapping[str, object]:
+    previous_response_id: Final = None if responses_request is None else responses_request.get("previous_response_id")
+    return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
+
+
+def _native_responses_count(
+    provider_counter: BaseTokenCounter,
+    custom_llm_provider: str | None,
+    responses_request: Mapping[str, object] | None,
+    deployment: Mapping[str, object] | None,
+    request_model: str,
+) -> Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]] | None:
+    if responses_request is None or not isinstance(provider_counter, OpenAITokenCounter):
+        return None
+    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+    router_defaults: Final[Mapping[str, object]] = (
+        {} if llm_router is None else _router_default_litellm_params(llm_router)
+    )
+    return partial(
+        _try_native_responses_count,
+        provider_counter,
+        custom_llm_provider,
+        responses_request=responses_request,
+        policy=drop_policy({**litellm_params, **router_defaults, **responses_request}),
+        deployment=deployment,
+        request_model=request_model,
+    )
+
+
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     if not isinstance(system, (str, list)) or not system:
         return None
@@ -15160,6 +15221,7 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    responses_request: Mapping[str, object] | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15181,7 +15243,7 @@ async def count_request_tokens(
         try:
             deployment = await llm_router.async_get_available_deployment(
                 model=request.model,
-                request_kwargs={},
+                request_kwargs=dict(_responses_routing_kwargs(responses_request)),
             )
         except Exception:
             verbose_proxy_logger.exception(
@@ -15231,7 +15293,14 @@ async def count_request_tokens(
         None
         if provider_counter is None
         else await _provider_token_count(
-            count_with=partial(
+            count_with=_native_responses_count(
+                provider_counter,
+                custom_llm_provider,
+                responses_request,
+                _ROUTED_DEPLOYMENT.validate_python(deployment),
+                request.model,
+            )
+            or partial(
                 _try_provider_token_count,
                 provider_counter,
                 custom_llm_provider,

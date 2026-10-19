@@ -55,6 +55,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
+from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
@@ -74,6 +75,7 @@ from litellm.proxy.proxy_server import (
     count_request_tokens,
     token_counter,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import SelectTokenizerResponse, TokenCountMessagesFormat, TokenCountResponse
@@ -3169,3 +3171,57 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
         local.total_tokens,
         local.tokenizer_type,
     )
+
+
+_PINNED_COUNTS: Final = MappingProxyType({"deployment-a.test": 11, "deployment-b.test": 22})
+
+
+def _pinned_count_peer(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content).get("previous_response_id") != "resp_original":
+        return httpx.Response(400, json={"error": {"message": "previous_response_id was not decoded"}}, request=request)
+    return httpx.Response(200, json={"input_tokens": _PINNED_COUNTS[request.url.host]}, request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pinned", ["deployment-a", "deployment-b"])
+async def test_responses_count_goes_to_the_deployment_that_served_the_previous_response(
+    monkeypatch: pytest.MonkeyPatch, pinned: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                    "api_base": f"https://{identity}.test/v1",
+                },
+                "model_info": {"id": identity},
+            }
+            for identity in ("deployment-a", "deployment-b")
+        ],
+        optional_pre_call_checks=["responses_api_deployment_check"],
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_pinned_count_peer))
+    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        "openai", pinned, "resp_original"
+    )
+
+    with patch.object(openai_count_tokens_http, "get_async_httpx_client", return_value=client):
+        counts: Final = [
+            (
+                await count_request_tokens(
+                    request=TokenCountRequest(model="gpt-group", messages=[{"role": "user", "content": "again"}]),
+                    call_endpoint=True,
+                    responses_request={
+                        "model": "gpt-group",
+                        "input": "again",
+                        "previous_response_id": previous_response_id,
+                    },
+                )
+            ).total_tokens
+            for _ in range(8)
+        ]
+
+    assert counts == [_PINNED_COUNTS[f"{pinned}.test"]] * 8
