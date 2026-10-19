@@ -21,6 +21,8 @@ AIOHTTP_POOL_POISONING_RELEASES: Final = ("3.14.0", "3.14.1")
 AIOHTTP_POOL_POISONING_SOURCE: Final = "aio-libs/aiohttp#12953, fixed in aiohttp 3.14.2"
 ANYIO_STRANDED_LOCK_WAITER_FIX: Final = Version("4.14.0")
 ANYIO_STRANDED_LOCK_WAITER_SOURCE: Final = "agronholm/anyio#1145, fixed in anyio 4.14.0 released 2026-06-15"
+PYDANTIC_TYPED_DICT_EXTRA_ITEMS_SUPPORT: Final = Version("2.12.0")
+PYDANTIC_TYPED_DICT_EXTRA_ITEMS_SOURCE: Final = "TypeAdapter drops PEP 728 extra_items keys on pydantic 2.11.7, keeps them on 2.12.0 (probed 2026-10-19)"
 CLI_RUNTIME_DEPENDENCIES: Final = frozenset({"rich", "pyyaml", "requests"})
 PROXY_SERVER_ONLY_DEPENDENCIES: Final = frozenset(
     {
@@ -109,3 +111,17 @@ def test_declared_anyio_floor_is_at_or_above_stranded_lock_waiter_fix() -> None:
         specifier.operator == ">=" and Version(specifier.version) >= ANYIO_STRANDED_LOCK_WAITER_FIX
         for specifier in declared[0].specifier
     ), ANYIO_STRANDED_LOCK_WAITER_SOURCE
+
+
+def test_declared_pydantic_floor_keeps_typed_dict_extra_items() -> None:
+    declared: Final = tuple(
+        Requirement(requirement)
+        for requirement in PYPROJECT["project"]["dependencies"]
+        if canonicalize_name(Requirement(requirement).name) == "pydantic"
+    )
+    assert len(declared) == 1, PYDANTIC_TYPED_DICT_EXTRA_ITEMS_SOURCE
+    assert declared[0].marker is None, PYDANTIC_TYPED_DICT_EXTRA_ITEMS_SOURCE
+    assert any(
+        specifier.operator == ">=" and Version(specifier.version) >= PYDANTIC_TYPED_DICT_EXTRA_ITEMS_SUPPORT
+        for specifier in declared[0].specifier
+    ), PYDANTIC_TYPED_DICT_EXTRA_ITEMS_SOURCE
