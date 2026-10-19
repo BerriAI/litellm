@@ -3538,12 +3538,12 @@ def openai_proxy_gate(
     decoded path."""
     if is_proxy_admin(user_api_key_dict):
         return
-    decoded: Final = endpoint_path
+    decoded = endpoint_path
     for _ in range(3):
         step: Final = unquote(decoded)
         if step == decoded:
             break
-        decoded = step
+        decoded = step  # mutable-ok: the decode loop converges and the mutated value is the local decision input
     normalized: Final = posixpath.normpath(f"/{decoded.strip('/')}")
     canonical: Final = _strip_openai_version_prefix(normalized)
     if canonical.lower().startswith(_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES):
