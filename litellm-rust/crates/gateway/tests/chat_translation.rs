@@ -474,6 +474,23 @@ async fn bedrock_signs_with_the_keys_region_and_endpoint_in_the_config() {
     );
 }
 
+#[rstest]
+#[case::anthropic("claude")]
+#[case::bedrock("bedrock")]
+#[tokio::test]
+async fn a_translated_answer_carries_a_chat_completion_id_and_object(#[case] model: &str) {
+    let harness = harness().await;
+    let answer = harness
+        .json(json!({"model": model, "messages": answered("tooluse_1"), "max_tokens": 16}))
+        .await;
+
+    assert!(
+        answer["id"].as_str().unwrap().starts_with("chatcmpl-"),
+        "{answer}"
+    );
+    assert_eq!(answer["object"], "chat.completion");
+}
+
 #[tokio::test]
 async fn bedrock_tool_round_trip() {
     let harness = harness().await;
