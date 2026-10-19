@@ -8281,6 +8281,17 @@ class TestEuJevPassthroughRoute:
         assert "custom_body" in response.text
         assert not route.called
 
+    def test_rejects_streaming_that_would_skip_spend_tracking(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post(
+                "/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x", "stream": True}
+            )
+
+        assert response.status_code == 400
+        assert "Streaming" in response.text
+        assert not route.called
+
     @pytest.mark.asyncio
     async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("EU_JEV_API_KEY", "eu-jev-test-key")

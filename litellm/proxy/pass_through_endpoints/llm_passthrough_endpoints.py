@@ -727,8 +727,11 @@ async def eu_jev_proxy_route(
 
     [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
     """
-    if "custom_body" in await read_request_body(request):
+    body: Final = await read_request_body(request)
+    if "custom_body" in body:
         raise HTTPException(status_code=400, detail="custom_body is not supported for eu_jev requests")
+    if body.get("stream"):
+        raise HTTPException(status_code=400, detail="Streaming is not supported for eu_jev requests")
     base_target_url: Final = get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com"
     encoded_endpoint: Final = httpx.URL(endpoint).path
     normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
