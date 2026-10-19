@@ -12,6 +12,7 @@ from typing import Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -25,6 +26,7 @@ _JSON_OBJECTS: Final = TypeAdapter(Sequence[Mapping[str, object]], config=Config
 _STR_LIST: Final = TypeAdapter(list[str])
 
 DEEPSEEK_SEARCH_MAX_COUNT: Final = 50
+DEEPSEEK_SEARCH_MAX_QUERY_CHARS: Final = 128
 _DEEPSEEK_SEARCH_PATH: Final = "/v1/tools/search"
 # DeepSeek chat defaults DEEPSEEK_API_BASE to the /beta prefix; the search route lives at the root.
 _CHAT_ONLY_BASE_SUFFIXES: Final = ("/beta", "/v1")
@@ -76,7 +78,8 @@ class DeepSeekSearchConfig(BaseSearchConfig):
     ) -> dict[str, object]:  # mutable-ok: the http handler sends this as the JSON body
         """
         Unified params -> DeepSeek body: ``query`` (list joined with spaces, ``search_domain_filter``
-        folded in as ``site:`` operators), ``max_results`` -> ``count`` clamped to [1, 50].
+        folded in as ``site:`` operators, the whole string capped at 128 characters by DeepSeek),
+        ``max_results`` -> ``count`` clamped to [1, 50].
         ``country`` and ``max_tokens_per_page`` have no DeepSeek equivalent and are dropped.
         Everything outside the unified spec (``need_content``, ``ori_question``, ``localization``)
         is forwarded as-is.
@@ -88,7 +91,7 @@ class DeepSeekSearchConfig(BaseSearchConfig):
         passthrough: Final = {k: v for k, v in optional_params.items() if k not in unified}
         return {
             **passthrough,
-            "query": _with_site_filters(joined_query, domains),
+            "query": _checked_query(_with_site_filters(joined_query, domains), domains),
             **({"count": count} if count is not None else {}),
         }
 
@@ -125,6 +128,24 @@ def _with_site_filters(query: str, domains: tuple[str, ...]) -> str:
         return query
     site_clause: Final = " OR ".join(f"site:{domain}" for domain in domains)
     return f"{query} {site_clause}"
+
+
+def _checked_query(query: str, domains: tuple[str, ...]) -> str:
+    if len(query) <= DEEPSEEK_SEARCH_MAX_QUERY_CHARS:
+        return query
+    filter_note: Final = (
+        f" ({len(domains)} search_domain_filter entries are sent as site: operators inside the query)"
+        if domains
+        else ""
+    )
+    raise BadRequestError(
+        message=(
+            f"DeepSeek Search accepts a query of at most {DEEPSEEK_SEARCH_MAX_QUERY_CHARS} characters, "
+            f"got {len(query)}{filter_note}. Shorten the query or the domain filter."
+        ),
+        model="deepseek/search",
+        llm_provider="deepseek",
+    )
 
 
 def _count(raw: object) -> int | None:
