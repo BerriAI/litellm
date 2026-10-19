@@ -4,10 +4,55 @@ templates:
 - gateway/deployment.yaml
 - backend/deployment.yaml
 - ingress.yaml
+- monolith/deployment.yaml
 - lens/ingress.yaml
 - lens/service.yaml
 - lens/deployment.yaml
 tests:
+- it: connects the monolith Deployment to the shared Lens service
+  template: monolith/deployment.yaml
+  set:
+    fullnameOverride: lens-test
+    monolith.enabled: true
+    lensWorker.enabled: true
+    lensWorker.publicUrl: https://gateway.example/lens-ingest
+    lensWorker.serviceTokenSecret.name: lens-service
+    lensWorker.clickhouseSecret.name: lens-storage
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LITELLM_LENS_URL
+        value: http://lens-test-lens-worker:4318
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LITELLM_LENS_SERVICE_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: lens-service
+            key: service-token
+- it: routes /lens-ingest to the Lens worker in monolith mode
+  template: ingress.yaml
+  set:
+    fullnameOverride: lens-test
+    monolith.enabled: true
+    ingress.enabled: true
+    lensWorker.publicUrl: https://gateway.example/lens-ingest
+    lensWorker.enabled: true
+    lensWorker.serviceTokenSecret.name: lens-service
+    lensWorker.clickhouseSecret.name: lens-storage
+  asserts:
+  - contains:
+      path: spec.rules[0].http.paths
+      content:
+        path: /lens-ingest
+        pathType: Prefix
+        backend:
+          service:
+            name: lens-test-lens-worker
+            port:
+              number: 4318
 - it: connects gateway/deployment.yaml to the shared Lens service
   template: gateway/deployment.yaml
   set: &id001

@@ -1,0 +1,149 @@
+suite: test the LiteAdmin worker and its proxy wiring
+templates:
+  - liteadmin.yaml
+  - gateway/configmap.yaml
+  - gateway/deployment.yaml
+  - backend/deployment.yaml
+  - monolith/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders nothing when liteadmin is disabled
+    template: liteadmin.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: enabled renders a Deployment, Service and PVC on the shared image
+    set:
+      liteadmin.enabled: true
+      liteadmin.existingSecret: liteadmin-secret
+      liteadmin.gatewayUrl: http://gateway.example.com
+      liteadmin.model: gpt-4o
+    template: liteadmin.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+      - isKind:
+          of: Deployment
+        documentIndex: 0
+      - isKind:
+          of: Service
+        documentIndex: 1
+      - isKind:
+          of: PersistentVolumeClaim
+        documentIndex: 2
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:1.104.0
+        documentIndex: 0
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: ["--admin-agent"]
+        documentIndex: 0
+
+  - it: refuses to render without liteadmin.existingSecret
+    set:
+      liteadmin.enabled: true
+      liteadmin.gatewayUrl: http://gateway.example.com
+      liteadmin.model: gpt-4o
+    templates:
+      - backend/deployment.yaml
+    template: backend/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: liteadmin.existingSecret is required
+
+  - it: wires the liteadmin env onto the backend pod in componentized mode
+    set:
+      liteadmin.enabled: true
+      liteadmin.existingSecret: liteadmin-secret
+      liteadmin.gatewayUrl: http://gateway.example.com
+      liteadmin.model: gpt-4o
+    template: backend/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_ADMIN_AGENT_URL
+            value: http://RELEASE-NAME-litellm-liteadmin:10000
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADMIN_AGENT_SERVICE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: liteadmin-secret
+                key: ADMIN_AGENT_SERVICE_TOKEN
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROXY_BASE_URL
+            value: http://gateway.example.com
+
+  - it: leaves the liteadmin env off the gateway pod in componentized mode
+    set:
+      liteadmin.enabled: true
+      liteadmin.existingSecret: liteadmin-secret
+      liteadmin.gatewayUrl: http://gateway.example.com
+      liteadmin.model: gpt-4o
+    template: gateway/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_ADMIN_AGENT_URL
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADMIN_AGENT_SERVICE_TOKEN
+
+  - it: wires the liteadmin env onto the monolith pod in monolith mode
+    set:
+      monolith.enabled: true
+      liteadmin.enabled: true
+      liteadmin.existingSecret: liteadmin-secret
+      liteadmin.gatewayUrl: http://gateway.example.com
+      liteadmin.model: gpt-4o
+    template: monolith/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_ADMIN_AGENT_URL
+            value: http://RELEASE-NAME-litellm-liteadmin:10000
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADMIN_AGENT_SERVICE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: liteadmin-secret
+                key: ADMIN_AGENT_SERVICE_TOKEN
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROXY_BASE_URL
+            value: http://gateway.example.com
+
+  - it: a user-supplied PROXY_BASE_URL in extraEnv wins over liteadmin.gatewayUrl
+    set:
+      liteadmin.enabled: true
+      liteadmin.existingSecret: liteadmin-secret
+      liteadmin.gatewayUrl: http://gateway.example.com
+      liteadmin.model: gpt-4o
+      backend.extraEnv:
+        - name: PROXY_BASE_URL
+          value: https://custom.example.com
+    template: backend/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROXY_BASE_URL
+            value: http://gateway.example.com
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROXY_BASE_URL
+            value: https://custom.example.com
