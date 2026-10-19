@@ -22,6 +22,7 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -1622,7 +1623,7 @@ async def _update_team_spend(team_id: str, response_cost: float) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_cache_adds_spend_to_the_cached_team_only(monkeypatch):
+async def test_update_cache_adds_spend_to_the_cached_team_only(monkeypatch: pytest.MonkeyPatch) -> None:
     cache: Final = UserApiKeyCache()
     cache.set_cache(key="team_id:warm", value=LiteLLM_TeamTableCachedObj(team_id="warm", spend=5.0, blocked=True))
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
@@ -1655,8 +1656,10 @@ async def _invalidated_by_a_peer(cache: UserApiKeyCache, team_id: str) -> None:
     [(_block_on_this_worker, True), (_invalidated_by_a_peer, None)],
 )
 async def test_update_cache_never_restores_a_team_a_management_write_replaced(
-    management_write, expected_blocked, monkeypatch
-):
+    management_write: Callable[[UserApiKeyCache, str], Awaitable[None]],
+    expected_blocked: bool | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     team_id: Final = "kill-switch"
     cache: Final = UserApiKeyCache()
     cache.set_cache(key=f"team_id:{team_id}", value=LiteLLM_TeamTableCachedObj(team_id=team_id, blocked=False))
