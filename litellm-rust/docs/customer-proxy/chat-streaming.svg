@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="800" viewBox="0 0 980 800" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="800" fill="#ffffff"/>
+  <text x="20" y="30" font-size="17" font-weight="bold" fill="#111">POST /v1/chat/completions "stream": true to an anthropic/ or bedrock/ deployment</text>
+
+  <!-- client request -->
+  <rect x="20" y="60" width="150" height="56" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="95" y="84" text-anchor="middle" fill="#111" font-weight="bold">Client</text>
+  <text x="95" y="102" text-anchor="middle" fill="#333">stream, stream_options</text>
+
+  <!-- gateway -->
+  <rect x="220" y="50" width="320" height="76" rx="6" fill="#f5f5f5" stroke="#666"/>
+  <text x="380" y="72" text-anchor="middle" fill="#111" font-weight="bold">gateway-inference chat_completions</text>
+  <text x="380" y="92" text-anchor="middle" fill="#333">is_stream: stream_machine, Sse encoder,</text>
+  <text x="380" y="110" text-anchor="middle" fill="#333">ReportedUsage response extension</text>
+  <line x1="170" y1="88" x2="218" y2="88" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- run_stream -->
+  <rect x="20" y="160" width="560" height="196" rx="6" fill="#eef7ee" stroke="#3c8d3c"/>
+  <text x="300" y="182" text-anchor="middle" fill="#111" font-weight="bold">inference-chat run_stream (route_where retries)</text>
+  <text x="36" y="206" fill="#333">1. strip stream and stream_options, keep include_usage</text>
+  <text x="36" y="226" fill="#333">2. resolve, prepare, the same param rules as non-streaming</text>
+  <text x="36" y="246" fill="#333">3. streaming_request: anthropic adds "stream": true,</text>
+  <text x="54" y="264" fill="#333">bedrock /converse becomes /converse-stream</text>
+  <text x="36" y="284" fill="#333">4. auth and interceptors, send; timeout bounds the head,</text>
+  <text x="54" y="302" fill="#333">then an idle timeout per read, no total limit</text>
+  <text x="36" y="322" fill="#333">5. wait for the first OpenAI chunk before answering, so an</text>
+  <text x="54" y="340" fill="#333">error up to there falls over to another deployment</text>
+  <line x1="380" y1="126" x2="380" y2="158" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- upstream -->
+  <rect x="660" y="160" width="300" height="110" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="810" y="186" text-anchor="middle" fill="#111" font-weight="bold">Provider</text>
+  <text x="810" y="208" text-anchor="middle" fill="#333">Anthropic: text/event-stream</text>
+  <text x="810" y="228" text-anchor="middle" fill="#333">Bedrock: AWS event stream</text>
+  <text x="810" y="248" text-anchor="middle" fill="#333">(application/vnd.amazon.eventstream)</text>
+  <line x1="580" y1="200" x2="658" y2="200" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- pipeline row -->
+  <text x="20" y="398" font-weight="bold" fill="#111">Per chunk, pulled by the client body (dropping it drops the upstream request)</text>
+
+  <rect x="20" y="414" width="170" height="86" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="105" y="438" text-anchor="middle" fill="#111" font-weight="bold">provider stream</text>
+  <text x="105" y="458" text-anchor="middle" fill="#333">SSE events or</text>
+  <text x="105" y="476" text-anchor="middle" fill="#333">event-stream frames</text>
+
+  <rect x="220" y="414" width="190" height="86" rx="6" fill="#fff8e6" stroke="#b8860b"/>
+  <text x="315" y="438" text-anchor="middle" fill="#111" font-weight="bold">decoder</text>
+  <text x="315" y="458" text-anchor="middle" fill="#333">ModelResponseIterator</text>
+  <text x="315" y="476" text-anchor="middle" fill="#333">ConverseStreamIterator</text>
+
+  <rect x="440" y="414" width="220" height="86" rx="6" fill="#eef7ee" stroke="#3c8d3c"/>
+  <text x="550" y="438" text-anchor="middle" fill="#111" font-weight="bold">StreamWrapper</text>
+  <text x="550" y="458" text-anchor="middle" fill="#333">OpenAI chunks: role, one id,</text>
+  <text x="550" y="476" text-anchor="middle" fill="#333">finish chunk, usage chunk</text>
+
+  <rect x="690" y="414" width="130" height="86" rx="6" fill="#f5f5f5" stroke="#666"/>
+  <text x="755" y="438" text-anchor="middle" fill="#111" font-weight="bold">Sse encoder</text>
+  <text x="755" y="458" text-anchor="middle" fill="#333">data: frames,</text>
+  <text x="755" y="476" text-anchor="middle" fill="#333">data: [DONE]</text>
+
+  <rect x="850" y="414" width="110" height="86" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="905" y="452" text-anchor="middle" fill="#111" font-weight="bold">Client</text>
+  <text x="905" y="472" text-anchor="middle" fill="#333">OpenAI SSE</text>
+
+  <line x1="190" y1="457" x2="218" y2="457" stroke="#333" marker-end="url(#a)"/>
+  <line x1="410" y1="457" x2="438" y2="457" stroke="#333" marker-end="url(#a)"/>
+  <line x1="660" y1="457" x2="688" y2="457" stroke="#333" marker-end="url(#a)"/>
+  <line x1="820" y1="457" x2="848" y2="457" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- meter -->
+  <rect x="440" y="530" width="380" height="76" rx="6" fill="#ffffff" stroke="#b8860b"/>
+  <text x="630" y="552" text-anchor="middle" fill="#111" font-weight="bold">meter and observers (gateway-inference Finish)</text>
+  <text x="630" y="572" text-anchor="middle" fill="#333">usage from ReportedUsage, set at stream end</text>
+  <text x="630" y="590" text-anchor="middle" fill="#333">even when the client did not ask for include_usage</text>
+  <line x1="550" y1="500" x2="550" y2="528" stroke="#333" marker-end="url(#a)"/>
+  <line x1="755" y1="500" x2="755" y2="528" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- bottom boxes -->
+  <rect x="20" y="530" width="390" height="250" rx="6" fill="#ffffff" stroke="#3c8d3c"/>
+  <text x="215" y="552" text-anchor="middle" fill="#111" font-weight="bold">chunk shape (as the Python proxy)</text>
+  <text x="36" y="576" fill="#333">first chunk carries role: assistant</text>
+  <text x="36" y="596" fill="#333">usage stripped from every chunk; include_usage adds</text>
+  <text x="54" y="614" fill="#333">a final chunk with choices [{index 0, delta {}}]</text>
+  <text x="36" y="634" fill="#333">finish_reason: end_turn stop, max_tokens length,</text>
+  <text x="54" y="652" fill="#333">tool_use tool_calls; else stop or tool_calls at end</text>
+  <text x="36" y="672" fill="#333">tool call deltas with content "", empty args "{}"</text>
+  <text x="36" y="692" fill="#333">reasoning_content and thinking_blocks (with index,</text>
+  <text x="54" y="710" fill="#333">signature, redacted_thinking)</text>
+  <text x="36" y="730" fill="#333">model: the name the client asked for</text>
+  <text x="36" y="750" fill="#555">bedrock chunks carry provider_specific_fields {}</text>
+
+  <rect x="440" y="630" width="520" height="150" rx="6" fill="#ffffff" stroke="#999" stroke-dasharray="5,4"/>
+  <text x="700" y="652" text-anchor="middle" fill="#111" font-weight="bold">errors</text>
+  <text x="456" y="676" fill="#333">upstream status before the first chunk: retry or fallback,</text>
+  <text x="474" y="694" fill="#333">then an OpenAI JSON error with the same status</text>
+  <text x="456" y="718" fill="#333">anthropic error event, bedrock exception (throttling 429,</text>
+  <text x="474" y="736" fill="#333">validation 400, ...) after the first chunk: a final</text>
+  <text x="474" y="754" fill="#333">data: {"error": ...} frame, no [DONE], no usage recorded</text>
+</svg>

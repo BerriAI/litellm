@@ -27,7 +27,8 @@ use crate::{
             streaming::{ChatStream, StreamShape},
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
+                STREAM_PARAM, Unsupported, ValidatedEnvironment, unsupported_message,
+                unsupported_param,
             },
         },
         messages::streaming::event_stream as messages_event_stream,
@@ -199,6 +200,14 @@ impl BaseConfig for AnthropicConfig {
             messages_event_stream,
             ModelResponseIterator::new(shape),
         ))
+    }
+
+    /// Python sends `stream: true` in the body, after the other params.
+    fn streaming_request(&self, url: String, mut body: Value) -> Result<(String, Value), Error> {
+        if let Value::Object(fields) = &mut body {
+            fields.insert(STREAM_PARAM.into(), Value::Bool(true));
+        }
+        Ok((url, body))
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {

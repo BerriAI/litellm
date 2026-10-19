@@ -3750,6 +3750,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "bytes",
  "envy",
  "futures-util",
  "http 1.4.2",
@@ -3759,6 +3760,7 @@ dependencies = [
  "litellm-config",
  "litellm-db",
  "litellm-db-testing",
+ "litellm-framer",
  "litellm-gateway-auth",
  "litellm-gateway-hooks",
  "litellm-gateway-inference",
@@ -4059,6 +4061,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-framer",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",
@@ -4072,7 +4075,9 @@ dependencies = [
  "rstest",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
+ "uuid",
  "wiremock",
 ]
 

@@ -29,12 +29,17 @@ pub enum ChatCompletionThinkingBlock {
         signature: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<Value>,
+        /// Which thinking block of the response a streamed piece belongs to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u64>,
     },
     RedactedThinking {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         data: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u64>,
     },
 }
 
@@ -46,6 +51,21 @@ pub struct PromptTokensDetails {
     pub cached_tokens: u64,
     pub cache_creation_tokens: u64,
     pub text_tokens: u64,
+    /// The cache writes again, under the name Python's `Usage` gives them on a stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    /// The cache writes split by lifetime (`ephemeral_5m_input_tokens`, `ephemeral_1h_input_tokens`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_token_details: Option<Value>,
+}
+
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Default)]
+pub struct CompletionTokensDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_tokens: Option<u64>,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -55,6 +75,15 @@ pub struct ChatCompletionsUsage {
     pub completion_tokens: u64,
     pub total_tokens: u64,
     pub prompt_tokens_details: PromptTokensDetails,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens_details: Option<CompletionTokensDetails>,
+    /// Anthropic's server tool counts, `{"web_search_requests": n}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_tool_use: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]

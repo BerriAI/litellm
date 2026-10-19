@@ -1,13 +1,14 @@
 //! Builds the hooks and observers inference requests run through, and the per-deployment prices
 //! observers that read cost need.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
-use litellm_config::Config;
+use litellm_config::{Config, Model};
 use litellm_gateway_hooks::{
     DEFAULT_QUEUE, Facts, Hook, Observer, Observers, Pipeline, Prices, deployment_fields,
 };
 use litellm_gateway_inference::{Gateway, Hooks};
+use litellm_llms::base_llm::model_info::ModelInfo;
 use litellm_model_catalog::{Catalog, Provenance};
 use litellm_secrets::source::SecretSource;
 use serde_json::{Map, Value};
@@ -29,18 +30,26 @@ pub async fn install(
     hooks: Vec<Arc<dyn Hook>>,
     observers: Vec<Arc<dyn Observer>>,
 ) -> Result<(), Error> {
-    if hooks.is_empty() && observers.is_empty() {
+    let serves_azure = config.model_list.iter().any(is_azure);
+    if hooks.is_empty() && observers.is_empty() && !serves_azure {
         return Ok(());
     }
     let needs_cost = observers
         .iter()
         .any(|observer| observer.reads().contains(Facts::COST))
         || hooks.iter().any(|hook| hook.reads().contains(Facts::COST));
+    let catalog = match needs_cost || serves_azure {
+        true => load_catalog(inference).await.map(Arc::new),
+        false => None,
+    };
+    if let Some(catalog) = catalog.as_ref().filter(|_| serves_azure) {
+        inference.install_model_info(Arc::new(CostMap::new(catalog.clone())));
+    }
+    if hooks.is_empty() && observers.is_empty() {
+        return Ok(());
+    }
     let prices = match needs_cost {
-        true => {
-            let catalog = load_catalog(inference).await;
-            prices(config, inference, catalog.as_ref())
-        }
+        true => prices(config, inference, catalog.as_deref()),
         false => Prices::default(),
     };
     let names: Vec<_> = hooks
@@ -135,7 +144,9 @@ async fn fetch(inference: &Gateway, url: &str) -> Result<Vec<u8>, Box<dyn std::e
 }
 
 /// Every deployment's prices: the cost map entry for its model, overlaid by the prices its
-/// `model_info` and `litellm_params` set, keyed by the router's deployment ids.
+/// `model_info` and `litellm_params` set, keyed by the router's deployment ids. An Azure
+/// deployment that names neither a `base_model` nor prices of its own is priced by the model
+/// its response names, as the proxy prices it.
 fn prices(config: &Config, inference: &Gateway, catalog: Option<&Catalog>) -> Prices {
     let mut prices = Prices::default();
     for (model, id) in config
@@ -151,16 +162,73 @@ fn prices(config: &Config, inference: &Gateway, catalog: Option<&Catalog>) -> Pr
                 .iter()
                 .map(|(name, value)| (name, value.clone())),
         );
-        let base_model = model_info.get("base_model").and_then(Value::as_str);
-        let fields = deployment_fields(
-            catalog,
-            &model.litellm_params.model,
-            base_model,
-            &[&model_info, &params],
-        );
+        let base_model = params
+            .get("base_model")
+            .or_else(|| model_info.get("base_model"))
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty());
+        let name = match is_azure(model) && !model.litellm_params.model.starts_with(AZURE_ROUTE) {
+            true => format!("{AZURE_ROUTE}{}", model.litellm_params.model),
+            false => model.litellm_params.model.clone(),
+        };
+        let overrides = [&model_info, &params];
+        if is_azure(model)
+            && base_model.is_none()
+            && deployment_fields(None, &name, None, &overrides).is_empty()
+        {
+            prices.price_by_response_model(id.into(), AZURE_PROVIDER);
+        }
+        let fields = deployment_fields(catalog, &name, base_model, &overrides);
         prices.insert(id.into(), &fields);
     }
+    if let Some(catalog) = catalog.filter(|_| prices.prices_by_response_model()) {
+        for name in catalog
+            .model_names()
+            .filter(|name| name.starts_with(AZURE_ROUTE))
+        {
+            if let Some(found) = catalog.lookup(name) {
+                prices.insert_model(name, found.entry.fields());
+            }
+        }
+    }
     prices
+}
+
+const AZURE_PROVIDER: &str = "azure";
+const AZURE_ROUTE: &str = "azure/";
+
+fn is_azure(model: &Model) -> bool {
+    match model.litellm_params.custom_llm_provider.as_deref() {
+        Some(provider) => provider == AZURE_PROVIDER,
+        None => model.litellm_params.model.starts_with(AZURE_ROUTE),
+    }
+}
+
+/// The model cost map as the capabilities Azure's param rules read.
+struct CostMap {
+    catalog: Arc<Catalog>,
+    keys: HashSet<String>,
+}
+
+impl CostMap {
+    fn new(catalog: Arc<Catalog>) -> Self {
+        let keys = catalog
+            .model_names()
+            .filter_map(|name| catalog.lookup(name))
+            .flat_map(|found| found.entry.fields().keys().cloned().collect::<Vec<_>>())
+            .collect();
+        Self { catalog, keys }
+    }
+}
+
+impl ModelInfo for CostMap {
+    fn entry(&self, model: &str) -> Option<&Map<String, Value>> {
+        self.catalog.lookup(model).map(|found| found.entry.fields())
+    }
+
+    fn declares(&self, key: &str) -> bool {
+        self.keys.contains(key)
+    }
 }
 
 fn json_object<'a, V: serde::Serialize + 'a>(

@@ -29,6 +29,7 @@ pub(super) async fn execute(
         config,
         url,
         body,
+        stream_shape: _,
         optional_params,
         environment,
         secrets,
