@@ -25,7 +25,7 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     LiteLLM_ManagedVectorStore,
 )
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_utils import is_request_body_safe
+from litellm.proxy.auth.auth_utils import get_request_route, is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -683,6 +683,7 @@ async def rag_ingest(
                 general_settings=general_settings,
                 llm_router=llm_router,
                 model="",
+                route=get_request_route(request=request),
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
