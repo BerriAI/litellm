@@ -5162,7 +5162,7 @@ class DailyTagSpendTransaction(BaseDailySpendTransaction):
     # "" when the request had no team. Not required: entries queued by a pod running the
     # previous release, or replayed from the Redis buffer across an upgrade, carry no such key,
     # and the upsert reads a missing value as "".
-    team_id: NotRequired[str]
+    team_id: ReadOnly[NotRequired[str]]
 
 
 class DailyAgentSpendTransaction(BaseDailySpendTransaction):

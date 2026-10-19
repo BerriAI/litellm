@@ -918,7 +918,7 @@ class DBSpendUpdateWriter:
             model_group=base.get("model_group"),
             endpoint=base.get("endpoint"),
             mcp_namespaced_tool_name=base.get("mcp_namespaced_tool_name"),
-            team_id=payload.get("team_id") or "",
+            team_id=payload.get("team_id") or "",  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
             targets=tuple(
                 DailyBaselineTarget(entity=entity, entity_id=identity)
                 for entity, values in bases
@@ -3035,7 +3035,9 @@ class DBSpendUpdateWriter:
             return
 
         request_tags: Final = daily_spend_entity_ids(payload, "tag")
-        team_id: Final = payload.get("team_id") or ""
+        # .get, not indexing: the caller swallows exceptions at debug level, so a payload without
+        # team_id must still record its tag spend (as unattributed) rather than drop it silently.
+        team_id: Final = payload.get("team_id") or ""  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
         for tag in request_tags:
             if tag is None:
                 continue
