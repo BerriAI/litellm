@@ -2067,6 +2067,56 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_aresponses_websocket_turn_reaches_a_custom_logger_through_the_async_hook_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils import thread_pool_executor
+    from litellm.responses.main import base_llm_http_handler
+
+    class InlineExecutor:
+        def submit(self, fn, *args, **kwargs):
+            fn(*args, **kwargs)
+
+    sessions: list[LitellmLogging] = []
+
+    async def open_session(**kwargs):
+        sessions.append(kwargs["logging_obj"])
+
+    async_logged = asyncio.Event()
+    sync_call_ids: list[str] = []
+    async_call_ids: list[str] = []
+
+    class CaptureLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            sync_call_ids.append(kwargs["litellm_call_id"])
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            async_call_ids.append(kwargs["litellm_call_id"])
+            async_logged.set()
+
+    logger = CaptureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "success_callback", ["cache", logger])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logger])
+    monkeypatch.setattr(thread_pool_executor, "executor", InlineExecutor())
+    with patch.object(  # test-quality-ok: the provider socket is the seam; how a turn of the session logs is under test
+        base_llm_http_handler, "async_responses_websocket", AsyncMock(side_effect=open_session)
+    ):
+        await litellm._aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
+    turn = sessions[0].copy_for_new_call("ws-turn-2", dt_object.now())
+
+    await turn.dispatch_success_handlers(
+        litellm.ResponsesAPIResponse(
+            id="resp_turn_2", created_at=0, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[]
+        ),
+        prefer_async_handlers=True,
+    )
+    await asyncio.wait_for(async_logged.wait(), timeout=10)
+
+    assert (async_call_ids, sync_call_ids) == (["ws-turn-2"], [])
+
+
+@pytest.mark.asyncio
 async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_success_log(
     monkeypatch: pytest.MonkeyPatch,
 ):
