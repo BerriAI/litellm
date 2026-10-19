@@ -1219,14 +1219,6 @@ class DBSpendUpdateWriter:
         try:
             if hashed_token is None or prisma_client is None:
                 return
-            from litellm.proxy.proxy_server import proxy_logging_obj
-            from litellm.proxy.spend_tracking.charge_receipt_request import receipt_runtime
-
-            receipts: Final = receipt_runtime(proxy_logging_obj)
-            if receipts is not None and hashed_token in receipts.settings.key_hashes:
-                verbose_proxy_logger.error("Refusing an unreceipted legacy spend increment for a required-receipt key")
-                return
-
             await self.spend_update_queue.add_update(
                 update=SpendUpdateQueueItem(
                     entity_type=Litellm_EntityType.KEY,

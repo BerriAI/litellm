@@ -144,6 +144,7 @@ async def authorize_charge_receipt(
     if not await runtime.ready():
         raise HTTPException(503, "Durable charge accounting is temporarily unavailable.")
     context: Final = BillingContext(request_id=claims.request_id, key_hash=key_hash)
+    auth.set_charge_receipt_factory(lambda: runtime.bind(context))
     request.state.charge_receipt_context = context  # rebind-ok: carry validated attribution into the response barrier
 
 

@@ -2503,4 +2503,4 @@ async def test_receipt_stream_finishes_charge_capture_after_client_closes(
     if provider_fails:
         assert not query.calls
     else:
-        assert json.loads(str(query.calls[0].parameters[2])) == expected.model_dump()
+        assert json.loads(str(query.calls[0][2])) == expected.model_dump()

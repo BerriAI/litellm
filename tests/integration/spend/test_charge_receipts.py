@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Final
 from uuid import uuid4
@@ -286,7 +287,7 @@ async def test_stream_chunk_does_not_commit_zero_before_final_usage(journal: Jou
     assert (await journal.balance()).spend == 0
 
 
-async def test_required_partial_failure_updates_rollups_once_with_error_logging_disabled(
+async def test_only_receipted_calls_skip_the_legacy_key_debit(
     journal: JournalCase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm import Usage
@@ -316,6 +317,7 @@ async def test_required_partial_failure_updates_rollups_once_with_error_logging_
             runtime: Final = ChargeReceiptRuntime(
                 receipt_settings(journal), journal.store, finalize=ProxyDBLogger().finalize_required_charge
             )
+            logging.charge_receipts = runtime
             call: Final = Logging(
                 model=journal.receipt.model,
                 messages=[],
@@ -360,6 +362,23 @@ async def test_required_partial_failure_updates_rollups_once_with_error_logging_
             assert (await journal.balance()).spend == 0.25
             cached_spend, _ = await proxy_server.read_spend_counter_cache_value("spend:key:" + journal.receipt.key_hash)
             assert cached_spend == 0.25
+            assert await journal.receipt_count() == 1
+            await logging.db_spend_update_writer.update_database(
+                token=journal.receipt.key_hash,
+                response_cost=0.25,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                org_id=None,
+                kwargs={"model": journal.receipt.model, "litellm_params": {}},
+                completion_response=None,
+                start_time=datetime.now(timezone.utc),
+                end_time=datetime.now(timezone.utc),
+            )
+            while (await journal.balance()).spend != 0.5:
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.01)
+                await logging.db_spend_update_writer.db_update_spend_transaction_handler(client, 1, logging)
             assert await journal.receipt_count() == 1
     finally:
         await journal.database.execute_raw('DELETE FROM "LiteLLM_TeamMembership" WHERE team_id=$1', identity)

@@ -128,7 +128,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
-from litellm.types.charge_receipts import CHARGE_OUTCOME_KEY, RequiredChargeCapture
+from litellm.types.charge_receipts import CHARGE_OUTCOME_KEY, RequiredChargeCapture, inherited_charge_capture
 from litellm.types.containers.main import ContainerObject
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
@@ -3733,6 +3733,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 # print standard logging payload
                 self._emit_stored_standard_logging_payload()
         captured_response: Final[object] = self.model_call_details.get("async_complete_streaming_response", result)
+        complete_charge: Final = captured_response is not None and (
+            self.stream is not True or self._is_assembled_stream_success(captured_response)
+        )
+        if complete_charge and self.required_charge_capture is None:
+            self.required_charge_capture = inherited_charge_capture(
+                _LITELLM_PARAMS.validate_python(self.model_call_details.get("litellm_params") or {})
+            )
         required_charge_outcome: Final = (
             await self.required_charge_capture.capture_success(
                 self.model_call_details,
@@ -3740,11 +3747,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time,
                 end_time,
             )
-            if (
-                self.required_charge_capture is not None
-                and captured_response is not None
-                and (self.stream is not True or self._is_assembled_stream_success(captured_response))
-            )
+            if self.required_charge_capture is not None and complete_charge
             else None
         )
 

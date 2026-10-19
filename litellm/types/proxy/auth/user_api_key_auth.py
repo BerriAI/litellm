@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # moved UserAPIKeyAuth fields and the Span alias are typed Any
@@ -13,6 +13,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.types.agents import AgentCaller, AgentResponse
+from litellm.types.charge_receipts import RequiredChargeCapture
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.carried_budget_state import (
@@ -187,6 +188,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     agent_invocation_cost: float | None = Field(default=None, exclude=True)
     billing_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     _managed_delegation_verified: bool = PrivateAttr(default=False)
+    _charge_receipt_factory: Callable[[], RequiredChargeCapture] | None = PrivateAttr(default=None)
     managed_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     managed_agent_context: ManagedAgentContext | None = Field(default=None, exclude=True)
     agent_caller: AgentCaller | None = Field(
@@ -216,6 +218,12 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    def set_charge_receipt_factory(self, factory: Callable[[], RequiredChargeCapture]) -> None:
+        self._charge_receipt_factory = factory
+
+    def new_charge_capture(self) -> RequiredChargeCapture | None:
+        return self._charge_receipt_factory() if self._charge_receipt_factory is not None else None
+
     @model_validator(mode="before")
     @classmethod
     def check_api_key(cls, values: object) -> object:
@@ -240,6 +248,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("invoked_agent_policy", None)
         values.pop("agent_invocation_cost", None)
         values.pop("billing_agent_policy", None)
+        values.pop("_charge_receipt_factory", None)
         api_key: Final = values.get("api_key")
         if api_key is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(api_key)})  # pyright: ignore[reportArgumentType]  # non-str fails in the hasher

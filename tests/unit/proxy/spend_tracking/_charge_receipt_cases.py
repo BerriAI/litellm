@@ -1,6 +1,5 @@
 import asyncio
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, TypeAlias
 
@@ -34,23 +33,17 @@ SETTINGS: Final = ChargeReceiptSettings(
 STAMP: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-@dataclass(frozen=True, slots=True)
-class QueryCall:
-    query: str
-    parameters: tuple[object, ...]
-
-
 class ScriptedQuery:
     def __init__(self, replies: tuple[Reply, ...] = (), *, hold: bool = False) -> None:
         self.replies = replies
         self.hold: Final = hold
-        self.calls: tuple[QueryCall, ...] = ()
+        self.calls: tuple[tuple[object, ...], ...] = ()
         self.entered: Final = asyncio.Event()
         self.release: Final = asyncio.Event()
 
     async def __call__(self, query: str, *parameters: object) -> Sequence[Mapping[str, object]]:
         index: Final = len(self.calls)
-        self.calls = (*self.calls, QueryCall(query, parameters))
+        self.calls = (*self.calls, parameters)
         if index >= len(self.replies):
             pytest.fail(f"Unexpected database call {index + 1}")
         self.entered.set()

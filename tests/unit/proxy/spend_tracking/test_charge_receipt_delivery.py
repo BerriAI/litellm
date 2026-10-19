@@ -57,8 +57,8 @@ async def test_unacknowledged_delivery_is_retained_for_retry(case: str, reason: 
         publisher: Final = ChargeReceiptPublisher(ChargeReceiptStore(query), SETTINGS, client)
         assert await publisher.deliver_once() == 0
     assert len(query.calls) == 2
-    assert (RECEIPT.event_id,) in query.calls[1].parameters
-    assert publisher.owner in query.calls[1].parameters and reason in query.calls[1].parameters
+    assert (RECEIPT.event_id,) in query.calls[1]
+    assert publisher.owner in query.calls[1] and reason in query.calls[1]
 
 
 @pytest.mark.asyncio
@@ -82,9 +82,9 @@ async def test_partial_acknowledgement_never_discards_the_unconfirmed_receipt() 
     async with httpx.AsyncClient(transport=httpx.MockTransport(receiver)) as client:
         publisher: Final = ChargeReceiptPublisher(ChargeReceiptStore(query), SETTINGS, client)
         assert await publisher.deliver_once() == 1
-    assert (RECEIPT.event_id,) in query.calls[1].parameters and publisher.owner in query.calls[1].parameters
-    assert (second.event_id,) in query.calls[2].parameters
-    assert publisher.owner in query.calls[2].parameters and "receipt_rejected" in query.calls[2].parameters
+    assert (RECEIPT.event_id,) in query.calls[1] and publisher.owner in query.calls[1]
+    assert (second.event_id,) in query.calls[2]
+    assert publisher.owner in query.calls[2] and "receipt_rejected" in query.calls[2]
 
 
 @pytest.mark.asyncio
@@ -98,4 +98,4 @@ async def test_fully_acknowledged_delivery_does_not_schedule_a_retry() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(receiver)) as client:
         publisher: Final = ChargeReceiptPublisher(ChargeReceiptStore(query), SETTINGS, client)
         assert await publisher.deliver_once() == 1
-    assert len(query.calls) == 2 and query.calls[1].parameters == ((RECEIPT.event_id,), publisher.owner)
+    assert len(query.calls) == 2 and query.calls[1] == ((RECEIPT.event_id,), publisher.owner)

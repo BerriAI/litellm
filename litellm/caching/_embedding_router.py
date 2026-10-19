@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -42,7 +43,7 @@ def build_router_embedding_metadata(
     request_metadata: Mapping[str, object] | None,
 ) -> Mapping[str, object]:
     """Forward the caller's full metadata, flagged as a semantic-cache embedding."""
-    metadata: Final = dict(request_metadata or {})
+    metadata: Final = without_budget_reservation(request_metadata or {})
     metadata["semantic-cache-embedding"] = True
     return metadata
 
