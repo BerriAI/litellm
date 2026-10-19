@@ -19,6 +19,7 @@ from functools import lru_cache
 from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
+from anyio import fail_after
 from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
@@ -111,9 +112,11 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
+from litellm.litellm_core_utils.logging_worker import optional_callback_budget
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
+    perform_redaction,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redact_streaming_responses_for_custom_logger,
@@ -3526,6 +3529,68 @@ class Logging(LiteLLMLoggingBaseClass):
                 e,
             )
 
+    async def _run_async_success_hooks(
+        self, callbacks: Sequence[str | Callable[..., object] | CustomLogger], result: object
+    ) -> object:
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomGuardrail):
+                    from litellm.types.guardrails import GuardrailEventHooks
+
+                    if (
+                        callback.should_run_guardrail(
+                            data=self.model_call_details,
+                            event_type=GuardrailEventHooks.logging_only,
+                        )
+                        is not True
+                    ):
+                        continue
+
+                    self.shadow_eval_request_snapshot = None
+                    self.model_call_details, result = await callback.async_logging_hook(
+                        kwargs=self.model_call_details,
+                        result=result,
+                        call_type=self.call_type,
+                    )
+                elif isinstance(callback, CustomLogger):
+                    result = cast(  # cast-ok: legacy redaction returns heterogeneous response objects
+                        object,
+                        redact_message_input_output_from_custom_logger(
+                            result=result, litellm_logging_obj=self, custom_logger=callback
+                        ),
+                    )
+                    self.model_call_details, result = await callback.async_logging_hook(
+                        kwargs=self.model_call_details,
+                        result=result,
+                        call_type=self.call_type,
+                    )
+            except Exception:  # noqa: BLE001  # one failing hook must not skip later callbacks (slot release)
+                verbose_logger.error(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred in async_logging_hook %s",
+                    traceback.format_exc(),
+                )
+                self._handle_callback_failure(callback=callback)
+
+        return result
+
+    async def _prepare_accounting_success_hooks(
+        self, callbacks: Sequence[str | Callable[..., object] | CustomLogger], result: object
+    ) -> object:
+        from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+
+        try:
+            with fail_after(optional_callback_budget(LOGGING_WORKER_MAX_TIME_PER_COROUTINE, fraction=0.5)):
+                return await self._run_async_success_hooks(callbacks, result)
+        except TimeoutError:
+            self.shadow_eval_request_snapshot = None
+            self.model_call_details = redact_streaming_responses_for_custom_logger(
+                self.model_call_details, CustomLogger(message_logging=False)
+            )
+            verbose_logger.warning("Logging hooks timed out; recording spend with request and response bodies redacted")
+            return cast(  # cast-ok: legacy redaction returns heterogeneous response objects
+                object, perform_redaction(self.model_call_details, result)
+            )
+
     async def async_success_handler(
         self,
         result: object = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
@@ -3735,7 +3800,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self._get_completed_success_callbacks(asynchronous=True) if not self.stream else callbacks
         )
 
-        result = redact_message_input_output_from_logging(
+        redacted_result: Final = redact_message_input_output_from_logging(
             model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
             result=result,
         )
@@ -3743,45 +3808,30 @@ class Logging(LiteLLMLoggingBaseClass):
         ## LOGGING HOOK ##
 
         hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
-        for callback in hook_callbacks:
-            try:
-                if isinstance(callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
-                    if (
-                        callback.should_run_guardrail(
-                            data=self.model_call_details,
-                            event_type=GuardrailEventHooks.logging_only,
-                        )
-                        is not True
-                    ):
-                        continue
-
-                    self.shadow_eval_request_snapshot = None
-                    self.model_call_details, result = await callback.async_logging_hook(
-                        kwargs=self.model_call_details,
-                        result=result,
-                        call_type=self.call_type,
-                    )
-                elif isinstance(callback, CustomLogger):
-                    result = redact_message_input_output_from_custom_logger(
-                        result=result, litellm_logging_obj=self, custom_logger=callback
-                    )
-                    self.model_call_details, result = await callback.async_logging_hook(
-                        kwargs=self.model_call_details,
-                        result=result,
-                        call_type=self.call_type,
-                    )
-            except Exception:  # noqa: BLE001  # one failing hook must not skip later callbacks (slot release)
-                verbose_logger.error(
-                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred in async_logging_hook %s",
-                    traceback.format_exc(),
-                )
-                self._handle_callback_failure(callback=callback)
+        accounting_callbacks: Final = tuple(
+            {
+                type(callback): callback
+                for callback in delivery_callbacks
+                if isinstance(callback, CustomLogger) and callback.is_internal_accounting_callback
+            }.values()
+        )
+        result = (
+            await self._prepare_accounting_success_hooks(hook_callbacks, redacted_result)
+            if accounting_callbacks
+            else await self._run_async_success_hooks(hook_callbacks, redacted_result)
+        )
+        ordered_callbacks: Final = (
+            *accounting_callbacks,
+            *(
+                callback
+                for callback in delivery_callbacks
+                if not (isinstance(callback, CustomLogger) and callback.is_internal_accounting_callback)
+            ),
+        )
 
         self.mark_logging_complete(event_type="async_success")
 
-        for callback in delivery_callbacks:
+        for callback in ordered_callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
             should_run = self.should_run_callback(

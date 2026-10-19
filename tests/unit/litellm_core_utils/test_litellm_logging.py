@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import contextvars
 import copy
 import datetime
 import importlib.abc
@@ -48,7 +49,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
     set_callbacks,
 )
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
@@ -2125,7 +2126,7 @@ async def test_aresponses_websocket_turn_reaches_a_custom_logger_through_the_asy
 async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_success_log(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
     from litellm.responses.main import base_llm_http_handler
 
     success_events = []
@@ -12958,3 +12959,93 @@ def test_legacy_s3_logs_a_streamed_anthropic_messages_call_handed_off_from_the_a
     assert s3_writer.log_event.call_count == expected_s3_writes
     if expected_s3_writes:
         assert s3_writer.log_event.call_args.kwargs["response_obj"] is complete_response
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("accounting_first", [False, True])
+@pytest.mark.parametrize("duplicate_accounting", [False, True])
+@pytest.mark.parametrize("blocked_phase", ["hook", "delivery", "neither", "redacted"])
+async def test_slow_optional_logging_cannot_cancel_accounting(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    accounting_first: bool,
+    duplicate_accounting: bool,
+    blocked_phase: str,
+) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.spend_tracking.spend_event import SpendEvent, decode_spend_event
+    from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
+
+    recorded: Final[asyncio.Queue[tuple[bytes, str]]] = asyncio.Queue()
+    hook_context: Final = contextvars.ContextVar("accounting_hook_context", default="outside")
+    delivered: Final = asyncio.Event()
+
+    async def store_event(line: bytes) -> None:
+        recorded.put_nowait((line, hook_context.get()))
+
+    producer: Final = SpendEventProducer(
+        address=UnixAddress("/unused"),
+        on_unavailable="fallback",
+        buffer_size=1,
+        connect_timeout=1,
+        fallback=store_event,
+    )
+    await producer.close(drain_timeout=1)
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    cancelled: Final = asyncio.Event()
+    never: Final = asyncio.Event()
+
+    class OptionalLogger(CustomLogger):
+        async def async_logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            hook_context.set("inside")
+            if blocked_phase == "hook":
+                try:
+                    await never.wait()
+                finally:
+                    cancelled.set()
+            return kwargs, result
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            delivered.set()
+            if blocked_phase == "delivery":
+                try:
+                    await never.wait()
+                finally:
+                    cancelled.set()
+
+    optional: Final = OptionalLogger(message_logging=blocked_phase != "redacted")
+    accounting: Final = _ProxyDBLogger(producer)
+    accounting_callbacks: Final = [accounting, _ProxyDBLogger(producer)] if duplicate_accounting else [accounting]
+    callbacks: Final = [*accounting_callbacks, optional] if accounting_first else [optional, *accounting_callbacks]
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    logging_obj: Final = _async_request_logging_obj("accounting-timeout", callbacks, stream=stream)
+    response: Final = ModelResponse(
+        choices=[{"message": {"role": "assistant", "content": "private-marker"}}],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    worker: Final = LoggingWorker(timeout=0.1)
+    worker.ensure_initialized_and_enqueue(logging_obj.async_success_handler(result=response))
+    try:
+        await worker.flush()
+        line, context = recorded.get_nowait()
+        assert context == "inside"
+        assert delivered.is_set()
+        event: Final = decode_spend_event(line)
+        assert isinstance(event, SpendEvent)
+        assert event.response is not None
+        assert Usage.model_validate(event.response["usage"]).total_tokens == 15
+        assert recorded.empty()
+        assert cancelled.is_set() is (blocked_phase in ("hook", "delivery"))
+        assert ("private-marker" in line.decode()) is (blocked_phase not in ("hook", "redacted"))
+        assert (REDACTED_BY_LITELLM in line.decode()) is (blocked_phase in ("hook", "redacted"))
+        assert response.choices[0].message.content == "private-marker"
+    finally:
+        await worker.stop()

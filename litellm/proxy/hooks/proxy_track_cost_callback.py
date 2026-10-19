@@ -3,7 +3,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -154,6 +154,8 @@ def _proxy_spend_writer() -> DBSpendUpdateWriter:
 
 
 class _ProxyDBLogger(CustomLogger):
+    is_internal_accounting_callback: ClassVar[bool] = True
+
     def __init__(
         self,
         spend_event_producer: SpendEventProducer | None = None,
