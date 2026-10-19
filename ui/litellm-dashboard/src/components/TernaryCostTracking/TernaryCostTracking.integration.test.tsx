@@ -40,6 +40,37 @@ const CONFIGURED_VIEW = {
 
 const SAVED = { message: "Ternary settings saved. Restart the proxy to apply the change", status: "success" };
 
+const DRY_RUN_RESPONSE = {
+  message: "Preview only",
+  status: "success",
+  usage_data: [],
+  normalized_data: [{ Tags: '{"prompt_tokens": "10"}' }],
+  summary: {
+    total_records: 3,
+    estimated_spend: 7.75,
+    total_tokens: 66,
+    unique_teams: 2,
+    unique_models: 2,
+    days: ["2026-10-13", "2026-10-14"],
+  },
+};
+
+const EXPORT_RESPONSE = {
+  message: "Ternary export uploaded 2 day(s)",
+  status: "success",
+  start_time_utc: "2026-10-13T00:00:00Z",
+  end_time_utc: "2026-10-15T22:00:00Z",
+  days_uploaded: ["2026-10-14", "2026-10-15"],
+};
+
+const EMPTY_EXPORT_RESPONSE = {
+  message: "No usage to upload in this window",
+  status: "success",
+  start_time_utc: "2026-10-13T00:00:00Z",
+  end_time_utc: "2026-10-15T22:00:00Z",
+  days_uploaded: [],
+};
+
 const renderTab = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
@@ -123,20 +154,7 @@ describe("TernaryCostTracking", () => {
 
   it("previews the export as an estimate without sending anything", async () => {
     mockGet.mockResolvedValue(CONFIGURED_VIEW);
-    mockPost.mockResolvedValue({
-      message: "Preview only",
-      status: "success",
-      usage_data: [],
-      normalized_data: [{ Tags: '{"prompt_tokens": "10"}' }],
-      summary: {
-        total_records: 3,
-        estimated_spend: 7.75,
-        total_tokens: 66,
-        unique_teams: 2,
-        unique_models: 2,
-        days: ["2026-10-13", "2026-10-14"],
-      },
-    });
+    mockPost.mockResolvedValue(DRY_RUN_RESPONSE);
     const user = userEvent.setup();
     renderTab();
 
@@ -149,13 +167,7 @@ describe("TernaryCostTracking", () => {
 
   it("exports the scheduled window after confirmation and lists the days sent", async () => {
     mockGet.mockResolvedValue(CONFIGURED_VIEW);
-    mockPost.mockResolvedValue({
-      message: "Ternary export uploaded 2 day(s)",
-      status: "success",
-      start_time_utc: "2026-10-13T00:00:00Z",
-      end_time_utc: "2026-10-15T22:00:00Z",
-      days_uploaded: ["2026-10-14", "2026-10-15"],
-    });
+    mockPost.mockResolvedValue(EXPORT_RESPONSE);
     const user = userEvent.setup();
     renderTab();
 
@@ -169,13 +181,7 @@ describe("TernaryCostTracking", () => {
 
   it("says nothing was sent when the window had no usage", async () => {
     mockGet.mockResolvedValue(CONFIGURED_VIEW);
-    mockPost.mockResolvedValue({
-      message: "No usage to upload in this window",
-      status: "success",
-      start_time_utc: "2026-10-13T00:00:00Z",
-      end_time_utc: "2026-10-15T22:00:00Z",
-      days_uploaded: [],
-    });
+    mockPost.mockResolvedValue(EMPTY_EXPORT_RESPONSE);
     const user = userEvent.setup();
     renderTab();
 

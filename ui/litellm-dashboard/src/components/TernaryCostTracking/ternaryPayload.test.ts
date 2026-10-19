@@ -27,13 +27,14 @@ const issuesFor = (schema: typeof createSchema | typeof updateSchema, values: Te
 
 describe("buildCreatePayload", () => {
   it("trims every field and sends no interval for a daily export", () => {
-    expect(buildCreatePayload(filled)).toEqual({
+    const expected = {
       api_key: "tern-key",
       connection_id: "conn-1",
       ternary_base_url: "https://api.ternary.app",
       frequency: "daily",
       interval_seconds: null,
-    });
+    };
+    expect(buildCreatePayload(filled)).toEqual(expected);
   });
 
   it("sends the interval as a number for an interval export", () => {
@@ -97,21 +98,21 @@ describe("updateSchemaFor", () => {
 
 describe("formValuesFromSettings", () => {
   it("prefills everything except the API key", () => {
-    expect(
-      formValuesFromSettings({
-        api_key_masked: "te****ey",
-        connection_id: "conn-1",
-        ternary_base_url: "https://eu.example.com",
-        frequency: "interval",
-        interval_seconds: 120,
-        status: "configured",
-      }),
-    ).toEqual({
+    const settings = {
+      api_key_masked: "te****ey",
+      connection_id: "conn-1",
+      ternary_base_url: "https://eu.example.com",
+      frequency: "interval",
+      interval_seconds: 120,
+      status: "configured",
+    } as const;
+    const expected = {
       api_key: "",
       connection_id: "conn-1",
       ternary_base_url: "https://eu.example.com",
       frequency: "interval",
       interval_seconds: "120",
-    });
+    };
+    expect(formValuesFromSettings(settings)).toEqual(expected);
   });
 });
