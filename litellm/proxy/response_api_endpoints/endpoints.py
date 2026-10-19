@@ -42,6 +42,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_type_for_status,
 )
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -49,6 +50,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.token_count import TokenCountSourceFields
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
@@ -1074,7 +1076,7 @@ class _ResponsesApiErrorBody(TypedDict):
     error: ReadOnly[_ResponsesApiErrorDetail]
 
 
-class _ResponsesInputTokensResult(TypedDict):
+class _ResponsesInputTokensResult(TokenCountSourceFields):
     object: ReadOnly[str]
     input_tokens: ReadOnly[int]
 
@@ -1289,6 +1291,7 @@ async def responses_input_tokens(
     result: Final[_ResponsesInputTokensResult] = {
         "object": "response.input_tokens",
         "input_tokens": token_response.total_tokens,
+        **count_source_fields(token_response),
     }
     return result
 
