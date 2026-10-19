@@ -10739,7 +10739,7 @@ async def async_data_generator(
                     with anyio.fail_after(receipt_capture.runtime.settings.drain_timeout_seconds):
                         await receipt_stream.drain()
                         ProxyLogging.fire_deferred_stream_logging(
-                            as_str_mapping(_UNTYPED_VALUE.validate_python(request_data))
+                            TypeAdapter(dict[str, object]).validate_python(request_data)
                         )
                         await await_charge_receipt(request)
                         stream_completed = True  # rebind-ok: the disconnected provider stream reached EOF
