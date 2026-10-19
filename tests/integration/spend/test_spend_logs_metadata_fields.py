@@ -13,7 +13,7 @@ from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventual
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.upstream import delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.spend.test_batch_completion_accounting import batch_input_file, batch_routes
 from integration.streaming.test_stream_contracts import text_stream
 from pydantic import JsonValue

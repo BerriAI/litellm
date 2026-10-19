@@ -5,7 +5,7 @@ import pytest
 
 from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _DOCUMENT_URL: Final = "https://example.com/doc.pdf"
 _OCR_COST_PER_PAGE: Final = 0.0125

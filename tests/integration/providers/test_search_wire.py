@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway, Scenario
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel
 
 _EXA_KEY: Final = "synthetic-exa-key"

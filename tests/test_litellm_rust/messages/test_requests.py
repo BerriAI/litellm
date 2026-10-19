@@ -1,10 +1,12 @@
+import json
 from typing import Final
 
 import pytest
 
 import litellm
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, call
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -12,11 +14,12 @@ pytestmark = pytest.mark.requires_rust_extension
 CAPABILITY_MODEL: Final = "claude-test-runtime-capabilities"
 
 
-def sent(server: RecordingServer) -> tuple[dict[str, object], dict[str, str]]:
-    assert_served_natively(server)
-    request: Final = server.requests[0]
-    assert isinstance(request.body, dict)
-    return request.body, request.headers
+def sent(server: SharedProvider) -> tuple[dict[str, object], dict[str, str]]:
+    requests: Final = assert_served_natively(server)
+    request: Final = requests[0]
+    body: Final = json.loads(request.body)
+    assert isinstance(body, dict)
+    return body, request.headers
 
 
 def capabilities(monkeypatch: pytest.MonkeyPatch, *, sampling: bool) -> None:
@@ -28,7 +31,7 @@ def capabilities(monkeypatch: pytest.MonkeyPatch, *, sampling: bool) -> None:
 
 
 @pytest.mark.asyncio
-async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(server: RecordingServer) -> None:
+async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(server: SharedProvider) -> None:
     history: Final = [
         {"role": "user", "content": "run it"},
         {
@@ -47,6 +50,7 @@ async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(se
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
     ]
 
+    server.expect(Reply(body=json.dumps(MESSAGES_RESPONSE).encode()))
     await call(server, messages=history)
 
     body, _ = sent(server)
@@ -58,7 +62,8 @@ async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(se
 
 
 @pytest.mark.asyncio
-async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(server: RecordingServer) -> None:
+async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(server: SharedProvider) -> None:
+    server.expect(Reply(body=json.dumps(MESSAGES_RESPONSE).encode()))
     await call(
         server,
         provider_specific_header=[
@@ -73,7 +78,8 @@ async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(serv
 
 
 @pytest.mark.asyncio
-async def test_scoped_headers_override_extra_headers_which_override_forwarded_headers(server: RecordingServer) -> None:
+async def test_scoped_headers_override_extra_headers_which_override_forwarded_headers(server: SharedProvider) -> None:
+    server.expect(Reply(body=json.dumps(MESSAGES_RESPONSE).encode()))
     await call(
         server,
         headers={"x-priority": "forwarded", "x-forwarded-only": "kept"},
@@ -91,9 +97,12 @@ async def test_scoped_headers_override_extra_headers_which_override_forwarded_he
 
 @pytest.mark.asyncio
 async def test_model_capabilities_are_read_from_model_cost_at_call_time(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    server.expected_requests = 2
+    server.expect(
+        Reply(body=json.dumps(MESSAGES_RESPONSE).encode()),
+        Reply(body=json.dumps(MESSAGES_RESPONSE).encode()),
+    )
     model: Final = f"anthropic/{CAPABILITY_MODEL}"
 
     capabilities(monkeypatch, sampling=True)
@@ -101,8 +110,8 @@ async def test_model_capabilities_are_read_from_model_cost_at_call_time(
     capabilities(monkeypatch, sampling=False)
     await call(server, model=model, temperature=0.2, drop_params=True)
 
-    assert_served_natively(server, count=2)
-    first, second = (request.body for request in server.requests)
+    requests: Final = assert_served_natively(server, count=2)
+    first, second = (json.loads(request.body) for request in requests)
     assert isinstance(first, dict)
     assert first["temperature"] == 0.2
     assert second == {name: value for name, value in first.items() if name != "temperature"}
@@ -110,11 +119,12 @@ async def test_model_capabilities_are_read_from_model_cost_at_call_time(
 
 @pytest.mark.asyncio
 async def test_global_drop_params_drops_unsupported_params(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     capabilities(monkeypatch, sampling=False)
     monkeypatch.setattr(litellm, "drop_params", True)
 
+    server.expect(Reply(body=json.dumps(MESSAGES_RESPONSE).encode()))
     await call(server, model=f"anthropic/{CAPABILITY_MODEL}", top_k=5)
 
     body, _ = sent(server)
@@ -123,24 +133,25 @@ async def test_global_drop_params_drops_unsupported_params(
 
 @pytest.mark.asyncio
 async def test_unsupported_params_are_rejected_before_io_without_drop_params(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     capabilities(monkeypatch, sampling=False)
     monkeypatch.setattr(litellm, "drop_params", False)
-    server.expected_requests = 0
 
     with pytest.raises(litellm.BadRequestError, match="top_k"):
         await call(server, model=f"anthropic/{CAPABILITY_MODEL}", top_k=5)
 
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
-async def test_optional_positional_body_parameters_reach_the_wire(server: RecordingServer) -> None:
+async def test_optional_positional_body_parameters_reach_the_wire(server: SharedProvider) -> None:
     metadata: Final = {"user_id": "caller"}
     args: Final = (16, list(MESSAGES), "anthropic/claude-test", metadata, None, False, "Be brief", 0.25)
 
-    response: Final = await litellm.anthropic_messages(*args, api_key="test-key", api_base=server.base_url)
+    server.expect(Reply(body=json.dumps(MESSAGES_RESPONSE).encode()))
+    response: Final = await litellm.anthropic_messages(*args, api_key="test-key", api_base=server.wire.url)
 
     assert isinstance(response, dict)
     assert response["id"] == MESSAGES_RESPONSE["id"]

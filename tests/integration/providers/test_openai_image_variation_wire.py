@@ -6,7 +6,7 @@ from typing import Final, cast
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel
 
 _PNG_BYTES: Final = (

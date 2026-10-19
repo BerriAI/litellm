@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 MODEL: Final = "gpt-audio-1.5"
 TOKEN: Final = "scripted-openai-audio-key"

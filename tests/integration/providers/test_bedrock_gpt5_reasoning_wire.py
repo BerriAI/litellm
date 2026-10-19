@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 MODEL: Final = "bedrock/converse/us.openai.gpt-5.6-sol"
 TOKEN: Final = "synthetic-bedrock-bearer"

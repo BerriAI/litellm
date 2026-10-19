@@ -5,7 +5,7 @@ from typing import Final
 import httpx
 from integration._support.client import JSON_OBJECT, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 
 AZURE_TARGET: Final = "/openai/v1/responses?api-version="

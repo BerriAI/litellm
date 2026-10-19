@@ -2,7 +2,7 @@ import json
 from typing import Final
 
 from integration._support.client import Gateway, Scenario
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 MODEL: Final = "triton/my-triton-model"
 TOKEN: Final = "scripted-triton-key"

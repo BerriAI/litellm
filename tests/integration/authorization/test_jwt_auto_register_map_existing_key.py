@@ -19,7 +19,7 @@ from tests.integration._support.client import Gateway, eventually, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.database_relay import held_statement_relay
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 KEY_ID: Final = "integration-jwt-map-existing-key"
 MAPPING_INSERT: Final = b'INSERT INTO "public"."LiteLLM_JWTKeyMapping"'

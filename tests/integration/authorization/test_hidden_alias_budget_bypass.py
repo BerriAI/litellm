@@ -22,7 +22,7 @@ from integration._support.anthropic_thinking import JSON_OBJECT
 from integration._support.client import Gateway, Scenario, eventually, object_value
 from integration._support.database import write_rows
 from integration._support.process import group_members, owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.authorization._hidden_alias_budget import (
     BUDGET,
     BUDGET_EXCEEDED,

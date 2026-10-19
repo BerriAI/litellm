@@ -19,7 +19,7 @@ from a2a.compat.v0_3.types import (
 )
 
 import litellm
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 
 def _agent_card(wire_url: str) -> dict:

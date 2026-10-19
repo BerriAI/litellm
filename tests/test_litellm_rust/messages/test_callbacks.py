@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Iterator
+import json
 from contextvars import ContextVar
 from datetime import datetime
 from typing import Final
@@ -12,11 +12,18 @@ from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.utils import ModelResponse, StandardLoggingPayload
-from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, call
+from tests.test_litellm_rust.messages.data import (
+    BAD_REQUEST,
+    MESSAGES_RESPONSE,
+    RATE_LIMITED,
+    call,
+    messages_reply,
+)
 from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, request_body
 from tests.test_litellm_rust.support.gaps import gap
 from tests.test_litellm_rust.support.isolation import rebound
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from tests.test_litellm_rust.support.results import response_id, with_id
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
@@ -25,11 +32,6 @@ pytestmark = pytest.mark.requires_rust_extension
 SYNC_HANDLERS_ON_ASYNC_CALLS: Final = gap("native async calls also run the sync success and failure handlers")
 _OBJECT: Final = TypeAdapter(dict[str, object])
 _HEADERS: Final = TypeAdapter(dict[str, str])
-
-
-@pytest.fixture
-def server(server: RecordingServer) -> Iterator[RecordingServer]:
-    yield from relaxed(server)
 
 
 @pytest.mark.asyncio
@@ -48,9 +50,10 @@ def server(server: RecordingServer) -> Iterator[RecordingServer]:
     ),
 )
 async def test_success_hook_fires_the_expected_number_of_times(
-    server: RecordingServer, hook: str, expected: int
+    server: SharedProvider, hook: str, expected: int
 ) -> None:
     recorder: Final = HookRecorder()
+    server.expect(messages_reply())
 
     with rebound(litellm, "callbacks", [recorder]):
         response: Final = await call(server)
@@ -71,9 +74,9 @@ async def test_success_hook_fires_the_expected_number_of_times(
     ),
 )
 async def test_failure_hook_fires_the_expected_number_of_times(
-    server: RecordingServer, hook: str, expected: int
+    server: SharedProvider, hook: str, expected: int
 ) -> None:
-    server.default_response = ResponseSpec(body=RATE_LIMITED, status=429)
+    server.expect(messages_reply(RATE_LIMITED, status=429))
     recorder: Final = HookRecorder()
 
     with rebound(litellm, "callbacks", [recorder]):
@@ -86,8 +89,8 @@ async def test_failure_hook_fires_the_expected_number_of_times(
 
 
 @pytest.mark.asyncio
-async def test_failure_events_carry_the_error_raised_to_the_caller(server: RecordingServer) -> None:
-    server.default_response = ResponseSpec(body=BAD_REQUEST, status=400)
+async def test_failure_events_carry_the_error_raised_to_the_caller(server: SharedProvider) -> None:
+    server.expect(messages_reply(BAD_REQUEST, status=400))
     recorder: Final = RecordingLogger()
 
     with rebound(litellm, "callbacks", [recorder]):
@@ -101,37 +104,42 @@ async def test_failure_events_carry_the_error_raised_to_the_caller(server: Recor
 
 
 @pytest.mark.asyncio
-async def test_pre_api_call_sees_the_wire_body(server: RecordingServer) -> None:
+async def test_pre_api_call_sees_the_wire_body(server: SharedProvider) -> None:
     recorder: Final = RecordingLogger()
+    server.expect(messages_reply())
 
     response: Final = await call(server, callbacks=[recorder])
 
-    assert_served_natively(server, response)
+    requests: Final = assert_served_natively(server, response)
     pre_call: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
     assert isinstance(pre_call, dict)
-    assert request_body(pre_call) == server.requests[0].body
+    assert request_body(pre_call) == json.loads(requests[0].body)
 
 
 @pytest.mark.asyncio
-async def test_pre_api_call_edits_reach_the_provider(server: RecordingServer) -> None:
+async def test_pre_api_call_edits_reach_the_provider(server: SharedProvider) -> None:
     class Edit(CustomLogger):
         def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
             request_body(kwargs)["temperature"] = 0.25
 
+    server.expect(messages_reply())
     response: Final = await call(server, callbacks=[Edit()])
 
-    assert_served_natively(server, response)
-    assert isinstance(server.requests[0].body, dict)
-    assert server.requests[0].body["temperature"] == 0.25
+    requests: Final = assert_served_natively(server, response)
+    body: Final = json.loads(requests[0].body)
+    assert isinstance(body, dict)
+    assert body["temperature"] == 0.25
 
 
 @pytest.mark.asyncio
-async def test_pre_api_call_sees_the_shaped_optional_params(server: RecordingServer) -> None:
+async def test_pre_api_call_sees_the_shaped_optional_params(server: SharedProvider) -> None:
     recorder: Final = RecordingLogger()
+    server.expect(messages_reply())
 
     await call(server, callbacks=[recorder], temperature=0.2, top_k=3, drop_params=True)
 
-    sent: Final = server.requests[0].body
+    requests: Final = assert_served_natively(server)
+    sent: Final = json.loads(requests[0].body)
     assert isinstance(sent, dict)
     assert not {"temperature", "top_k"} & sent.keys()
     pre_call: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
@@ -143,7 +151,7 @@ async def test_pre_api_call_sees_the_shaped_optional_params(server: RecordingSer
 
 
 @pytest.mark.asyncio
-async def test_logging_hook_and_redaction_edits_reach_the_async_success_event(server: RecordingServer) -> None:
+async def test_logging_hook_and_redaction_edits_reach_the_async_success_event(server: SharedProvider) -> None:
     class Rewrite(HookRecorder):
         async def async_logging_hook(
             self, kwargs: dict[str, object], result: object, call_type: str
@@ -156,11 +164,13 @@ async def test_logging_hook_and_redaction_edits_reach_the_async_success_event(se
             return {**model_call_details, "redacted": True}
 
     recorder: Final = Rewrite()
+    server.expect(messages_reply())
 
     with rebound(litellm, "callbacks", [recorder]):
         await call(server)
         success: Final = await recorder.wait_for_async("async_log_success_event")
 
+    assert_served_natively(server)
     assert isinstance(success[0].kwargs, dict)
     assert success[0].kwargs["logging_hook_ran"] is True
     assert success[0].kwargs["redacted"] is True
@@ -168,7 +178,7 @@ async def test_logging_hook_and_redaction_edits_reach_the_async_success_event(se
 
 @pytest.mark.asyncio
 async def test_pre_call_deployment_hooks_compose_the_wire_request_in_registration_order(
-    server: RecordingServer,
+    server: SharedProvider,
 ) -> None:
     class Rewrite(CustomLogger):
         def __init__(self, marker: str) -> None:
@@ -184,16 +194,17 @@ async def test_pre_call_deployment_hooks_compose_the_wire_request_in_registratio
                 "extra_headers": {**headers, "x-deployment-hook": headers["x-deployment-hook"] + self.marker},
             }
 
+    server.expect(messages_reply())
     with rebound(litellm, "callbacks", [Rewrite("first"), Rewrite("-second")]):
         response: Final = await call(server, extra_headers={"x-deployment-hook": "caller-", "x-kept": "unchanged"})
 
-    assert_served_natively(server, response)
-    assert server.requests[0].headers["x-deployment-hook"] == "caller-first-second"
-    assert server.requests[0].headers["x-kept"] == "unchanged"
+    requests: Final = assert_served_natively(server, response)
+    assert requests[0].headers["x-deployment-hook"] == "caller-first-second"
+    assert requests[0].headers["x-kept"] == "unchanged"
 
 
 @pytest.mark.asyncio
-async def test_pre_call_deployment_rejection_logs_failure_without_provider_io(server: RecordingServer) -> None:
+async def test_pre_call_deployment_rejection_logs_failure_without_provider_io(server: SharedProvider) -> None:
     rejection: Final = litellm.BadRequestError(
         message="deployment rejected", model="test-model", llm_provider="anthropic"
     )
@@ -211,20 +222,22 @@ async def test_pre_call_deployment_rejection_logs_failure_without_provider_io(se
         failures: Final = await recorder.wait_for_async("async_log_failure_event")
 
     assert raised.value is rejection
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
     assert len(failures) == 1
     assert _OBJECT.validate_python(failures[0].kwargs)["exception"] is raised.value
     assert not {"log_pre_api_call", "log_success_event", "async_log_success_event"} & set(recorder.names)
 
 
 @pytest.mark.asyncio
-async def test_pre_call_deployment_hook_can_delete_keywords(server: RecordingServer) -> None:
+async def test_pre_call_deployment_hook_can_delete_keywords(server: SharedProvider) -> None:
     class DropKeywords(CustomLogger):
         async def async_pre_call_deployment_hook(
             self, kwargs: dict[str, object], call_type: object
         ) -> dict[str, object]:
             return {name: value for name, value in kwargs.items() if name not in ("system", "extra_headers")}
 
+    server.expect(messages_reply())
     with rebound(litellm, "callbacks", [DropKeywords()]):
         response: Final = await call(
             server,
@@ -233,17 +246,19 @@ async def test_pre_call_deployment_hook_can_delete_keywords(server: RecordingSer
             headers={"x-kept": "keep this header"},
         )
 
-    assert_served_natively(server, response)
-    sent: Final = server.requests[0]
-    assert isinstance(sent.body, dict)
-    assert "system" not in sent.body
+    requests: Final = assert_served_natively(server, response)
+    sent: Final = requests[0]
+    body: Final = json.loads(sent.body)
+    assert isinstance(body, dict)
+    assert "system" not in body
     assert "x-deleted" not in sent.headers
     assert sent.headers["x-kept"] == "keep this header"
 
 
 @pytest.mark.asyncio
-async def test_post_call_success_deployment_hook_replaces_the_response(server: RecordingServer) -> None:
+async def test_post_call_success_deployment_hook_replaces_the_response(server: SharedProvider) -> None:
     recorder: Final = RecordingLogger()
+    server.expect(messages_reply())
 
     class Replace(CustomLogger):
         async def async_post_call_success_deployment_hook(
@@ -263,12 +278,14 @@ async def test_post_call_success_deployment_hook_replaces_the_response(server: R
 
 
 @pytest.mark.asyncio
-async def test_concurrent_calls_keep_callback_context_metadata_and_responses_isolated(server: RecordingServer) -> None:
+async def test_concurrent_calls_keep_callback_context_metadata_and_responses_isolated(server: SharedProvider) -> None:
     context: Final = ContextVar("messages-callback-context", default="outside")
     first_entered: Final = asyncio.Event()
     second_entered: Final = asyncio.Event()
-    server.enqueue(ResponseSpec(body={**MESSAGES_RESPONSE, "id": "msg_first"}))
-    server.enqueue(ResponseSpec(body={**MESSAGES_RESPONSE, "id": "msg_second"}))
+    server.expect(
+        messages_reply({**MESSAGES_RESPONSE, "id": "msg_first"}),
+        messages_reply({**MESSAGES_RESPONSE, "id": "msg_second"}),
+    )
 
     class Observe(RecordingLogger):
         async def async_pre_call_deployment_hook(
@@ -323,11 +340,12 @@ async def test_concurrent_calls_keep_callback_context_metadata_and_responses_iso
 
 
 @pytest.mark.asyncio
-async def test_a_failing_logger_does_not_fail_the_call(server: RecordingServer) -> None:
+async def test_a_failing_logger_does_not_fail_the_call(server: SharedProvider) -> None:
     class Broken(CustomLogger):
         def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
             raise RuntimeError("logger exploded")
 
+    server.expect(messages_reply())
     response: Final = await call(server, callbacks=[Broken()])
 
     assert_served_natively(server, response)
@@ -349,7 +367,7 @@ async def test_a_failing_logger_does_not_fail_the_call(server: RecordingServer) 
     ),
 )
 async def test_function_callback_fires_the_expected_number_of_times(
-    server: RecordingServer, event: str, asynchronous: bool, dynamic: bool, expected: int
+    server: SharedProvider, event: str, asynchronous: bool, dynamic: bool, expected: int
 ) -> None:
     recorder: Final = RecordingLogger()
 
@@ -363,7 +381,9 @@ async def test_function_callback_fires_the_expected_number_of_times(
     global_list: Final = f"_async_{event}_callback" if asynchronous else f"{event}_callback"
     request_callbacks: Final = {f"{event}_callback": [registered]} if dynamic else {}
     if event == "failure":
-        server.default_response = ResponseSpec(body=BAD_REQUEST, status=400)
+        server.expect(messages_reply(BAD_REQUEST, status=400))
+    else:
+        server.expect(messages_reply())
 
     with rebound(litellm, "callbacks", [recorder]), rebound(litellm, global_list, [] if dynamic else [registered]):
         try:
@@ -377,7 +397,7 @@ async def test_function_callback_fires_the_expected_number_of_times(
 
 
 @pytest.mark.asyncio
-async def test_pre_call_rule_rejects_before_provider_io(server: RecordingServer) -> None:
+async def test_pre_call_rule_rejects_before_provider_io(server: SharedProvider) -> None:
     checked: Final[list[str]] = []
 
     def reject(text: str) -> bool:
@@ -389,11 +409,12 @@ async def test_pre_call_rule_rejects_before_provider_io(server: RecordingServer)
             await call(server)
 
     assert checked == ["Hello"]
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
-async def test_dataset_hook_returning_none_drops_the_record_from_the_success_sink(server: RecordingServer) -> None:
+async def test_dataset_hook_returning_none_drops_the_record_from_the_success_sink(server: SharedProvider) -> None:
     datasets: Final = RecordingLogger()
 
     class Drop(CustomLogger):
@@ -402,11 +423,14 @@ async def test_dataset_hook_returning_none_drops_the_record_from_the_success_sin
         ) -> None:
             datasets._record("async_dataset_hook", response=logged_data)
 
-    server.enqueue(ResponseSpec(body={"items": [{"id": "callback-dataset"}]}))
+    server.expect(
+        Reply(body=json.dumps({"items": [{"id": "callback-dataset"}]}).encode()),
+        messages_reply(),
+    )
     with rebound(litellm, "argilla_transformation_object", {"prompt": "messages", "answer": "response"}):
         sink: Final = ArgillaLogger(
             argilla_api_key="test-key",
-            argilla_base_url=server.base_url,
+            argilla_base_url=server.wire.url,
             argilla_dataset_name="callback-dataset",
             flush_interval=3600,
         )
@@ -415,12 +439,14 @@ async def test_dataset_hook_returning_none_drops_the_record_from_the_success_sin
             await datasets.wait_for_async("async_dataset_hook")
             await sink.flush_queue()
 
-    assert [request.method for request in server.requests] == ["GET", "POST"]
+    requests: Final = server.received()
+    assert [request.method for request in requests] == ["GET", "POST"]
 
 
 @pytest.mark.asyncio
-async def test_sync_call_returns_the_provider_message(server: RecordingServer) -> None:
+async def test_sync_call_returns_the_provider_message(server: SharedProvider) -> None:
     recorder: Final = RecordingLogger()
+    server.expect(messages_reply())
 
     response: Final = await call(server, asynchronous=False, callbacks=[recorder])
 

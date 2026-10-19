@@ -26,7 +26,7 @@ from integration._support.openai_wire import (
 )
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.redis_process import OwnedRedis, owned_redis
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.routing.test_payment_required_cooldown import cooldown_config, cooled, router_settings
 from integration.routing.test_payment_required_mapping import deployment
 from pydantic import JsonValue

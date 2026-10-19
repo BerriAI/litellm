@@ -7,7 +7,7 @@ import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.otlp_sink import Span, SpanSinks, recorded_spans, spans_for_trace
 from integration._support.process import owned_proxy
-from integration._support.wire import wire_server
+from tests._support.wire import wire_server
 from integration.management._batch_file_caps import (
     UPLOADS,
     batch_file,

@@ -22,7 +22,7 @@ from integration._support.process import owned_proxy
 from integration._support.sigv4 import encoded_path, signature
 from integration._support.timing import Timed, assert_within_factor_of_control, timed
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 import litellm

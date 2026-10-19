@@ -15,7 +15,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 from integration._support import tls
 from integration._support.sigv4 import canonical_query, signature
-from integration._support.wire import Reply
+from tests._support.wire import Reply
 from pydantic import JsonValue
 
 _AUTHORIZATION: Final = re.compile(

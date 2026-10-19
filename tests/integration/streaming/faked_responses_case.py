@@ -7,7 +7,7 @@ import httpx
 from anthropic.types import ToolParam as AnthropicToolParam
 from integration._support.client import Gateway, Scenario, eventually, list_value, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, Wire
+from tests._support.wire import Reply, Request, Wire
 from openai.types.chat import ChatCompletionFunctionToolParam
 from openai.types.responses import FunctionToolParam
 from pydantic import JsonValue, TypeAdapter

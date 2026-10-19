@@ -5,7 +5,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, object_value
-from integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 from integration.translation.case import (
     StreamingTranslationTestCase,
     TranslationTestCase,

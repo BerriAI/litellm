@@ -17,7 +17,7 @@ from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)

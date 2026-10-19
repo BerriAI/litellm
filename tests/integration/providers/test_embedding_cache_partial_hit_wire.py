@@ -3,7 +3,7 @@ from typing import Final, Literal
 
 import httpx
 from integration._support.client import Gateway, eventually
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _VECTORS: Final = {

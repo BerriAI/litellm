@@ -18,7 +18,7 @@ import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, list_value, object_value, string_value
 from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.shares_worker_state

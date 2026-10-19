@@ -18,7 +18,7 @@ from _s3_v2_support import (
 )
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
-from integration._support.wire import wire_server
+from tests._support.wire import wire_server
 from integration.caching.response_cache_case import entry_keys, redis_store
 
 pytestmark: Final = pytest.mark.shares_worker_state

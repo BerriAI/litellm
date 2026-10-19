@@ -13,7 +13,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from integration._support.ports import allocate_port
 from integration.providers._assistants_route_errors_support import (
     ASSISTANT_MODEL,

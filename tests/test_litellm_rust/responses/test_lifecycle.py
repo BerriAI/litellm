@@ -8,24 +8,23 @@ from litellm.rust_bridge import _native, execution
 from litellm.rust_bridge.public_call import NativeCall
 from tests.test_litellm_rust.responses.data import REQUEST
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests._support.provider import SharedProvider
 
 pytestmark = pytest.mark.requires_rust_extension
 
 
 @pytest.mark.asyncio
 async def test_unstarted_call_has_no_provider_or_callback_effects(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorder: Final = RecordingLogger()
-    server.expected_requests = 0
     monkeypatch.setattr(litellm, "ssl_verify", object())
     monkeypatch.setattr(litellm, "max_budget", 1.0)
     monkeypatch.setattr(litellm, "_current_cost", 2.0)
     kwargs: Final = {
         **REQUEST,
         "api_key": "test-key",
-        "api_base": server.base_url,
+        "api_base": server.wire.url,
         "callbacks": [recorder],
     }
 
@@ -33,7 +32,7 @@ async def test_unstarted_call_has_no_provider_or_callback_effects(
         **REQUEST,
         "stream": None,
         "api_key": "test-key",
-        "api_base": server.base_url,
+        "api_base": server.wire.url,
         "custom_llm_provider": "openai",
         "extra_headers": None,
     }
@@ -42,5 +41,6 @@ async def test_unstarted_call_has_no_provider_or_callback_effects(
     assert asyncio.iscoroutine(pending)
     pending.close()
 
-    assert not server.requests
+    requests: Final = server.received()
+    assert requests == ()
     assert not recorder.events

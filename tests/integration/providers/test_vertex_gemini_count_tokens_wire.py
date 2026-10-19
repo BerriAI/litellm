@@ -17,7 +17,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 

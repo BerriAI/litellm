@@ -8,7 +8,7 @@ from typing import Final
 import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.responses_vendor import same_response
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
 from pydantic import JsonValue, TypeAdapter
 

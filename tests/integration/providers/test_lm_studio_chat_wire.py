@@ -4,7 +4,7 @@ import json
 from typing import Final
 
 from integration._support.client import JSON_OBJECT, Gateway, list_value, object_value
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _BACKEND: Final = "typhoon2-quen2.5-7b-instruct"
 _API_KEY: Final = "synthetic-lm-studio-key"

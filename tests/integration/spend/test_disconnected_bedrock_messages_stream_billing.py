@@ -8,7 +8,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 BEDROCK_MODEL: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"

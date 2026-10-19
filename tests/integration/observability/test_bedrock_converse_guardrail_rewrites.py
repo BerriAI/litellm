@@ -23,7 +23,7 @@ from tests.integration._support.client import (
     object_value,
 )
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 _MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 _MODEL: Final = "converse-guarded"

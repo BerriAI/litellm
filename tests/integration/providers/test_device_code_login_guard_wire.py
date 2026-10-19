@@ -25,7 +25,7 @@ from integration._support.client import eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.timing import assert_cut_short, timed
-from integration._support.wire import Request
+from tests._support.wire import Request
 from litellm.llms.chatgpt.authenticator import DEVICE_CODE_COOLDOWN_SECONDS
 from pydantic import JsonValue
 

@@ -1,8 +1,8 @@
 from typing import Final
 
 from integration._support.client import JSON_OBJECT, Gateway
-from integration._support.provider import SharedProvider
-from integration._support.wire import Reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from pydantic import JsonValue
 
 ANTHROPIC_STREAM_REPLY: Final = b"".join(

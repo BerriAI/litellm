@@ -10,7 +10,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, eventually, held, object_value
 from integration._support.database import read_rows
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])

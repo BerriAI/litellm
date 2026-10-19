@@ -18,7 +18,7 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.timing import assert_within_factor_of_control, timed
-from integration._support.wire import Request, Wire, wire_server
+from tests._support.wire import Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 GPT: Final = "us.openai.gpt-5.6-sol"

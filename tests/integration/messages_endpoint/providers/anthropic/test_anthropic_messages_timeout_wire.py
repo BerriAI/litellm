@@ -10,7 +10,7 @@ import yaml
 from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.process import owned_proxy
 from integration._support.timing import assert_cut_short, timed
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _UPSTREAM_STALL_SECONDS: Final = 4.0
 _CONFIGURED_TIMEOUT_SECONDS: Final = 1.0

@@ -6,7 +6,7 @@ import anthropic
 import pytest
 from anthropic.types import MessageTokensCount
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "claude-sonnet-4-6"

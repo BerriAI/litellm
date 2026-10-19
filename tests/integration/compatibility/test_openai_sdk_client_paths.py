@@ -34,7 +34,7 @@ from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply, openai_error, responses_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.responses_vendor import response_identities
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai.types import Completion, ModerationCreateResponse
 from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import ResponseStreamEvent

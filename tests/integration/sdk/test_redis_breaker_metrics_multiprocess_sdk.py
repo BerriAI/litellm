@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Final
 
 from integration._support.redis_breaker_worker import STATE_GAUGE, WorkerReport, run_breaker_worker
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from prometheus_client import CollectorRegistry, multiprocess
 
 _ANSWER: Final = "answered through the redis cache"

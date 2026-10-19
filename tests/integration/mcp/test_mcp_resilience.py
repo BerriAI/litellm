@@ -29,7 +29,7 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply
+from tests._support.wire import Reply
 from pydantic import BaseModel, TypeAdapter
 
 pytestmark: Final = pytest.mark.shares_worker_state

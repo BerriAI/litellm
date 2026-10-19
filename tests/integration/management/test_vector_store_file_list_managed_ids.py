@@ -21,7 +21,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 from pydantic import JsonValue, TypeAdapter

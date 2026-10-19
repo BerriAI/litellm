@@ -19,7 +19,7 @@ from integration._support.anthropic_sse import user_prompt
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, held
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, openai_error, responses_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai.types.chat import ChatCompletionChunk
 from pydantic import JsonValue
 

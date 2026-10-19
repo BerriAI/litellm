@@ -35,7 +35,7 @@ from integration._support.client import (
 from integration._support.database import read_rows
 from integration._support.ports import allocate_port
 from integration._support.process import graceful_stop_seconds, owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 TEAM_API_KEY: Final = "integration-rag-team-key"

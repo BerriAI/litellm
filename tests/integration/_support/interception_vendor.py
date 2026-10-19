@@ -9,7 +9,7 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
 from integration._support.openai_wire import chat_stream, responses_stream
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue, TypeAdapter
 
 AZURE_KEY: Final = "synthetic-azure-key"

@@ -46,7 +46,7 @@ from integration._support.client import Gateway, eventually, object_value, strin
 from integration._support.database import read_rows, write_rows
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.upstream import delete_scenario, register_scenario
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.shares_worker_state

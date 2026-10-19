@@ -12,7 +12,7 @@ import pytest
 from integration._support.client import eventually, gateway_from_environment, held
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.redis_process import owned_redis
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from integration.routing._prompt_cache_pin_support import (
     BEDROCK_FIVE_MINUTE_MODEL,
     BEDROCK_ONE_HOUR_MODEL,

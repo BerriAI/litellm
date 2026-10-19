@@ -10,7 +10,7 @@ from typing import Final, Literal, TypeAlias
 
 import pytest
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 import litellm
 from litellm import Router

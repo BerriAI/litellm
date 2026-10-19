@@ -7,7 +7,7 @@ import anthropic
 from integration._support.bedrock_runtime_peer import NATIVE_CHAT, answer, body_of, marker_of, respond, target_of
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Request, Wire, wire_server
+from tests._support.wire import Request, Wire, wire_server
 from pydantic import JsonValue
 
 BEDROCK_MODEL: Final = "us.openai.gpt-5.6-sol"

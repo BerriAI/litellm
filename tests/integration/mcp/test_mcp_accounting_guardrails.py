@@ -33,7 +33,7 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.shares_worker_state

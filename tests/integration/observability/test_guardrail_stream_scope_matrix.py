@@ -33,7 +33,7 @@ from integration._support.mcp import McpCaller, echo_tool, register_mcp, scripte
 from integration._support.process import owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.upstream import delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from pydantic import TypeAdapter
 from websockets.asyncio.server import ServerConnection, serve

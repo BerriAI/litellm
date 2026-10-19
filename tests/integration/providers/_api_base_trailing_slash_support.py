@@ -9,7 +9,7 @@ from typing import Final
 
 import httpx
 from integration._support.client import Gateway, Scenario, list_value, object_value
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue, TypeAdapter
 
 KEY: Final = "synthetic-trailing-slash-key"

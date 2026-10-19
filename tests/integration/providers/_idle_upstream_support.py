@@ -25,7 +25,7 @@ from integration._support.database import read_rows
 from integration._support.idle_gateway import MARKER, Arrival, Drop, IdleGateway, idle_gateway
 from integration._support.openai_wire import chat_reply, chat_stream, responses_reply
 from integration._support.process import OwnedProxy, OwnedState, WorkerHealthcheck, owned_proxy_process
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
 from pydantic import JsonValue, TypeAdapter

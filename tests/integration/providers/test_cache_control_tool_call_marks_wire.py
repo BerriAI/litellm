@@ -21,7 +21,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     ANTHROPIC_MODEL,
     ASK,

@@ -27,7 +27,7 @@ from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.upstream import aws_event_stream_frame
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 

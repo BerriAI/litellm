@@ -5,6 +5,7 @@ recorded OpenAI response, then compares what reached the provider, what the call
 callback logged. The native leg fails instead of silently falling back to Python
 """
 
+import json
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -23,7 +24,8 @@ from litellm.rust_bridge.configuration import Rollout
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -296,8 +298,8 @@ def native_responses() -> Iterator[FallbackProbe]:
         yield probe
 
 
-def _kwargs(case: Case, server: RecordingServer, recorder: RecordingLogger) -> dict[str, object]:
-    return {"model": MODEL, "api_key": "sk-test", "api_base": server.base_url, "callbacks": [recorder], **case.kwargs}
+def _kwargs(case: Case, server: SharedProvider, recorder: RecordingLogger) -> dict[str, object]:
+    return {"model": MODEL, "api_key": "sk-test", "api_base": server.wire.url, "callbacks": [recorder], **case.kwargs}
 
 
 def _response(result: object) -> Mapping[str, JsonValue]:
@@ -305,15 +307,16 @@ def _response(result: object) -> Mapping[str, JsonValue]:
     return _OBJECT.validate_python(result.model_dump(mode="json", exclude_none=True))
 
 
-async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None) -> Leg:
+async def _leg(case: Case, server: SharedProvider, probe: FallbackProbe | None) -> Leg:
     with isolated_callback_registries():
         return await _isolated_leg(case, server, probe)
 
 
-async def _isolated_leg(case: Case, server: RecordingServer, probe: FallbackProbe | None) -> Leg:
+async def _isolated_leg(case: Case, server: SharedProvider, probe: FallbackProbe | None) -> Leg:
     recorder: Final = RecordingLogger()
-    server.enqueue(ResponseSpec(body=dict(case.upstream)))
-    request_count: Final = len(server.requests)
+    server.expect(Reply(body=json.dumps(dict(case.upstream)).encode()))
+    requests_before: Final = server.received()
+    assert requests_before == ()
     kwargs: Final = _kwargs(case, server, recorder)
     fallbacks_before: Final = 0 if probe is None else probe.calls
     if probe is None:
@@ -322,8 +325,9 @@ async def _isolated_leg(case: Case, server: RecordingServer, probe: FallbackProb
         result = await _PUBLIC_ARESPONSES(**kwargs)
     await drain_logging()
     success: Final = await recorder.wait_for_async("async_log_success_event")
-    assert len(server.requests) == request_count + 1
-    sent: Final = server.requests[-1]
+    requests: Final = server.received()
+    assert len(requests) == 1
+    sent: Final = requests[0]
     standard: Final = _LOGGED.validate_python(_LOGGED.validate_python(success[0].kwargs)["standard_logging_object"])
     return Leg(
         request_body=_OBJECT.validate_python(sent.body),
@@ -337,15 +341,14 @@ async def _isolated_leg(case: Case, server: RecordingServer, probe: FallbackProb
 
 
 @pytest.fixture
-def parity_server(recording_server: RecordingServer) -> RecordingServer:
-    recording_server.expected_requests = 2
+def parity_server(recording_server: SharedProvider) -> SharedProvider:
     return recording_server
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("case", "aspect"), tuple(param for case in CASES for param in case.params()))
 async def test_native_responses_match_python(
-    case: Case, aspect: str, parity_server: RecordingServer, native_responses: FallbackProbe
+    case: Case, aspect: str, parity_server: SharedProvider, native_responses: FallbackProbe
 ) -> None:
     python: Final = await _leg(case, parity_server, probe=None)
     native: Final = await _leg(case, parity_server, probe=native_responses)

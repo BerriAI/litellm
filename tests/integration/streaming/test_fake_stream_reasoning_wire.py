@@ -19,7 +19,7 @@ from integration._support.database import read_rows
 from integration._support.upstream import (
     _aws_event_frame,  # pyright: ignore[reportPrivateUsage]  # the scripted Bedrock peer's only event-stream encoder
 )
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from redis import Redis
 

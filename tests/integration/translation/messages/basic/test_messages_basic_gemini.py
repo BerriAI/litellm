@@ -1,6 +1,6 @@
 import pytest
 from integration._support.client import Gateway
-from integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.bases.gemini import (
     GEMINI_3_1_PRO_PREVIEW_TEST_CASE,

@@ -5,7 +5,7 @@ from urllib.parse import unquote
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 CLAUDE_ID: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"

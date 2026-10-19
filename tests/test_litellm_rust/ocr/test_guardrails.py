@@ -1,5 +1,7 @@
 from typing import Final
 
+import json
+
 import pytest
 from fastapi import HTTPException
 
@@ -10,7 +12,9 @@ from litellm.types.guardrails import BlockedWord, ContentFilterAction, Guardrail
 from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.ocr.data import call_aocr
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.ocr.data import ocr_reply
+from tests._support.provider import SharedProvider
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -30,7 +34,7 @@ class ReplaceOCRMarkdown(CustomGuardrail):
 
 @pytest.mark.asyncio
 async def test_native_aocr_post_call_content_filter_blocks_matching_markdown(
-    server: RecordingServer,
+    server: SharedProvider,
 ) -> None:
     guardrail: Final = ContentFilterGuardrail(
         guardrail_name="block-native-ocr-markdown",
@@ -39,21 +43,24 @@ async def test_native_aocr_post_call_content_filter_blocks_matching_markdown(
     )
     litellm.callbacks.append(guardrail)
 
+    server.expect(ocr_reply())
     with pytest.raises(HTTPException, match="Content blocked") as blocked:
         await call_aocr(server, guardrails=[guardrail.guardrail_name])
 
     assert blocked.value.status_code == 400
-    assert len(server.requests) == 1
+    requests: Final = assert_served_natively(server)
+    assert len(requests) == 1
 
 
 @pytest.mark.asyncio
 async def test_native_aocr_post_call_replacement_reaches_caller_and_success_callback(
-    server: RecordingServer,
+    server: SharedProvider,
 ) -> None:
     guardrail: Final = ReplaceOCRMarkdown()
     recorder: Final = RecordingLogger()
     litellm.callbacks.append(guardrail)
 
+    server.expect(ocr_reply())
     response: Final = await call_aocr(
         server,
         callbacks=[recorder],
@@ -65,4 +72,5 @@ async def test_native_aocr_post_call_replacement_reaches_caller_and_success_call
     assert response.pages[0].markdown == "Reviewed OCR"
     assert len(success_events) == 1
     assert success_events[0].response.pages[0].markdown == "Reviewed OCR"
-    assert "guardrails" not in server.requests[0].body
+    requests: Final = assert_served_natively(server, response)
+    assert "guardrails" not in json.loads(requests[0].body)

@@ -14,7 +14,7 @@ import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 from openai.pagination import SyncCursorPage
 from openai.types.eval_create_response import EvalCreateResponse as _Eval

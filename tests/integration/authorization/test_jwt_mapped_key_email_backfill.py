@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from jwt.algorithms import RSAAlgorithm
 
 pytestmark: Final = pytest.mark.shares_worker_state

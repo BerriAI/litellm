@@ -16,7 +16,7 @@ import psutil
 import pytest
 from anthropic.types import MessageParam
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
     ANTHROPIC_VERSION,

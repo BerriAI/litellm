@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _BACKENDS: Final = ("mimo-v2.6-pro", "mimo-v2.6-flash")

@@ -9,7 +9,7 @@ import pytest
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.redis_process import owned_redis
-from integration._support.wire import wire_server
+from tests._support.wire import wire_server
 from integration.routing._prompt_cache_pin_support import (
     FIVE_MINUTE_MARK,
     FIVE_MINUTES,

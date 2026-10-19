@@ -16,7 +16,7 @@ import jwt
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, eventually, object_value
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 from redis import Redis
 

@@ -11,7 +11,7 @@ import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment, string_value
 from integration._support.process import owned_proxy_process
 from integration._support.responses_vendor import same_response
-from integration._support.wire import Request, Wire, wire_server
+from tests._support.wire import Request, Wire, wire_server
 from integration.providers._coralbricks import (
     API_KEY,
     MODEL,

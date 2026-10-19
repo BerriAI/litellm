@@ -44,7 +44,7 @@ from integration._support.responses_stream import (
     spend_row,
     sse_events,
 )
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 

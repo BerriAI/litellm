@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 import httpx
 from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows, write_rows
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, JsonValue, TypeAdapter
 

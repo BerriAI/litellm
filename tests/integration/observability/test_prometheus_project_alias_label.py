@@ -15,7 +15,7 @@ import yaml
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.prometheus_series import Sample, scrape
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 _MODEL: Final = "prometheus-project-alias-model"
 _RPM: Final = 60

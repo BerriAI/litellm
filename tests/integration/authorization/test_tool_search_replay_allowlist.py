@@ -9,7 +9,7 @@ from integration._support import responses_vendor as rv
 from integration._support import tool_search as ts
 from integration._support.client import Gateway, Scenario
 from integration._support.openai_wire import answering_model_discovery, chat_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 from tests.integration.caching.response_cache_case import await_entry, redis_store

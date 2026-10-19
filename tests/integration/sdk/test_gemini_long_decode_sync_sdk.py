@@ -13,7 +13,7 @@ import pytest
 from _pytest.mark.structures import ParameterSet
 from integration._support.client import JSON_OBJECT
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._gemini_long_decode_support import (
     API_KEY,
     BACKEND,

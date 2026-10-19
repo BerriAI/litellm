@@ -29,7 +29,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import eventually, string_value
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.security._canary import MARKER, Canary, canary
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Recorder, Rig, canary_rig, settle, team_caller
 from integration.security._sweeps import (

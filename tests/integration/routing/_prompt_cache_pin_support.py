@@ -11,7 +11,7 @@ import yaml
 from integration._support.client import Gateway, eventually, held, object_value
 from integration._support.database import read_rows
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire
+from tests._support.wire import Reply, Request, Wire
 from integration.providers._cache_control_marks_support import anthropic_peer, bedrock_peer, marker_of
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis

@@ -1,30 +1,22 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from typing import Final
 
 import pytest
 
 from tests.test_litellm_rust.responses.data import RESPONSES_EVENTS, RESPONSES_RESPONSE, STREAMING, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
 from tests.test_litellm_rust.support.results import consume, response_id
 from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests._support.provider import SharedProvider
 
 pytestmark = pytest.mark.requires_rust_extension
-
-STREAM: Final = ResponseSpec(body=None, events=RESPONSES_EVENTS)
-
-
-@pytest.fixture
-def server(server: RecordingServer) -> Iterator[RecordingServer]:
-    yield from relaxed(server)
 
 
 @pytest.mark.asyncio
 @STREAMING
 async def test_stream_relays_provider_events_and_logs_success_once_after_the_last_chunk(
-    server: RecordingServer,
+    server: SharedProvider,
 ) -> None:
-    server.enqueue(STREAM)
     recorder: Final = RecordingLogger()
 
     stream: Final = await call(server, stream=True, callbacks=[recorder])
@@ -46,8 +38,7 @@ async def test_stream_relays_provider_events_and_logs_success_once_after_the_las
 
 @pytest.mark.asyncio
 @STREAMING
-async def test_sync_stream_relays_provider_events_and_logs_success_once(server: RecordingServer) -> None:
-    server.enqueue(STREAM)
+async def test_sync_stream_relays_provider_events_and_logs_success_once(server: SharedProvider) -> None:
     recorder: Final = RecordingLogger()
 
     stream: Final = await call(server, asynchronous=False, stream=True, callbacks=[recorder])

@@ -10,7 +10,7 @@ from typing import Final
 from urllib.parse import unquote
 
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Final
 
@@ -7,9 +8,10 @@ import litellm
 from tests.test_litellm_rust.ocr.data import (
     OCR_DOCUMENT,
     call,
+    ocr_reply,
 )
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests._support.provider import SharedProvider
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -27,7 +29,7 @@ pytestmark = pytest.mark.requires_rust_extension
     ids=["inherit", "explicit", "explicit-none"],
 )
 async def test_native_ocr_inherits_named_credentials_without_overwriting_arguments(
-    server: RecordingServer,
+    server: SharedProvider,
     monkeypatch: pytest.MonkeyPatch,
     asynchronous: bool,
     override: dict[str, object],
@@ -48,7 +50,7 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
                 credential_info={},
                 credential_values={
                     "api_key": "credential-key",
-                    "api_base": server.base_url,
+                    "api_base": server.wire.url,
                     "pages": pages,
                     "opaque": opaque,
                 },
@@ -69,10 +71,12 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
         "callbacks": [Observer()],
         **override,
     }
+    server.expect(ocr_reply())
     response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+    requests: Final = assert_served_natively(server, response)
     assert response.pages[0].markdown == "native OCR response"
-    assert server.requests[0].headers["authorization"] == f"Bearer {expected_key}"
-    assert server.requests[0].body["pages"] == [0, 2]
+    assert requests[0].headers["authorization"] == f"Bearer {expected_key}"
+    assert json.loads(requests[0].body)["pages"] == [0, 2]
 
 
 @pytest.mark.asyncio
@@ -87,17 +91,17 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     ],
 )
 async def test_native_settings_fail_before_provider_io(
-    server: RecordingServer,
+    server: SharedProvider,
     monkeypatch: pytest.MonkeyPatch,
     asynchronous: bool,
     name: str,
     value: object,
 ) -> None:
-    server.expected_requests = 0
     monkeypatch.setattr(litellm, name, value)
     with pytest.raises(ValueError, match=r"http_settings|url_policy"):
         await call(server, asynchronous, num_retries=0)
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
@@ -110,38 +114,40 @@ async def test_native_settings_fail_before_provider_io(
     ],
 )
 async def test_native_vertex_globals_fail_before_provider_io_only_for_vertex_calls(
-    server: RecordingServer,
+    server: SharedProvider,
     monkeypatch: pytest.MonkeyPatch,
     asynchronous: bool,
     name: str,
     value: object,
 ) -> None:
-    server.expected_requests = 1
+    server.expect(ocr_reply())
     monkeypatch.setattr(litellm, name, value)
     await call(server, asynchronous, num_retries=0)
+    first_requests: Final = assert_served_natively(server)
+    assert len(first_requests) == 1
     with pytest.raises(ValueError, match=r"provider_defaults"):
         await call(server, asynchronous, model="vertex_ai/mistral-ocr-latest", num_retries=0)
-    assert len(server.requests) == 1
+    second_requests: Final = server.received()
+    assert second_requests == ()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_native_ssl_context_is_terminal_configuration(server: RecordingServer, asynchronous: bool) -> None:
+async def test_native_ssl_context_is_terminal_configuration(server: SharedProvider, asynchronous: bool) -> None:
     import ssl
 
-    server.expected_requests = 0
     context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     with pytest.raises(ValueError, match=r"request\.ssl_verify.*SSLContext"):
         await call(server, asynchronous, ssl_verify=context, num_retries=0)
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_native_settings_preserve_protocol_failures(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
 ) -> None:
-    server.expected_requests = 0
     failure: Final = LookupError("settings truth test failed")
     cause: Final = RuntimeError("settings cause")
 
@@ -155,39 +161,42 @@ async def test_native_settings_preserve_protocol_failures(
     assert caught.value is failure
     assert caught.value.__cause__ is cause
     assert caught.value.__traceback__ is not None
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_native_settings_observe_mutation_between_calls(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
 ) -> None:
     monkeypatch.setattr(litellm, "force_ipv4", "yes")
     monkeypatch.setattr(litellm, "http2", 1)
     monkeypatch.setattr(litellm, "vertex_project", [])
     monkeypatch.setattr(litellm, "vertex_location", 0)
     monkeypatch.setattr(litellm, "user_url_allowed_hosts", "EXAMPLE.TEST.")
+    server.expect(ocr_reply())
     response: Final = await call(server, asynchronous, num_retries=0)
+    first_requests: Final = assert_served_natively(server, response)
     assert response.pages[0].markdown == "native OCR response"
-    assert_served_natively(server)
+    assert len(first_requests) == 1
     monkeypatch.setattr(litellm, "ssl_certificate", 1)
     with pytest.raises(ValueError, match=r"http_settings\.ssl_certificate"):
         await call(server, asynchronous, num_retries=0)
-    assert len(server.requests) == 1
+    second_requests: Final = server.received()
+    assert second_requests == ()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("present", [False, True], ids=["missing", "invalid-pem"])
 async def test_native_client_certificate_is_validated_before_io(
-    server: RecordingServer,
+    server: SharedProvider,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     asynchronous: bool,
     present: bool,
 ) -> None:
-    server.expected_requests = 0
     certificate: Final = tmp_path / "client.pem"
     if present:
         certificate.write_text("invalid certificate")
@@ -195,4 +204,5 @@ async def test_native_client_certificate_is_validated_before_io(
     with pytest.raises(ValueError, match=r"http_settings\.ssl_certificate.*PEM") as caught:
         await call(server, asynchronous, num_retries=0)
     assert str(certificate) not in str(caught.value)
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()

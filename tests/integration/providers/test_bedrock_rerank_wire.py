@@ -7,7 +7,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 MODEL: Final = "bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
 ACCESS_KEY: Final = "AKIAINTEGRATION000002"

@@ -11,7 +11,7 @@ import pytest
 from integration._support.client import Gateway
 from integration._support.idle_gateway import Arrival
 from integration._support.process import graceful_stop_seconds
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from integration.providers._idle_upstream_support import (
     REUSE_IDLE_SECONDS,
     ProxyTarget,

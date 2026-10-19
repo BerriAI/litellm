@@ -32,7 +32,7 @@ from integration._support.anthropic_thinking import JSON_OBJECT, MODEL, Event, c
 from integration._support.client import Gateway, eventually, held
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.timing import assert_not_delayed_by
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 
 pytestmark: Final = [

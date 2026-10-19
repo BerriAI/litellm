@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _MODEL: Final = "claude-sonnet-4-6"
 _KEY: Final = "synthetic-anthropic-key"

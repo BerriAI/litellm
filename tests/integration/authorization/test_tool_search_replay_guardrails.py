@@ -13,7 +13,7 @@ from integration._support import tool_search as ts
 from integration._support.client import Gateway
 from integration._support.database import write_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from pydantic import JsonValue
 
 from tests.integration.caching.response_cache_case import await_entry, redis_store

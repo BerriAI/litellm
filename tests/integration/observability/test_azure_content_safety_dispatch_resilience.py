@@ -11,7 +11,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.redis_process import owned_redis
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from integration._support.ports import allocate_port
 from integration.observability.azure_dispatch_support import (
     ATTACK_MARKER,

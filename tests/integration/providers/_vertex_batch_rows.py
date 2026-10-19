@@ -10,7 +10,7 @@ from urllib.parse import unquote, urlsplit
 import httpx
 from integration._support.client import Gateway, Scenario
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue, TypeAdapter
 
 PROJECT: Final = "scripted-project"

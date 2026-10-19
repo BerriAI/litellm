@@ -16,7 +16,7 @@ from integration._support.budget import case_timeout_seconds
 from integration._support.client import Gateway
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)

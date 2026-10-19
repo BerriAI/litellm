@@ -21,7 +21,7 @@ from integration._support.anthropic_sse import (
 )
 from integration._support.client import Gateway, object_value
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire
+from tests._support.wire import Reply, Request, Wire
 from pydantic import JsonValue, TypeAdapter
 
 DANGEROUS_TOOL_USE: Final = "dangerous-tool-use-2026-09-03"

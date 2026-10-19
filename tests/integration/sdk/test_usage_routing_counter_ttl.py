@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import eventually
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from litellm import Router
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from redis import Redis

@@ -7,7 +7,7 @@ import pytest
 
 from integration._support.client import Gateway
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 USER_KEY: Final = "sk-user-supplied-" + uuid.uuid4().hex
 

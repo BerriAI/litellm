@@ -11,7 +11,7 @@ from integration._support.responses_stream import (
     rate_limited_stream,
     serve,
 )
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 
 import litellm
 from litellm import Router

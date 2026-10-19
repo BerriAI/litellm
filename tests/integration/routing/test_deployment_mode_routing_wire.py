@@ -23,7 +23,7 @@ from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply, responses_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.responses_vendor import same_response
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.shares_worker_state

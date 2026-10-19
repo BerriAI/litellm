@@ -19,7 +19,7 @@ from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, eventually, gateway_from_environment, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 

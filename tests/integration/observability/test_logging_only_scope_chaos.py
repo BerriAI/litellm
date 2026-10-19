@@ -46,7 +46,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.ports import allocate_port
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.timing import Timed, assert_not_delayed_by, timed
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from openai import APIConnectionError as OpenAIAPIConnectionError
 from pydantic import JsonValue
 

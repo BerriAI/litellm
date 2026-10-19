@@ -18,7 +18,7 @@ from integration._support.client import Gateway, Scenario, eventually, gateway_f
 from integration._support.database import scratch_database
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.redis_process import OwnedRedis, owned_redis
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.management._batch_file_caps import (
     DAY_SECONDS,
     DOWNLOADS,

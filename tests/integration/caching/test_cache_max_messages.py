@@ -13,8 +13,8 @@ from integration._support.anthropic_sse import message_json
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.openai_wire import chat_reply, responses_reply
 from integration._support.process import owned_proxy
-from integration._support.provider import SharedProvider
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply, Request, wire_server
 from integration.caching.response_cache_case import await_entry, redis_store
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis

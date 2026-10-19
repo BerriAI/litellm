@@ -27,7 +27,7 @@ from integration._support.sagemaker_embedding import (
     openai_payload,
     respond,
 )
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 

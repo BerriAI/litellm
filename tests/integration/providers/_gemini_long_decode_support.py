@@ -14,7 +14,7 @@ import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire
+from tests._support.wire import Reply, Request, Wire
 from pydantic import JsonValue
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with

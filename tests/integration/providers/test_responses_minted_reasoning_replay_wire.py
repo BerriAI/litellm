@@ -18,7 +18,7 @@ from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.timing import assert_within_factor_of_control, timed
-from integration._support.wire import Request, Wire, wire_server
+from tests._support.wire import Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _GPT: Final = "gpt-5.6"

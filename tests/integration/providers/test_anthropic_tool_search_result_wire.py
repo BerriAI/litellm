@@ -5,7 +5,7 @@ from typing import Final
 
 from integration._support.anthropic_thinking import sse_chunks
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _MODEL: Final = "claude-opus-5-5"

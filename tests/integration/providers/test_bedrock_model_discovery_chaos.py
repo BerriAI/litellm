@@ -32,7 +32,7 @@ from integration._support.bedrock_discovery import (
 )
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.process import OwnedProxy, graceful_stop_seconds
-from integration._support.wire import Reply
+from tests._support.wire import Reply
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 

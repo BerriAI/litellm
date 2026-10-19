@@ -9,7 +9,7 @@ from typing import Final
 
 from integration._support.claude_code import sse_frame
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue, TypeAdapter
 
 MODEL: Final = "claude-sonnet-5-5"

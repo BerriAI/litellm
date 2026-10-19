@@ -17,7 +17,7 @@ from integration._support.client import Gateway, Scenario, eventually, gateway_f
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.responses_vendor import newest_marker
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import owned_config
 from integration.providers._mantle_gpt_prompt_cache_support import (
     EXPLICIT,

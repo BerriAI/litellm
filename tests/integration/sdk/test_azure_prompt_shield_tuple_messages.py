@@ -8,7 +8,7 @@ import litellm
 import pytest
 from fastapi import HTTPException
 from integration._support.client import object_value
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from litellm import Router
 from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import (
     AzureContentSafetyPromptShieldGuardrail,

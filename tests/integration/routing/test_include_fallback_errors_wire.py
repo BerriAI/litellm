@@ -21,7 +21,7 @@ from integration._support.client import Gateway, eventually, gateway_from_enviro
 from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply, responses_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS

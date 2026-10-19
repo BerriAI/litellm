@@ -20,7 +20,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.openai_wire import chat_reply
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 UNREACHABLE_API_BASE: Final = "http://127.0.0.1:9/v1"
 END_USER_REQUESTS: Final = 10

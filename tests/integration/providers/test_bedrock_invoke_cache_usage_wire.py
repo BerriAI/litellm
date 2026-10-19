@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 MODEL_ID: Final = "us.amazon.nova-pro-v1:0"
 TOKEN: Final = "synthetic-bedrock-bearer"

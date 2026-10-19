@@ -12,8 +12,8 @@ from pydantic import JsonValue, TypeAdapter
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value, string_value
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.provider import PROVIDER_URL, SharedProvider
-from tests.integration._support.wire import Reply
+from tests._support.provider import PROVIDER_URL, SharedProvider
+from tests._support.wire import Reply
 
 _TAGGED_GROUP: Final = "tag-filtered-group"
 _TAGGED_IDS: Final = frozenset({"tag-filtered-team-a", "tag-filtered-team-b"})

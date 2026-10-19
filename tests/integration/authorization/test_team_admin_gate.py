@@ -33,7 +33,7 @@ from tests.integration._support.client import (
     team_admin_permissions,
 )
 from tests.integration._support.database import read_rows
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 Caller = Literal["proxy_admin", "team_admin", "member", "other_team_admin", "outsider", "org_admin", "other_org_admin"]
 CALLERS: Final[tuple[Caller, ...]] = (

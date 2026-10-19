@@ -11,7 +11,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS

@@ -13,7 +13,7 @@ from integration._support import responses_vendor as rv
 from integration._support.client import string_value
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 
 

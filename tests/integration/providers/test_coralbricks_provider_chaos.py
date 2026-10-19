@@ -21,7 +21,7 @@ from integration._support.client import JSON_OBJECT, Gateway, eventually, string
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.responses_vendor import same_response
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._coralbricks import (
     API_KEY,
     MARKER,

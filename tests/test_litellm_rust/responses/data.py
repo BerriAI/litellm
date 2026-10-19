@@ -1,8 +1,10 @@
+import json
 from typing import Final
 
 import litellm
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from tests.test_litellm_rust.support.gaps import gap
-from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.routing import call_public
 
 RESPONSES_MODEL: Final = "openai/gpt-6.1-sol"
@@ -46,6 +48,13 @@ RESPONSES_EVENTS: Final = (
     ),
     ("response.completed", {"type": "response.completed", "sequence_number": 2, "response": RESPONSES_RESPONSE}),
 )
+RESPONSES_SSE: Final = tuple(
+    f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in RESPONSES_EVENTS
+)
+
+
+def responses_reply(body: object = RESPONSES_RESPONSE, status: int = 200) -> Reply:
+    return Reply(body=json.dumps(body).encode(), status=status)
 
 
 def _error(kind: str) -> dict[str, object]:
@@ -57,7 +66,7 @@ BAD_REQUEST: Final = _error("invalid_request_error")
 RATE_LIMITED: Final = _error("rate_limit_exceeded")
 
 
-async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: object) -> object:
+async def call(server: SharedProvider, *, asynchronous: bool = True, **kwargs: object) -> object:
     return await call_public(
         litellm.responses,
         litellm.aresponses,

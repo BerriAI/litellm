@@ -12,7 +12,7 @@ from a2a.types import a2a_pb2
 from google.protobuf.json_format import MessageToDict
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 

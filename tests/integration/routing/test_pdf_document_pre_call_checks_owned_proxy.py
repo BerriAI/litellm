@@ -24,7 +24,7 @@ from integration._support.pdf_document import (
     responses_input_file,
 )
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import anthropic_peer, marker_of, owned_config
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis

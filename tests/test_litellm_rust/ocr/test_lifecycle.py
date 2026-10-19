@@ -17,17 +17,21 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from tests.test_litellm_rust.ocr.data import OCR_RESPONSE, call_aocr, call_ocr
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.ocr.data import ocr_reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 pytestmark = pytest.mark.requires_rust_extension
 
 
 @pytest.mark.asyncio
-async def test_proxy_metadata_remains_python_owned(server: RecordingServer) -> None:
+async def test_proxy_metadata_remains_python_owned(server: SharedProvider) -> None:
     from litellm.proxy._types import UserAPIKeyAuth
 
     recorder: Final = RecordingLogger()
     auth: Final = UserAPIKeyAuth(user_id="ocr-user")
+    server.expect(ocr_reply())
     response: Final = await call_aocr(
         server, callbacks=[recorder], metadata={"user_api_key_auth": auth}, shared_session=object()
     )
@@ -35,25 +39,28 @@ async def test_proxy_metadata_remains_python_owned(server: RecordingServer) -> N
     assert response.pages[0].markdown == "native OCR response"
     assert response._hidden_params["additional_headers"]["x-litellm-rust"] == "true"
     assert events[0].kwargs["litellm_params"]["metadata"]["user_api_key_auth"].user_id == "ocr-user"
-    assert "metadata" not in server.requests[0].body
+    requests: Final = assert_served_natively(server, response)
+    assert "metadata" not in json.loads(requests[0].body)
 
 
 @pytest.mark.asyncio
 async def test_request_level_custom_pricing_reaches_logging_params_and_bills_the_call(
-    server: RecordingServer,
+    server: SharedProvider,
 ) -> None:
     recorder: Final = RecordingLogger()
+    server.expect(ocr_reply())
     response: Final = await call_aocr(server, callbacks=[recorder], ocr_cost_per_page=0.05)
     events: Final = await recorder.wait_for_async("async_log_success_event")
 
     assert response.usage_info is not None and response.usage_info.pages_processed == 1
     assert events[0].kwargs["litellm_params"]["ocr_cost_per_page"] == 0.05
     assert response._hidden_params["response_cost"] == pytest.approx(0.05)
-    assert "ocr_cost_per_page" not in server.requests[0].body
+    requests: Final = assert_served_natively(server, response)
+    assert "ocr_cost_per_page" not in json.loads(requests[0].body)
 
 
 @pytest.mark.asyncio
-async def test_response_replacement_finalized_before_dispatch_in_caller_task(server: RecordingServer) -> None:
+async def test_response_replacement_finalized_before_dispatch_in_caller_task(server: SharedProvider) -> None:
     caller: Final = asyncio.current_task()
     context: Final = ContextVar("lifecycle-test", default="before")
     observations: Final = []
@@ -70,11 +77,13 @@ async def test_response_replacement_finalized_before_dispatch_in_caller_task(ser
             return response.model_copy(update={"model": "replaced"})
 
     litellm.callbacks.append(Replace())
+    server.expect(ocr_reply())
     response: Final = await call_aocr(server, callbacks=[recorder], litellm_call_id="native-final")
     events: Final = await recorder.wait_for_async("async_log_success_event")
     assert observations == [("pre", caller, "pre"), ("post", caller, "pre")]
     assert context.get() == "pre"
-    assert server.requests[0].body["pages"] == [2]
+    requests: Final = assert_served_natively(server, response)
+    assert json.loads(requests[0].body)["pages"] == [2]
     assert response.model == "replaced"
     assert events[0].response is response
     assert response._hidden_params["litellm_call_id"] == "native-final"
@@ -84,8 +93,9 @@ async def test_response_replacement_finalized_before_dispatch_in_caller_task(ser
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_metadata_failure_dispatches_only_failure_and_releases_logger(
-    server: RecordingServer, asynchronous: bool
+    server: SharedProvider, asynchronous: bool
 ) -> None:
+    server.expect(ocr_reply())
     failure: Final = RuntimeError("metadata failed")
     seen: Final = []
 
@@ -126,12 +136,12 @@ async def test_metadata_failure_dispatches_only_failure_and_releases_logger(
     gc.collect()
     assert seen == ([("sync", failure), ("async", failure)] if asynchronous else [("sync", failure)])
     assert reference() is None
-    assert len(server.requests) == 1
+    assert len(assert_served_natively(server)) == 1
 
 
 @pytest.mark.asyncio
-async def test_mapped_failure_identity_and_deployment_snapshot(server: RecordingServer) -> None:
-    server.enqueue(ResponseSpec(body={"message": "unavailable"}, status=500))
+async def test_mapped_failure_identity_and_deployment_snapshot(server: SharedProvider) -> None:
+    server.expect(ocr_reply({"message": "unavailable"}, status=500))
     recorder: Final = RecordingLogger()
     snapshots: Final = []
 
@@ -149,16 +159,17 @@ async def test_mapped_failure_identity_and_deployment_snapshot(server: Recording
     assert caught.value.status_code == 500
     assert snapshots[0] is not caught.value
     assert snapshots[0].status_code == 418
-    assert len(server.requests) == 1
+    assert len(assert_served_natively(server)) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["pre", "http"])
 async def test_cancellation_cleans_up_in_caller_task_without_terminal_dispatch(
-    server: RecordingServer, phase: str
+    server: SharedProvider, phase: str
 ) -> None:
     entered: Final = asyncio.Event()
     recorder: Final = RecordingLogger()
+    gate: Final = threading.Event()
 
     class Pause(CustomLogger):
         async def async_pre_call_deployment_hook(self, kwargs, call_type):
@@ -168,9 +179,7 @@ async def test_cancellation_cleans_up_in_caller_task_without_terminal_dispatch(
 
     litellm.callbacks.append(Pause())
     if phase == "http":
-        server.enqueue(ResponseSpec(body=OCR_RESPONSE, delay=0.2))
-    if phase == "pre":
-        server.expected_requests = 0
+        server.expect(Reply(chunks=(json.dumps(OCR_RESPONSE).encode(),), gate_before_first=gate))
     restored: Final = []
 
     async def invoke():
@@ -186,16 +195,24 @@ async def test_cancellation_cleans_up_in_caller_task_without_terminal_dispatch(
     else:
         await asyncio.wait_for(entered.wait(), 5)
     task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        gate.set()
     await drain_logging()
     assert restored == ["parent"]
     assert not any("success" in name or "failure" in name for name in recorder.names)
+    if phase == "http":
+        assert_served_natively(server)
+    else:
+        requests: Final = server.received()
+        assert requests == ()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("blocked", [False, True])
-async def test_deferred_logging_requires_release_and_runs_at_most_once(server: RecordingServer, blocked: bool) -> None:
+async def test_deferred_logging_requires_release_and_runs_at_most_once(server: SharedProvider, blocked: bool) -> None:
     recorder: Final = RecordingLogger()
     logger: Final = Logging(
         model="mistral-ocr-latest",
@@ -208,7 +225,9 @@ async def test_deferred_logging_requires_release_and_runs_at_most_once(server: R
         dynamic_async_success_callbacks=[recorder],
     )
     logger._defer_async_logging = True
+    server.expect(ocr_reply())
     response: Final = await call_aocr(server, litellm_logging_obj=logger)
+    assert_served_natively(server, response)
     await drain_logging()
     assert "async_log_success_event" not in recorder.names
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
@@ -220,7 +239,7 @@ async def test_deferred_logging_requires_release_and_runs_at_most_once(server: R
         assert events[0].response is response
 
 
-def test_sync_success_uses_executor_and_copied_caller_context(server: RecordingServer) -> None:
+def test_sync_success_uses_executor_and_copied_caller_context(server: SharedProvider) -> None:
     context: Final = ContextVar("sync-lifecycle", default="missing")
     context.set("caller")
     thread: Final = threading.current_thread()
@@ -232,7 +251,9 @@ def test_sync_success_uses_executor_and_copied_caller_context(server: RecordingS
             observations.append((threading.current_thread(), context.get(), response_obj))
             finished.set()
 
+    server.expect(ocr_reply())
     response: Final = call_ocr(server, callbacks=[Observe()])
+    assert_served_natively(server, response)
     assert finished.wait(5)
     assert observations[0][0] is not thread
     assert observations[0][1] == "caller"
@@ -240,8 +261,8 @@ def test_sync_success_uses_executor_and_copied_caller_context(server: RecordingS
 
 
 @pytest.mark.asyncio
-async def test_nested_native_calls_preserve_context_and_dispatch_each_outcome(server: RecordingServer) -> None:
-    server.expected_requests = 2
+async def test_nested_native_calls_preserve_context_and_dispatch_each_outcome(server: SharedProvider) -> None:
+    server.expect(ocr_reply(), ocr_reply())
     recorder: Final = RecordingLogger()
     outcomes: Final = []
 
@@ -256,11 +277,11 @@ async def test_nested_native_calls_preserve_context_and_dispatch_each_outcome(se
     assert [event.kwargs["litellm_call_id"] for event in events] == ["inner", "outer"]
     assert events[0].response is outcomes[0]
     assert events[1].response is outcomes[1]
-    assert len(server.requests) == 2
+    assert len(assert_served_natively(server, outcomes[0], outcomes[1], count=2)) == 2
 
 
-def test_sync_pre_call_can_make_nested_native_request(server: RecordingServer) -> None:
-    server.expected_requests = 2
+def test_sync_pre_call_can_make_nested_native_request(server: SharedProvider) -> None:
+    server.expect(ocr_reply(), ocr_reply())
     observed: Final = []
 
     class Nested(CustomLogger):
@@ -270,14 +291,13 @@ def test_sync_pre_call_can_make_nested_native_request(server: RecordingServer) -
 
     response: Final = call_ocr(server, callbacks=[Nested()], litellm_call_id="outer-sync")
     assert observed[0].pages[0].markdown == response.pages[0].markdown
-    assert len(server.requests) == 2
+    assert len(assert_served_natively(server, observed[0], response, count=2)) == 2
 
 
-def test_unstarted_native_coroutine_releases_input_without_reading_file(server: RecordingServer) -> None:
+def test_unstarted_native_coroutine_releases_input_without_reading_file(server: SharedProvider) -> None:
     from litellm.ocr.dispatch import _public_request
     from litellm.rust_bridge import _native
 
-    server.expected_requests = 0
     effects: Final = []
 
     class File:
@@ -297,10 +317,12 @@ def test_unstarted_native_coroutine_releases_input_without_reading_file(server: 
     gc.collect()
     assert reference() is None
     assert effects == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
-async def test_file_read_happens_after_deployment_hook_in_caller_task(server: RecordingServer) -> None:
+async def test_file_read_happens_after_deployment_hook_in_caller_task(server: SharedProvider) -> None:
     effects: Final = []
     caller: Final = asyncio.current_task()
 
@@ -315,13 +337,15 @@ async def test_file_read_happens_after_deployment_hook_in_caller_task(server: Re
             effects.append(("hook", asyncio.current_task()))
 
     litellm.callbacks.append(Deployment())
+    server.expect(ocr_reply())
     await call_aocr(server, document={"type": "file", "file": File()})
+    assert_served_natively(server)
     assert effects == [("hook", caller), ("read", caller)]
 
 
 @pytest.mark.asyncio
-async def test_failure_callbacks_continue_within_both_families(server: RecordingServer) -> None:
-    server.enqueue(ResponseSpec(body={"message": "failed"}, status=500))
+async def test_failure_callbacks_continue_within_both_families(server: SharedProvider) -> None:
+    server.expect(ocr_reply({"message": "failed"}, status=500))
     observed: Final = []
 
     class Broken(CustomLogger):
@@ -344,6 +368,7 @@ async def test_failure_callbacks_continue_within_both_families(server: Recording
         await call_aocr(server, callbacks=[Broken(), Following()])
     assert [name for name, _ in observed] == ["broken-sync", "following-sync", "broken-async", "following-async"]
     assert all(error is caught.value for _, error in observed)
+    assert_served_natively(server)
 
 
 @pytest.mark.asyncio
@@ -384,17 +409,18 @@ async def test_cancelling_native_transport_closes_connection_before_return() -> 
 
 
 @pytest.mark.asyncio
-async def test_response_limit_is_enforced_at_the_public_boundary(server: RecordingServer) -> None:
+async def test_response_limit_is_enforced_at_the_public_boundary(server: SharedProvider) -> None:
     limit: Final = len(json.dumps(OCR_RESPONSE).encode()) - 1
+    server.expect(ocr_reply())
     with pytest.raises(litellm.APIConnectionError, match="OCR response exceeds the size limit"):
         await call_aocr(server, max_response_bytes=limit)
-    assert len(server.requests) == 1
+    assert len(assert_served_natively(server)) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [False, True])
 async def test_empty_callbacks_run_deployment_hooks_and_defer_like_the_python_client_wrapper(
-    server: RecordingServer,
+    server: SharedProvider,
     monkeypatch: pytest.MonkeyPatch,
     failure: bool,
     created_loggers: list[Logging],
@@ -431,7 +457,9 @@ async def test_empty_callbacks_run_deployment_hooks_and_defer_like_the_python_cl
     monkeypatch.setattr(litellm_logging, "executor", probe)
     monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", probe)
     if failure:
-        server.enqueue(ResponseSpec(body={"message": "provider failed"}, status=500))
+        server.expect(ocr_reply({"message": "provider failed"}, status=500))
+    else:
+        server.expect(ocr_reply())
     trace_id_var.set("callback-free-parent")
     arguments: Final = {"litellm_trace_id": "callback-free-call", "litellm_call_id": "callback-free-id"}
     if failure:
@@ -449,23 +477,28 @@ async def test_empty_callbacks_run_deployment_hooks_and_defer_like_the_python_cl
     assert len(created_loggers) == 1
     logger: Final = created_loggers[0]
     if failure:
-        assert logger.model_call_details["first_api_call_start_time"] <= logger.model_call_details["end_time"]
         assert logger.model_call_details["response_cost"] == 0
+        assert logger.model_call_details["first_api_call_start_time"] <= logger.model_call_details["end_time"]
     else:
         assert getattr(logger, "_native_pending_logging", None) is not None
         assert "end_time" not in logger.model_call_details
+    assert_served_natively(server)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "registration", ["success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"]
 )
-async def test_terminal_registration_added_during_http_is_observed(server: RecordingServer, registration: str) -> None:
+async def test_terminal_registration_added_during_http_is_observed(server: SharedProvider, registration: str) -> None:
     failure: Final = "failure" in registration
     observer: Final = RecordingLogger()
-    server.enqueue(
-        ResponseSpec(
-            body={"message": "provider failed"} if failure else OCR_RESPONSE, status=500 if failure else 200, delay=0.1
+    gate: Final = threading.Event()
+    body: Final = {"message": "provider failed"} if failure else OCR_RESPONSE
+    server.expect(
+        Reply(
+            chunks=(json.dumps(body).encode(),),
+            status=500 if failure else 200,
+            gate_before_first=gate,
         )
     )
     task: Final = asyncio.create_task(
@@ -473,6 +506,7 @@ async def test_terminal_registration_added_during_http_is_observed(server: Recor
     )
     await server.wait_for_requests(1)
     getattr(litellm, registration).append(observer)
+    gate.set()
     if failure:
         with pytest.raises(litellm.InternalServerError):
             await task
@@ -483,6 +517,7 @@ async def test_terminal_registration_added_during_http_is_observed(server: Recor
     )
     await observer.wait_for_async(event)
     assert event in observer.names
+    assert_served_natively(server)
 
 
 @pytest.fixture
@@ -513,7 +548,7 @@ def created_loggers(monkeypatch: pytest.MonkeyPatch) -> list[Logging]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("consumer", ["logger_fn", "raw_global", "request_debug"])
 async def test_explicit_logging_consumers_keep_request_and_response_payloads(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, created_loggers: list[Logging], consumer: str
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch, created_loggers: list[Logging], consumer: str
 ) -> None:
     snapshots: Final[list[dict[str, object]]] = []
     if consumer == "raw_global":
@@ -523,7 +558,9 @@ async def test_explicit_logging_consumers_keep_request_and_response_payloads(
         "raw_global": {},
         "request_debug": {"litellm_request_debug": True},
     }[consumer]
+    server.expect(ocr_reply())
     response: Final = await call_aocr(server, **arguments)
+    assert_served_natively(server, response)
     details: Final = created_loggers[0].model_call_details
     assert details["additional_args"]["complete_input_dict"]["model"] == "mistral-ocr-latest"
     assert json.loads(details["original_response"])["pages"][0]["markdown"] == response.pages[0].markdown

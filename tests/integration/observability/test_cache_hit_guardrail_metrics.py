@@ -15,7 +15,7 @@ import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from prometheus_client.parser import text_string_to_metric_families
 
 pytestmark: Final = pytest.mark.shares_worker_state

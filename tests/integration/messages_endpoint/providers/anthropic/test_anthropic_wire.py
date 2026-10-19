@@ -11,7 +11,7 @@ from integration._support import claude_code as cc
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.safeguards_rig import DANGEROUS_TOOL_USE_BETA
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])

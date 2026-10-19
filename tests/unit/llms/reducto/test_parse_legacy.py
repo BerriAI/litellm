@@ -1,7 +1,9 @@
+import json
 import pytest
 
 import litellm
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -19,12 +21,12 @@ def disable_aiohttp_transport():
 
 
 @pytest.mark.asyncio
-async def test_parse_legacy_wraps_enhance_under_options(disable_aiohttp_transport, reducto_server: RecordingServer):
-    reducto_server.expected_requests = 2
-    reducto_server.enqueue(ResponseSpec(body={"file_id": "reducto://legacy.pdf"}))
-    reducto_server.enqueue(
-        ResponseSpec(
-            body={
+async def test_parse_legacy_wraps_enhance_under_options(disable_aiohttp_transport, reducto_server: SharedProvider):
+    reducto_server.expect(
+        Reply(body=json.dumps({"file_id": "reducto://legacy.pdf"}).encode()),
+        Reply(
+            body=json.dumps(
+                {
                 "usage": {"num_pages": 1, "credits": 1},
                 "result": {
                     "chunks": [
@@ -39,8 +41,9 @@ async def test_parse_legacy_wraps_enhance_under_options(disable_aiohttp_transpor
                         }
                     ]
                 },
-            }
-        )
+                }
+            ).encode()
+        ),
     )
 
     response = await litellm.aocr(
@@ -51,15 +54,16 @@ async def test_parse_legacy_wraps_enhance_under_options(disable_aiohttp_transpor
             "mime_type": "application/pdf",
         },
         api_key="legacy-key",
-        api_base=reducto_server.base_url,
+        api_base=reducto_server.wire.url,
         enhance={"agentic": [{"type": "table"}]},
     )
 
-    upload_request, parse_request = reducto_server.requests
-    assert upload_request.path == "/upload"
-    assert parse_request.path == "/parse"
-    assert isinstance(parse_request.body, dict)
-    request_body = parse_request.body
+    requests = reducto_server.received()
+    assert len(requests) == 2
+    upload_request, parse_request = requests
+    assert upload_request.target == "/upload"
+    assert parse_request.target == "/parse"
+    request_body = json.loads(parse_request.body)
     assert request_body == {
         "document_url": "reducto://legacy.pdf",
         "options": {"enhance": {"agentic": [{"type": "table"}]}},

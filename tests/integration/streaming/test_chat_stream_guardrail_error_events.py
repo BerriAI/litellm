@@ -15,7 +15,7 @@ from integration._support.client import JSON_OBJECT, Gateway, eventually, list_v
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.responses_stream import healthy_stream
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 from litellm.proxy import client as proxy_client

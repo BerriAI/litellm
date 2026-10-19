@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.openai_wire import answering_model_discovery, chat_reply, responses_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import anthropic_peer, marker_of
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 

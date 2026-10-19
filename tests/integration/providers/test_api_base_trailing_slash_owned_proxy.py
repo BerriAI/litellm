@@ -6,7 +6,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, eventually, gateway_from_environment, list_value, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from integration.providers._api_base_trailing_slash_support import (
     KEY,
     TRAILING,

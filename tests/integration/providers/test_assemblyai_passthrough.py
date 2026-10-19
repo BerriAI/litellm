@@ -11,7 +11,7 @@ from integration._support.client import Gateway, gateway_from_environment
 from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.process import owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 _HOSTS: Final = ("api.assemblyai.com", "api.eu.assemblyai.com")
 _PROVIDER_KEY: Final = "synthetic-assemblyai-key"

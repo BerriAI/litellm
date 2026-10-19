@@ -3,7 +3,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from integration._support.client import Gateway, Scenario
 from integration._support.openai_wire import chat_reply, responses_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _DEPLOYMENT: Final = "gpt-5.4-nano"

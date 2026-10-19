@@ -4,7 +4,7 @@ from typing import Final
 
 from tests.integration._support.client import Gateway
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _FILE_ID: Final = "file-integration"
 _JOB_ID: Final = "ftjob-integration"

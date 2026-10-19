@@ -1,3 +1,4 @@
+import json
 import os
 from unittest.mock import AsyncMock, Mock
 
@@ -5,7 +6,8 @@ import httpx
 import pytest
 
 import litellm
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -25,8 +27,7 @@ def disable_aiohttp_transport(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_parse_v3_rejects_plain_http_urls(disable_aiohttp_transport, reducto_server: RecordingServer):
-    reducto_server.expected_requests = 0
+async def test_parse_v3_rejects_plain_http_urls(disable_aiohttp_transport, reducto_server: SharedProvider):
     with pytest.raises(litellm.BadRequestError, match="upload the file first"):
         await litellm.aocr(
             model="reducto/parse-v3",
@@ -35,19 +36,21 @@ async def test_parse_v3_rejects_plain_http_urls(disable_aiohttp_transport, reduc
                 "document_url": "https://example.com/document.pdf",
             },
             api_key="test-key",
-            api_base=reducto_server.base_url,
+            api_base=reducto_server.wire.url,
         )
+    requests = reducto_server.received()
+    assert requests == ()
 
 
 @pytest.mark.asyncio
 async def test_parse_v3_image_data_uri_upload_uses_image_mime(
-    disable_aiohttp_transport, reducto_server: RecordingServer
+    disable_aiohttp_transport, reducto_server: SharedProvider
 ):
-    reducto_server.expected_requests = 2
-    reducto_server.enqueue(ResponseSpec(body={"file_id": "reducto://uploaded-image.png"}))
-    reducto_server.enqueue(
-        ResponseSpec(
-            body={
+    reducto_server.expect(
+        Reply(body=json.dumps({"file_id": "reducto://uploaded-image.png"}).encode()),
+        Reply(
+            body=json.dumps(
+                {
                 "usage": {"num_pages": 1, "credits": 1},
                 "result": {
                     "chunks": [
@@ -57,8 +60,9 @@ async def test_parse_v3_image_data_uri_upload_uses_image_mime(
                         }
                     ]
                 },
-            }
-        )
+                }
+            ).encode()
+        ),
     )
 
     response = await litellm.aocr(
@@ -69,27 +73,30 @@ async def test_parse_v3_image_data_uri_upload_uses_image_mime(
             "mime_type": "image/png",
         },
         api_key="programmatic-key",
-        api_base=f"{reducto_server.base_url}/",
+        api_base=f"{reducto_server.wire.url}/",
     )
 
-    upload_request, parse_request = reducto_server.requests
-    assert upload_request.path == "/upload"
-    assert parse_request.path == "/parse"
+    requests = reducto_server.received()
+    assert len(requests) == 2
+    upload_request, parse_request = requests
+    assert upload_request.target == "/upload"
+    assert parse_request.target == "/parse"
     assert upload_request.headers["authorization"] == "Bearer programmatic-key"
     assert b"image/png" in upload_request.raw_body
 
-    assert isinstance(parse_request.body, dict)
-    assert parse_request.body["input"] == "reducto://uploaded-image.png"
+    assert json.loads(parse_request.body)["input"] == "reducto://uploaded-image.png"
     assert response.pages[0].markdown == "Image OCR"
 
 
 @pytest.mark.asyncio
-async def test_parse_v3_uses_programmatic_api_key_over_env(disable_aiohttp_transport, reducto_server: RecordingServer):
-    reducto_server.expected_requests = 2
-    reducto_server.enqueue(ResponseSpec(body={"file_id": "reducto://uploaded.pdf"}))
-    reducto_server.enqueue(
-        ResponseSpec(
-            body={
+async def test_parse_v3_uses_programmatic_api_key_over_env(
+    disable_aiohttp_transport, reducto_server: SharedProvider
+):
+    reducto_server.expect(
+        Reply(body=json.dumps({"file_id": "reducto://uploaded.pdf"}).encode()),
+        Reply(
+            body=json.dumps(
+                {
                 "usage": {"num_pages": 1, "credits": 1},
                 "result": {
                     "chunks": [
@@ -104,8 +111,9 @@ async def test_parse_v3_uses_programmatic_api_key_over_env(disable_aiohttp_trans
                         }
                     ]
                 },
-            }
-        )
+                }
+            ).encode()
+        ),
     )
 
     await litellm.aocr(
@@ -116,10 +124,11 @@ async def test_parse_v3_uses_programmatic_api_key_over_env(disable_aiohttp_trans
             "mime_type": "application/pdf",
         },
         api_key="passed-key",
-        api_base=reducto_server.base_url,
+        api_base=reducto_server.wire.url,
     )
 
-    assert reducto_server.requests[0].headers["authorization"] == "Bearer passed-key"
-    assert reducto_server.requests[1].headers["authorization"] == "Bearer passed-key"
-
+    requests = reducto_server.received()
+    assert len(requests) == 2
+    assert requests[0].headers["authorization"] == "Bearer passed-key"
+    assert requests[1].headers["authorization"] == "Bearer passed-key"
 

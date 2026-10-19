@@ -16,7 +16,7 @@ from integration._support.client import Gateway, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.tls import write_self_signed_cert
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])

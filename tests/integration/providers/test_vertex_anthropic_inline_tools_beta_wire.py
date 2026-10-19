@@ -20,7 +20,7 @@ import yaml
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _INLINE_TOOLS: Final = "inline-tools-2026-09-15"

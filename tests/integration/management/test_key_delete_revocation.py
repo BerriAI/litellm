@@ -9,7 +9,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, delete_key_if_present, eventually
 from tests.integration._support.database import read_rows
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _CHAT_BODY: Final = TypeAdapter(dict[str, JsonValue])
 _EXPECTED_CHAT: Final = ("POST", "/v1/chat/completions")

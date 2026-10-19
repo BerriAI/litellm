@@ -6,7 +6,7 @@ import httpx
 import openai
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, list_value, object_value, string_value
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.streaming.faked_responses_case import (
     ANSWER,
     ARGUMENTS,

@@ -7,7 +7,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 ANTHROPIC_MODEL: Final = "claude-sonnet-4-5-20250929"
 MODEL_RPM: Final = 40

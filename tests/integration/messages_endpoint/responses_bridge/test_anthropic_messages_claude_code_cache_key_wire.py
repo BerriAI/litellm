@@ -3,7 +3,7 @@ import uuid
 from typing import Final
 
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "gpt-5.4-mini"

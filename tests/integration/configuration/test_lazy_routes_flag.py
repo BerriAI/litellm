@@ -31,7 +31,7 @@ from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.mcp import McpPeer, call_tool, echo_tool, scripted_peer, tool_calls, tool_names
 from tests.integration._support.process import OwnedProxy, owned_proxy_process
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 TICKET_FEATURES: Final = ("mcp_management", "mcp_byok_oauth")
 FLAG: Final = "LITELLM_DISABLE_LAZY_ROUTES"

@@ -17,7 +17,7 @@ import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.messages_endpoint.providers.anthropic.test_anthropic_safeguards_beta_wire import (
     ANTHROPIC_KEY,
     ANTHROPIC_MODEL,

@@ -1,8 +1,10 @@
+import json
 from typing import Final
 
 import litellm
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from tests.test_litellm_rust.support.gaps import gap
-from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.routing import call_public
 
 MESSAGES_MODEL: Final = "anthropic/claude-sonnet-5"
@@ -36,6 +38,13 @@ MESSAGES_EVENTS: Final = (
     ),
     ("message_stop", {"type": "message_stop"}),
 )
+MESSAGES_SSE: Final = tuple(
+    f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in MESSAGES_EVENTS
+)
+
+
+def messages_reply(body: object = MESSAGES_RESPONSE, status: int = 200) -> Reply:
+    return Reply(body=json.dumps(body).encode(), status=status)
 
 REQUEST: Final = {"model": MESSAGES_MODEL, "messages": list(MESSAGES), "max_tokens": 64}
 
@@ -48,7 +57,7 @@ BAD_REQUEST: Final = _error("invalid_request_error")
 RATE_LIMITED: Final = _error("rate_limit_error")
 
 
-async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: object) -> object:
+async def call(server: SharedProvider, *, asynchronous: bool = True, **kwargs: object) -> object:
     return await call_public(
         litellm.anthropic.messages.create,
         litellm.anthropic.messages.acreate,

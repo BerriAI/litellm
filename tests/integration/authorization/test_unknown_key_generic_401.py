@@ -18,7 +18,7 @@ from websockets.exceptions import InvalidStatus
 from tests.integration._support.client import Gateway, delete_key_if_present, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from tests.integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 
 MODEL: Final = "anthropic/claude-haiku-4-5"
 GENERIC_MESSAGE: Final = "Authentication Error, Invalid API key provided."

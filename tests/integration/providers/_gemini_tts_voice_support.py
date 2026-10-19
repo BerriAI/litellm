@@ -23,7 +23,7 @@ from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventual
 from integration._support.database import read_rows
 from integration._support.upstream import GEMINI_LIVE_PATH, ScenarioHandle, delete_scenario, register_scenario
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from pydantic import JsonValue
 from websockets.asyncio.client import ClientConnection

@@ -6,7 +6,7 @@ from typing import Final
 import anthropic
 import openai
 from integration._support.client import JSON_OBJECT, Gateway, list_value, object_value, string_value
-from integration._support.wire import wire_server
+from tests._support.wire import wire_server
 from integration.streaming.faked_responses_case import (
     ANSWER,
     ANTHROPIC_TOOL_PARAMS,

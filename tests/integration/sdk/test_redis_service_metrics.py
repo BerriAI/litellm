@@ -6,7 +6,7 @@ from typing import Final
 
 import litellm
 import pytest
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from litellm import Router
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from prometheus_client import REGISTRY

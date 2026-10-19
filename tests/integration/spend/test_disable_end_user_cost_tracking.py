@@ -19,7 +19,7 @@ from integration._support.client import Gateway, Scenario, eventually, gateway_f
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
 from integration._support.upstream import JsonResponse, SseResponse, delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]

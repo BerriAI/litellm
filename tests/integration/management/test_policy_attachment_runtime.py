@@ -8,7 +8,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 

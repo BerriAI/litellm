@@ -25,7 +25,7 @@ from integration._support.database import read_rows
 from integration._support.mcp import EntryPoint, McpCaller, echo_tool, register_mcp, scripted_peer, tool_calls
 from integration._support.otlp_sink import AuditConfigWriter, SpanSinks, recorded_spans
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 pytestmark: Final = pytest.mark.shares_worker_state
 

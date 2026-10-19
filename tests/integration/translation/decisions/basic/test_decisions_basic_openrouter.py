@@ -1,6 +1,6 @@
 import pytest
 from integration._support.client import Gateway
-from integration._support.provider import SharedProvider
+from tests._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.decisions.bases.openrouter import (
     TYPESAFE_JEV_1_13_TEST_CASE,

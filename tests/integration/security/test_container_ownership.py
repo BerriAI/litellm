@@ -10,7 +10,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI, PermissionDeniedError
 from openai.types import ContainerListResponse, ContainerRetrieveResponse
 from openai.types.containers import FileListResponse, FileRetrieveResponse

@@ -4,7 +4,7 @@ from typing import Final
 
 from integration._support.client import Gateway
 from integration._support.mcp import mcp_peer, register_mcp, tool_calls
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _FUNCTION_TOOL: Final = {
     "type": "function",

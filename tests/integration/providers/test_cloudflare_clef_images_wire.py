@@ -20,7 +20,7 @@ from integration._support.client import Gateway, eventually, gateway_from_enviro
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.timing import assert_within_factor_of_control, timed
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 Route = Literal["/v1/systemone", "/systemone", "/v1/decisions", "/decisions"]

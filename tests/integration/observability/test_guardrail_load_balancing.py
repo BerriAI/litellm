@@ -8,7 +8,7 @@ import yaml
 
 from tests.integration._support.client import Gateway
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _REQUESTS: Final = 24
 _COMPLETION: Final = {

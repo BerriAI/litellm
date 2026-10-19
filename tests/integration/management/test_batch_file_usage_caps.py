@@ -15,7 +15,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, string_value
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.management._batch_file_caps import (
     COMPLETION_TEXT,
     DAY_SECONDS,

@@ -9,7 +9,7 @@ from typing import Final
 import yaml
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 from test_grayswan_wire import _PROVIDER_KEY, _REQUEST_MESSAGES, _VENDOR_KEY, _monitor_bodies, _serving_model_probe
 

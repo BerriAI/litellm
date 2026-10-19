@@ -15,7 +15,7 @@ from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 BACKEND: Final = "gemini-embedding-001"
 TARGET: Final = f"/models/{BACKEND}:batchEmbedContents"

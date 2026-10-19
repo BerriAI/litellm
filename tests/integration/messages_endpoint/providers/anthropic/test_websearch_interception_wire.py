@@ -6,7 +6,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 BEDROCK_MODEL: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 INVOKE_TARGET: Final = f"/model/{BEDROCK_MODEL}/invoke"

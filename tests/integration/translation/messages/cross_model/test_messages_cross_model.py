@@ -4,8 +4,8 @@ from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway
-from integration._support.provider import SharedProvider
-from integration._support.wire import Reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.bases.anthropic import CLAUDE_SONNET_5_5_TEST_CASE
 from integration.translation.messages.bases.azure_ai import (

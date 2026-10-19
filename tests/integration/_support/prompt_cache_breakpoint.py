@@ -16,7 +16,7 @@ from integration._support import responses_vendor as rv
 from integration._support.client import eventually, object_value, string_value
 from integration._support.database import ROWS
 from integration._support.openai_wire import answering_model_discovery, responses_reply
-from integration._support.wire import Reply, Request, Wire
+from tests._support.wire import Reply, Request, Wire
 from psycopg.rows import DictRow, dict_row
 from pydantic import JsonValue
 

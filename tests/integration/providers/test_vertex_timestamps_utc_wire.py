@@ -16,7 +16,7 @@ from integration._support.client import JSON_OBJECT, Gateway, Scenario, gateway_
 from integration._support.process import owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(240)

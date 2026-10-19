@@ -13,7 +13,7 @@ import httpx
 import openai
 import pytest
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 import litellm

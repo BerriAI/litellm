@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario
 from integration._support.timing import assert_within_factor_of_control, timed
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _BACKEND: Final = "gemini-3.7-flash"

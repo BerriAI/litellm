@@ -7,7 +7,7 @@ import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, list_value, object_value
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.wire import Request
+from tests._support.wire import Request
 from pydantic import JsonValue
 
 GEMINI_2_5_FLASH_DEPLOYMENT: Final[Mapping[str, JsonValue]] = {

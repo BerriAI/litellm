@@ -33,7 +33,7 @@ from integration._support.process import owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.upstream import CONTROL_URL, ScenarioHandle, delete_scenario, register_scenario
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from jwt.algorithms import RSAAlgorithm
 from pydantic import JsonValue

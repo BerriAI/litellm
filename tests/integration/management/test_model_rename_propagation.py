@@ -19,7 +19,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 _PROVIDER_MODEL: Final = "gpt-4o-mini"
 _PROVIDER_API_KEY: Final = "integration-provider-key"

@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from google import genai
 from google.genai import types
 from integration._support.client import Gateway, Scenario
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "gemini-2.5-flash"

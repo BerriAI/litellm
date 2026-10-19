@@ -11,7 +11,7 @@ from typing import Final
 import openai
 import pytest
 from integration._support.client import eventually
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 import litellm
 from litellm.types.utils import ModelResponseStream

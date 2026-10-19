@@ -13,7 +13,7 @@ import anthropic
 import openai
 import yaml
 from integration._support.client import Gateway, JsonValue, eventually, object_value
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 
 BUCKET: Final = "integration-bucket"
 PREFIX: Final = "integration-logs"

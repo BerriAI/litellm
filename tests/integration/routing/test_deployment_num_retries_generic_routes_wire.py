@@ -20,7 +20,7 @@ from integration._support.openai_wire import (
     posted_targets,
     responses_reply,
 )
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _TEXT: Final = "Hello"

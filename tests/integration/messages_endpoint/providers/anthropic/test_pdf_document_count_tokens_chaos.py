@@ -21,7 +21,7 @@ from integration._support.pdf_document import (
     rendered_tokens,
 )
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from integration.providers._cache_control_marks_support import anthropic_peer, owned_config
 from pydantic import JsonValue, TypeAdapter
 

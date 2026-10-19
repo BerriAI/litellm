@@ -5,7 +5,7 @@ from typing import Final
 import httpx
 import pytest
 from integration._support.client import Gateway, Scenario
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from openai import OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk
 from pydantic import JsonValue

@@ -4,10 +4,10 @@ import json
 from collections.abc import Callable
 from typing import Final
 
-from integration._support.wire import Reply, Request, Wire
+from tests._support.wire import Reply, Request, Wire
 from pydantic import JsonValue
 
-from tests.integration._support.provider import MODEL_DISCOVERY
+from tests._support.provider import MODEL_DISCOVERY
 
 _USAGE: Final = {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
 

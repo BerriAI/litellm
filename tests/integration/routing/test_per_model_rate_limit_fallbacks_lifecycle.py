@@ -11,7 +11,7 @@ import pytest
 from integration._support.client import eventually, gateway_from_environment, string_value
 from integration._support.database import scratch_database
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from integration.routing.test_per_model_rate_limit_fallbacks import (
     SETTING,
     Groups,

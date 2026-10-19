@@ -24,7 +24,7 @@ from _openinference_support import (
     _spans,
 )
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 
 

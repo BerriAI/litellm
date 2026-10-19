@@ -12,7 +12,7 @@ import pytest
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.workers import cost_map_environment
 from integration.cost_calculation.cost_tracking_case import COST_MAP
 from pydantic import JsonValue, TypeAdapter

@@ -5,7 +5,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     CITIES,
     anthropic_deployment,

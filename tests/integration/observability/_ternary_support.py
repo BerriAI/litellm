@@ -25,7 +25,7 @@ import psycopg
 import yaml
 from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from psycopg import sql
 
 TERNARY_API_KEY: Final = "synthetic-ternary-api-key"

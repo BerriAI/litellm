@@ -11,7 +11,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, gateway_from_environment, object_value
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"

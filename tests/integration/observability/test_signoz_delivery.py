@@ -21,7 +21,7 @@ import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process, stop_root_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue
 from pydantic import JsonValue, TypeAdapter

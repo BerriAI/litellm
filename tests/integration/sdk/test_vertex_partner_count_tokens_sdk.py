@@ -5,7 +5,7 @@ from typing import Final
 import litellm
 import pytest
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "claude-sonnet-4-6"

@@ -16,9 +16,15 @@ from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES
 from litellm.types.utils import ModelResponse
-from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_RESPONSE
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.messages.data import (
+    MESSAGES,
+    MESSAGES_MODEL,
+    MESSAGES_SSE,
+    messages_reply,
+)
+from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, responses_reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 
 
 def payload(value: object) -> object:
@@ -36,15 +42,22 @@ def cache_key(response: object) -> object:
     return headers.get("x-litellm-cache-key")
 
 
+def cache_reply(route: Literal["chat", "messages", "responses"], stream: bool = False) -> Reply:
+    if route == "responses":
+        return responses_reply()
+    if route == "messages" and stream:
+        return Reply(chunks=MESSAGES_SSE, content_type="text/event-stream")
+    return messages_reply()
+
+
 async def invoke(
     route: Literal["chat", "messages", "responses"],
-    server: RecordingServer,
+    server: SharedProvider,
     options: Mapping[str, object],
     native: bool = True,
 ) -> object:
-    common: Final = {"api_key": "test-key", "api_base": server.base_url, **options}
+    common: Final = {"api_key": "test-key", "api_base": server.wire.url, **options}
     if route == "responses":
-        server.default_response = ResponseSpec(body=RESPONSES_RESPONSE)
         arguments: Final = {"model": RESPONSES_MODEL, "input": "hello", **common}
         if not native:
             return await litellm.aresponses(**arguments)
@@ -56,7 +69,7 @@ async def invoke(
                 "input": "hello",
                 "stream": None,
                 "api_key": "test-key",
-                "api_base": server.base_url,
+                "api_base": server.wire.url,
                 "custom_llm_provider": "openai",
                 "extra_headers": None,
                 **arguments,
@@ -69,11 +82,6 @@ async def invoke(
             python=runtime.NO_PYTHON,
             rules=(RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),),
         )
-    server.default_response = (
-        ResponseSpec(body=None, events=MESSAGES_EVENTS)
-        if options.get("stream")
-        else ResponseSpec(body=MESSAGES_RESPONSE)
-    )
     parameters: Final = {"model": MESSAGES_MODEL, "messages": list(MESSAGES), "max_tokens": 32, **common}
     if route == "chat":
         if not native:
@@ -97,7 +105,7 @@ async def invoke(
             "max_tokens": 32,
             "stream": None,
             "api_key": "test-key",
-            "api_base": server.base_url,
+            "api_base": server.wire.url,
             "custom_llm_provider": "anthropic",
             **parameters,
         },

@@ -14,7 +14,7 @@ import yaml
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value, string_value
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 _ATTACHABLE: Final = "attachable-during-guard"
 _WORDS: Final = "custom-words-during-guard"

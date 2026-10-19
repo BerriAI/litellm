@@ -20,7 +20,7 @@ import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai.types.chat import ChatCompletionChunk
 from pydantic import JsonValue, TypeAdapter
 

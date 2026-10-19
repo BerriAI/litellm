@@ -20,7 +20,7 @@ from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai.types.responses import ResponseCompletedEvent
 from pydantic import JsonValue, TypeAdapter
 

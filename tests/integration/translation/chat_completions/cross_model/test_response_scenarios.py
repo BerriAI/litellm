@@ -4,8 +4,8 @@ from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, object_value
-from integration._support.provider import SharedProvider
-from integration._support.wire import Reply
+from tests._support.provider import SharedProvider
+from tests._support.wire import Reply
 from integration.translation.case import SSEFrame, StreamingTranslationTestCase
 from integration.translation.chat_completions.bases.openai_responses import GPT_6_1_SOL_TEST_CASE
 from integration.translation.chat_completions.cross_model.contracts import (

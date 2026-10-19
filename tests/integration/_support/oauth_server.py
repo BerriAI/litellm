@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Final
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 
 TOKEN_EXCHANGE: Final = "urn:ietf:params:oauth:grant-type:token-exchange"
 

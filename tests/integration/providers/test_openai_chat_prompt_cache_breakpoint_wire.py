@@ -7,7 +7,7 @@ import pytest
 from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, gateway_from_environment, string_value
 from integration._support.openai_wire import answering_model_discovery, chat_reply
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(120)

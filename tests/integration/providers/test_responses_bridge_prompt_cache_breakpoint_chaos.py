@@ -15,7 +15,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from integration.providers._responses_bridge_prompt_cache_breakpoint import (
     _Call,

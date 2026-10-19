@@ -5,7 +5,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 ACCESS_KEY: Final = "AKIAINTEGRATION000003"
 USER_CONTEXT: Final = {"userId": "reader@example.com"}

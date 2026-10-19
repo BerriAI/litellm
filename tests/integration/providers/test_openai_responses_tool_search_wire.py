@@ -23,7 +23,7 @@ from integration._support.budget import readiness_seconds
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration.providers.test_responses_bridge_tool_search_wire import (
     _CACHE_BUST,
     _CLAUDE,

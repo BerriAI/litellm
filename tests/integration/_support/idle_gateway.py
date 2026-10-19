@@ -16,7 +16,7 @@ from queue import SimpleQueue
 from socketserver import BaseServer
 from typing import Final
 
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 
 MARKER: Final = re.compile(rb"idle-[0-9a-f]{16}")
 _LOOPBACK: Final = "127.0.0.1"

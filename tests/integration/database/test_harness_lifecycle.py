@@ -43,7 +43,7 @@ from tests.integration._support.database_relay import (
 )
 from tests.integration._support.runtime import configure_executor
 from tests.integration._support.sharding import ShardExecution, shard_errors
-from tests.integration._support.wire import Reply, wire_server
+from tests._support.wire import Reply, wire_server
 from tests.integration._support.ports import allocate_port
 from tests.integration.run import _without_provider_api_keys
 

@@ -10,7 +10,7 @@ from typing import Final
 import pytest
 from integration._support.process import graceful_stop_seconds
 from integration._support.safeguards_rig import DANGEROUS_TOOL_USE_BETA, SAFEGUARDS, Rig, nonce, safeguards_rig, sse
-from integration._support.wire import Reply, Request
+from tests._support.wire import Reply, Request
 from pydantic import JsonValue
 
 pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 240)

@@ -6,7 +6,7 @@ from urllib.parse import unquote
 
 import pytest
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 import litellm

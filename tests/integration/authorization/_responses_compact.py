@@ -17,7 +17,7 @@ import openai
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.responses_vendor import same_response
-from integration._support.wire import Reply, Request, Wire
+from tests._support.wire import Reply, Request, Wire
 from integration._support.worker_readiness import wait_for_worker_readiness
 from openai.types.responses import CompactedResponse, ResponseInputParam
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter

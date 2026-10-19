@@ -1,11 +1,12 @@
+import json
 from typing import Final, NoReturn
 
 import pytest
 
 import litellm
-from tests.test_litellm_rust.ocr.data import OCR_DOCUMENT, OCR_MODEL
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.ocr.data import OCR_DOCUMENT, OCR_MODEL, ocr_reply
 from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests._support.provider import SharedProvider
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -14,7 +15,7 @@ pytestmark = pytest.mark.requires_rust_extension
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("caching", [None, False, True])
 async def test_ocr_does_not_depend_on_chat_cache(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, caching: bool | None
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, caching: bool | None
 ) -> None:
     from litellm.caching.caching import Cache
 
@@ -23,17 +24,19 @@ async def test_ocr_does_not_depend_on_chat_cache(
         "model": OCR_MODEL,
         "document": OCR_DOCUMENT,
         "api_key": "test-key",
-        "api_base": server.base_url,
+        "api_base": server.wire.url,
         "caching": caching,
     }
+    server.expect(ocr_reply())
     response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+    requests: Final = assert_served_natively(server, response)
     assert response.pages[0].markdown == "native OCR response"
-    assert len(server.requests) == 1
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize("failure", ["invalid", "live", "schema"])
 def test_native_projection_errors_never_select_python(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, failure: str
+    server: SharedProvider, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     import dataclasses
     import ssl
@@ -44,7 +47,6 @@ def test_native_projection_errors_never_select_python(
     from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR
     from litellm.rust_bridge.public_call import NativeCall
 
-    server.expected_requests = 0
     snapshot: Final = dataclasses.replace(settings.http_settings(), user_agent=1)
     if failure == "schema":
         monkeypatch.setattr(settings, "http_settings", lambda: snapshot)
@@ -59,7 +61,7 @@ def test_native_projection_errors_never_select_python(
             "model": "mistral/mistral-ocr-latest",
             "document": OCR_DOCUMENT,
             "api_key": "test-key",
-            "api_base": server.base_url,
+            "api_base": server.wire.url,
             "timeout": None,
             "custom_llm_provider": "mistral",
             "extra_headers": None,
@@ -76,7 +78,8 @@ def test_native_projection_errors_never_select_python(
             native=lambda native: native(request),
             python=python_fallback,
         )
-    assert server.requests == []
+    requests: Final = server.received()
+    assert requests == ()
 
 
 MODELS: Final = ("cohere/parse-v5.0", "azure_ai/Cohere-parse-v5.0")
@@ -102,11 +105,12 @@ PAYLOAD: Final = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", MODELS)
-async def test_ocr_health_check_uses_the_native_route(recording_server: RecordingServer, model: str) -> None:
-    recording_server.enqueue(ResponseSpec(body=PAYLOAD))
+async def test_ocr_health_check_uses_the_native_route(recording_server: SharedProvider, model: str) -> None:
+    recording_server.expect(ocr_reply(PAYLOAD))
     response: Final = await litellm.ahealth_check(
-        model_params={"model": model, "api_key": "test-key", "api_base": recording_server.base_url}, mode="ocr"
+        model_params={"model": model, "api_key": "test-key", "api_base": recording_server.wire.url}, mode="ocr"
     )
     assert "error" not in response
-    assert_served_natively(recording_server)
-    assert recording_server.requests[0].body["document"]["image_url"].startswith("data:image/png;base64,")
+    requests: Final = assert_served_natively(recording_server)
+    body: Final = json.loads(requests[0].body)
+    assert body["document"]["image_url"].startswith("data:image/png;base64,")

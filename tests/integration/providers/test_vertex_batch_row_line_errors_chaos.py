@@ -7,7 +7,7 @@ from typing import Final
 
 import httpx
 from integration._support.client import Gateway, eventually
-from integration._support.wire import Request, wire_server
+from tests._support.wire import Request, wire_server
 from integration._support.ports import allocate_port
 
 from integration.providers._vertex_batch_rows import (

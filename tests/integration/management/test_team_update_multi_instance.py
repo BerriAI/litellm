@@ -10,7 +10,7 @@ import pytest
 from pydantic import JsonValue
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _UPSTREAM_REPLIES: Final[Mapping[str, Mapping[str, JsonValue]]] = {
     "/v1/chat/completions": {

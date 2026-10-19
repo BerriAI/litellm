@@ -7,7 +7,7 @@ import pytest
 from integration._support import prompt_cache_breakpoint as pcb
 from integration._support import responses_vendor as rv
 from integration._support import tool_search as ts
-from integration._support.wire import Wire, wire_server
+from tests._support.wire import Wire, wire_server
 from pydantic import JsonValue
 
 import litellm

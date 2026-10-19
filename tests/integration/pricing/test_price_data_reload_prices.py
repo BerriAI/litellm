@@ -15,7 +15,7 @@ import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.shares_worker_state

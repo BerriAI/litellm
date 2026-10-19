@@ -10,7 +10,7 @@ from pydantic import JsonValue
 
 from integration._support.client import Gateway
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _PROMPT: Final = "Respond with exactly the following text and nothing else:\nHello from LiteLLM!"
 _HEAD: Final = "Hello from "

@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 from integration._support.client import Gateway
 from integration._support.upstream import _aws_event_frame
-from integration._support.wire import Reply, Request, wire_server
+from tests._support.wire import Reply, Request, wire_server
 
 _MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 _ACTIONS: Final = ("converse", "invoke", "converse-stream", "invoke-with-response-stream")

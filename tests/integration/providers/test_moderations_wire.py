@@ -7,7 +7,7 @@ import openai
 import yaml
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from openai.types import Moderation
 from pydantic import BaseModel
 

@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Iterator
 from importlib import import_module
 from typing import Final
 
@@ -8,7 +8,7 @@ import pytest_asyncio
 import litellm
 from tests.test_litellm_rust.support.clickhouse import clickhouse_url as clickhouse_url
 from tests.test_litellm_rust.support.isolation import isolated_test_state
-from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
+from tests._support.provider import SharedProvider, shared_provider
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="function")
@@ -18,8 +18,8 @@ async def isolate_test_state() -> AsyncIterator[None]:
 
 
 @pytest.fixture
-def recording_server() -> Generator[RecordingServer]:
-    with recording_service() as server:
+def recording_server(request: pytest.FixtureRequest) -> Iterator[SharedProvider]:
+    with shared_provider() as server, server.checked(request.node.nodeid):
         yield server
 
 

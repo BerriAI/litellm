@@ -17,7 +17,7 @@ from integration._support import prompt_cache_breakpoint as pcb
 from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, eventually, gateway_from_environment, string_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 

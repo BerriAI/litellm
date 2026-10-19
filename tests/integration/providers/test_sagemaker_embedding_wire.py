@@ -34,7 +34,7 @@ from integration._support.sagemaker_embedding import (
     plain_route,
     respond,
 )
-from integration._support.wire import Request, Wire, wire_server
+from tests._support.wire import Request, Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]

@@ -20,7 +20,7 @@ import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, list_value, object_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from tests._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.shares_worker_state

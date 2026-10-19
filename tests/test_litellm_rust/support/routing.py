@@ -8,7 +8,7 @@ from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from tests.test_litellm_rust.support.isolation import rebound
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests._support.provider import SharedProvider
 from tests.test_litellm_rust.support.served import assert_served_natively
 
 __all__ = ["CALL_ID", "assert_served_natively", "call_public", "native_route"]
@@ -26,7 +26,7 @@ async def call_public(
     create: Callable[..., object],
     acreate: Callable[..., Awaitable[object]],
     request: Mapping[str, object],
-    server: RecordingServer,
+    server: SharedProvider,
     *,
     asynchronous: bool,
     **kwargs: object,
@@ -34,7 +34,7 @@ async def call_public(
     arguments: Final = {
         **copy.deepcopy(dict(request)),
         "api_key": "test-key",
-        "api_base": server.base_url,
+        "api_base": server.wire.url,
         "litellm_call_id": CALL_ID,
         **kwargs,
     }

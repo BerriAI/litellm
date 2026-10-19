@@ -8,7 +8,7 @@ import pytest
 from pydantic import JsonValue
 
 from integration._support.client import Gateway
-from integration._support.wire import wire_server
+from tests._support.wire import wire_server
 from integration.providers._responses_bridge_prompt_cache_breakpoint import (
     _BREAKPOINT,
     _Call,
