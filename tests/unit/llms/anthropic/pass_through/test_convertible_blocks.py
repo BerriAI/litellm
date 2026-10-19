@@ -135,7 +135,6 @@ _DROPPED_INSIDE_TOOL_RESULT: Final[tuple[tuple[Mapping[str, object], str, str], 
         "text-notes",
         "document with a text source inside a tool_result",
     ),
-    ({"type": "tool_reference", "tool_name": "find_docs"}, "find_docs", "tool_reference inside a tool_result"),
 )
 
 
@@ -155,6 +154,22 @@ def test_tool_result_content_both_counters_drop_is_named(inner: Mapping[str, obj
     assert marker not in gemini
     assert marker not in openai
     assert unconvertible_anthropic_blocks(_tool_turn(inner)) == (label,)
+
+
+def test_tool_reference_count_guard_rejects_when_only_responses_preserves_it() -> None:
+    inner: Final = {"type": "tool_reference", "tool_name": "find_docs"}
+    gemini, openai = _sent_by_each_counter(inner)
+
+    assert "find_docs" not in gemini
+    assert _JSON_OBJECTS.validate_json(openai) == [
+        {"type": "function_call", "call_id": "toolu_01", "name": "lookup", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "toolu_01", "output": "[Loaded tool: find_docs]"},
+    ]
+    assert unconvertible_anthropic_blocks(_tool_turn(inner)) == ("tool_reference inside a tool_result",)
+    assert unconvertible_blocks_error(_tool_turn(inner), "anthropic") == (
+        "count_tokens can't convert these content blocks for this model, so the count would leave them out: "
+        "tool_reference inside a tool_result"
+    )
 
 
 def _replayed_web_search(encrypted_content: str) -> tuple[Mapping[str, object], ...]:

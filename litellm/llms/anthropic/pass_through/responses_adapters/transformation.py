@@ -391,9 +391,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                parts = [
-                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
-                                ]
+                                parts = (
+                                    c.get("text", "")
+                                    if (
+                                        part := cast(Mapping[str, object], c)  # cast-ok: dict checked below
+                                    ).get("type")
+                                    == "text"
+                                    else f"[Loaded tool: {part.get('tool_name', '')}]"
+                                    for c in inner
+                                    if isinstance(c, dict) and c.get("type") in {"text", "tool_reference"}
+                                )
                                 output_text = "\n".join(parts)
                                 if covered_image_parts or later_image_parts:
                                     output_text = (
