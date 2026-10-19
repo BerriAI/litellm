@@ -10,7 +10,7 @@ from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
-from tests.unit.llms.bedrock.slow_vault import LOOP_STALL_LIMIT_SECONDS, host_in_slow_vault, longest_loop_stall_while
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 
 class _ProbedCountTokensHandler(BedrockCountTokensHandler):
@@ -71,19 +71,17 @@ async def test_handle_count_tokens_request_looks_up_its_region_off_the_event_loo
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
-    vault: Final = host_in_slow_vault(monkeypatch, "AWS_REGION_NAME", "AWS_BEDROCK_RUNTIME_ENDPOINT")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_REGION_NAME", "AWS_BEDROCK_RUNTIME_ENDPOINT")
 
-    stall, result = await longest_loop_stall_while(
-        BedrockCountTokensHandler().handle_count_tokens_request(
-            request_data={"model": "us.anthropic.claude-sonnet-5-5", "messages": [{"role": "user", "content": "hi"}]},
-            litellm_params={},
-            resolved_model="us.anthropic.claude-sonnet-5-5",
-            client=AsyncHTTPHandler(transport=httpx.MockTransport(_count_tokens_in_us_west_2)),
-        )
+    result = await BedrockCountTokensHandler().handle_count_tokens_request(
+        request_data={"model": "us.anthropic.claude-sonnet-5-5", "messages": [{"role": "user", "content": "hi"}]},
+        litellm_params={},
+        resolved_model="us.anthropic.claude-sonnet-5-5",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_count_tokens_in_us_west_2)),
     )
 
     assert vault.read.is_set()
-    assert stall < LOOP_STALL_LIMIT_SECONDS
+    assert not vault.stalled_the_loop.is_set()
     assert result == {"input_tokens": 7}
 
 

@@ -35,7 +35,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 )
 from litellm.types.utils import CallTypes, ModelResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
-from tests.unit.llms.bedrock.slow_vault import LOOP_STALL_LIMIT_SECONDS, host_in_slow_vault, longest_loop_stall_while
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 
 @pytest.fixture
@@ -8092,18 +8092,16 @@ async def test_guardrail_secret_lookups_leave_the_event_loop_free(
 ) -> None:
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
-    vault: Final = host_in_slow_vault(monkeypatch, "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION_NAME")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION_NAME")
     guardrail: Final = BedrockGuardrail(**guardrail_config)
     upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=upstream_answer))
 
-    stall, _ = await longest_loop_stall_while(
-        guardrail.make_bedrock_api_request(
-            source="INPUT",
-            messages=[{"role": "user", "content": "hello"}],
-            request_data={"messages": []},
-        )
+    _ = await guardrail.make_bedrock_api_request(
+        source="INPUT",
+        messages=[{"role": "user", "content": "hello"}],
+        request_data={"messages": []},
     )
 
     assert vault.read.is_set()
-    assert stall < LOOP_STALL_LIMIT_SECONDS
+    assert not vault.stalled_the_loop.is_set()
     assert upstream.calls.last.request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"

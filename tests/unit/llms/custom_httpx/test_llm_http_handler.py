@@ -67,7 +67,7 @@ from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIRe
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
-from tests.unit.llms.bedrock.slow_vault import LOOP_STALL_LIMIT_SECONDS, host_in_slow_vault, longest_loop_stall_while
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -1340,7 +1340,7 @@ async def test_bedrock_secret_lookups_leave_the_event_loop_free(
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
     monkeypatch.setenv("AWS_S3_BUCKET_NAME", "batch-inputs")
     monkeypatch.setenv("AWS_S3_OUTPUT_BUCKET_NAME", "batch-outputs")
-    vault: Final = host_in_slow_vault(
+    vault: Final = host_in_loop_probing_vault(
         monkeypatch,
         "AWS_REGION_NAME",
         "AWS_BEDROCK_RUNTIME_ENDPOINT",
@@ -1353,10 +1353,10 @@ async def test_bedrock_secret_lookups_leave_the_event_loop_free(
     )
     upstream: Final = respx_mock.route().mock(return_value=upstream_answer)
 
-    stall, _ = await longest_loop_stall_while(call())
+    _ = await call()
 
     assert vault.read.is_set()
-    assert stall < LOOP_STALL_LIMIT_SECONDS
+    assert not vault.stalled_the_loop.is_set()
     assert ".us-west-2." in upstream.calls.last.request.url.host
 
 

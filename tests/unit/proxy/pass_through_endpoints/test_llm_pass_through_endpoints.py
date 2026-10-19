@@ -35,7 +35,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.passthrough.main import raise_for_provider_status
 from litellm.llms.bedrock.common_utils import BedrockError
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
-from tests.unit.llms.bedrock.slow_vault import LOOP_STALL_LIMIT_SECONDS, host_in_slow_vault, longest_loop_stall_while
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
@@ -2531,7 +2531,7 @@ async def test_bedrock_agent_runtime_region_lookup_leaves_the_event_loop_free(mo
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ak")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "sk")
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
-    vault: Final = host_in_slow_vault(monkeypatch, "AWS_REGION_NAME")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_REGION_NAME")
 
     async def receive() -> dict[str, object]:
         return {"type": "http.request", "body": b'{"retrievalQuery": {"text": "hi"}}', "more_body": False}
@@ -2550,17 +2550,15 @@ async def test_bedrock_agent_runtime_region_lookup_leaves_the_event_loop_free(mo
         retrieve: Final = upstream.post(
             "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/KB1234567/retrieve"
         ).mock(return_value=httpx.Response(200, json={"retrievalResults": []}))
-        stall, _ = await longest_loop_stall_while(
-            bedrock_proxy_route(
-                endpoint="knowledgebases/KB1234567/retrieve",
-                request=request,
-                fastapi_response=Response(),
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-caller"),
-            )
+        _ = await bedrock_proxy_route(
+            endpoint="knowledgebases/KB1234567/retrieve",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-caller"),
         )
 
     assert vault.read.is_set()
-    assert stall < LOOP_STALL_LIMIT_SECONDS
+    assert not vault.stalled_the_loop.is_set()
     assert retrieve.calls.last.request.headers["authorization"].startswith("AWS4-HMAC-SHA256")
 
 

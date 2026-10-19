@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.router import GenericLiteLLMParams
-from tests.unit.llms.bedrock.slow_vault import LOOP_STALL_LIMIT_SECONDS, host_in_slow_vault, longest_loop_stall_while
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 WORKSPACE_ALIASES: Final = ("workspace_id", "aws_workspace_id", "anthropic_workspace_id", "anthropic-workspace-id")
 
@@ -692,22 +692,20 @@ async def test_anthropic_messages_claude_platform_workspace_and_region_lookups_l
 
     monkeypatch.setenv("ANTHROPIC_AWS_WORKSPACE_ID", "wrkspc_test")
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
-    vault: Final = host_in_slow_vault(monkeypatch, "ANTHROPIC_AWS_WORKSPACE_ID", "AWS_REGION_NAME")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "ANTHROPIC_AWS_WORKSPACE_ID", "AWS_REGION_NAME")
     sigv4_without_region: Final = {key: value for key, value in SIGV4_KWARGS.items() if key != "aws_region_name"}
     requests: list[dict] = []
 
-    stall, response = await longest_loop_stall_while(
-        litellm.anthropic_messages(
-            model="bedrock/claude_platform/claude-sonnet-5-5",
-            messages=[{"role": "user", "content": "hello"}],
-            max_tokens=10,
-            client=_async_gateway_client(requests),
-            **sigv4_without_region,
-        )
+    response = await litellm.anthropic_messages(
+        model="bedrock/claude_platform/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=10,
+        client=_async_gateway_client(requests),
+        **sigv4_without_region,
     )
 
     assert vault.read.is_set()
-    assert stall < LOOP_STALL_LIMIT_SECONDS
+    assert not vault.stalled_the_loop.is_set()
     assert response["content"][0]["text"] == "ok"
     _assert_gateway_accepted(requests[0], sigv4_without_region)
 

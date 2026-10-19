@@ -18,7 +18,7 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
 from litellm.realtime_api import main as realtime_main
-from tests.unit.llms.bedrock.slow_vault import LOOP_STALL_LIMIT_SECONDS, host_in_slow_vault, longest_loop_stall_while
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 
 @pytest.fixture(autouse=True)
@@ -631,21 +631,19 @@ class TestBedrockRealtimeSessionLifecycle:
         self, stub_aws_sdk_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
-        vault: Final = host_in_slow_vault(monkeypatch, "AWS_REGION_NAME")
+        vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_REGION_NAME")
         websocket: Final = RealtimeClientWS()
 
-        stall, _ = await longest_loop_stall_while(
-            BedrockRealtime().async_realtime(
-                model="amazon.nova-2-sonic-v1:0",
-                websocket=websocket,
-                logging_obj=FakeLogging(),
-                aws_access_key_id="k",
-                aws_secret_access_key="s",
-            )
+        _ = await BedrockRealtime().async_realtime(
+            model="amazon.nova-2-sonic-v1:0",
+            websocket=websocket,
+            logging_obj=FakeLogging(),
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
         )
 
         assert vault.read.is_set()
-        assert stall < LOOP_STALL_LIMIT_SECONDS
+        assert not vault.stalled_the_loop.is_set()
         assert stub_aws_sdk_client["config_kwargs"]["region"] == "us-west-2"
         assert stub_aws_sdk_client["config_kwargs"]["endpoint_uri"] == "https://bedrock-runtime.us-west-2.amazonaws.com"
 
