@@ -116,7 +116,6 @@ from litellm.litellm_core_utils.logging_worker import optional_callback_budget
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
-    perform_redaction,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redact_streaming_responses_for_custom_logger,
@@ -3574,7 +3573,11 @@ class Logging(LiteLLMLoggingBaseClass):
         return result
 
     async def _prepare_accounting_success_hooks(
-        self, callbacks: Sequence[str | Callable[..., object] | CustomLogger], result: object
+        self,
+        callbacks: Sequence[str | Callable[..., object] | CustomLogger],
+        result: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
     ) -> object:
         from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 
@@ -3582,14 +3585,30 @@ class Logging(LiteLLMLoggingBaseClass):
             with fail_after(optional_callback_budget(LOGGING_WORKER_MAX_TIME_PER_COROUTINE, fraction=0.5)):
                 return await self._run_async_success_hooks(callbacks, result)
         except TimeoutError:
+            from litellm.proxy.spend_tracking.spend_event import (
+                SpendEventBuildError,
+                build_spend_event_payload,
+                spend_event_callback_args,
+            )
+
             self.shadow_eval_request_snapshot = None
-            self.model_call_details = redact_streaming_responses_for_custom_logger(
-                self.model_call_details, CustomLogger(message_logging=False)
+            assembled_stream: Final = "async_complete_streaming_response" in self.model_call_details
+            accounting_response: Final[object] = (
+                self.model_call_details["async_complete_streaming_response"] if assembled_stream else result
             )
-            verbose_logger.warning("Logging hooks timed out; recording spend with request and response bodies redacted")
-            return cast(  # cast-ok: legacy redaction returns heterogeneous response objects
-                object, perform_redaction(self.model_call_details, result)
+            event: Final = build_spend_event_payload(
+                self.model_call_details, accounting_response, start_time, end_time, store_bodies=False
             )
+            if isinstance(event, SpendEventBuildError):
+                verbose_logger.error("Cannot prepare body-free spend accounting after a logging hook timeout")
+                return event
+            args: Final = spend_event_callback_args(event)
+            self.model_call_details = {
+                **args.kwargs,
+                **({"async_complete_streaming_response": args.response_obj} if assembled_stream else {}),
+            }
+            verbose_logger.warning("Logging hooks timed out, recording spend without request or response bodies")
+            return args.response_obj
 
     async def async_success_handler(
         self,
@@ -3816,10 +3835,15 @@ class Logging(LiteLLMLoggingBaseClass):
             }.values()
         )
         result = (
-            await self._prepare_accounting_success_hooks(hook_callbacks, redacted_result)
+            await self._prepare_accounting_success_hooks(hook_callbacks, redacted_result, start_time, end_time)
             if accounting_callbacks
             else await self._run_async_success_hooks(hook_callbacks, redacted_result)
         )
+        if accounting_callbacks:
+            from litellm.proxy.spend_tracking.spend_event import SpendEventBuildError
+
+            if isinstance(result, SpendEventBuildError):
+                return
         ordered_callbacks: Final = (
             *accounting_callbacks,
             *(

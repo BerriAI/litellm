@@ -342,10 +342,10 @@ def _function_tool(name: str) -> _FunctionTool:
     return tool
 
 
-def build_spend_event(
+def build_spend_event_payload(
     raw_kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime, store_bodies: bool
-) -> bytes | SpendEventBuildError:
-    """Validate the success callback's kwargs and serialize the event once, as a single JSON line."""
+) -> SpendEvent | SpendEventBuildError:
+    """Validate and project the identity, usage, cost, and optional bodies of a completed call."""
     try:
         kwargs: Final = _SUCCESS_KWARGS.validate_python(raw_kwargs)
     except ValidationError as error:
@@ -379,6 +379,16 @@ def build_spend_event(
         realtime_tool_calls=kwargs.get("realtime_tool_calls"),
         request_tool_names=_request_tool_names(kwargs),
     )
+    return event
+
+
+def build_spend_event(
+    raw_kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime, store_bodies: bool
+) -> bytes | SpendEventBuildError:
+    """Validate the success callback's kwargs and serialize the event once, as a single JSON line."""
+    event: Final = build_spend_event_payload(raw_kwargs, response_obj, start_time, end_time, store_bodies)
+    if isinstance(event, SpendEventBuildError):
+        return event
     return event.model_dump_json(fallback=_json_fallback).encode() + b"\n"
 
 
