@@ -16,6 +16,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     get_deployment_successes_for_current_minute,
 )
@@ -733,11 +734,13 @@ async def test_router_moderation_endpoint_factory_invokes_default_model(
     assert response.id == "modr-2"
 
 
-def _sora_deployment(model_name: str, api_key: str, deployment_id: str) -> dict[str, object]:
+def _sora_deployment(
+    model_name: str, api_key: str, deployment_id: str, access_groups: tuple[str, ...] = ()
+) -> dict[str, object]:
     return {
         "model_name": model_name,
         "litellm_params": {"model": "openai/sora-2", "api_key": api_key},
-        "model_info": {"id": deployment_id},
+        "model_info": {"id": deployment_id, "access_groups": list(access_groups)},
     }
 
 
@@ -752,13 +755,20 @@ def _two_account_sora_router() -> Router:
     )
 
 
-async def _poll_status_keys(router: Router, model: str, deployment_id: str, respx_mock: respx.MockRouter) -> set[str]:
+async def _poll_status_keys(
+    router: Router,
+    model: str,
+    deployment_id: str,
+    respx_mock: respx.MockRouter,
+    caller: UserAPIKeyAuth | None = None,
+) -> set[str]:
     route: Final = respx_mock.get("https://api.openai.com/v1/videos/video_raw").respond(
         200, json={"id": "video_raw", "object": "video", "status": "in_progress"}
     )
     video_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id=deployment_id)
+    metadata: Final = {} if caller is None else {"user_api_key_auth": caller}
     for _ in range(10):
-        await router.avideo_status(model=model, video_id=video_id)
+        await router.avideo_status(model=model, video_id=video_id, litellm_metadata=dict(metadata))
     return {call.request.headers["authorization"] for call in route.calls}
 
 
@@ -768,6 +778,22 @@ async def test_video_status_polls_the_deployment_that_created_the_video(
     model: str, respx_mock: respx.MockRouter
 ) -> None:
     keys: Final = await _poll_status_keys(_two_account_sora_router(), model, "dep-b", respx_mock)
+
+    assert keys == {"Bearer key-b"}
+
+
+@pytest.mark.asyncio
+async def test_video_status_on_a_routing_group_polls_the_member_deployment_that_created_the_video(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = Router(
+        model_list=[_sora_deployment("sora-a", "key-a", "dep-a"), _sora_deployment("sora-b", "key-b", "dep-b")],
+        routing_groups=[
+            {"group_name": "sora-group", "models": ["sora-a", "sora-b"], "routing_strategy": "simple-shuffle"}
+        ],
+    )
+
+    keys: Final = await _poll_status_keys(router, "sora-group", "dep-b", respx_mock)
 
     assert keys == {"Bearer key-b"}
 
@@ -788,3 +814,37 @@ async def test_video_status_with_a_removed_deployment_routes_across_the_group(re
     assert keys <= {"Bearer key-a", "Bearer key-b"}
     assert keys
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key_access_group", "expected_key"), [("ag-a", "Bearer key-a"), ("ag-b", "Bearer key-b")])
+async def test_video_status_pins_only_to_a_deployment_in_the_callers_access_groups(
+    key_access_group: str, expected_key: str, respx_mock: respx.MockRouter
+) -> None:
+    router: Final = Router(
+        model_list=[
+            _sora_deployment("sora", "key-a", "dep-a", access_groups=("ag-a",)),
+            _sora_deployment("sora", "key-b", "dep-b", access_groups=("ag-b",)),
+        ]
+    )
+
+    keys: Final = await _poll_status_keys(
+        router, "sora", "dep-b", respx_mock, caller=UserAPIKeyAuth(models=[key_access_group])
+    )
+
+    assert keys == {expected_key}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["sora", "sora-alias"])
+async def test_pinned_video_status_logs_the_requested_model_group(
+    model: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture: Final = _RouterLoggingCapture("dep-b")
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+
+    keys: Final = await _poll_status_keys(_two_account_sora_router(), model, "dep-b", respx_mock)
+    _, standard_logging_object = await capture.next_event()
+
+    assert keys == {"Bearer key-b"}
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["model_group"] == model

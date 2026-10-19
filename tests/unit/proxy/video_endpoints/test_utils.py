@@ -288,6 +288,30 @@ def test_encode_video__routed_deployment_replaces_the_one_in_the_id() -> None:
     assert decode_video_id_with_provider(out.id).get("deployment_id") == "deployment-new"
 
 
+@pytest.mark.parametrize(
+    ("polled_deployment", "returned_deployment"),
+    [(None, "deployment-routed"), ("deployment-creator", "deployment-creator")],
+)
+def test_encode_video__a_poll_keeps_the_deployment_its_id_named_else_takes_the_one_that_answered(
+    polled_deployment: str | None,
+    returned_deployment: str,
+) -> None:
+    polled_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id=polled_deployment)
+    video: Final = _video(
+        encode_video_id_with_provider("video_raw", "openai", ""), hidden_params={"model_id": "deployment-routed"}
+    )
+
+    out: Final = encode_video_id_in_response(
+        video,
+        fallback_provider=None,
+        fallback_model_id="sora",
+        polled_video=decode_video_id_with_provider(polled_id),
+    )
+
+    assert isinstance(out, VideoObject)
+    assert out.id == encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id=returned_deployment)
+
+
 def test_encode_video__id_already_naming_the_routed_deployment_is_unchanged() -> None:
     original_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id="deployment-1")
     video: Final = _video(original_id, hidden_params={"model_id": "deployment-1"})
@@ -443,6 +467,24 @@ def test_video_model_group__without_a_known_deployment_matches_plain_resolution(
 
 def test_video_model_group__keeps_a_group_named_in_the_id_over_a_deployment_of_another_group() -> None:
     assert video_model_group(_decoded("sora-team", "dep-sora-shared"), _two_groups_sharing_sora()) == "sora-team"
+
+
+@pytest.mark.parametrize("deployment_id", ["dep-sora-team", "dep-sora-shared"])
+def test_video_model_group__keeps_an_alias_of_the_creating_deployments_group(deployment_id: str) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"openai/sora-{name}", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-team", "sora-shared")
+        ],
+        model_group_alias={"sora-alias": deployment_id.removeprefix("dep-")},
+    )
+    provider_model: Final = f"sora-{deployment_id.removeprefix('dep-')}"
+
+    assert video_model_group(_decoded(provider_model, deployment_id), router) == "sora-alias"
 
 
 def test_video_model_group__is_none_without_a_router() -> None:

@@ -28,6 +28,7 @@ mock's call args), and a brand-new kwarg added to this layer surfaces as a failu
 
 from contextlib import ExitStack
 from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -352,6 +353,15 @@ async def test_status__restamps_response_id_with_decoded_model_id(harness: Harne
 
 
 @pytest.mark.asyncio
+async def test_status__id_without_a_deployment_takes_the_deployment_that_answered_the_poll(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id(hidden_params={"model_id": "deployment-uuid"}))
+
+    resp: Final = await call_status(harness, AZURE_VIDEO_ID)
+
+    _assert_id_resolves_to_deployment(resp, deployment_id="deployment-uuid")
+
+
+@pytest.mark.asyncio
 async def test_status__plain_id_defaults_to_openai(harness):
     await call_status(harness, "video_plain")
 
@@ -457,7 +467,7 @@ async def test_status_and_content__hand_the_served_member_to_the_request_process
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", [call_status, call_content])
 async def test_status_and_content__shared_provider_model_routes_to_the_creating_deployments_group(
-    harness: Harness, call: Any
+    harness: Harness, call: Callable[[Harness, str], Awaitable[object]]
 ) -> None:
     router: Final = Router(
         model_list=[

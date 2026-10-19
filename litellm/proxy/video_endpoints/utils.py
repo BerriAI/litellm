@@ -95,7 +95,8 @@ def routable_model_name(model: object, llm_router: "Router | None", custom_llm_p
 def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> str | None:
     """
     The group a video id names. A provider model that several groups share resolves to the group of the
-    deployment that created the video, while a name the router routes by itself is kept as written.
+    deployment that created the video, while a name the router routes by itself, or one that routes to that
+    deployment's group (an alias of it), is kept as written.
     """
     if llm_router is None:
         return None
@@ -107,21 +108,35 @@ def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> s
     if resolved == model_id or not deployment_id:
         return resolved
     deployment: Final = llm_router.get_deployment(model_id=deployment_id)
-    return resolved if deployment is None else deployment.model_name
+    if deployment is None:
+        return resolved
+    creating_group: Final = deployment.model_name
+    if resolved is not None and llm_router.resolve_served_model_name(resolved, creating_group) == creating_group:
+        return resolved
+    return creating_group
 
 
 def encode_video_id_in_response(
     response: object,
     fallback_provider: object,
     fallback_model_id: object,
+    polled_video: DecodedVideoId | None = None,
 ) -> object:
+    """
+    Stamps the provider, model and creating deployment into a returned video id. A poll of an existing video
+    (`polled_video`) keeps the deployment its id already named, so a poll never moves the id to another deployment.
+    """
     if not isinstance(response, VideoObject) or not response.id:
         return response
 
     decoded: Final = decode_video_id_with_provider(response.id)
     hidden_params: Final = response.hidden_params
     routed_deployment_id: Final = id_safe_name(hidden_params.get("model_id"))
-    deployment_id: Final = routed_deployment_id or decoded.get("deployment_id")
+    deployment_id: Final = (
+        routed_deployment_id or decoded.get("deployment_id")
+        if polled_video is None
+        else polled_video.get("deployment_id") or routed_deployment_id
+    )
     model_id: Final = decoded.get("model_id") or id_safe_name(fallback_model_id) or routed_deployment_id
     provider: Final = (
         id_safe_name(decoded.get("custom_llm_provider"))

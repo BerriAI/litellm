@@ -515,9 +515,6 @@ CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_b
 
 _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
-_VIDEO_ID_CALL_TYPES: Final = frozenset(
-    {"avideo_status", "avideo_content", "avideo_remix", "avideo_edit", "avideo_extension"}
-)
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -5938,7 +5935,7 @@ class Router:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             try:
                 deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init above
-                    model=model,
+                    model=self._video_deployment_to_pin(model, kwargs) or model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
                     input=kwargs.get("input", None),
@@ -6637,23 +6634,37 @@ class Router:
             return await self._aanthropic_messages_with_streaming_fallbacks(
                 original_function=original_function, **kwargs
             )
-        routed_kwargs: Final = self._pin_video_deployment(kwargs) if call_type in _VIDEO_ID_CALL_TYPES else kwargs
-        return await self._ageneric_api_call_with_fallbacks(original_function=original_function, **routed_kwargs)
+        return await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
-    def _pin_video_deployment(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    def _video_deployment_to_pin(self, model: str, kwargs: Mapping[str, object]) -> str | None:
         """
         A video lives on the provider account of the deployment that created it, so a call on an id that names
-        a deployment of the requested group goes to that deployment instead of any member of the group.
+        a deployment the caller may use in the requested group goes to that deployment instead of any member.
         """
         video_id: Final = kwargs.get("video_id")
-        model: Final = kwargs.get("model")
-        if not isinstance(video_id, str) or not isinstance(model, str):
-            return kwargs
-        deployment_id: Final = decode_video_id_with_provider(video_id).get("deployment_id")
-        deployment: Final = self.get_deployment(model_id=deployment_id) if deployment_id else None
-        if deployment is None or deployment.model_name != (self.get_model_from_alias(model=model) or model):
-            return kwargs
-        return {**kwargs, "model": deployment_id}
+        deployment_id: Final = (
+            decode_video_id_with_provider(video_id).get("deployment_id") if isinstance(video_id, str) else None
+        )
+        if not deployment_id:
+            return None
+        model_group: Final = self.get_model_from_alias(model=model) or model
+        request_team_id: Final = get_request_team_id(kwargs)
+        routing_group_deployments: Final = self._get_routing_group_deployments(
+            model=model_group, team_id=request_team_id
+        )
+        callable_ids: Final = self._deployment_ids(
+            self._filter_deployments_by_model_access_groups(
+                model=model_group,
+                healthy_deployments=(
+                    routing_group_deployments
+                    if routing_group_deployments is not None
+                    else list(self.deployments_for_request(model, kwargs))
+                ),
+                request_kwargs=kwargs,
+                request_team_id=request_team_id,
+            )
+        )
+        return deployment_id if deployment_id in callable_ids else None
 
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
@@ -14155,10 +14166,10 @@ class Router:
     def _filter_deployments_by_model_access_groups(
         self,
         model: str,
-        healthy_deployments: list,
+        healthy_deployments: list[DeploymentTypedDict],
         request_kwargs: Mapping[str, object] | None,
         request_team_id: str | None,
-    ) -> list:
+    ) -> list[DeploymentTypedDict]:
         """
         Restrict candidate deployments to caller-authorized model access groups.
 
