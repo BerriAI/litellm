@@ -458,6 +458,10 @@ _JSON_STRING: Final = TypeAdapter(str)
 
 _KEY_CONTEXT: Final = 64
 
+# Longest JSON line scanned for a multi-line tool string. Escaping puts the whole string on that one line, and
+# detect-secrets regexes backtrack across it, so a longer multi-line string is scanned as its own lines only.
+_JSON_LINE_LIMIT: Final = 4096
+
 # A detector can stop a match inside an escape of a JSON-escaped line, as at the backslash of \".
 _CUT_ESCAPE: Final = re.compile(r"(?<=.)\\(?:u[0-9A-Fa-f]{0,3})?\Z", re.DOTALL)
 
@@ -566,6 +570,11 @@ def _json_line(context: str | None, text: str) -> str:
     return value if context is None else f'"{context}": {value}'
 
 
+def _scanned_json_line(context: str | None, text: str) -> str | None:
+    line: Final = _json_line(context, text)
+    return line if len(line) <= _JSON_LINE_LIMIT or len(text.splitlines()) < 2 else None
+
+
 def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:
     """Return the detected value as it appears in ``texts``, decoding it when it came from a JSON-escaped key line."""
     candidates: Final = (value, _json_unescaped(value))
@@ -630,11 +639,13 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         return pattern.sub("[REDACTED]", text)
 
     def redact_tool_payload(self, payload: JsonValue) -> JsonValue:
-        """Redact secrets in a tool payload's string values, scanning each value alone and as its JSON line."""
+        """Redact secrets in a tool payload's string values, scanning each value alone and, unless it is a long
+        multi-line string, as its JSON line."""
         fields: Final = tuple(iter_tool_json_fields(payload))
         texts: Final = tuple(text for _, text in fields)
         contexts: Final = {key: _key_context(key) for key in {key for key, _ in fields if key is not None}}
-        keyed: Final = tuple(_json_line(None if key is None else contexts[key], text) for key, text in fields)
+        json_lines: Final = (_scanned_json_line(None if key is None else contexts[key], text) for key, text in fields)
+        keyed: Final = tuple(line for line in json_lines if line is not None)
         detected: Final = tuple(
             {**secret, "value": value}
             for secret in self.scan_message_for_secrets("\n".join((*texts, *keyed)))
