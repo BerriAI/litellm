@@ -160,6 +160,13 @@ def prepare_native_messages(
     )
 
 
+def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, object]]:
+    """Apply the block rewrites every /v1/messages request gets before it reaches a provider."""
+    return flatten_unencrypted_web_search_results_in_anthropic_messages(
+        sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
+    )
+
+
 @lru_cache(maxsize=1)
 def anthropic_messages_optional_param_keys() -> frozenset[str]:
     """

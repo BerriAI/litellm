@@ -630,3 +630,56 @@ class TestClientsideBaseOverride:
             )
             is None
         )
+
+
+class TestCountTokens:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_count_authenticates_with_the_workload_identity_bearer(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        mock_token_exchange()
+        count_route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 12})
+        )
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="openai/gpt-4o",
+        )
+        assert result is not None
+        assert result.error is False
+        assert result.total_tokens == 12
+        assert count_route.calls.last.request.headers["authorization"] == "Bearer exchanged-bearer-token"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_failed_mint_becomes_a_count_error_response(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        respx.post(TOKEN_EXCHANGE_URL).mock(return_value=httpx.Response(400, json={"error": "invalid_grant"}))
+        count_route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens")
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="openai/gpt-4o",
+        )
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 401
+        assert result.total_tokens == 0
+        assert not count_route.called

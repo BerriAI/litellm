@@ -3,9 +3,9 @@
 import copy
 import logging
 import re
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -50,6 +50,28 @@ def safe_divide_seconds(seconds: float, denominator: float, default: float | Non
 
 
 _DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
+
+
+def as_str_mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
+@runtime_checkable
+class _SupportsIter(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, index: int, /) -> object: ...
+
+
+def iter_items(value: object) -> Iterable[object]:
+    if isinstance(value, _SupportsIter):
+        return value
+    if isinstance(value, _SupportsGetItem):
+        return iter(value)
+    raise TypeError(f"'{type(value).__name__}' object is not iterable")
 
 
 def normalize_drop_params(value: object) -> bool | None:

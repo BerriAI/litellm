@@ -1042,6 +1042,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
+                "token_count_framing": {"type": "integer"},
+                "token_count_model": {
+                    "type": "object",
+                    "properties": {"model": {"type": "string"}, "region": {"type": "string"}},
+                    "required": ["model"],
+                },
+                "token_count_tokenizer": {"type": "string", "enum": ["kimi_k3"]},
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
