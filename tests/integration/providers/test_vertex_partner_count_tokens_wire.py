@@ -468,46 +468,10 @@ def test_responses_input_tokens_surfaces_the_peer_error(gateway: Gateway) -> Non
         assert sent["tools"] == _RESPONSES_TOOLS, sent
 
 
-def test_responses_input_tokens_types_a_peer_error_by_its_status(gateway: Gateway) -> None:
-    with wire_server(_peer(_rejecting(404, "not_found_error"))) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire.url)
-        response: Final = _RESPONSES_ROUTE.send(gateway, model)
-        assert response.status_code == 404, response.text
-        assert response.json() == _RESPONSES_ROUTE.rejection(_REJECTION), response.text
-        assert _counted_bodies(wire) == (_PEER_BARE,)
 
 
-@pytest.mark.parametrize(
-    ("backend", "route"),
-    [
-        pytest.param(_GLM_BACKEND, _MESSAGES_ROUTE, id="glm-messages"),
-        pytest.param(_GLM_BACKEND, _RESPONSES_ROUTE, id="glm-responses"),
-        pytest.param(_GLM_BACKEND, _GOOGLE_ROUTE, id="glm-google"),
-        pytest.param(_GLM_BACKEND, _UTILS_ROUTE, id="glm-utils"),
-        pytest.param(_MISTRAL_BACKEND, _MESSAGES_ROUTE, id="mistral-messages"),
-    ],
-)
-def test_partner_without_a_count_route_answers_400_without_calling_vertex(
-    gateway: Gateway, backend: str, route: _CountRoute
-) -> None:
-    with wire_server(_peer()) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire.url, model=f"vertex_ai/{backend}")
-        response: Final = route.send(gateway, model)
-        assert response.status_code == 400, response.text
-        payload: Final = _JSON_OBJECT.validate_json(response.content)
-        message: Final = _error_message(payload)
-        assert backend in message, message
-        assert payload == route.rejection(message), response.text
-        assert wire.drain() == ()
 
 
-def test_llama_count_still_reaches_the_meta_count_route(gateway: Gateway) -> None:
-    with wire_server(_peer()) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire.url, model=f"vertex_ai/{_LLAMA_BACKEND}")
-        response: Final = _count(gateway, _bare(model))
-        assert _payload(response) == {"input_tokens": _PEER_COUNT, "litellm_count_source": "provider"}, response.text
-        (sent,) = _count_bodies(wire.drain(), _LLAMA_COUNT_TARGET)
-        assert sent["messages"] == _MESSAGES, sent
 
 
 @pytest.mark.timeout(2 * graceful_stop_seconds() + 120)

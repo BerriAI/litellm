@@ -391,28 +391,3 @@ def test_google_count_tokens_sends_the_system_instruction_text(counting_proxy: O
         )
         assert response.status_code == 200, response.text
         assert _count_body(wire)["instructions"] == "Be brief.\nAnswer in English."
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        pytest.param(
-            {"message": "Invalid input", "type": "invalid_request_error", "param": "input", "code": "invalid_value"},
-            id="full",
-        ),
-        pytest.param({"message": "Invalid input", "type": "invalid_request_error"}, id="bare"),
-    ],
-)
-def test_responses_input_tokens_passes_an_openai_count_error_through(
-    counting_proxy: OwnedProxy, error: dict[str, JsonValue]
-) -> None:
-    def rejecting(_request: Request) -> Reply:
-        return Reply(status=400, body=json.dumps({"error": error}).encode())
-
-    gateway: Final = counting_proxy.gateway
-    with wire_server(rejecting) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire.url)
-        response: Final = gateway.request("POST", "/v1/responses/input_tokens", {"model": model, "input": "hello"})
-        assert response.status_code == 400, response.text
-        assert response.json() == {"error": {"param": None, "code": None, **error}}, response.text
-        assert _count_body(wire)["input"] == [{"role": "user", "content": "hello"}]

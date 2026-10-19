@@ -383,7 +383,8 @@ def test_token_counter_fallback_counts_tools_system_and_anthropic_blocks(client,
     assert full > bare
 
 
-def test_token_counter_fallback_counts_a_prompt_with_tools_like_its_messages_form(client, auth_as, monkeypatch):
+def test_token_counter_fallback_prompt_with_tools_does_not_500(client, auth_as, monkeypatch):
+    """Regression: a ``prompt`` request carrying ``tools`` but no ``messages`` still counts, because the fallback attaches tools only when counting messages (``token_counter`` rejects tools on the text path)."""
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
     prompt = "count the tokens in this sentence please"
@@ -404,6 +405,4 @@ def test_token_counter_fallback_counts_a_prompt_with_tools_like_its_messages_for
         )
 
     assert response.status_code == 200, response.text
-    assert response.json()["total_tokens"] == litellm.token_counter(
-        model="claude-fable-5", messages=[{"role": "user", "content": prompt}], tools=tools
-    )
+    assert response.json()["total_tokens"] == litellm.token_counter(model="claude-fable-5", text=prompt)

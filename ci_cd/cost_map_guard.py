@@ -1,11 +1,11 @@
 """Guard the cost map on pull requests.
 
-Every pull request whose diff against its merge base touches one of the two cost map files gets the file
-checks: the files parse and the backup copy matches the root file. A pull request that leaves both untouched
-skips them, since merging it keeps the base branch's copies and its head tree only carries whatever state the
-branch was cut from. Pull requests from the cost map sync bot (branches named litellm_cost_map_sync_*) always
-get the file checks and additionally may only touch those two files or the legacy schema
-path and may only add or update models.
+Every pull request whose diff against its merge base touches one of the three cost map files gets the file
+checks: the files parse, the backup copy matches the root file, and the JSON schema is in sync and validates the
+map. A pull request that leaves all three untouched skips them, since merging it keeps the base branch's copies
+and its head tree only carries whatever state the branch was cut from. Pull requests from the cost map sync bot
+(branches named litellm_cost_map_sync_*) always get the file checks and additionally may only touch those three
+files and may only add or update models.
 """
 
 from __future__ import annotations
@@ -19,12 +19,13 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from generate_model_prices_schema import SPECIAL_ROOT_KEYS, build_schema, render, validation_errors
+
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
-LEGACY_SCHEMA_PATH: Final = "model_prices_and_context_window.schema.json"
-GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
+SCHEMA_PATH: Final = "model_prices_and_context_window.schema.json"
+GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH, SCHEMA_PATH)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
-SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
 EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
 
 CostMap = dict[str, object]
@@ -34,6 +35,7 @@ CostMap = dict[str, object]
 class Snapshot:
     cost_map: str
     backup: str
+    schema: str
 
 
 def _parse_object(text: str, path: str) -> CostMap | str:
@@ -42,6 +44,13 @@ def _parse_object(text: str, path: str) -> CostMap | str:
     except json.JSONDecodeError as error:
         return f"{path} is not valid JSON: {error}"
     return parsed if isinstance(parsed, dict) else f"{path} must be a JSON object at the root"
+
+
+def _rendered_schema(cost_map: CostMap) -> str:
+    try:
+        return render(build_schema(cost_map))
+    except SystemExit as error:
+        return str(error)
 
 
 def _evaluation_output_price_failure(
@@ -69,13 +78,29 @@ def _file_failures(
     *,
     evaluation_output_price_sources: Mapping[str, str] = EVALUATION_OUTPUT_PRICE_SOURCES,
 ) -> tuple[str, ...]:
+    schema_text: Final = _rendered_schema(head_map)
+    if not schema_text.startswith("{"):
+        return (schema_text,)
     backup_failure: Final = (
         ()
         if head.backup == head.cost_map
         else (f"{BACKUP_PATH} differs from {COST_MAP_PATH}; copy the root file over it",)
     )
+    schema_failure: Final = (
+        ()
+        if head.schema == schema_text
+        else (
+            f"{SCHEMA_PATH} is out of sync with {COST_MAP_PATH}; "
+            "run `python ci_cd/generate_model_prices_schema.py` and commit the result",
+        )
+    )
     return (
         *backup_failure,
+        *schema_failure,
+        *(
+            f"{COST_MAP_PATH} does not validate against its schema: {error}"
+            for error in validation_errors(head_map, json.loads(schema_text))[:20]
+        ),
         *(
             failure
             for key, entry in head_map.items()
@@ -110,7 +135,7 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
         *(
             f"bot PRs may only change the cost map files, not {path}"
             for path in changed_files
-            if path not in GUARDED_PATHS and path != LEGACY_SCHEMA_PATH
+            if path not in GUARDED_PATHS
         ),
         *(f"bot PRs may not remove models: {key}" for key in base_map if key not in head_map),
         *(f"bot PRs may not remove fields: {ref}" for ref in removed_fields),

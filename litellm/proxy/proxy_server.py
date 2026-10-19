@@ -14153,10 +14153,8 @@ async def count_request_tokens(
             model_info.get("custom_tokenizer", None),
         )
     system_message: Final = _system_message(system)
-    prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
-        Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else messages),
+        Sequence[AllMessageValues] | None, messages
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)

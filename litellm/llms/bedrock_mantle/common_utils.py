@@ -158,7 +158,3 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     """
     entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"
-
-
-def is_mantle_claude_model(model: str) -> bool:
-    return "claude" in model.lower()

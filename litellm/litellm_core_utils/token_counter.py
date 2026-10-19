@@ -34,10 +34,6 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
-    ChatTemplateToolSection,
-    chat_template_tool_section,
-)
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -347,9 +343,6 @@ EXTRAPOLATION_SAMPLES: Final = 16
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
-_ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
-    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming")
-)
 
 
 def _count_offload_limiter_for_this_loop() -> anyio.CapacityLimiter:
@@ -407,7 +400,6 @@ class _MessageCountParams:
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
-        self.tool_section = chat_template_tool_section(model)
 
 
 def token_counter(
@@ -471,9 +463,7 @@ def token_counter(
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
             includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
-            num_tokens += _count_extra(
-                params.count_function, tools, tool_choice, includes_system_message, params.tool_section
-            )
+            num_tokens += _count_extra(params.count_function, tools, tool_choice, includes_system_message)
 
     else:
         raise ValueError("Either text or messages must be provided")
@@ -567,7 +557,6 @@ def _count_extra(
     tools: list[ChatCompletionToolParam] | None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None,
     includes_system_message: bool,
-    tool_section: ChatTemplateToolSection | None,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.
     Args:
@@ -575,56 +564,26 @@ def _count_extra(
         tools (Optional[List[ChatCompletionToolParam]]): The available tools.
         tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice.
         includes_system_message (bool): Whether the messages include a system message.
-        tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
     """
-    reply_primer_tokens: Final = 3
-    tool_choice_tokens: Final = 0 if tool_section is not None else _count_tool_choice(count_function, tool_choice)
-    return (
-        reply_primer_tokens
-        + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
-        + tool_choice_tokens
-    )
 
+    num_tokens = 3  # every reply is primed with <|start|>assistant<|message|>
 
-def _count_tool_definitions(
-    count_function: TokenCounterFunction,
-    tools: Sequence[object] | None,
-    includes_system_message: bool,
-    tool_section: ChatTemplateToolSection | None,
-) -> int:
-    if not tools:
-        return 0
-    if tool_section is not None:
-        return _count_chat_template_tools(count_function, tools, includes_system_message, tool_section)
-    system_message_discount: Final = 4 if includes_system_message else 0
-    return count_function(_format_function_definitions(tools)) + 9 - system_message_discount
-
-
-def _count_tool_choice(
-    count_function: TokenCounterFunction,
-    tool_choice: ChatCompletionNamedToolChoiceParam | None,
-) -> int:
+    if tools:
+        num_tokens += count_function(_format_function_definitions(tools))
+        num_tokens += 9  # Additional tokens for function definition of tools
+    # If there's a system message and tools are present, subtract four tokens
+    if tools and includes_system_message:
+        num_tokens -= 4
+    # If tool_choice is 'none', add one token.
+    # If it's an object, add 4 + the number of tokens in the function name.
+    # If it's undefined or 'auto', don't add anything.
     if tool_choice == "none":
-        return 1
-    if isinstance(tool_choice, dict):
-        return 7 + count_function(str(tool_choice["function"]["name"]))
-    return 0
+        num_tokens += 1
+    elif isinstance(tool_choice, dict):
+        num_tokens += 7
+        num_tokens += count_function(str(tool_choice["function"]["name"]))
 
-
-def _count_chat_template_tools(
-    count_function: TokenCounterFunction,
-    tools: Sequence[object],
-    includes_system_message: bool,
-    tool_section: ChatTemplateToolSection,
-) -> int:
-    functions: Final = tuple(
-        function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name")
-    )
-    if not functions:
-        return 0
-    system_turn_tokens: Final = 0 if includes_system_message else tool_section.implicit_system_turn_tokens
-    schemas: Final = tool_section.render_tool_schemas(functions)
-    return tool_section.preamble_tokens + system_turn_tokens + count_function(schemas)
+    return num_tokens
 
 
 def _get_extrapolating_count_function(
@@ -1034,88 +993,47 @@ def _count_content_list(
         )
 
 
-def _format_function_definitions(tools: Sequence[object]) -> str:
+def _format_function_definitions(tools):
     """Formats tool definitions in the format that OpenAI appears to use.
     Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
     """
     lines: Final = []
     lines.append("namespace functions {")
     lines.append("")
-    for function in _function_definitions(tools):
-        lines.extend(_format_single_function_definition(function))
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            # Anthropic tool shape → OpenAI function dict for token counting.
+            params = tool.get("input_schema") or tool.get("parameters") or {}
+            if not isinstance(params, dict):
+                params = {}
+            function = {
+                "name": tool.get("name"),
+                "description": tool.get("description"),
+                "parameters": params,
+            }
+        function_name = function.get("name")
+        if not function_name:
+            # Skip malformed tools missing a name to avoid emitting
+            # ``type None = ...`` which would produce inaccurate token counts.
+            continue
+        if function_description := function.get("description"):
+            lines.append(f"// {function_description}")
+        parameters = function.get("parameters") or {}
+        if not isinstance(parameters, dict):
+            parameters = {}
+        properties = parameters.get("properties")
+        if properties and properties.keys():
+            lines.append(f"type {function_name} = (_: {{")
+            lines.append(_format_object_parameters(parameters, 0))
+            lines.append("}) => any;")
+        else:
+            lines.append(f"type {function_name} = () => any;")
+        lines.append("")
     lines.append("} // namespace functions")
     return "\n".join(lines)
-
-
-def _tools_sent_as_functions(tools: Sequence[object]) -> tuple[Mapping[str, object], ...]:
-    return tuple(tool for tool in _tool_mappings(tools) if not _is_anthropic_web_search_tool(tool))
-
-
-def _is_anthropic_web_search_tool(tool: Mapping[str, object]) -> bool:
-    return tool.get("name") == "web_search" and "input_schema" not in tool and tool.get("type") != "function"
-
-
-def _tool_mappings(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
-    for tool in tools:
-        if isinstance(tool, Mapping):
-            yield cast(Mapping[str, object], tool)
-
-
-def _function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
-    for tool in _tool_mappings(tools):
-        yield from _function_definitions_for_tool(tool)
-
-
-def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mapping[str, object]]:
-    function: Final = tool.get("function")
-    if isinstance(function, Mapping):
-        yield function
-        return
-    declarations: Final = tool.get("function_declarations") or tool.get("functionDeclarations")
-    if isinstance(declarations, list):
-        for declaration in declarations:
-            if isinstance(declaration, Mapping):
-                yield declaration
-        return
-    input_schema: Final = tool.get("input_schema")
-    parameters: Final = input_schema or tool.get("parameters") or {}
-    normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
-    unmapped_anthropic_keys: Final = (
-        {key: value for key, value in tool.items() if key not in _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE}
-        if input_schema is not None
-        else {}
-    )
-    description: Final = tool.get("description")
-    strict: Final = tool.get("strict")
-    yield {
-        "name": tool.get("name"),
-        "parameters": {**normalized_parameters, **unmapped_anthropic_keys},
-        **({"description": description} if description is not None else {}),
-        **({"strict": bool(strict)} if strict is not None else {}),
-    }
-
-
-def _format_single_function_definition(function: Mapping[str, object]) -> tuple[str, ...]:
-    function_name: Final = function.get("name")
-    if not function_name:
-        return ()
-    function_description: Final = function.get("description")
-    parameters_value: Final = function.get("parameters") or {}
-    parameters: Final = parameters_value if isinstance(parameters_value, Mapping) else {}
-    properties: Final = parameters.get("properties")
-    if isinstance(properties, Mapping) and properties:
-        return (
-            *((f"// {function_description}",) if function_description else ()),
-            f"type {function_name} = (_: {{",
-            _format_object_parameters(parameters, 0),
-            "}) => any;",
-            "",
-        )
-    return (
-        *((f"// {function_description}",) if function_description else ()),
-        f"type {function_name} = () => any;",
-        "",
-    )
 
 
 def _format_object_parameters(parameters, indent):

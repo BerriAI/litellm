@@ -801,45 +801,41 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
         assert endpoint.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
 
 
-class _FailingRuntimeHandler(BedrockCountTokensHandler):
-    def __init__(self, error: Exception) -> None:
-        super().__init__()
-        self._error = error
-
-    async def handle_count_tokens_request(
-        self,
-        request_data: dict[str, object],
-        litellm_params: dict[str, object],
-        resolved_model: str,
-        client: AsyncHTTPHandler | None = None,
-    ) -> dict[str, JsonValue]:
-        raise self._error
-
-
 @pytest.mark.asyncio
 async def test_bedrock_token_counter_error_propagation_bedrock_error():
     """
     Test that BedrockTokenCounter properly returns error response when BedrockError is raised.
     Verifies that the status code and error message are preserved.
     """
-    counter = BedrockTokenCounter(
-        runtime_handler=_FailingRuntimeHandler(BedrockError(status_code=429, message="Rate limit exceeded"))
-    )
+    counter = BedrockTokenCounter()
 
-    result = await counter.count_tokens(
-        model_to_use="anthropic.claude-3-sonnet",
-        messages=[{"role": "user", "content": "hello"}],
-        contents=None,
-        deployment={"litellm_params": {}},
-        request_model="bedrock/anthropic.claude-3-sonnet",
-    )
+    # Mock the handler to raise BedrockError with specific status code
+    with patch.object(
+        counter, "count_tokens", wraps=counter.count_tokens
+    ) as mock_count:
+        # We need to patch at the handler level
+        with patch(
+            "litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler"
+        ) as MockHandler:
+            mock_handler_instance = MockHandler.return_value
+            mock_handler_instance.handle_count_tokens_request = AsyncMock(
+                side_effect=BedrockError(status_code=429, message="Rate limit exceeded")
+            )
 
-    assert result is not None
-    assert result.error is True
-    assert result.status_code == 429
-    assert "Rate limit exceeded" in result.error_message
-    assert result.tokenizer_type == "bedrock_api"
-    assert result.total_tokens == 0
+            result = await counter.count_tokens(
+                model_to_use="anthropic.claude-3-sonnet",
+                messages=[{"role": "user", "content": "hello"}],
+                contents=None,
+                deployment={"litellm_params": {}},
+                request_model="bedrock/anthropic.claude-3-sonnet",
+            )
+
+            assert result is not None
+            assert result.error is True
+            assert result.status_code == 429
+            assert "Rate limit exceeded" in result.error_message
+            assert result.tokenizer_type == "bedrock_api"
+            assert result.total_tokens == 0
 
 
 @pytest.mark.asyncio
@@ -847,20 +843,28 @@ async def test_bedrock_token_counter_error_propagation_generic_exception():
     """
     Test that BedrockTokenCounter returns error response with 500 status for generic exceptions.
     """
-    counter = BedrockTokenCounter(runtime_handler=_FailingRuntimeHandler(Exception("Unexpected error")))
+    counter = BedrockTokenCounter()
 
-    result = await counter.count_tokens(
-        model_to_use="anthropic.claude-3-sonnet",
-        messages=[{"role": "user", "content": "hello"}],
-        contents=None,
-        deployment={"litellm_params": {}},
-        request_model="bedrock/anthropic.claude-3-sonnet",
-    )
+    with patch(
+        "litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler"
+    ) as MockHandler:
+        mock_handler_instance = MockHandler.return_value
+        mock_handler_instance.handle_count_tokens_request = AsyncMock(
+            side_effect=Exception("Unexpected error")
+        )
 
-    assert result is not None
-    assert result.error is True
-    assert result.status_code == 500
-    assert "Unexpected error" in result.error_message
+        result = await counter.count_tokens(
+            model_to_use="anthropic.claude-3-sonnet",
+            messages=[{"role": "user", "content": "hello"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="bedrock/anthropic.claude-3-sonnet",
+        )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 500
+        assert "Unexpected error" in result.error_message
 
 
 @pytest.mark.asyncio
