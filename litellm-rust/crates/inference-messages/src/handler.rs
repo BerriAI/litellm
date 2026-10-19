@@ -29,7 +29,7 @@ pub(super) struct ProviderCall {
     pub(super) provider: super::common_utils::MessagesProvider,
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
-    stream: bool,
+    request_context: RequestContext,
     pub gateway_injected_cache_control: bool,
 }
 
@@ -43,7 +43,6 @@ impl MessagesRoute {
     pub(super) async fn prepare_outbound(
         &self,
         request: ProviderMessagesRequest,
-        context: &CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<ProviderCall, Error> {
         let ProviderMessagesRequest {
             provider,
@@ -67,18 +66,32 @@ impl MessagesRoute {
             model: request_context.model.clone(),
             provider: request_context.custom_llm_provider.clone(),
         };
+        let wire = WireRequest {
+            url,
+            headers: authenticated.headers,
+            body: provider
+                .config()
+                .wire_body(serde_json::to_value(&body).map_err(serialize_failure)?),
+        };
+        Ok(ProviderCall {
+            identity,
+            wire,
+            provider,
+            signer: authenticated.signer,
+            timeout,
+            request_context,
+            gateway_injected_cache_control,
+        })
+    }
+
+    pub(super) async fn intercept_outbound(
+        &self,
+        request: ProviderCall,
+        context: &CallContext<'_, impl Interceptors<Error>>,
+    ) -> Result<(ProviderCall, bool), Error> {
         let wire = context
             .interceptors
-            .before_provider_request(
-                WireRequest {
-                    url,
-                    headers: authenticated.headers,
-                    body: provider
-                        .config()
-                        .wire_body(serde_json::to_value(&body).map_err(serialize_failure)?),
-                },
-                request_context,
-            )
+            .before_provider_request(request.wire, request.request_context.clone())
             .await?;
         let stream = match wire.body.get("stream") {
             None | Some(Value::Null) => false,
@@ -93,20 +106,13 @@ impl MessagesRoute {
                 ));
             }
         };
-        Ok(ProviderCall {
-            identity,
-            wire,
-            provider,
-            signer: authenticated.signer,
-            timeout,
-            stream,
-            gateway_injected_cache_control,
-        })
+        Ok((ProviderCall { wire, ..request }, stream))
     }
 
     pub(super) async fn call_provider(
         &self,
         request: ProviderCall,
+        stream: bool,
         context: &CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
         let ProviderCall {
@@ -115,7 +121,6 @@ impl MessagesRoute {
             provider,
             signer,
             timeout,
-            stream,
             ..
         } = request;
         let provider_name = provider.as_str();

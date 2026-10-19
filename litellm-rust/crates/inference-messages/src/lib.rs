@@ -79,20 +79,44 @@ impl MessagesRoute {
                 &prepared.body.model,
                 prepared.provider.as_str(),
             );
-            let request = self.prepare_outbound(prepared, &context).boxed().await?;
-            let cache = CallCache::<route::Messages>::from_wire(
-                self.cache.as_ref().filter(|_| request.cacheable()),
-                context.cache,
-                &request.identity,
-                &request.wire,
-            );
+            let request = self.prepare_outbound(prepared).boxed().await?;
+            let early_cache = self
+                .cache
+                .as_ref()
+                .filter(|cache| request.cacheable() && !cache.service.requires_wire_request())
+                .map(|cache| {
+                    CallCache::<route::Messages>::from_wire(
+                        Some(cache),
+                        context.cache,
+                        &request.identity,
+                        &request.wire,
+                    )
+                });
+            let early_hit = match &early_cache {
+                Some(cache) => cache.lookup().await,
+                None => None,
+            };
+            let (request, stream) = self.intercept_outbound(request, &context).await?;
+            let (cache, hit) = match early_cache {
+                Some(cache) => (cache, early_hit),
+                None => {
+                    let cache = CallCache::<route::Messages>::from_wire(
+                        self.cache.as_ref().filter(|_| request.cacheable()),
+                        context.cache,
+                        &request.identity,
+                        &request.wire,
+                    );
+                    let hit = cache.lookup().await;
+                    (cache, hit)
+                }
+            };
             let identity = request.identity.clone();
             let config = request.provider.config();
             let gateway_injected_cache_control = request.gateway_injected_cache_control;
-            let (output, source) = match cache.lookup().await {
+            let (output, source) = match hit {
                 Some(hit) => hit,
                 None => (
-                    self.call_provider(request, &context).await?,
+                    self.call_provider(request, stream, &context).await?,
                     ResultSource::Provider,
                 ),
             };

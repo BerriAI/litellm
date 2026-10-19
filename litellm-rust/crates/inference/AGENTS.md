@@ -78,6 +78,7 @@
   - the legacy Python callback adapter translates execution facts into the existing Python logging contract. Python remains the accounting owner on that path
   - native gateway accounting belongs to gateway dependencies, independently of `host-python`
   - response-cache services expose no coordination counters or reservation APIs. A shared Redis deployment does not make response storage and accounting coordination the same dependency
-- Cache lookup follows provider preparation, credential resolution, and the request interceptor
+- Cache lookup follows provider preparation and credential resolution
+  - Messages awaits Python-owned cache lookup before the request interceptor and pre-call logging. Services requiring wire identity still look up after interception
   - native keys describe the effective provider URL, authenticated headers, and rewritten body. Python delegation keeps Python's key semantics and returns the host's hit key unchanged
   - signed requests bypass caching until the signing identity has a stable cache representation

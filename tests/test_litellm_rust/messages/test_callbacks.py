@@ -5,15 +5,19 @@ from datetime import datetime
 from typing import Final
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import SpanKind
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.caching.caching import Cache
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.utils import ModelResponse, StandardLoggingPayload
 from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, call
-from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, request_body
+from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, drain_logging, request_body
 from tests.test_litellm_rust.support.gaps import gap
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
@@ -30,6 +34,35 @@ _HEADERS: Final = TypeAdapter(dict[str, str])
 @pytest.fixture
 def server(server: RecordingServer) -> Iterator[RecordingServer]:
     yield from relaxed(server)
+
+
+@pytest.mark.asyncio
+async def test_response_cache_lookup_finishes_before_otel_chat_span_starts(
+    server: RecordingServer, otel: tuple[OpenTelemetryV2, InMemorySpanExporter]
+) -> None:
+    logger, exporter = otel
+    with (
+        rebound(litellm, "cache", Cache()),
+        logger.tracer.start_as_current_span("POST /v1/messages", kind=SpanKind.SERVER) as root,
+    ):
+        response: Final = await call(server, caching=True)
+        await drain_logging()
+
+    assert_served_natively(server, response)
+    spans: Final = exporter.get_finished_spans()
+    cache_spans: Final = tuple(span for span in spans if span.name == "cache.get llm_response")
+    chat_spans: Final = tuple(span for span in spans if span.name.startswith("chat "))
+    assert len(cache_spans) == 1, tuple(span.name for span in spans)
+    assert len(chat_spans) == 1, tuple(span.name for span in spans)
+    cache_span: Final = cache_spans[0]
+    chat_span: Final = chat_spans[0]
+    assert cache_span.parent == chat_span.parent == root.get_span_context()
+    assert cache_span.end_time is not None
+    assert chat_span.start_time is not None
+    assert cache_span.end_time <= chat_span.start_time, (
+        "Response cache lookup must finish before the provider chat span starts, "
+        f"cache ended at {cache_span.end_time}, chat started at {chat_span.start_time}"
+    )
 
 
 @pytest.mark.asyncio
