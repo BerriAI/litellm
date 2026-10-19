@@ -354,6 +354,42 @@ def test_tiny_results_are_never_cleared_and_do_not_count_toward_keep():
     assert applied["cleared_tool_uses"] == 2
 
 
+def _clear_with_keep_two_and_inputs(messages, clear_tool_inputs):
+    return apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 2},
+            "clear_tool_inputs": clear_tool_inputs,
+        },
+    )
+
+
+def test_tiny_results_count_and_clear_when_their_tool_inputs_are_cleared():
+    for clear_tool_inputs in (True, ["get_weather"]):
+        messages = _make_history(6)
+        messages[2]["content"][0]["content"] = "(Bash completed with no output)"
+        messages[12]["content"][0]["content"] = "ok"
+        new_messages, applied = _clear_with_keep_two_and_inputs(messages, clear_tool_inputs)
+        assert _cleared_ids(new_messages) == {"toolu_00", "toolu_01", "toolu_02", "toolu_03"}
+        assert applied is not None
+        assert applied["cleared_tool_uses"] == 4
+
+
+def test_tiny_results_stay_out_when_clear_tool_inputs_names_other_tools():
+    messages = _make_history(6)
+    messages[2]["content"][0]["content"] = "(Bash completed with no output)"
+    messages[12]["content"][0]["content"] = "ok"
+    new_messages, applied = _clear_with_keep_two_and_inputs(messages, ["read_file"])
+    assert _cleared_ids(new_messages) == {"toolu_01", "toolu_02"}
+    assert applied is not None
+    assert applied["cleared_tool_uses"] == 2
+
+
 def test_results_over_46_bytes_and_empty_results_still_count():
     messages = _make_history(5)
     messages[2]["content"][0]["content"] = "x" * 47

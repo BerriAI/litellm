@@ -1,7 +1,8 @@
 """``clear_tool_uses_20250919`` polyfill, matching the Anthropic API's selection.
 
 ``keep`` counts clearable tool uses only. Uses of ``exclude_tools`` are never cleared, and neither are uses whose
-result is 1 to 46 bytes of text, which the API leaves out of its count. Clearing goes oldest
+result is 1 to 46 bytes of text, which the API leaves out of its count, unless ``clear_tool_inputs`` covers their
+tool: then their input can still be cleared, and the API counts and clears them like any other. Clearing goes oldest
 first in batches of at least ``clear_at_least`` tokens and leaves an incomplete last batch, so the cleared prefix
 only grows between requests and each batch costs one prompt-cache miss.
 """
@@ -118,6 +119,10 @@ def _tiny_result_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[str]:
     """Return ids whose result is 1 to 46 bytes of text; the API neither counts nor clears those uses."""
     ids: Final = (_tiny_result_id(block) for block in blocks)
     return frozenset(block_id for block_id in ids if block_id is not None)
+
+
+def _clears_input(name: str | None, input_tools: ToolNames) -> bool:
+    return input_tools == "all" or (name is not None and name in input_tools)
 
 
 def _resolve_clear_at_least(value: object) -> tuple[int, bool]:
@@ -328,7 +333,7 @@ def apply_clear_tool_uses_20250919(
     clearable: Final = tuple(
         tool_use_id
         for tool_use_id, name in _tool_uses_in_order(blocks)
-        if name not in exclude_tools and tool_use_id not in tiny
+        if name not in exclude_tools and (tool_use_id not in tiny or _clears_input(name, input_tools))
     )
     if len(clearable) <= keep_count:
         return messages, None
