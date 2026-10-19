@@ -859,7 +859,9 @@ class ChunkProcessor:
         return reasoning_tokens
 
     @staticmethod
-    def _extract_usage_chunk(chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream") -> Usage | None:
+    def extract_usage_chunk(
+        chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream | TextCompletionResponse",
+    ) -> Usage | None:
         usage_chunk: Usage | CompletionUsage | None = None
         if hasattr(chunk, "usage") and chunk.usage is not None:
             usage_chunk = chunk.usage
@@ -918,7 +920,7 @@ class ChunkProcessor:
         cost: float | None = None
 
         for chunk in chunks:
-            usage_chunk = self._extract_usage_chunk(chunk)
+            usage_chunk = self.extract_usage_chunk(chunk)
 
             if usage_chunk is not None:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
@@ -1015,7 +1017,7 @@ class ChunkProcessor:
         values: Final = [
             value
             for chunk in chunks
-            if (usage_chunk := self._extract_usage_chunk(chunk)) is not None
+            if (usage_chunk := self.extract_usage_chunk(chunk)) is not None
             and isinstance(value := getattr(usage_chunk, field, None), str)
         ]
         return values[-1] if values else None
@@ -1222,8 +1224,9 @@ def _as_text_completion_chunk(chunk: TextCompletionResponse | Mapping[str, objec
     return chunk if isinstance(chunk, TextCompletionResponse) else TextCompletionResponse.model_validate(chunk)
 
 
-def _reports_token_counts(chunk: TextCompletionResponse) -> bool:
-    return chunk.usage is not None and bool(chunk.usage.prompt_tokens or chunk.usage.completion_tokens)
+def _reported_usage(chunk: TextCompletionResponse) -> Usage | None:
+    usage: Final = ChunkProcessor.extract_usage_chunk(chunk)
+    return usage if usage is not None and (usage.prompt_tokens or usage.completion_tokens) else None
 
 
 def stream_chunk_builder_text_completion(
@@ -1246,8 +1249,9 @@ def stream_chunk_builder_text_completion(
     all_choices: Final = chain.from_iterable(chunk.choices for chunk in text_chunks)
     combined_content: Final = "".join(choice.text for choice in all_choices if choice.text)
 
+    reported_usages: Final = tuple(reported for reported in map(_reported_usage, text_chunks) if reported is not None)
     usage: Final = ChunkProcessor(list(text_chunks), messages).calculate_usage(
-        chunks=tuple(_UsageBearingChunk(usage=chunk.usage) for chunk in text_chunks if _reports_token_counts(chunk)),
+        chunks=tuple(_UsageBearingChunk(usage=reported) for reported in reported_usages),
         model=model or "",
         completion_output=combined_content,
         messages=messages,
