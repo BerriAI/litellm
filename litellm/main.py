@@ -2681,9 +2681,7 @@ def _complete_custom_openai(
     # OpenAI accepts request metadata independently of preview features. Other
     # providers keep the existing preview gate because compatible providers may
     # reject the field.
-    if metadata is not None and (
-        custom_llm_provider == "openai" or litellm.enable_preview_features
-    ):
+    if metadata is not None and (custom_llm_provider == "openai" or litellm.enable_preview_features):
         openai_metadata: Final = get_requester_metadata(metadata)
         if openai_metadata is not None:
             optional_params["metadata"] = openai_metadata
