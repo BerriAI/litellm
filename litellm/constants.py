@@ -1256,14 +1256,6 @@ together_ai_models: Final[set] = set(
 # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
 
-baseten_models: Final[set] = set(
-    [
-        "qvv0xeq",
-        "q841o8w",
-        "31dxrj3",
-    ]
-)  # FALCON 7B  # WizardLM  # Mosaic ML
-
 featherless_ai_models: Final[set] = set(
     [
         "featherless-ai/Qwerky-72B",
