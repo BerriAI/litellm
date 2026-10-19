@@ -2042,7 +2042,7 @@ def test_a_timed_out_request_is_priced_at_the_rate_the_router_registered_for_the
         request_body={},
         dispatched=True,
         provider_billed=True,
-        litellm_params={"model": f"openai/{FAILURE_USAGE_MODEL}", "metadata": {"model_info": {"id": "dep-lit145"}}},
+        deployment_id="dep-lit145",
     )
 
     assert lifted is not None
@@ -2051,33 +2051,69 @@ def test_a_timed_out_request_is_priced_at_the_rate_the_router_registered_for_the
     assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
 
 
-def test_the_deployment_id_is_resolved_like_the_success_path_litellm_metadata_first(monkeypatch):
-    """On /messages and /responses the router stamps the real deployment id into litellm_metadata;
-    a model_info on metadata (possibly client-supplied) must not pick the rate."""
-    from litellm.proxy.utils import _failure_usage_to_lift
+def _dispatched_failure_logging_obj(model: str, litellm_params: dict) -> object:
+    """A Logging object as the failure hook sees it: litellm_params in the real get_litellm_params()
+    shape (every key present, ``litellm_metadata`` None on chat completions) and a first-handoff
+    instant, so the lift treats the request as dispatched."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
-    for dep, rate in (("dep-lit145-real", 0.25), ("dep-lit145-wrong", 9.0)):
-        monkeypatch.setitem(
-            litellm.model_cost,
-            dep,
-            {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": rate, "output_cost_per_token": rate},
-        )
-
-    lifted = _failure_usage_to_lift(
-        model_call_details={"call_type": "acompletion", "model": FAILURE_USAGE_MODEL, "messages": ONE_USER_MESSAGE},
-        request_body={},
-        dispatched=True,
-        provider_billed=True,
-        litellm_params={
-            "model": f"openai/{FAILURE_USAGE_MODEL}",
-            "metadata": {"model_info": {"id": "dep-lit145-wrong"}},
-            "litellm_metadata": {"model_info": {"id": "dep-lit145-real"}},
-        },
+    logging_obj = Logging(
+        model=model,
+        messages=ONE_USER_MESSAGE,
+        stream=False,
+        call_type="acompletion",
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="call-lit145",
+        function_id="fn-lit145",
     )
+    logging_obj.update_environment_variables(model=model, user="", optional_params={}, litellm_params=litellm_params)
+    logging_obj.model_call_details["first_api_call_start_time"] = real_datetime.datetime.now()
+    logging_obj.model_call_details["messages"] = ONE_USER_MESSAGE
+    logging_obj.model_call_details["call_type"] = "acompletion"
+    return logging_obj
 
-    assert lifted is not None
-    usage, response_cost = lifted
-    assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
+
+def test_the_deployment_rate_is_found_on_the_logging_objects_real_litellm_params(monkeypatch):
+    """``get_litellm_params()`` always carries a ``litellm_metadata`` key (None on chat
+    completions) next to the router-stamped ``metadata.model_info.id``; the failure row must
+    still price at the deployment's own rate, like ``Logging.get_router_model_id`` on the
+    success path."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "dep-lit145-real-shape",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.25, "output_cost_per_token": 0.25},
+    )
+    litellm_params = get_litellm_params(metadata={"model_info": {"id": "dep-lit145-real-shape"}})
+    assert "litellm_metadata" in litellm_params and litellm_params["litellm_metadata"] is None
+    logging_obj = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, litellm_params)
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    assert lifted["response_cost"] == pytest.approx(lifted["combined_usage_object"].prompt_tokens * 0.25)
+
+
+def test_an_azure_deployment_is_priced_at_its_base_model_like_the_success_path():
+    """An Azure deployment name is not in the cost map; the success path prices it through
+    ``model_info.base_model`` (``get_base_model_from_metadata``) and so must the failure row."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    logging_obj = _dispatched_failure_logging_obj(
+        "azure/lit145-not-in-cost-map",
+        get_litellm_params(metadata={"model_info": {"base_model": "azure/gpt-4.1"}}),
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "azure"
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    expected_cost, _ = litellm.cost_per_token(
+        model="azure/gpt-4.1", prompt_tokens=lifted["combined_usage_object"].prompt_tokens
+    )
+    assert expected_cost > 0
+    assert lifted["response_cost"] == pytest.approx(expected_cost)
 
 
 def test_a_litellm_params_key_in_the_request_body_cannot_zero_the_timeout_price():
@@ -2096,7 +2132,7 @@ def test_a_litellm_params_key_in_the_request_body_cannot_zero_the_timeout_price(
         request_body={},
         dispatched=True,
         provider_billed=True,
-        litellm_params={"model": f"openai/{FAILURE_USAGE_MODEL}"},
+        deployment_id=None,
     )
 
     assert lifted is not None
@@ -2377,9 +2413,7 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
             ]
         )
 
-        response = create_model_info_response(
-            model_id="my-embeddings", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="my-embeddings", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2409,12 +2443,8 @@ def test_create_model_info_response_resolves_model_group_alias_to_target(model_g
         model_group_alias=model_group_alias,
     )
 
-    alias_response = create_model_info_response(
-        model_id="team-embeddings", provider="openai", llm_router=router
-    )
-    target_response = create_model_info_response(
-        model_id="my-embeddings", provider="openai", llm_router=router
-    )
+    alias_response = create_model_info_response(model_id="team-embeddings", provider="openai", llm_router=router)
+    target_response = create_model_info_response(model_id="my-embeddings", provider="openai", llm_router=router)
 
     assert alias_response["id"] == "team-embeddings"
     for field in ("mode", "max_input_tokens", "max_output_tokens"):
@@ -2497,7 +2527,9 @@ async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeyp
     with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
         await proxy_logging_obj.post_call_failure_hook(
             request_data={"metadata": {}},
-            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
+            original_exception=HTTPException(
+                status_code=400, detail="Upstream passthrough request failed with status 400"
+            ),
             user_api_key_dict=UserAPIKeyAuth(),
             traceback_str=upstream_traceback,
         )
@@ -2561,9 +2593,13 @@ def test_mcp_conversion_preserves_request_policy_and_isolates_guardrail_data(buc
     parent = {
         "model": "parent-model",
         bucket: {
-            "guardrails": ["policy-rule"], "guardrail_config": {"language": "en"},
-            "applied_policies": ["parent-policy"], "policy_sources": {"parent-policy": "model"},
-            "_guardrail_pipelines": [], "_pipeline_managed_guardrails": ["pipeline-rule"], "tags": ["review"],
+            "guardrails": ["policy-rule"],
+            "guardrail_config": {"language": "en"},
+            "applied_policies": ["parent-policy"],
+            "policy_sources": {"parent-policy": "model"},
+            "_guardrail_pipelines": [],
+            "_pipeline_managed_guardrails": ["pipeline-rule"],
+            "tags": ["review"],
         },
         "guardrails": [{"request-rule": {"extra_body": {"threshold": 0.9}}}],
         "guardrail_config": {"entities": ["EMAIL_ADDRESS"]},
@@ -2593,13 +2629,26 @@ def test_mcp_conversion_honors_only_authenticated_global_guardrail_opt_outs(opt_
     from litellm.responses.mcp.request_context import MCPRequestContext
 
     auth = UserAPIKeyAuth(metadata={"opted_out_global_guardrails": ["global-rule"] if opt_out else []})
-    context = MCPRequestContext.resolve(kwargs={"metadata": {
-        "user_api_key_auth": auth, "disable_global_guardrails": True,
-        "user_api_key_metadata": {"disable_global_guardrails": True},
-    }}, tools=None)
+    context = MCPRequestContext.resolve(
+        kwargs={
+            "metadata": {
+                "user_api_key_auth": auth,
+                "disable_global_guardrails": True,
+                "user_api_key_metadata": {"disable_global_guardrails": True},
+            }
+        },
+        tools=None,
+    )
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-    kwargs = {"name": "execute", "arguments": {}, "user_api_key_auth": auth, "guardrail_context": context.guardrail_context}
-    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    kwargs = {
+        "name": "execute",
+        "arguments": {},
+        "user_api_key_auth": auth,
+        "guardrail_context": context.guardrail_context,
+    }
+    synthetic = proxy_logging._convert_mcp_to_llm_format(
+        proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs
+    )
     guardrail = CustomGuardrail(guardrail_name="global-rule", event_hook="pre_mcp_call", default_on=True)
     assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is (not opt_out)
     synthetic["metadata"]["user_api_key_metadata"]["opted_out_global_guardrails"].append("unrelated")
@@ -2613,19 +2662,26 @@ def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expecte
     from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails
 
     registry = policy_registry.PolicyRegistry()
-    registry._policies = {"model-policy": Policy(
-        condition=PolicyCondition(model="parent-model"), guardrails=PolicyGuardrails(add=["model-rule"])
-    )}
+    registry._policies = {
+        "model-policy": Policy(
+            condition=PolicyCondition(model="parent-model"), guardrails=PolicyGuardrails(add=["model-rule"])
+        )
+    }
     registry._initialized = True
     monkeypatch.setattr(policy_registry, "_policy_registry", registry)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
     kwargs = {
-        "name": "execute", "arguments": {},
+        "name": "execute",
+        "arguments": {},
         "user_api_key_auth": UserAPIKeyAuth(metadata={"policies": ["model-policy"]}),
-        "guardrail_context": MCPRequestContext.resolve_guardrail_context({"model": model, "guardrails": ["request-rule"]}),
+        "guardrail_context": MCPRequestContext.resolve_guardrail_context(
+            {"model": model, "guardrails": ["request-rule"]}
+        ),
     }
-    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    synthetic = proxy_logging._convert_mcp_to_llm_format(
+        proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs
+    )
     assert ("model-rule" in synthetic["metadata"]["guardrails"]) is expected
     assert "request-rule" in synthetic["metadata"]["guardrails"]
 

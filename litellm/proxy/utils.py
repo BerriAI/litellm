@@ -267,7 +267,6 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.fallback_event_handlers import routed_deployment_id
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -281,6 +280,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionRe
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 from litellm.utils import (
     add_configured_callback_to_specific_event,
+    get_base_model_from_metadata,
 )
 
 if TYPE_CHECKING:
@@ -1017,7 +1017,8 @@ def _failure_usage_to_lift(
     request_body: Mapping[str, object],
     dispatched: bool,
     provider_billed: bool = False,
-    litellm_params: Mapping[str, object] | None = None,
+    deployment_id: str | None = None,
+    base_model: str | None = None,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -1026,8 +1027,11 @@ def _failure_usage_to_lift(
     estimated input-side Usage. When the failure is one the provider bills
     anyway (``provider_billed``: a read timeout or a client disconnect, where
     the provider had the prompt and kept working after LiteLLM hung up) that
-    usage is priced at the model's input rate; any other post-dispatch failure
-    stays at zero cost. The raw request body backfills
+    usage is priced at the model's input rate, the way the success path prices it:
+    at the rate the router registered under ``deployment_id`` (``Logging.get_router_model_id``)
+    when the deployment declares one, else the cost map's rate for ``base_model`` (an Azure
+    deployment's ``model_info.base_model``) or the deployment model; any other post-dispatch
+    failure stays at zero cost. The raw request body backfills
     the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
     chat-completions provider) without filling optional_params. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
@@ -1061,18 +1065,18 @@ def _failure_usage_to_lift(
         return None
     if not provider_billed:
         return estimated_usage, 0.0
-    return estimated_usage, _estimated_input_cost(model_call_details, estimated_usage.prompt_tokens, litellm_params)
-
-
-def _deployment_cost_per_token(litellm_params: Mapping[str, object] | None, model: str) -> CostPerToken | None:
-    """The pricing the router registered for this deployment under its ``model_info.id``: the id
-    is read with the router's own ``routed_deployment_id`` from ``Logging.litellm_params`` (never
-    from the flattened ``model_call_details`` copy a request body key can overwrite) and priced
-    through ``deployment_pricing_model_info`` as the success path does; None means the cost map."""
-    model_info: Final = deployment_pricing_model_info(
-        model_id=routed_deployment_id(litellm_params) if litellm_params is not None else None,
-        deployment_model=model,
+    return estimated_usage, _estimated_input_cost(
+        model_call_details, estimated_usage.prompt_tokens, deployment_id=deployment_id, base_model=base_model
     )
+
+
+def _deployment_cost_per_token(deployment_id: str | None, model: str) -> CostPerToken | None:
+    """The pricing the router registered for this deployment under its ``model_info.id``, read
+    through ``deployment_pricing_model_info`` exactly as the success path does; None means the
+    public cost map. The id is ``Logging.get_router_model_id()`` (the logging object's own
+    ``litellm_params``), never the flattened ``model_call_details`` copy a request body key can
+    overwrite."""
+    model_info: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=model)
     if model_info is None:
         return None
     return CostPerToken(
@@ -1084,17 +1088,20 @@ def _deployment_cost_per_token(litellm_params: Mapping[str, object] | None, mode
 def _estimated_input_cost(
     model_call_details: Mapping[str, object],
     prompt_tokens: int,
-    litellm_params: Mapping[str, object] | None,
+    deployment_id: str | None,
+    base_model: str | None,
 ) -> float:
-    """Input price for the estimated prompt; an unpriceable model (not in the cost map and no
-    deployment rate) keeps the row at $0 rather than dropping the failure row."""
+    """Input price for the estimated prompt: the deployment's registered rate when it has one, else
+    the cost map's rate for ``base_model`` or the deployment model (an Azure deployment name is not
+    in the cost map, its ``base_model`` is). An unpriceable model keeps the row at $0 rather than
+    dropping the failure row."""
     try:
         model: Final = str(model_call_details.get("model") or "")
         estimated_input_cost, _ = litellm.cost_per_token(
-            model=model,
+            model=base_model or model,
             custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
             prompt_tokens=prompt_tokens,
-            custom_cost_per_token=_deployment_cost_per_token(litellm_params, model),
+            custom_cost_per_token=_deployment_cost_per_token(deployment_id, model),
         )
     except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
         verbose_proxy_logger.debug(
@@ -1263,7 +1270,8 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         request_body=request_data,
         dispatched=_first_handoff is not None,
         provider_billed=provider_billed,
-        litellm_params=getattr(_logging_obj, "litellm_params", None),
+        deployment_id=_logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None,
+        base_model=get_base_model_from_metadata(model_call_details=_model_call_details),
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
