@@ -126,6 +126,17 @@ pub(crate) fn public_response(
         .map(Bound::unbind)
 }
 
+/// The JSON form of a public response a Python hook handed back, models nested in it included.
+pub(crate) fn response_value(public: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    from_py(
+        &public
+            .py()
+            .import("pydantic_core")?
+            .getattr("to_jsonable_python")?
+            .call1((public,))?,
+    )
+}
+
 struct RequestFieldSources<'py> {
     body: Option<Bound<'py, PyAny>>,
     credentials: Option<Bound<'py, PyAny>>,

@@ -80,6 +80,22 @@ impl PythonBinding for ResponsesPythonHost {
         self.0.response(py, &response)
     }
 
+    fn public_response(
+        &mut self,
+        py: Python<'_>,
+        response: &serde_json::Value,
+    ) -> PyResult<Py<PyAny>> {
+        self.0.response(py, response)
+    }
+
+    fn response_value(
+        &mut self,
+        _: Python<'_>,
+        public: &Bound<'_, PyAny>,
+    ) -> PyResult<serde_json::Value> {
+        crate::marshal::response_value(public)
+    }
+
     fn encode_stream_head(
         &mut self,
         _py: Python<'_>,

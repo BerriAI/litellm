@@ -5,7 +5,6 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
-from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.responses import dispatch as responses_dispatch
 from litellm.responses import main as python_responses
@@ -287,7 +286,6 @@ ENCODED_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("deploymen
         (Feature.DEPLOYMENT_RESPONSE_ID, {"litellm_metadata": {"model_info": {"id": "deployment-1"}}}, {}),
         (Feature.ENCODED_ITEM_IDS, {"input": [{"type": "reasoning", "id": ENCODED_ID, "summary": []}]}, {}),
         (Feature.MODIFY_PARAMS, {}, {"modify_params": True}),
-        (Feature.RESPONSE_CACHE, {}, {"cache": Cache()}),
         (
             Feature.MANAGED_RESOURCE_IDS,
             {

@@ -16,6 +16,8 @@ pub enum MachineFault {
     Abandoned,
     /// The host resumed the call out of turn.
     Protocol(ResumeError),
+    /// The host answered with a value the call cannot read back as its own type.
+    UnreadableAnswer,
 }
 
 pub type ExecuteFuture<R, C = <R as Protocol>::Response> =

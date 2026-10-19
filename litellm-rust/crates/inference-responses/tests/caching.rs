@@ -25,14 +25,20 @@ use litellm_inference::{
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
-fn cache_request(input: Value) -> CacheRequest {
-    CacheRequest {
-        identity: ProviderIdentity {
+fn cache_request<P: litellm_inference::caching::Cachable>(
+    input: Value,
+    cache: Option<Arc<dyn ResponseCacheService>>,
+    options: Option<CacheOptions>,
+) -> CacheRequest {
+    CacheRequest::prepare::<P>(
+        ProviderIdentity {
             model: "test-model".into(),
             provider: "test-provider".into(),
         },
-        input,
-    }
+        cache,
+        options,
+        &|_| input.clone(),
+    )
 }
 
 #[fixture]
@@ -59,31 +65,55 @@ struct InvalidEntryCache(
 );
 
 impl ResponseCacheService for InvalidEntryCache {
-    fn config(&self) -> &ResponseCacheConfig {
-        self.0.config()
+    fn prepare(
+        self: Arc<Self>,
+        options: CacheOptions,
+        surface: &str,
+        input: &dyn Fn() -> Value,
+    ) -> litellm_cache_response::PreparedCache {
+        litellm_cache_response::PreparedCache {
+            policy: options.policy,
+            max_entry_bytes: self.0.config().max_entry_bytes,
+            call: Arc::new(InvalidEntryCall {
+                request: options.request(&self.0.config().namespace, surface, input()),
+                service: self,
+            }),
+        }
     }
+}
 
+struct InvalidEntryCall {
+    service: Arc<InvalidEntryCache>,
+    request: litellm_cache_response::ResponseCacheRequest,
+}
+
+impl litellm_cache_response::ResponseCacheCall for InvalidEntryCall {
     fn lookup<'a>(
         &'a self,
-        request: &'a litellm_cache_response::ResponseCacheRequest,
         now: Duration,
-    ) -> futures_util::future::BoxFuture<'a, Result<Option<Value>, litellm_cache::Error>> {
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Option<litellm_cache_response::CacheHit>, litellm_cache::Error>,
+    > {
         Box::pin(async move {
-            Ok(self
-                .0
-                .async_lookup(request, now)
-                .await?
-                .or_else(|| Some(self.1.clone())))
+            Ok(Some(litellm_cache_response::CacheHit {
+                value: self
+                    .service
+                    .0
+                    .async_lookup(&self.request, now)
+                    .await?
+                    .unwrap_or_else(|| self.service.1.clone()),
+                key: litellm_cache_response::cache_key(&self.request.key),
+            }))
         })
     }
 
     fn store<'a>(
         &'a self,
-        request: &'a litellm_cache_response::ResponseCacheRequest,
         response: Value,
         now: Duration,
     ) -> futures_util::future::BoxFuture<'a, Result<(), litellm_cache::Error>> {
-        Box::pin(self.0.async_store(request, response, now))
+        Box::pin(self.service.0.async_store(&self.request, response, now))
     }
 }
 
@@ -139,6 +169,7 @@ impl Interceptors<RouteError> for ChangingHooks {
             InterceptRequest::ResultReady { facts, reply } => {
                 reply.send(self.result_ready(facts).await?);
             }
+            other => other.pass_through(),
         }
         Ok(())
     }
@@ -184,9 +215,11 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
     let calls = AtomicUsize::new(0);
     for _ in 0..2 {
         let response = execute_unary::<Responses, _, _>(
-            cache_request(json!({"input":"hello"})),
-            Some(cache.clone()),
-            Some(CacheOptions::new(CacheScope::Shared)),
+            cache_request::<Responses>(
+                json!({"input":"hello"}),
+                Some(cache.clone()),
+                Some(CacheOptions::new(CacheScope::Shared)),
+            ),
             &(),
             None,
             || async {
@@ -226,9 +259,11 @@ async fn responses_cache_only_reuses_completed_responses(
     let calls = AtomicUsize::new(0);
     for _ in 0..2 {
         let response = execute_unary::<Responses, _, _>(
-            cache_request(json!({"input":"hello"})),
-            Some(cache.clone()),
-            Some(CacheOptions::new(CacheScope::Shared)),
+            cache_request::<Responses>(
+                json!({"input":"hello"}),
+                Some(cache.clone()),
+                Some(CacheOptions::new(CacheScope::Shared)),
+            ),
             &(),
             None,
             || async {

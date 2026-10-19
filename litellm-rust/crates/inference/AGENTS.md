@@ -67,7 +67,7 @@
 - Attach a `litellm_cache_response::ScopedCache` with `route.with_cache(cache)`. Cached and uncached routes use the same `execute` and `machine` methods
 - `CallOptions` carries a scope-free `CachePolicy` and observation. Per-call policy never replaces the attached scope or service
 - Provider transport does not own cache orchestration. Stream capture stays in `src/caching.rs`
-- This crate and the format crates own request identity, typed response reconstruction, and stream capture and replay
+- This crate and the format crates expose lazy effective-request identity and own typed response reconstruction and stream capture and replay. The selected cache service prepares per-call state before lookup. Only the native adapter materializes that identity and constructs native key inputs. Python delegation uses Python kwargs and never invokes the native identity builder
 - `cache-response` owns cache policy, namespacing, scope encoding, versioned envelopes, and freshness
 - The SDK explicitly chooses shared scope. The gateway derives isolated scope from authenticated identity before attaching its service
 - `ExecutionFacts` are delivered through the awaited `ResultReady` host operation for both provider and cached results, before public response processing or stream opening
@@ -79,5 +79,5 @@
   - native gateway accounting belongs to gateway dependencies, independently of `host-python`
   - response-cache services expose no coordination counters or reservation APIs. A shared Redis deployment does not make response storage and accounting coordination the same dependency
 - Cache lookup follows provider preparation, credential resolution, and the request interceptor
-  - keys describe the effective provider URL, authenticated headers, and rewritten body
+  - native keys describe the effective provider URL, authenticated headers, and rewritten body. Python delegation keeps Python's key semantics and returns the host's hit key unchanged
   - signed requests bypass caching until the signing identity has a stable cache representation

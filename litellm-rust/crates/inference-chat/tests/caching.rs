@@ -181,6 +181,7 @@ impl Interceptors<RouteError> for ChangingHooks {
             InterceptRequest::ResultReady { facts, reply } => {
                 reply.send(self.result_ready(facts).await?);
             }
+            other => other.pass_through(),
         }
         Ok(())
     }

@@ -95,6 +95,12 @@ impl DeploymentHooks {
             .map(Bound::unbind)
     }
 
+    pub fn reviews_success(py: Python<'_>) -> PyResult<bool> {
+        python::DeploymentHooks::ReviewsSuccess
+            .call(py, ())?
+            .extract()
+    }
+
     pub fn after_success(
         py: Python<'_>,
         kwargs: &Py<PyDict>,

@@ -321,6 +321,7 @@ pub enum HookScript {
     FailAfterSuccess,
     CancelTerminal,
     FailTerminal,
+    ReviewResult,
 }
 
 pub struct SyntheticHooks {
@@ -336,6 +337,24 @@ pub fn hooks(log: &Log, script: HookScript) -> SyntheticHooks {
 }
 
 impl CallHooks<PythonRuntime> for SyntheticHooks {
+    fn reviews_provider_results(&mut self, _: Python<'_>) -> PyResult<bool> {
+        Ok(matches!(self.script, HookScript::ReviewResult))
+    }
+
+    fn provider_result(
+        &mut self,
+        py: Python<'_>,
+        response: Py<PyAny>,
+    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
+        let reviewed = response.bind(py).cast::<PyDict>()?.copy()?;
+        self.log.push(format!(
+            "provider_result:{}",
+            reviewed.get_item("text")?.unwrap()
+        ));
+        reviewed.set_item("text", "reviewed")?;
+        Ok(HookStep::Ready(reviewed.into_any().unbind()))
+    }
+
     fn prepare_arguments(
         &mut self,
         _: Python<'_>,
@@ -469,6 +488,21 @@ pub fn success_machine() -> MachineFactory {
                     .after_provider_response(RawResponse { body: "raw".into() })
                     .await?;
                 Ok(format!("{projected}|{signed}|{}", wire.url))
+            })
+        })
+    })
+}
+
+/// A call that offers its provider result for review and returns the text it keeps.
+pub fn reviewed_machine() -> MachineFactory {
+    Box::new(move |_| {
+        CallMachine::new(None, move |host| {
+            Box::pin(async move {
+                let kept = host
+                    .interceptors
+                    .provider_result(serde_json::json!({"text": "provider"}))
+                    .await?;
+                Ok(kept["text"].as_str().unwrap_or_default().to_owned())
             })
         })
     })

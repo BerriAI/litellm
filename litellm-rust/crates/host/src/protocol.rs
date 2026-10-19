@@ -33,6 +33,12 @@ pub enum InterceptRequest {
         raw: RawResponse,
         reply: Reply<()>,
     },
+    /// A complete response the provider just produced, before anything caches or delivers it.
+    /// Never raised for a cache hit. The answer is the response the call keeps.
+    ProviderResult {
+        response: serde_json::Value,
+        reply: Reply<serde_json::Value>,
+    },
 }
 
 impl InterceptRequest {
@@ -43,6 +49,7 @@ impl InterceptRequest {
                 reply.send(());
             }
             Self::BeforeProviderRequest { wire, reply, .. } => reply.send(*wire),
+            Self::ProviderResult { response, reply } => reply.send(response),
         }
     }
 
@@ -67,6 +74,9 @@ impl InterceptRequest {
             ),
             Self::AfterProviderResponse { raw, reply } => {
                 reply.send(interceptors.after_provider_response(raw).await?);
+            }
+            Self::ProviderResult { response, reply } => {
+                reply.send(interceptors.provider_result(response).await?);
             }
         }
         Ok(())

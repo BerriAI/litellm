@@ -80,6 +80,7 @@ FAKES = {
     'custom_pricing_fields': lambda: ('ocr_cost_per_page',),
     'is_internal_call': lambda: legacy.is_internal.get(),
     'before_deployment_call': lambda kwargs, call_type: kwargs['logger'].hook('pre', kwargs, call_type),
+    'reviews_deployment_success': lambda: True,
     'after_deployment_success': lambda kwargs, response, call_type: kwargs['logger'].hook(
         'success', response, call_type
     ),

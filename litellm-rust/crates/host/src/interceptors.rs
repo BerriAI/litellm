@@ -1,5 +1,7 @@
 use std::future::Future;
 
+use serde::{Serialize, de::DeserializeOwned};
+
 use crate::{
     machine::MachineFault,
     protocol::{InterceptRequest, Reply, reply},
@@ -144,6 +146,25 @@ where
 
     fn result_ready(&self, facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
         self.intercept(|reply| InterceptRequest::ResultReady { facts, reply })
+    }
+
+    /// Offers a complete provider response before it is cached or delivered, and returns the
+    /// response the call keeps. Never raised for a cache hit.
+    fn provider_result<R>(&self, response: R) -> impl Future<Output = Result<R, E>> + Send
+    where
+        R: Serialize + DeserializeOwned + Send,
+    {
+        let value = serde_json::to_value(&response);
+        async move {
+            let value = value.map_err(|_| MachineFault::UnreadableAnswer)?;
+            let answer = self
+                .intercept(|reply| InterceptRequest::ProviderResult {
+                    response: value,
+                    reply,
+                })
+                .await?;
+            serde_json::from_value(answer).map_err(|_| MachineFault::UnreadableAnswer.into())
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+use litellm_host::interceptors::InterceptPoints;
 use litellm_host::observation::ObservationSender;
 use std::sync::Arc;
 
@@ -58,7 +59,7 @@ impl OcrRoute {
                     caller_document,
                     observers,
                 ));
-            execute.await
+            interceptors.provider_result(execute.await?).await
         })
         .await
     }

@@ -1,10 +1,11 @@
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use litellm_cache::{BaseCache, Error, ExactCacheContext};
 use serde_json::Value;
 
 use crate::{
     CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
+    cache_key,
 };
 
 type CacheFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -24,46 +25,78 @@ impl Default for ResponseCacheConfig {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct CacheHit {
+    pub value: Value,
+    pub key: String,
+}
+
 pub trait ResponseCacheService: Send + Sync {
-    fn config(&self) -> &ResponseCacheConfig;
+    fn prepare(
+        self: Arc<Self>,
+        options: CacheOptions,
+        surface: &str,
+        input: &dyn Fn() -> Value,
+    ) -> PreparedCache;
+}
 
-    fn lookup<'a>(
-        &'a self,
-        request: &'a ResponseCacheRequest,
-        now: Duration,
-    ) -> CacheFuture<'a, Option<Value>>;
+pub struct PreparedCache {
+    pub policy: CachePolicy,
+    pub max_entry_bytes: usize,
+    pub call: Arc<dyn ResponseCacheCall>,
+}
 
-    fn store<'a>(
-        &'a self,
-        request: &'a ResponseCacheRequest,
-        response: Value,
-        now: Duration,
-    ) -> CacheFuture<'a, ()>;
+pub trait ResponseCacheCall: Send + Sync {
+    fn lookup<'a>(&'a self, now: Duration) -> CacheFuture<'a, Option<CacheHit>>;
+
+    fn store<'a>(&'a self, response: Value, now: Duration) -> CacheFuture<'a, ()>;
 }
 
 impl<B> ResponseCacheService for ResponseCache<B>
 where
+    B: BaseCache<Value = CacheEntry, Context = ExactCacheContext> + 'static,
+{
+    fn prepare(
+        self: Arc<Self>,
+        options: CacheOptions,
+        surface: &str,
+        input: &dyn Fn() -> Value,
+    ) -> PreparedCache {
+        PreparedCache {
+            policy: options.policy,
+            max_entry_bytes: self.config().max_entry_bytes,
+            call: Arc::new(NativeCacheCall {
+                request: options.request(&self.config().namespace, surface, input()),
+                service: self,
+            }),
+        }
+    }
+}
+
+struct NativeCacheCall<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> {
+    service: Arc<ResponseCache<B>>,
+    request: ResponseCacheRequest,
+}
+
+impl<B> ResponseCacheCall for NativeCacheCall<B>
+where
     B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>,
 {
-    fn config(&self) -> &ResponseCacheConfig {
-        self.config()
+    fn lookup<'a>(&'a self, now: Duration) -> CacheFuture<'a, Option<CacheHit>> {
+        Box::pin(async move {
+            Ok(self
+                .service
+                .async_lookup(&self.request, now)
+                .await?
+                .map(|value| CacheHit {
+                    value,
+                    key: cache_key(&self.request.key),
+                }))
+        })
     }
 
-    fn lookup<'a>(
-        &'a self,
-        request: &'a ResponseCacheRequest,
-        now: Duration,
-    ) -> CacheFuture<'a, Option<Value>> {
-        Box::pin(self.async_lookup(request, now))
-    }
-
-    fn store<'a>(
-        &'a self,
-        request: &'a ResponseCacheRequest,
-        response: Value,
-        now: Duration,
-    ) -> CacheFuture<'a, ()> {
-        Box::pin(self.async_store(request, response, now))
+    fn store<'a>(&'a self, response: Value, now: Duration) -> CacheFuture<'a, ()> {
+        Box::pin(self.service.async_store(&self.request, response, now))
     }
 }
 
@@ -83,8 +116,16 @@ pub struct CachePolicy {
 }
 
 impl CachePolicy {
+    pub fn reads(&self) -> bool {
+        self.caching != Some(false) && !self.no_cache
+    }
+
+    pub fn writes(&self) -> bool {
+        self.caching != Some(false) && !self.no_store
+    }
+
     pub fn enabled(&self) -> bool {
-        self.caching != Some(false) && !(self.no_cache && self.no_store)
+        self.reads() || self.writes()
     }
 }
 
@@ -181,5 +222,58 @@ impl ScopedCache {
             policy: policy.unwrap_or_default(),
             scope: self.scope.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use litellm_cache_memory::InMemoryCache;
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+
+    #[rstest]
+    #[case::shared(CacheScope::Shared)]
+    #[case::isolated(CacheScope::Isolated("tenant".into()))]
+    #[tokio::test]
+    async fn native_preparation_keeps_existing_keys_and_storage(#[case] scope: CacheScope) {
+        let service = Arc::new(
+            ResponseCache::new(Arc::new(InMemoryCache::default())).with_config(
+                ResponseCacheConfig {
+                    namespace: "test".into(),
+                    max_entry_bytes: 4096,
+                },
+            ),
+        );
+        let options = CacheOptions::new(scope);
+        let input = json!({"model": "test", "body": {"z": 1, "a": 2}});
+        let legacy = options.clone().request("test", "test", input.clone());
+        let preparations = Cell::new(0);
+        let prepared = service.clone().prepare(options, "test", &|| {
+            preparations.set(preparations.get() + 1);
+            input.clone()
+        });
+        assert_eq!(prepared.max_entry_bytes, 4096);
+        assert_eq!(prepared.call.lookup(Duration::ZERO).await.unwrap(), None);
+        prepared
+            .call
+            .store(json!({"answer": 42}), Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(
+            service.async_lookup(&legacy, Duration::ZERO).await.unwrap(),
+            Some(json!({"answer": 42}))
+        );
+        assert_eq!(
+            prepared.call.lookup(Duration::ZERO).await.unwrap(),
+            Some(CacheHit {
+                value: json!({"answer": 42}),
+                key: cache_key(&legacy.key),
+            })
+        );
+        assert_eq!(preparations.get(), 1);
     }
 }

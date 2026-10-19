@@ -95,6 +95,7 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
             InterceptRequest::AfterProviderResponse { raw, reply } => {
                 reply.send(self.after_provider_response(raw).await?);
             }
+            other => other.pass_through(),
         }
         Ok(())
     }

@@ -2,6 +2,7 @@ use crate::{InvokeError, PythonOwned};
 use litellm_host::protocol::Protocol;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use serde_json::Value;
 
 /// Converts requests, responses, stream values and errors at the Python boundary.
 pub trait PythonBinding: PythonOwned {
@@ -26,6 +27,16 @@ pub trait PythonBinding: PythonOwned {
         py: Python<'_>,
         response: <Self::Protocol as Protocol>::Response,
     ) -> PyResult<Py<PyAny>>;
+
+    /// A provider result as the public object Python hooks review, built from its JSON form.
+    fn public_response(&mut self, py: Python<'_>, response: &Value) -> PyResult<Py<PyAny>> {
+        crate::to_py(py, response)
+    }
+
+    /// The JSON form of the public object a Python hook handed back.
+    fn response_value(&mut self, _py: Python<'_>, public: &Bound<'_, PyAny>) -> PyResult<Value> {
+        crate::from_py(public)
+    }
 
     /// What the stream carries at hand-off, as the caller's stream receives it.
     fn encode_stream_head(

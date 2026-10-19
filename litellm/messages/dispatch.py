@@ -103,7 +103,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.SAFEGUARDS_CLASSIFIER: lambda request: native_route_classifies(
             str(request.resolved["model"]), request.resolved.get("safeguards")
         ),
-        Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.WORKLOAD_IDENTITY: detectors.anthropic_workload_identity,
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
