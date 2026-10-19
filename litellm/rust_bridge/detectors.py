@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from openai.types.responses import ResponseInputParam
 
     from litellm.responses.mcp.litellm_proxy_mcp_handler import ToolParam
-    from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponsesAPIOptionalRequestParams
+    from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS
 
 Detector: TypeAlias = Callable[[NativeCall], bool]
 Detectors: TypeAlias = Mapping[Feature, Detector]
@@ -238,21 +238,6 @@ def tool_schema_repair(request: NativeCall) -> bool:
 
 
 _PARAMS: Final = TypeAdapter(dict[str, object])
-
-
-def model_param_gating(request: NativeCall) -> bool:
-    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-    from litellm.rust_bridge.host.routes.responses import PARAMETERS
-
-    params: Final = {name: request.resolved[name] for name in PARAMETERS if request.resolved.get(name) is not None}
-    mapped: Final = _PARAMS.validate_python(
-        OpenAIResponsesAPIConfig().map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict
-            cast("ResponsesAPIOptionalRequestParams", params),  # cast-ok: the handler passes these kwargs
-            _openai_model(request),
-            drop_params=True,
-        )
-    )
-    return mapped != params
 
 
 _CHAT_UNGATED: Final = frozenset(

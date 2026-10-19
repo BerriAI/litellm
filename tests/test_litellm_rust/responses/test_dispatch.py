@@ -276,7 +276,6 @@ ENCODED_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("deploymen
         (Feature.TIMEOUT_VARIANTS, {"request_timeout": 5}, {}),
         (Feature.AGENTIC_LOOP_HOOK, {}, {"callbacks": [_Agentic()]}),
         (Feature.TLS_POLICY, {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
-        (Feature.DROP_PARAMS, {}, {"drop_params": True}),
         (Feature.STREAMING, {"stream": True}, {}),
         (Feature.PROMPT_MANAGEMENT, {"prompt_id": "welcome"}, {}),
         (Feature.TEXT_FORMAT, {"text_format": dict}, {}),
@@ -302,7 +301,6 @@ ENCODED_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("deploymen
             {},
         ),
         (Feature.TOOL_SCHEMA_REPAIR, {"tools": [{"type": "function", "name": "f", "parameters": "{}"}]}, {}),
-        (Feature.MODEL_PARAM_GATING, {"max_output_tokens": 1}, {}),
         (Feature.CLIENT_HEADERS, {"headers": {"x-tenant": "a"}}, {}),
         (Feature.DEPLOYMENT_HOOK, {}, {"callbacks": [_Deployment()]}),
         (

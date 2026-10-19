@@ -65,7 +65,6 @@ def _public_request(
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **detectors.COMMON,
-        Feature.DROP_PARAMS: detectors.drop_params,
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.STREAMING: detectors.streaming,
         Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
@@ -81,7 +80,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.CACHE_CONTROL_MARKS: detectors.cache_control_marks,
         Feature.ANTHROPIC_TOOL_SEARCH: detectors.anthropic_tool_search,
         Feature.TOOL_SCHEMA_REPAIR: detectors.tool_schema_repair,
-        Feature.MODEL_PARAM_GATING: detectors.model_param_gating,
         Feature.WORKLOAD_IDENTITY: detectors.openai_workload_identity,
         Feature.CLIENT_HEADERS: detectors.client_headers,
     }
