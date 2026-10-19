@@ -3,7 +3,9 @@ import base64
 import os
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Final
 
 import httpx
@@ -22,6 +24,11 @@ from litellm.types.llms.base import LiteLLMBaseModel
 oidc_cache: Final = DualCache()
 
 _PARSED_LITERAL: Final = TypeAdapter(object)
+
+
+@lru_cache(maxsize=128)
+def _cached_azure_oidc_token_provider(audience: str) -> Callable[[], str]:
+    return get_azure_ad_token_provider(azure_scope=audience)
 
 
 _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
@@ -337,7 +344,7 @@ def get_secret(
                 verbose_logger.warning(
                     "AZURE_FEDERATED_TOKEN_FILE not found in environment will use Azure AD token provider"
                 )
-                azure_token_provider: Final = get_azure_ad_token_provider(azure_scope=oidc_aud)
+                azure_token_provider: Final = _cached_azure_oidc_token_provider(oidc_aud)
                 try:
                     oidc_token = azure_token_provider()
                     if oidc_token is None:

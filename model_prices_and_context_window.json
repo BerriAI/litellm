@@ -24366,6 +24366,11 @@
             "notes": "Grounding with Bing Search (G1 SKU): $14 per 1,000 transactions. Tokens for the Foundry model deployment that runs the grounded search are billed separately on that deployment."
         }
     },
+    "deepseek/search": {
+        "input_cost_per_query": 0.00075,
+        "litellm_provider": "deepseek",
+        "mode": "search"
+    },
     "tinyfish/search": {
         "input_cost_per_query": 0.0,
         "litellm_provider": "tinyfish",
@@ -75498,7 +75503,6 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-4-argon": {
-        "deprecation_date": "2027-10-13",
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_flex": 5e-08,
@@ -76135,5 +76139,22 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "meta/sam-3.1": {
+        "input_cost_per_image": 0.0025,
+        "litellm_provider": "meta",
+        "mode": "responses",
+        "source": "https://dev.meta.ai/docs/pricing-rate-limits.md",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ]
     }
 }
