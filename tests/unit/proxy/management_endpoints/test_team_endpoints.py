@@ -2637,9 +2637,98 @@ async def test_team_model_add_delete_keep_model_aliases_in_team_cache(endpoint_n
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("endpoint_name", "blocked"), [("block_team", True), ("unblock_team", False)])
+async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
+    endpoint_name: str, blocked: bool, monkeypatch: pytest.MonkeyPatch
+):
+    import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
+    from litellm.proxy._types import BlockTeamRequest
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.auth.team_grants import team_model_aliases
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_id: Final = "team-kill-switch"
+    columns: Final = {"team_id": team_id, "team_alias": "kill-switch", "blocked": not blocked}
+    alias_table: Final = {"id": 1, "model_aliases": '{"fast": "gpt-4o"}', "created_by": "admin", "updated_by": "admin"}
+
+    async def update(
+        where: Mapping[str, str], data: Mapping[str, bool], include: Mapping[str, bool] | None = None
+    ) -> LiteLLM_TeamTable:
+        relations: Final = {"litellm_model_table": alias_table} if (include or {}).get("litellm_model_table") else {}
+        return LiteLLM_TeamTable.model_validate({**columns, **data, **relations})
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(**columns))
+    prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=update)
+    cache: Final = UserApiKeyCache()
+    redis: Final = _BroadcastRecordingRedis()
+    monkeypatch.setattr(pubsub_module, "coordination_redis_cache", lambda: redis)
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    warmed: Final = await get_team_object(team_id=team_id, prisma_client=prisma_client, user_api_key_cache=cache)
+    assert warmed.blocked is not blocked
+
+    response: Final = await getattr(team_endpoints, endpoint_name)(
+        data=BlockTeamRequest(team_id=team_id),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+    )
+    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
+
+    seen_by_auth: Final = await get_team_object(team_id=team_id, prisma_client=prisma_client, user_api_key_cache=cache)
+    assert seen_by_auth.blocked is blocked
+    assert team_model_aliases(seen_by_auth) == {"fast": "gpt-4o"}
+    assert redis.broadcast_keys == [f"team_id:{team_id}", "team_alias:kill-switch"]
+    assert (response.blocked, response.litellm_model_table, response.object_permission) == (blocked, None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint_name", ["block_team", "unblock_team"])
+@pytest.mark.parametrize(
+    ("caller", "stored_team", "status_code"),
+    [
+        (
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"),
+            LiteLLM_TeamTable(team_id="team-1234", members_with_roles=[Member(user_id="alice", role="user")]),
+            403,
+        ),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"), None, 404),
+    ],
+)
+async def test_team_block_unblock_refuse_before_writing(
+    endpoint_name: str,
+    caller: UserAPIKeyAuth,
+    stored_team: LiteLLM_TeamTable | None,
+    status_code: int,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy._types import BlockTeamRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=stored_team)
+    prisma_client.db.litellm_teamtable.update = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await getattr(team_endpoints, endpoint_name)(
+            data=BlockTeamRequest(team_id="team-1234"), http_request=MagicMock(), user_api_key_dict=caller
+        )
+
+    assert exc_info.value.status_code == status_code
+    prisma_client.db.litellm_teamtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "endpoint_name",
-    ["team_model_add", "team_model_delete", "update_team_member_permissions"],
+    ["team_model_add", "team_model_delete", "update_team_member_permissions", "block_team", "unblock_team"],
 )
 async def test_team_write_404s_when_row_vanishes_before_update(endpoint_name):
     """A team deleted between the read and the write must 404.
@@ -2662,9 +2751,12 @@ async def test_team_write_404s_when_row_vanishes_before_update(endpoint_name):
         TeamModelDeleteRequest,
         UserAPIKeyAuth,
     )
+    from litellm.proxy._types import BlockTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import (
+        block_team,
         team_model_add,
         team_model_delete,
+        unblock_team,
         update_team_member_permissions,
     )
 
@@ -2698,6 +2790,16 @@ async def test_team_write_404s_when_row_vanishes_before_update(endpoint_name):
                 team_id="team-1234",
                 team_member_permissions=["/key/generate"],
             ),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+        "block_team": lambda: block_team(
+            data=BlockTeamRequest(team_id="team-1234"),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+        "unblock_team": lambda: unblock_team(
+            data=BlockTeamRequest(team_id="team-1234"),
             http_request=mock_request,
             user_api_key_dict=mock_user_api_key_dict,
         ),
