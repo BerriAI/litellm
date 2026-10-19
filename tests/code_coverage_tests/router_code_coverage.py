@@ -139,7 +139,10 @@ ignored_function_names = [
     "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
     "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
     "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
-    "is_batch_deployment",  # Tested through the model group info batch endpoint tests in test_router.py
+    "prefer_batch_deployments",  # Tested through the mixed and wildcard group acreate_batch tests in test_router.py
+    "batch_create_routing",  # Tested through the mixed-group acreate_batch tests in test_router.py
+    "is_batch_create_routing",  # Tested through the chat-after-batch-create test in test_router.py
+    "is_batch_deployment",  # Tested through the mixed-group acreate_batch and model group info tests in test_router.py
     "deployment_supported_endpoints",  # Tested through the model group info batch endpoint tests in test_router.py
 ]
 

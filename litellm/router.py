@@ -188,9 +188,11 @@ from litellm.router_utils.auto_router_model_naming import (
     count_capability_routers,
 )
 from litellm.router_utils.batch_utils import (
+    batch_create_routing,
     deployment_supported_endpoints,
     get_router_metadata_variable_name,
     is_batch_retrieve_call_type,
+    prefer_batch_deployments,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
@@ -7138,12 +7140,13 @@ class Router:
         try:
             verbose_router_logger.debug("Inside _acreate_batch()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self.async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "files-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with batch_create_routing():
+                deployment: Final = await self.async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "files-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -14116,10 +14119,12 @@ class Router:
                     )
                 return early[0], self._drop_strategy_markers(
                     early[0],
-                    self._filter_reserved_deployments(
-                        model=early[0],
-                        healthy_deployments=early[1],
-                        request_team_id=request_team_id,
+                    prefer_batch_deployments(
+                        self._filter_reserved_deployments(
+                            model=early[0],
+                            healthy_deployments=early[1],
+                            request_team_id=request_team_id,
+                        )
                     ),
                 )
 
@@ -14210,7 +14215,7 @@ class Router:
                 model
             ]  # update the model to the actual value if an alias has been passed in
 
-        return model, self._drop_strategy_markers(model, healthy_deployments)
+        return model, self._drop_strategy_markers(model, prefer_batch_deployments(healthy_deployments))
 
     def _drop_strategy_markers(
         self, model: str, deployments: Sequence[DeploymentTypedDict]
