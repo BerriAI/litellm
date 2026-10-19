@@ -17,21 +17,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from fastapi import HTTPException, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError as OpenAIAPIError
 from pydantic import BaseModel
 
 import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import create_response
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
     _fast_serialize_simple_model_response_stream,
@@ -54,6 +56,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+from tests._support.clock_loops import AutojumpClockLoop
 
 from .conftest import normalize
 
@@ -283,8 +286,9 @@ def test_restamp_streaming_chunk_model_overrides_model_on_basemodel():
         "model": new_chunk.model,
         "logged": logged,
         "same_object": new_chunk is chunk,
+        "original_model": chunk.model,
     }
-    assert snapshot == {"model": "gpt-4", "logged": True, "same_object": True}
+    assert snapshot == {"model": "gpt-4", "logged": True, "same_object": False, "original_model": "openai/internal-x"}
 
 
 @pytest.mark.parametrize("return_raw_model_name", [False, True])
@@ -310,8 +314,7 @@ def test_restamp_streaming_chunk_model_overrides_model_on_dict():
         request_data={},
         model_mismatch_logged=True,
     )
-    assert new_chunk["model"] == "gpt-4"
-    assert logged is True
+    assert (new_chunk["model"], chunk["model"], logged) == ("gpt-4", "internal", True)
 
 
 def test_restamp_streaming_chunk_model_uses_fallback_model_from_metadata():
@@ -443,7 +446,7 @@ def test_restamp_streaming_chunk_model_fastest_response_preserves_model():
     assert logged is False
 
 
-def test_restamp_streaming_chunk_model_setattr_exception_logs_and_returns():
+def test_restamp_streaming_chunk_model_restamps_a_frozen_chunk_through_a_copy():
     from pydantic import ConfigDict
 
     class FrozenChunk(_simple_chunk().__class__):
@@ -462,8 +465,30 @@ def test_restamp_streaming_chunk_model_setattr_exception_logs_and_returns():
         request_data={"litellm_call_id": "test-id"},
         model_mismatch_logged=False,
     )
-    assert new_chunk.model == "openai/internal-x"
-    assert logged is True
+    assert (new_chunk.model, chunk.model, logged) == ("gpt-4", "openai/internal-x", True)
+
+
+def test_restamp_streaming_chunk_model_records_the_client_model_on_the_logging_object():
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="openai/internal-x",
+        messages=[],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="test-id",
+        function_id="test-id",
+    )
+    _restamp_streaming_chunk_model(
+        chunk=_simple_chunk(model="openai/internal-x"),
+        requested_model_from_client="gpt-4",
+        request_data={"litellm_call_id": "test-id", "litellm_logging_obj": logging_obj},
+        model_mismatch_logged=False,
+    )
+    assert logging_obj.client_facing_stream_model == "gpt-4"
 
 
 def test_format_fallback_metadata_sse_event():
@@ -656,7 +681,7 @@ def _patch_logging_flags(monkeypatch, needs_wrap=False, needs_per_chunk=False):
     # touching real logging globals.
     monkeypatch.setattr(
         ps.ProxyLogging,
-        "_fire_deferred_stream_logging",
+        "fire_deferred_stream_logging",
         staticmethod(lambda request_data: None),
     )
 
@@ -883,6 +908,318 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
+_BLOCK_MESSAGE: Final = "Content blocked: keyword 'keeper' detected"
+_BLOCK_ERROR: Final = {
+    "message": _BLOCK_MESSAGE,
+    "type": "invalid_request_error",
+    "param": None,
+    "code": "400",
+    "provider_specific_fields": {"error": _BLOCK_MESSAGE},
+}
+_UNSERIALIZABLE_SPAN: Final = object()
+
+
+async def _blocked_after(chunks: int, detail: dict[str, object]) -> AsyncIterator[ModelResponseStream]:
+    for _ in range(chunks):
+        yield _simple_chunk(content="partial")
+    raise HTTPException(status_code=400, detail=detail)
+
+
+async def _served(
+    upstream: AsyncIterator[ModelResponseStream], request_data: dict[str, object] | None = None
+) -> tuple[int, str | None, tuple[str, ...]]:
+    response: Final = await create_response(
+        generator=async_data_generator(
+            response=upstream, user_api_key_dict=_user_auth(), request_data=dict(request_data or {})
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+    assert isinstance(response, StreamingResponse)
+    body: Final = "".join(
+        [part if isinstance(part, str) else bytes(part).decode() async for part in response.body_iterator]
+    )
+    return response.status_code, response.media_type, tuple(frame for frame in body.split("\n\n") if frame)
+
+
+def _error_of(frame: str) -> dict[str, object]:
+    return json.loads(frame.removeprefix("data: "))["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "detail,expected_message,expected_fields",
+    [
+        pytest.param(
+            {"error": _BLOCK_MESSAGE, "guardrail": "block-keeper-word"},
+            _BLOCK_MESSAGE,
+            {"error": _BLOCK_MESSAGE, "guardrail": "block-keeper-word"},
+            id="json_detail",
+        ),
+        pytest.param(
+            {"error": _BLOCK_MESSAGE, "matched_span": _UNSERIALIZABLE_SPAN},
+            _BLOCK_MESSAGE,
+            {"error": _BLOCK_MESSAGE, "matched_span": str(_UNSERIALIZABLE_SPAN)},
+            id="non_json_detail",
+        ),
+        pytest.param(
+            {"matched_span": _UNSERIALIZABLE_SPAN},
+            json.dumps({"matched_span": str(_UNSERIALIZABLE_SPAN)}),
+            {"matched_span": str(_UNSERIALIZABLE_SPAN)},
+            id="non_json_detail_without_message",
+        ),
+    ],
+)
+async def test_guardrail_block_after_the_first_chunk_ends_the_stream_with_an_error_event(
+    detail: dict[str, object], expected_message: str, expected_fields: dict[str, str]
+) -> None:
+    status_code, _, frames = await _served(_blocked_after(1, detail))
+
+    assert status_code == 200
+    assert len(frames) == 3
+    assert json.loads(frames[0].removeprefix("data: "))["choices"][0]["delta"]["content"] == "partial"
+    assert _error_of(frames[1]) == {
+        "message": expected_message,
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "400",
+        "provider_specific_fields": expected_fields,
+    }
+    assert frames[2] == "data: [DONE]"
+
+
+@pytest.mark.asyncio
+async def test_guardrail_block_mid_stream_on_a_gemini_stream_sends_no_openai_error_event() -> None:
+    response: Final = await create_response(
+        generator=async_data_generator(
+            response=_blocked_after(1, {"error": _BLOCK_MESSAGE}),
+            user_api_key_dict=_user_auth(),
+            request_data={"_litellm_skip_openai_stream_done": True},
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+    assert isinstance(response, StreamingResponse)
+    parts: Final = aiter(response.body_iterator)
+    first: Final = await anext(parts)
+
+    with pytest.raises(HTTPException):
+        await anext(parts)
+    assert '"error"' not in (first if isinstance(first, str) else bytes(first).decode())
+
+
+async def _upstream_fails_after(chunks: int) -> AsyncIterator[ModelResponseStream]:
+    for _ in range(chunks):
+        yield _simple_chunk(content="partial")
+    raise RuntimeError("upstream reset")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data,closing_frames",
+    [
+        pytest.param({}, ("data: [DONE]",), id="openai_stream"),
+        pytest.param({"_litellm_skip_openai_stream_done": True}, (), id="gemini_stream"),
+    ],
+)
+async def test_upstream_failure_mid_stream_ends_with_an_error_event(
+    request_data: dict[str, object], closing_frames: tuple[str, ...]
+) -> None:
+    status_code, _, frames = await _served(_upstream_fails_after(1), request_data)
+
+    assert status_code == 200
+    assert _error_of(frames[1])["message"] == "upstream reset"
+    assert frames[2:] == closing_frames
+
+
+class _ReplacesClientErrors(CustomLogger):
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException:
+        return HTTPException(status_code=403, detail="Request blocked by policy")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream,original_message,expected_status",
+    [
+        pytest.param(
+            lambda: _blocked_after(0, {"error": _BLOCK_MESSAGE}), _BLOCK_MESSAGE, 403, id="block_before_the_first_chunk"
+        ),
+        pytest.param(lambda: _blocked_after(1, {"error": _BLOCK_MESSAGE}), _BLOCK_MESSAGE, 200, id="block_mid_stream"),
+        pytest.param(lambda: _upstream_fails_after(1), "upstream reset", 200, id="failure_mid_stream"),
+    ],
+)
+async def test_stream_error_sends_the_failure_hook_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    upstream: Callable[[], AsyncIterator[ModelResponseStream]],
+    original_message: str,
+    expected_status: int,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+
+    status_code, _, frames = await _served(upstream())
+
+    assert status_code == expected_status
+    assert original_message not in "".join(frames)
+    assert _error_of(frames[-2]) == {
+        "message": "Request blocked by policy",
+        "type": "permission_error",
+        "param": None,
+        "code": "403",
+    }
+    assert frames[-1] == "data: [DONE]"
+
+
+@pytest.mark.asyncio
+async def test_failure_before_the_first_chunk_answers_the_failure_hook_replacement_as_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+
+    response: Final = await create_response(
+        generator=async_data_generator(
+            response=_upstream_fails_after(0), user_api_key_dict=_user_auth(), request_data={}
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 403
+    assert json.loads(bytes(response.body))["error"]["message"] == "Request blocked by policy"
+    assert b"upstream reset" not in bytes(response.body)
+
+
+@pytest.mark.asyncio
+async def test_failure_before_the_first_chunk_on_a_bare_stream_still_ends_with_the_replacement_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+
+    frames: Final = tuple(
+        [
+            frame
+            async for frame in async_data_generator(
+                response=_upstream_fails_after(0), user_api_key_dict=_user_auth(), request_data={}
+            )
+        ]
+    )
+
+    assert _error_of(frames[0].strip())["message"] == "Request blocked by policy"
+    assert frames[1:] == ("data: [DONE]\n\n",)
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_failure_sends_the_failure_hook_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+    response: Final = ResponsesAPIResponse(id="resp_visible", created_at=1, model="gpt-6-astra", output=[])
+
+    async def upstream() -> AsyncIterator[BaseModel]:
+        yield ResponseCreatedEvent.model_validate({"type": "response.created", "sequence_number": 0, "response": response})
+        raise HTTPException(status_code=400, detail={"error": _BLOCK_MESSAGE})
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+    failure: Final = ResponseFailedEvent.model_validate_json(
+        next(line.removeprefix("data: ") for line in frames[-2].splitlines() if line.startswith("data: "))
+    )
+
+    assert _BLOCK_MESSAGE not in "".join(frames)
+    assert failure.response.error is not None
+    assert failure.response.error["code"] == "permission_error"
+    assert "Request blocked by policy" in failure.response.error["message"]
+    assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "detail,expected_fields",
+    [
+        pytest.param({"error": _BLOCK_MESSAGE}, {"error": _BLOCK_MESSAGE}, id="json_detail"),
+        pytest.param(
+            {"error": _BLOCK_MESSAGE, "matched_span": _UNSERIALIZABLE_SPAN},
+            {"error": _BLOCK_MESSAGE, "matched_span": str(_UNSERIALIZABLE_SPAN)},
+            id="non_json_detail",
+        ),
+    ],
+)
+async def test_guardrail_block_before_the_first_chunk_keeps_its_http_status(
+    detail: dict[str, object], expected_fields: dict[str, str]
+) -> None:
+    status_code, media_type, frames = await _served(_blocked_after(0, detail))
+
+    assert (status_code, media_type) == (400, "text/event-stream")
+    assert len(frames) == 2
+    assert _error_of(frames[0]) == {**_BLOCK_ERROR, "provider_specific_fields": expected_fields}
+    assert frames[1] == "data: [DONE]"
+
+
+async def _blocked_after_a_stall() -> AsyncIterator[ModelResponseStream]:
+    await asyncio.sleep(1.5)
+    async for chunk in _blocked_after(0, {"error": _BLOCK_MESSAGE}):
+        yield chunk
+
+
+def test_guardrail_block_after_a_keepalive_ping_ends_the_stream_with_an_error_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 1)
+    loop: Final = AutojumpClockLoop()
+
+    try:
+        status_code, _, frames = loop.run_until_complete(_served(_blocked_after_a_stall()))
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+    assert status_code == 200
+    assert frames[0] == ": ping"
+    assert _error_of(frames[-2]) == _BLOCK_ERROR
+    assert frames[-1] == "data: [DONE]"
+
+class _BlocksKeeperPerChunk(CustomLogger):
+    async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> None:
+        if "keeper" in response:
+            raise HTTPException(status_code=400, detail={"error": _BLOCK_MESSAGE})
+
+
+async def _chunks(*contents: str) -> AsyncIterator[ModelResponseStream]:
+    for content in contents:
+        yield _simple_chunk(content=content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "contents,expected_status,expected_frames",
+    [
+        pytest.param(("the keeper",), 400, 2, id="first_chunk"),
+        pytest.param(("partial", "the keeper"), 200, 3, id="second_chunk"),
+    ],
+)
+async def test_per_chunk_guardrail_block_keeps_early_blocks_on_their_status_and_ends_later_ones_in_band(
+    monkeypatch: pytest.MonkeyPatch, contents: tuple[str, ...], expected_status: int, expected_frames: int
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_BlocksKeeperPerChunk()])
+
+    status_code, media_type, frames = await _served(_chunks(*contents))
+
+    assert (status_code, media_type) == (expected_status, "text/event-stream")
+    assert len(frames) == expected_frames
+    assert _error_of(frames[-2]) == _BLOCK_ERROR
+    assert frames[-1] == "data: [DONE]"
+
+
 _UPSTREAM_BODY: Final = {
     "code": "cyber_policy",
     "message": "Upstream rejected request: flagged for possible cybersecurity risk",
@@ -920,6 +1257,9 @@ _UPSTREAM_BODY: Final = {
             ),
             "cyber_policy", id="upstream_body_code_and_message",
         ),
+        pytest.param(
+            "upstream_failure", RuntimeError("Upstream rejected request"), "server_error", id="builtin_exception"
+        ),
         *(
             pytest.param(
                 "upstream_failure", HTTPException(status_code=status, detail="Upstream rejected request"),
@@ -934,7 +1274,7 @@ _UPSTREAM_BODY: Final = {
 )
 async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_terminal(
     terminal: Literal["completed", "serialization_failure", "failure_after_completed", "upstream_failure"],
-    upstream_error: HTTPException | OpenAIAPIError | None,
+    upstream_error: Exception | None,
     expected_code: str | None,
 ) -> None:
     class ToolDelta(BaseModel):
@@ -2068,3 +2408,36 @@ def test_fast_serialize_simple_model_response_stream_keeps_served_service_tier()
 
     assert result is not None
     assert json.loads(result)["service_tier"] == "priority"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_lets_other_tasks_run_during_a_stream_that_never_waits(monkeypatch):
+    """A stream whose chunks are already buffered never suspends on its own, so
+    the generator has to hand the loop back itself once it has held the loop
+    long enough: another task must get to run before the stream is over, and
+    not before the hold budget is used up."""
+    _patch_logging_flags(monkeypatch)
+    order: list[str] = []  # mutable-ok: records the interleaving of the two tasks
+    clock: list[float] = [0.0]  # mutable-ok: fake monotonic clock, advanced 20 ms per chunk
+    monkeypatch.setattr(ps.time, "monotonic", lambda: clock[0])
+
+    async def chunks():
+        for index in range(6):
+            clock[0] += 0.02
+            order.append(f"chunk{index}")
+            yield _simple_chunk(content=str(index))
+
+    async def other_task():
+        order.append("other")
+
+    other = asyncio.ensure_future(other_task())
+    async for _ in async_data_generator(
+        response=chunks(),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4"},
+    ):
+        pass
+    await other
+
+    assert "other" in order[:-1], order
+    assert order.index("other") >= 3, order

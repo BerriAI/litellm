@@ -36,7 +36,7 @@ class EnterpriseCustomGuardrailHelper:
 
         proxy_server_request = data.get("proxy_server_request", {})
 
-        request_tags = StandardLoggingPayloadSetup._get_request_tags(
+        request_tags = StandardLoggingPayloadSetup.get_request_tags(
             litellm_params=data,
             proxy_server_request=proxy_server_request,
         )

@@ -7,11 +7,12 @@ and injection into the system prompt for non-Anthropic models.
 
 import posixpath
 import zipfile
+from collections.abc import Mapping
 from io import BytesIO
 from typing import Any, Final
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_SkillsTable
+from litellm.models.skills import LiteLLM_SkillsTable
 
 
 class SkillPromptInjectionHandler:
@@ -183,7 +184,7 @@ class SkillPromptInjectionHandler:
         data["messages"] = messages
         return data
 
-    def create_execute_code_tool(self, skill_modules: list[str]) -> dict[str, Any]:
+    def create_execute_code_tool(self, skill_modules: list[str]) -> Mapping[str, object]:
         """
         Create the execute_code tool definition.
 
@@ -226,7 +227,7 @@ class SkillPromptInjectionHandler:
             },
         }
 
-    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
+    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> Mapping[str, object]:
         """
         Convert a LiteLLM skill to an OpenAI-style tool.
 
@@ -271,7 +272,7 @@ class SkillPromptInjectionHandler:
 
         return tool
 
-    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
+    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> Mapping[str, object]:
         """
         Convert a LiteLLM skill to an Anthropic-style tool (messages API format).
 
@@ -289,7 +290,7 @@ class SkillPromptInjectionHandler:
         if len(description) > max_desc_length:
             description = description[: max_desc_length - 3] + "..."
 
-        input_schema: dict[str, Any] = {
+        input_schema: dict[str, object] = {
             "type": "object",
             "properties": {},
             "required": [],

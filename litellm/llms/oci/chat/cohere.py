@@ -15,8 +15,8 @@ import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.llms.oci.chat.generic import (
-    _normalize_oci_finish_reason,
-    _synthesize_oci_tool_call_id,
+    normalize_oci_finish_reason,
+    synthesize_oci_tool_call_id,
 )
 from litellm.llms.oci.common_utils import (
     OCI_JSON_TO_PYTHON_TYPES,
@@ -76,10 +76,12 @@ def _content_text(content: str | Iterable[Mapping[str, object]] | None) -> str:
     return str(content)
 
 
-def _extract_text_content(content: str | Iterable[Mapping[str, object]] | None) -> str:
+def extract_text_content(content: str | Iterable[Mapping[str, object]] | None) -> str:
     """Return the plain-text representation of a message content value."""
     return _content_text(content)
 
+
+_extract_text_content = extract_text_content
 
 _TOOL_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -138,7 +140,7 @@ def adapt_messages_to_cohere_standard(
     chat_history: Final[list[CohereMessage]] = []
     for msg in history_source:
         role = msg.get("role")
-        content = _extract_text_content(msg.get("content"))
+        content = extract_text_content(msg.get("content"))
 
         tool_calls = (
             [_to_cohere_tool_call(tool_call) for tool_call in msg["tool_calls"]]
@@ -235,13 +237,13 @@ def handle_cohere_response(
     model_response.created = int(datetime.datetime.now().timestamp())
 
     response_text: Final = cohere_response.chatResponse.text
-    finish_reason: Final = _normalize_oci_finish_reason(cohere_response.chatResponse.finishReason)
+    finish_reason: Final = normalize_oci_finish_reason(cohere_response.chatResponse.finishReason)
 
     tool_calls: list[dict[str, object]] | None = None
     if cohere_response.chatResponse.toolCalls:
         tool_calls = [
             {
-                "id": _synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
+                "id": synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
                 "type": "function",
                 "function": {
                     "name": tc.name,
@@ -323,7 +325,7 @@ def handle_cohere_stream_chunk(
                 # deterministically from the call's content/position. A random
                 # uuid4 per chunk would cause downstream stream-mergers to
                 # treat each chunk as a distinct tool call.
-                "id": _synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
+                "id": synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
                 "type": "function",
                 "function": {
                     "name": tc.name,
@@ -333,7 +335,7 @@ def handle_cohere_stream_chunk(
             for i, tc in enumerate(cohere_tool_calls)
         ]
 
-    finish_reason: Final = _normalize_oci_finish_reason(typed_chunk.finishReason)
+    finish_reason: Final = normalize_oci_finish_reason(typed_chunk.finishReason)
 
     return ModelResponseStream(
         choices=[

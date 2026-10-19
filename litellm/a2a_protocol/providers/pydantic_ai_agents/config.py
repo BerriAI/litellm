@@ -2,8 +2,7 @@
 Pydantic AI provider configuration.
 """
 
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncIterator, Mapping
 
 from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
 from litellm.a2a_protocol.providers.pydantic_ai_agents.handler import PydanticAIHandler
@@ -20,9 +19,12 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
     async def handle_non_streaming(
         self,
         request_id: str,
-        params: dict[str, Any],
+        params: dict[str, object],
         api_base: str | None = None,
-        **kwargs: Any,
+        *,
+        timeout: float = 60.0,
+        agent_extra_headers: Mapping[str, str] | None = None,
+        **kwargs: object,
     ) -> dict[str, object]:
         """Handle non-streaming request to Pydantic AI agent."""
         if api_base is None:
@@ -31,14 +33,14 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
             request_id=request_id,
             params=params,
             api_base=api_base,
-            timeout=kwargs.get("timeout", 60.0),
-            agent_extra_headers=kwargs.get("agent_extra_headers"),
+            timeout=timeout,
+            agent_extra_headers=agent_extra_headers,
         )
 
     async def handle_streaming(
         self,
         request_id: str,
-        params: dict[str, Any],
+        params: dict[str, object],
         api_base: str | None = None,
         **kwargs,
     ) -> AsyncIterator[dict[str, object]]:

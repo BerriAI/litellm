@@ -61,6 +61,33 @@ def test_edit_does_not_exempt_another_classifier_allowance() -> None:
     assert next(slot for slot in result.allowances if slot.key == "llm_v2").remaining == 0
 
 
+@pytest.mark.parametrize("classifier", ("heuristic_first", "hybrid"))
+@pytest.mark.parametrize(
+    ("other_classifier", "expected_label"),
+    (("heuristic_v2", "Heuristic v2"), ("llm", "Custom tiers or classifier instructions")),
+)
+def test_v2_chain_checks_both_allowances_and_keeps_both_owned_slots(
+    classifier: str, other_classifier: str, expected_label: str
+) -> None:
+    prompt: Final = {"classification_prompt": "Grade by difficulty"}
+    candidate: Final = deployment("chain", classifier, config={"local_heuristic": "heuristic_v2", **prompt})
+    blocked: Final = auto_router_availability(
+        others=(deployment("other", other_classifier, config=prompt),),
+        existing=None,
+        candidate=candidate,
+        baselines={},
+        limit=1,
+    )
+    assert blocked.error is not None and expected_label in blocked.error
+    edited: Final = auto_router_availability(
+        others=(), existing=candidate, candidate=candidate, baselines={}, limit=1
+    )
+    assert edited.error is None
+    assert tuple(slot.key for slot in edited.allowances if slot.used_by_this_router) == (
+        "heuristic_v2", "tier_or_classifier_prompt"
+    )
+
+
 def test_model_selection_does_not_claim_occupied_scoring_allowance() -> None:
     original: Final = deployment("legacy", "heuristic")
     changed: Final = deployment("other", "heuristic", tuned=True)

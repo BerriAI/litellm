@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 
 from litellm.llms.dashscope.common_utils import DashScopeError
@@ -347,3 +348,89 @@ class TestProviderConfigManagerDispatch:
             present_version_params=[],
         )
         assert isinstance(cfg, DashScopeRerankConfig)
+
+
+def _transform(payload: object, status_code: int = 200) -> RerankResponse:
+    return DashScopeRerankConfig().transform_rerank_response(
+        model="qwen3-rerank",
+        raw_response=httpx.Response(status_code, json=payload),
+        model_response=RerankResponse(),
+        logging_obj=MagicMock(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected_total_tokens"),
+    [
+        ({"total_tokens": 79}, 79),
+        ({}, None),
+        (None, None),
+    ],
+)
+def test_transform_rerank_response_reads_total_tokens_from_usage(usage: object, expected_total_tokens: int | None):
+    response = _transform({"id": "rerank-1", "results": [{"index": 0, "relevance_score": 0.5}], "usage": usage})
+
+    assert response.meta == {
+        "billed_units": {"total_tokens": expected_total_tokens},
+        "tokens": {"input_tokens": expected_total_tokens},
+    }
+
+
+def test_transform_rerank_response_keeps_provider_id_and_drops_unknown_result_fields():
+    response = _transform(
+        {
+            "id": "rerank-1",
+            "results": [{"index": 2, "relevance_score": 0.25, "document": {"text": "doc", "extra": 1}, "extra": 2}],
+        }
+    )
+
+    assert response.id == "rerank-1"
+    assert response.results == [{"index": 2, "relevance_score": 0.25, "document": {"text": "doc"}}]
+
+
+def test_transform_rerank_response_empty_results_list_yields_no_results():
+    assert _transform({"id": "rerank-1", "results": []}).results == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["not", "an", "object"],
+        {"results": 7},
+        {"results": ["not an object"]},
+        {"results": [{"index": 0, "relevance_score": 0.5}], "usage": "seventy nine"},
+        {"results": [{"index": 0, "relevance_score": 0.5}], "usage": {"total_tokens": 1.5}},
+        {"results": [{"index": 0, "relevance_score": 0.5}], "id": 7},
+    ],
+)
+def test_transform_rerank_response_rejects_malformed_payloads(payload: object):
+    with pytest.raises(ValidationError):
+        _transform(payload)
+
+
+def test_transform_rerank_response_result_without_index_raises_key_error():
+    with pytest.raises(KeyError, match="index"):
+        _transform({"results": [{"relevance_score": 0.5}]})
+
+
+def test_transform_rerank_response_error_envelope_raises_with_the_provider_status_and_message():
+    with pytest.raises(DashScopeError) as exc_info:
+        _transform({"code": "Throttling", "message": "slow down"}, status_code=429)
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.message == "slow down"
+
+
+def test_transform_rerank_response_without_results_raises_dashscope_error_naming_the_body():
+    with pytest.raises(DashScopeError) as exc_info:
+        _transform({"id": "rerank-1"}, status_code=502)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.message == "No results in DashScope rerank response: {'id': 'rerank-1'}"
+
+
+def test_transform_rerank_response_shape_errors_do_not_echo_the_payload():
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"results": [["leaked document text"]]})
+
+    assert "leaked document text" not in str(exc_info.value)
