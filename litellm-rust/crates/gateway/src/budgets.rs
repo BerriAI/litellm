@@ -17,22 +17,18 @@ use std::{
 
 use futures_util::future::BoxFuture;
 use litellm_config::Config;
-use litellm_db::{EndUser, PgPool};
+use litellm_db::PgPool;
 use litellm_gateway_hooks::{
     Facts, Hook, Prices, Record, Refusal, RequestEdit, RequestFacts, Settle, Targets, Usage,
 };
 use redis::aio::ConnectionManager;
 
-use crate::coordination::Coordination;
+use crate::{coordination::Coordination, end_users::EndUsers};
 
 /// The output tokens the proxy assumes when neither the request nor the model caps them.
 const DEFAULT_OUTPUT_TOKENS: u64 = 16_384;
 /// The proxy's slack when a reservation exactly meets a budget.
 const EPSILON: f64 = 1e-12;
-/// How long an end user's budget is reused before it is read again.
-const END_USER_TTL: Duration = Duration::from_secs(60);
-/// End users held in memory; the cache starts over past this.
-const MAX_END_USERS: usize = 10_000;
 const FAIL_CLOSED_READ: &str = "{'error': 'Budget enforcement unavailable: current spend could not be verified against Redis or the database, and fail_closed_budget_enforcement is enabled, so the request was rejected to avoid exceeding the configured budget. Retry shortly.'}";
 
 /// Seeds or raises each counter to its floor, runs the budget checks in the order given and
@@ -600,45 +596,6 @@ async fn admit_redis(
     }
 }
 
-/// An end user and the default budget it was read with.
-type EndUserKey = (String, Option<String>);
-
-/// End users' budgets, read from the proxy's database and reused for a minute.
-struct EndUsers {
-    pool: PgPool,
-    cache: Mutex<HashMap<EndUserKey, (EndUser, Instant)>>,
-}
-
-impl EndUsers {
-    async fn get(&self, id: &str, default_budget_id: Option<&str>) -> Option<EndUser> {
-        let key = (id.to_owned(), default_budget_id.map(str::to_owned));
-        let now = Instant::now();
-        if let Some((end_user, read_at)) = self
-            .cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            && now.duration_since(*read_at) < END_USER_TTL
-        {
-            return Some(end_user.clone());
-        }
-        match litellm_db::find_end_user(&self.pool, id, default_budget_id).await {
-            Ok(end_user) => {
-                let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-                if cache.len() >= MAX_END_USERS {
-                    cache.clear();
-                }
-                cache.insert(key, (end_user.clone(), now));
-                Some(end_user)
-            }
-            Err(error) => {
-                tracing::warn!(%error, "reading an end user's budget failed; not checking it");
-                None
-            }
-        }
-    }
-}
-
 /// The `budgets` hook.
 pub struct Budgets {
     settings: BudgetSettings,
@@ -670,10 +627,7 @@ impl Budgets {
                 fail_closed: settings.fail_closed,
             }),
             settings,
-            end_users: database.map(|pool| EndUsers {
-                pool,
-                cache: Mutex::default(),
-            }),
+            end_users: database.map(EndUsers::new),
             groups,
             prices: OnceLock::new(),
         }
@@ -817,7 +771,7 @@ impl Budgets {
                 .as_deref()
                 .or(self.settings.end_user_budget_id.as_deref());
             let end_user = match &self.end_users {
-                Some(end_users) => end_users.get(end_user_id, default_budget_id).await,
+                Some(end_users) => end_users.get(end_user_id, default_budget_id, None).await,
                 None => None,
             }
             .unwrap_or_default();

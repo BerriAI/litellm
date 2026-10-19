@@ -100,6 +100,8 @@ pub struct Refusal {
     pub param: Option<&'static str>,
     pub message: String,
     pub headers: Vec<(HeaderName, HeaderValue)>,
+    /// Send Anthropic's error envelope, with `kind` as its error type, instead of the proxy's.
+    pub anthropic: bool,
 }
 
 impl Refusal {
@@ -114,7 +116,15 @@ impl Refusal {
             param: Some("None"),
             message: message.into(),
             headers: Vec::new(),
+            anthropic: false,
         }
+    }
+
+    /// Sends `{"type": "error", "error": {"type": kind, "message": message}}`, as the proxy's
+    /// `/v1/messages` route does for some errors.
+    pub fn anthropic(mut self) -> Self {
+        self.anthropic = true;
+        self
     }
 
     /// Sends a `null` `param`, as the proxy's budget errors do.
