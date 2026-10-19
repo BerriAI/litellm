@@ -259,6 +259,11 @@ def cost_schema(key: str) -> JsonSchema:
 
 def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
     return {
+        "token_count_tokenizer": {
+            "type": "string",
+            "description": "Tokenizer litellm counts this model's requests with when the provider cannot count them.",
+            "enum": ["kimi_k3"],
+        },
         "litellm_provider": {
             "type": "string",
             "description": "LiteLLM provider slug; one of https://docs.litellm.ai/docs/providers.",
