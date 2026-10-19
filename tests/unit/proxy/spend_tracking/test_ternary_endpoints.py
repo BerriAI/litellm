@@ -276,6 +276,17 @@ async def test_update_validates_the_merged_settings(client: TestClient, store: T
     assert await store.get() == SETTINGS
 
 
+@pytest.mark.asyncio
+async def test_update_validation_errors_never_echo_the_stored_api_key(client: TestClient, store: TernarySettingsStore):
+    await store.save(SETTINGS)
+
+    response = client.put("/ternary/settings", json={"frequency": "interval", "interval_seconds": 0})
+
+    assert response.status_code == 400
+    assert API_KEY[:5] not in response.text
+    assert "interval_seconds must be a positive integer" in response.text
+
+
 def test_update_without_settings_is_not_found(client: TestClient):
     assert client.put("/ternary/settings", json={"connection_id": "conn-456"}).status_code == 404
 
