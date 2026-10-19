@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Literal, Optional
 
+from typing_extensions import ReadOnly, TypedDict, Unpack
+
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import log_guardrail_information
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
@@ -15,6 +17,13 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+    guardrail_name: ReadOnly[str | None]
+    default_on: ReadOnly[bool]
+
+
 class RecoGuardrail(GenericGuardrailAPI):
     """Reco guardrail integration for LiteLLM, built on the Generic Guardrail API wire contract."""
 
@@ -23,7 +32,9 @@ class RecoGuardrail(GenericGuardrailAPI):
         reco_tenant_id: str | None,
         api_base: str | None,
         headers: Mapping[str, str] | None = None,
-        **kwargs,  # noqa: ANN003  # kwargs-ok: forwards guardrail_name/event_hook/default_on to CustomGuardrail, whose types are narrower than LitellmParams' own field types
+        unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_open",
+        fail_on_error: bool = False,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         if not reco_tenant_id:
             raise ValueError("reco_tenant_id is required for the Reco guardrail")
@@ -37,8 +48,8 @@ class RecoGuardrail(GenericGuardrailAPI):
         super().__init__(
             headers=merged_headers,
             api_base=api_base,
-            unreachable_fallback="fail_open",
-            fail_on_error=False,
+            unreachable_fallback=unreachable_fallback,
+            fail_on_error=fail_on_error,
             **kwargs,
         )
 
