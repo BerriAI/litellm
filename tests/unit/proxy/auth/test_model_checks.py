@@ -1292,6 +1292,20 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
         pytest.param(
             "cloudflare/team-*", "cloudflare/@cf/*/*", None, set(), id="alias-with-fewer-wildcards-than-its-deployment"
         ),
+        pytest.param("partial-route-v/*/*", "cloudflare/@cf/*/*", None, _ROUTE_CF_IDS, id="multi-wildcard-alias"),
+        pytest.param(
+            "partial-route-v/*-*", "cloudflare/@cf/*/*", None, set(), id="multi-wildcard-alias-routing-splits-elsewhere"
+        ),
+        pytest.param(
+            "partial-route-team/*", "openai/gpt-partial-route-9*", None, set(), id="alias-over-mid-word-deployment"
+        ),
+        pytest.param(
+            "team/gpt-partial-route-9*",
+            "openai/gpt-partial-route-9*",
+            None,
+            {f"openai/{_ROUTE_OPENAI_ID}"},
+            id="alias-repeating-the-deployment-partial-word",
+        ),
         pytest.param(
             "cloudflare/*", "cloudflare/*", "cloudflare/@cf/*", _ROUTE_CF_IDS, id="key-filter-over-provider-wildcard"
         ),
@@ -1377,7 +1391,7 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
         model_info_names: Final = [
             str(row["model_name"])
             for row in expand_wildcard_deployments_for_model_info(
-                [dict(deployment) for deployment in router.get_model_list() or []]
+                [dict(deployment) for deployment in router.get_model_list() or []], router
             )
             if row["model_name"] != model_name
         ]
@@ -1396,6 +1410,47 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
     assert listed_v1_models == sorted(reachable)
     if key_model is None:
         assert listed_model_info_names == sorted(reachable)
+
+
+def test_catch_all_lists_no_id_a_more_specific_sibling_wildcard_routes_elsewhere() -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    unshadowed_id: Final = "cloudflare/@cf/unshadowed-route-org/model-d"
+    router: Final = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "cloudflare/@cf/*"}},
+            {"model_name": "partial-route-org/*", "litellm_params": {"model": "openai/*"}},
+        ]
+    )
+
+    def routed_models(listed: list[str]) -> dict[str, object]:
+        return {
+            listed_id: router.wildcard_route_deployments(listed_id, None)[0]["litellm_params"]["model"]
+            for listed_id in listed
+            if "route-org/model-" in listed_id
+        }
+
+    with _registered_chat_models(
+        {_ROUTE_CF_ID: "cloudflare", _ROUTE_CF_SUFFIXED_ID: "cloudflare", unshadowed_id: "cloudflare"}
+    ):
+        v1_models: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=["*", "partial-route-org/*"],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        model_info_names: Final = [
+            str(row["model_name"])
+            for row in expand_wildcard_deployments_for_model_info(
+                [dict(deployment) for deployment in router.get_model_list() or []], router
+            )
+        ]
+
+    assert routed_models(v1_models) == {"unshadowed-route-org/model-d": unshadowed_id}
+    assert routed_models(model_info_names) == {"unshadowed-route-org/model-d": unshadowed_id}
 
 
 def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(monkeypatch: pytest.MonkeyPatch) -> None:
