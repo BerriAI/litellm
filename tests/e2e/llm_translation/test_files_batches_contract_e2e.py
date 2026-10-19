@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from e2e_http import NoBody, Success, UnknownApiError, assert_client_error
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from proxy_client import ProxyClient
 from pydantic import BaseModel
@@ -28,6 +29,13 @@ class BatchObject(BaseModel):
 
 class TestFilesBatchesContract:
     @pytest.mark.covers("llm.files.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.FILES,
+            mode=Mode.BATCH,
+        )
+    )
     def test_upload_without_purpose_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         result = proxy.transport.upload(
@@ -47,6 +55,13 @@ class TestFilesBatchesContract:
                 pytest.fail(f"upload without purpose expected 4xx, got {other!r}")
 
     @pytest.mark.covers("llm.batches.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            mode=Mode.BATCH,
+        )
+    )
     def test_create_batch_missing_input_file_id_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -59,6 +74,14 @@ class TestFilesBatchesContract:
         assert_client_error(result, "batch missing input_file_id")
 
     @pytest.mark.covers("llm.batches.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(Provider.OPENAI,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_retrieve_invalid_batch_id_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         result = proxy.transport.get(

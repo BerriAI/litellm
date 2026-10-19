@@ -10,11 +10,11 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypeAlias
+from collections.abc import AsyncIterable, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 from fastapi import Request, Response
-from fastapi.responses import StreamingResponse
+from starlette.types import Message
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -74,6 +74,30 @@ class _StreamEventParser:
     parse: Callable[[str], _StreamEvent] = staticmethod(json.loads)
 
 
+@runtime_checkable
+class _StreamsBody(Protocol):
+    @property
+    def body_iterator(self) -> AsyncIterable[str | bytes | memoryview]: ...
+
+
+def _sse_frame_data(frame: str) -> str | None:
+    return next((line[6:].strip() for line in frame.splitlines() if line.startswith("data: ")), None)
+
+
+async def _never_receive() -> Message:
+    await asyncio.Event().wait()
+    raise AssertionError("unreachable")
+
+
+def detach_request_from_client(request: Request) -> Request:
+    """Same scope (headers, parsed body, auth) but a receive() that never yields http.disconnect.
+
+    The polling client closes its connection right after getting the polling id, so the
+    upstream call must not be cancelled by the client-disconnect guards.
+    """
+    return Request(request.scope, _never_receive)
+
+
 async def background_streaming_task(
     polling_id: str,
     data: dict[str, object],
@@ -122,8 +146,8 @@ async def background_streaming_task(
         # Make streaming request.
         # Pre-call checks (rate limits, guardrails, budget) were already run
         # before polling ID creation, so skip them here to avoid double-counting.
-        response: Final[StreamingResponse] = await processor.base_process_llm_request(
-            request=request,
+        response: Final = await processor.base_process_llm_request(
+            request=detach_request_from_client(request),
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
             route_type="aresponses",
@@ -197,20 +221,19 @@ async def background_streaming_task(
                 last_update_time = current_time
 
         # Handle StreamingResponse
-        if not hasattr(response, "body_iterator"):
+        if not isinstance(response, _StreamsBody):
             verbose_proxy_logger.warning(
                 "background_streaming_task: response for %s has no body_iterator; this may indicate a misconfiguration or provider error",
                 polling_id,
             )
 
-        if hasattr(response, "body_iterator"):
+        if isinstance(response, _StreamsBody):
             async for chunk in response.body_iterator:
                 # Parse chunk
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
 
-                if isinstance(chunk, str) and chunk.startswith("data: "):
-                    chunk_data = chunk[6:].strip()
+                if isinstance(chunk, str) and (chunk_data := _sse_frame_data(chunk)) is not None:
                     if chunk_data == "[DONE]":
                         break
 

@@ -168,3 +168,41 @@ describe("tierParamsByRowId", () => {
     expect(tierParamsByRowId(undefined, rows)).toBeUndefined();
   });
 });
+
+describe("the opt-in non-reasoning tier", () => {
+  const withTierZero = { SIMPLE: ["a"], MEDIUM: ["b"], COMPLEX: ["c"], REASONING: ["d"], NON_REASONING: ["cheap"] };
+
+  it("renders no fifth row while the toggle is off", () => {
+    // The regression for every existing router: the tier exists in the type, and the form must
+    // still show the four rows it always showed.
+    expect(activeTierRows({ tiers: withTierZero }).map((row) => row.id)).toEqual([
+      "SIMPLE",
+      "MEDIUM",
+      "COMPLEX",
+      "REASONING",
+    ]);
+  });
+
+  it("renders it first, as tier 0, when enabled", () => {
+    const rows = activeTierRows({ tiers: withTierZero, enable_non_reasoning_tier: true });
+    expect(rows.map((row) => row.id)).toEqual(["NON_REASONING", "SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
+    expect(rows[0].models).toEqual(["cheap"]);
+  });
+
+  it("renders an enabled tier with no models as an empty row rather than crashing", () => {
+    const emptyTierZeroRow: ActiveTierRow = {
+      id: "NON_REASONING",
+      name: "NON_REASONING",
+      definition: "",
+      models: [],
+      params: {},
+    };
+    const rows = activeTierRows({ tiers, enable_non_reasoning_tier: true });
+    expect(rows[0]).toEqual(emptyTierZeroRow);
+  });
+
+  it("counts as a built-in name either way, so a custom set cannot claim the name", () => {
+    expect(isBuiltInTierName("NON_REASONING")).toBe(true);
+    expect(isBuiltInTierName("non_reasoning")).toBe(true);
+  });
+});

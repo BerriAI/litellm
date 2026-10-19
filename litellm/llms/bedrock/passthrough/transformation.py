@@ -1,21 +1,351 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from functools import partial
+from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 import httpx
 from httpx import Response
+from pydantic import TypeAdapter
 
+from litellm._logging import verbose_logger
+from litellm.constants import AWS_ERROR_TYPE_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
+from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_object
+from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
+from litellm.types.utils import ModelResponseStream
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, BedrockEventStreamDecoderBase, BedrockModelInfo
+from ..request_metadata import (
+    BEDROCK_REQUEST_METADATA_HEADER,
+    BedrockRequestMetadataViolation,
+    bedrock_request_metadata_headers,
+    bedrock_request_metadata_is_owned,
+    bedrock_request_metadata_violation,
+    caller_request_metadata_violations_are_dropped,
+    merge_bedrock_invoke_headers,
+    resolve_bedrock_request_metadata,
+)
 
 if TYPE_CHECKING:
+    from botocore.eventstream import EventStreamMessage
     from httpx import URL
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
     from litellm.types.utils import CostResponseTypes
+
+
+BEDROCK_STREAMING_ACTIONS: Final = frozenset({"invoke-with-response-stream", "converse-stream"})
+_BEDROCK_CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
+_BEDROCK_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stream"})
+
+
+def _bedrock_endpoint_action(endpoint: str) -> str:
+    return endpoint.partition("?")[0].rstrip("/").rsplit("/", 1)[-1]
+
+
+def is_bedrock_streaming_endpoint(endpoint: str) -> bool:
+    return _bedrock_endpoint_action(endpoint) in BEDROCK_STREAMING_ACTIONS
+
+
+def _caller_request_metadata_violation(
+    action: str, body: Mapping[str, object]
+) -> BedrockRequestMetadataViolation | None:
+    if action in _BEDROCK_INVOKE_ACTIONS and "requestMetadata" in body and body["requestMetadata"] is None:
+        return BedrockRequestMetadataViolation("type", "requestMetadata must be a dictionary")
+    return bedrock_request_metadata_violation(body.get("requestMetadata"))
+
+
+def _aws_error_type(action: str, violation: BedrockRequestMetadataViolation) -> str:
+    if action in _BEDROCK_CONVERSE_ACTIONS and violation.kind == "type":
+        return "SerializationException"
+    return "ValidationException"
+
+
+def _caller_request_metadata(action: str, body: Mapping[str, object], litellm_params: Mapping[str, object]) -> object:
+    violation: Final = (
+        None
+        if caller_request_metadata_violations_are_dropped(litellm_params.get("drop_params") is True)
+        else _caller_request_metadata_violation(action, body)
+    )
+    if violation is not None:
+        raise BedrockError(
+            status_code=400,
+            message=violation.message,
+            headers={AWS_ERROR_TYPE_HEADER: _aws_error_type(action, violation)},
+        )
+    return body.get("requestMetadata")
+
+
+def _with_body_request_metadata(
+    action: str, body: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    resolved: Final = resolve_bedrock_request_metadata(
+        litellm_params, caller_metadata=_caller_request_metadata(action, body, litellm_params)
+    )
+    without_caller: Final = {key: value for key, value in body.items() if key != "requestMetadata"}
+    return without_caller if resolved is None else {**without_caller, "requestMetadata": resolved}
+
+
+def _without_owned_request_metadata_header(headers: Mapping[str, str]) -> Mapping[str, str]:
+    if not bedrock_request_metadata_is_owned():
+        return headers
+    return {name: value for name, value in headers.items() if name.lower() != BEDROCK_REQUEST_METADATA_HEADER.lower()}
+
+
+def _with_request_metadata(
+    action: str | None,
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+) -> tuple[Mapping[str, str], Mapping[str, object]]:
+    if action in _BEDROCK_CONVERSE_ACTIONS:
+        return headers, _with_body_request_metadata(action, body, litellm_params)
+    if action in _BEDROCK_INVOKE_ACTIONS and "requestMetadata" in body:
+        return _without_owned_request_metadata_header(headers), _with_body_request_metadata(
+            action, body, litellm_params
+        )
+    if action in _BEDROCK_INVOKE_ACTIONS:
+        return _with_invoke_request_metadata(headers, body, litellm_params)
+    return headers, body
+
+
+def _with_invoke_request_metadata(
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+) -> tuple[Mapping[str, str], Mapping[str, object]]:
+    owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+    return merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names), body
+
+
+def _is_cache_point(entry: object) -> bool:
+    fields: Final = as_json_object(entry)
+    return fields is not None and "cachePoint" in fields
+
+
+def _tool_result_part(item: object) -> str | None:
+    fields: Final = as_json_object(item)
+    if fields is None:
+        return None
+    text: Final = fields.get("text")
+    if isinstance(text, str):
+        return text
+    return json.dumps(fields["json"]) if "json" in fields else None
+
+
+def _tool_result_text(tool_result: Mapping[str, object]) -> str:
+    parts: Final = as_json_array(tool_result.get("content")) or ()
+    rendered: Final = "\n".join(part for item in parts if (part := _tool_result_part(item)) is not None).strip()
+    return rendered or "<non-text tool result omitted>"
+
+
+def _block_field(block: object, key: str) -> Mapping[str, object] | None:
+    fields: Final = as_json_object(block)
+    return None if fields is None else as_json_object(fields.get(key))
+
+
+def _as_text_block(block: object) -> object:
+    tool_use: Final = _block_field(block, "toolUse")
+    if tool_use is not None:
+        arguments: Final = json.dumps(tool_use.get("input"))
+        return {"text": f"[tool call {tool_use.get('toolUseId')}: {tool_use.get('name')}({arguments})]"}
+    tool_result: Final = _block_field(block, "toolResult")
+    if tool_result is None:
+        return block
+    return {"text": f"[tool result for {tool_result.get('toolUseId')}: {_tool_result_text(tool_result)}]"}
+
+
+def _has_tool_block(content: Sequence[object]) -> bool:
+    return any(
+        _block_field(block, "toolUse") is not None or _block_field(block, "toolResult") is not None for block in content
+    )
+
+
+def _as_text_message(message: object) -> object:
+    fields: Final = as_json_object(message)
+    content: Final = None if fields is None else as_json_array(fields.get("content"))
+    if fields is None or content is None or not _has_tool_block(content):
+        return message
+    return {**fields, "content": [_as_text_block(block) for block in content]}
+
+
+def _converse_body_to_send(body: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    ``body`` without a Converse ``toolConfig`` that holds no tool, with every ``toolUse`` and ``toolResult`` turned into
+    text, since Bedrock rejects tool blocks without a tool. Any other ``body`` comes back as it is.
+    """
+    tool_config: Final = as_json_object(body.get("toolConfig"))
+    tools: Final = None if tool_config is None else as_json_array(tool_config.get("tools"))
+    if tools is None or not all(map(_is_cache_point, tools)):
+        return body
+    messages: Final = as_json_array(body.get("messages"))
+    rest: Final = {key: value for key, value in body.items() if key != "toolConfig"}
+    return rest if messages is None else {**rest, "messages": [_as_text_message(message) for message in messages]}
+
+
+_TEXT_ONLY_DELTA_FIELDS: Final = frozenset({"content", "role"})
+
+
+def _plain_text_delta(chunk: ModelResponseStream) -> str | None:
+    """Return the delta text when the chunk carries nothing else that stream_chunk_builder reads."""
+    if chunk.get("usage") is not None or chunk.provider_specific_fields or len(chunk.choices) != 1:
+        return None
+    choice: Final = chunk.choices[0]
+    if choice.finish_reason or choice.logprobs is not None:
+        return None
+    delta_fields: Final[Mapping[str, object]] = MappingProxyType(choice.delta.model_dump())
+    populated: Final = frozenset(key for key, value in delta_fields.items() if value is not None)
+    if not populated <= _TEXT_ONLY_DELTA_FIELDS:
+        return None
+    content: Final = choice.delta.get("content")
+    return content if isinstance(content, str) else None
+
+
+class _CoalescedChunks:
+    """Retains translated chunks with consecutive text deltas folded into one, so memory tracks the response text,
+    not the event count."""
+
+    def __init__(self) -> None:
+        self._chunks: list[ModelResponseStream] = []  # mutable-ok: instance accumulator for streaming chunks
+        self._open_text_parts: list[str] = []  # mutable-ok: text deltas pending fold into self._chunks[-1]
+
+    def add(self, chunk: ModelResponseStream) -> None:
+        text: Final = _plain_text_delta(chunk)
+        if text is not None and self._open_text_parts:
+            self._open_text_parts.append(text)
+            return
+        self._seal_text_run()
+        self._chunks.append(chunk)
+        if text is not None:
+            self._open_text_parts.append(text)
+
+    def _seal_text_run(self) -> None:
+        if len(self._open_text_parts) > 1:
+            self._chunks[-1].choices[0].delta.content = "".join(self._open_text_parts)
+        self._open_text_parts.clear()
+
+    def chunks(self) -> Sequence[ModelResponseStream]:
+        self._seal_text_run()
+        return self._chunks
+
+
+def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelResponseStream | None:
+    from litellm.litellm_core_utils.streaming_handler import (
+        convert_generic_chunk_to_model_response_stream,
+        generic_chunk_has_all_required_fields,
+    )
+    from litellm.types.utils import GenericStreamingChunk
+
+    translated_chunk: Final = decoder.chunk_parser(chunk_data=json.loads(message))
+    if isinstance(translated_chunk, ModelResponseStream):
+        return translated_chunk
+    if generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
+        return convert_generic_chunk_to_model_response_stream(cast(GenericStreamingChunk, translated_chunk))
+    return None
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_JSON_OBJECTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _leaf_texts(block: Mapping[str, object]) -> Iterator[str]:
+    """The prompt text a content block carries itself: its text or JSON, or a tool call's input."""
+    text: Final = block.get("text")
+    if isinstance(text, str):
+        yield text
+    if "json" in block:
+        yield json.dumps(block["json"], default=str)
+    if "toolUse" in block:
+        yield json.dumps(_JSON_OBJECT.validate_python(block["toolUse"]).get("input"), default=str)
+
+
+def _block_texts(block: Mapping[str, object]) -> Iterator[str]:
+    """The prompt text a request content block carries, including the blocks of a tool result's content, which
+    Bedrock does not nest further."""
+    yield from _leaf_texts(block)
+    if "toolResult" not in block:
+        return
+    tool_result: Final = _JSON_OBJECT.validate_python(block["toolResult"])
+    yield from chain.from_iterable(map(_leaf_texts, _JSON_OBJECTS.validate_python(tool_result.get("content", ()))))
+
+
+def _content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    return "\n".join(chain.from_iterable(map(_block_texts, _JSON_OBJECTS.validate_python(content))))
+
+
+def _chat_message(turn: Mapping[str, object]) -> ChatCompletionUserMessage:
+    return ChatCompletionUserMessage(role="user", content=_content_text(turn.get("content", "")))
+
+
+def _count_prompt_tokens(model: str, request_body: object) -> int:
+    """Estimate a Bedrock request's prompt tokens from its system prompt and turns, the way a chat completions
+    stream that ended before the provider reported usage is estimated."""
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    body: Final = _JSON_OBJECT.validate_python(request_body)
+    if "messages" not in body:
+        return 0
+    system: Final = body.get("system")
+    messages: Final = (
+        *((ChatCompletionSystemMessage(role="system", content=_content_text(system)),) if system else ()),
+        *map(_chat_message, _JSON_OBJECTS.validate_python(body["messages"])),
+    )
+    return token_counter(model=model, messages=messages)
+
+
+def _build_logged_response(
+    chunks: Sequence[ModelResponseStream], litellm_logging_obj: "LiteLLMLoggingObj"
+) -> Optional["CostResponseTypes"]:
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
+
+    if len(chunks) == 0:
+        return None
+    return stream_chunk_builder(
+        chunks=list(chunks),
+        logging_obj=litellm_logging_obj,
+        count_prompt_tokens=partial(
+            _count_prompt_tokens, litellm_logging_obj.model, litellm_logging_obj.model_call_details.get("input")
+        ),
+    )
+
+
+class BedrockEventStreamCollector:
+    """Decodes and translates Bedrock event-stream frames as they are relayed instead of buffering the stream."""
+
+    def __init__(
+        self,
+        parse_event: Callable[["EventStreamMessage"], str | None],
+        decoder: Optional["AWSEventStreamDecoder"],
+    ) -> None:
+        from botocore.eventstream import EventStreamBuffer
+
+        self._parse_event = parse_event
+        self._decoder = decoder
+        self._event_stream_buffer: Final[EventStreamBuffer] = EventStreamBuffer()
+        self._chunks: Final = _CoalescedChunks()
+
+    def add(self, chunk: bytes) -> None:
+        if self._decoder is None:
+            return
+        self._event_stream_buffer.add_data(chunk)
+        for event in self._event_stream_buffer:
+            self._add_event(self._decoder, event)
+
+    def _add_event(self, decoder: "AWSEventStreamDecoder", event: "EventStreamMessage") -> None:
+        message: Final = self._parse_event(event)
+        translated: Final = _translate_message(decoder, message) if message is not None else None
+        if translated is not None:
+            self._chunks.add(translated)
+
+    def build_logged_response(self, litellm_logging_obj: "LiteLLMLoggingObj") -> Optional["CostResponseTypes"]:
+        return _build_logged_response(self._chunks.chunks(), litellm_logging_obj)
 
 
 class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig):
@@ -108,18 +438,26 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
 
     def sign_request(
         self,
-        headers: dict,
-        litellm_params: dict,
-        request_data: dict | None,
+        headers: dict[str, str],
+        litellm_params: dict[str, object],
+        request_data: dict[str, object] | None,
         api_base: str,
         model: str | None = None,
     ) -> tuple[dict, bytes | None]:
+        action: Final = _bedrock_endpoint_action(api_base)
+        body: Final[Mapping[str, object]] = request_data or {}
         optional_params: Final = litellm_params.copy()
+        signed_headers, signed_body = _with_request_metadata(
+            action=action if bedrock_request_metadata_is_owned() else None,
+            headers=headers,
+            body=_converse_body_to_send(body) if action in _BEDROCK_CONVERSE_ACTIONS else body,
+            litellm_params=litellm_params,
+        )
         return self._sign_request(
             service_name="bedrock",
-            headers=headers,
+            headers=dict(signed_headers),
             optional_params=optional_params,
-            request_data=request_data or {},
+            request_data=dict(signed_body),
             api_base=api_base,
             model=model,
             api_key=self.get_bedrock_bearer_token(optional_params),
@@ -168,87 +506,32 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
 
         return litellm_model_response
 
-    def _convert_raw_bytes_to_str_lines(self, raw_bytes: list[bytes]) -> list[str]:
-        from botocore.eventstream import EventStreamBuffer
-
-        all_chunks: Final = []
-        event_stream_buffer: Final = EventStreamBuffer()
-        for chunk in raw_bytes:
-            event_stream_buffer.add_data(chunk)
-            for event in event_stream_buffer:
-                message = self._parse_message_from_event(event)
-                if message is not None:
-                    all_chunks.append(message)
-
-        return all_chunks
-
-    def handle_logging_collected_chunks(
-        self,
-        all_chunks: list[str],
-        litellm_logging_obj: "LiteLLMLoggingObj",
-        model: str,
-        custom_llm_provider: str,
-        endpoint: str,
-    ) -> Optional["CostResponseTypes"]:
-        """
-        1. Convert all_chunks to a ModelResponseStream
-        2. combine model_response_stream to model_response
-        3. Return the model_response
-        """
-
-        from litellm.litellm_core_utils.streaming_handler import (
-            convert_generic_chunk_to_model_response_stream,
-            generic_chunk_has_all_required_fields,
+    def create_stream_collector(
+        self, model: str, custom_llm_provider: str, endpoint: str
+    ) -> PassthroughStreamCollector:
+        return BedrockEventStreamCollector(
+            parse_event=self._parse_message_from_event,
+            decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint),
         )
+
+    def _get_event_stream_decoder(self, model: str, endpoint: str) -> Optional["AWSEventStreamDecoder"]:
         from litellm.llms.bedrock.chat import get_bedrock_event_stream_decoder
         from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
             AmazonInvokeConfig,
         )
-        from litellm.main import stream_chunk_builder
-        from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
-        all_translated_chunks: Final = []
         if "invoke" in endpoint:
             invoke_provider: Final = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
             if invoke_provider is None:
-                raise ValueError(f"Invalid invoke provider: {invoke_provider}, for model: {model}")
-            obj = get_bedrock_event_stream_decoder(
-                invoke_provider=invoke_provider,
-                model=model,
-                sync_stream=True,
-                json_mode=False,
-            )
-        elif "converse" in endpoint:
-            obj = get_bedrock_event_stream_decoder(
-                invoke_provider=None,
-                model=model,
-                sync_stream=True,
-                json_mode=False,
-            )
-        else:
-            return None
-
-        for chunk in all_chunks:
-            message = json.loads(chunk)
-            translated_chunk = obj._chunk_parser(chunk_data=message)
-
-            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(
-                cast(dict, translated_chunk)
-            ):
-                chunk_obj = convert_generic_chunk_to_model_response_stream(
-                    cast(GenericStreamingChunk, translated_chunk)
+                verbose_logger.warning(
+                    "Bedrock passthrough spend tracking skipped: no invoke provider for model %s", model
                 )
-            elif isinstance(translated_chunk, ModelResponseStream):
-                chunk_obj = translated_chunk
-            else:
-                continue
-
-            all_translated_chunks.append(chunk_obj)
-
-        if len(all_translated_chunks) > 0:
-            model_response: Final = stream_chunk_builder(
-                chunks=all_translated_chunks,
-                logging_obj=litellm_logging_obj,
+                return None
+            return get_bedrock_event_stream_decoder(
+                invoke_provider=invoke_provider, model=model, sync_stream=True, json_mode=False
             )
-            return model_response
+        if "converse" in endpoint:
+            return get_bedrock_event_stream_decoder(
+                invoke_provider=None, model=model, sync_stream=True, json_mode=False
+            )
         return None

@@ -7,7 +7,7 @@ duplicated. BaseAgentsAPIConfig stays as pure transform code.
 """
 
 from collections.abc import Coroutine, Mapping
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -38,7 +38,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         extra_body: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
@@ -93,7 +93,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         extra_body: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
@@ -141,7 +141,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         agents_api_config: BaseAgentsAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
@@ -181,7 +181,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         agents_api_config: BaseAgentsAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AgentListResponse:
@@ -216,7 +216,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
@@ -259,7 +259,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AgentCreateResponse:
@@ -295,7 +295,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
@@ -338,7 +338,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AgentDeleteResult:
@@ -374,7 +374,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
@@ -417,7 +417,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AgentVersionsResponse:

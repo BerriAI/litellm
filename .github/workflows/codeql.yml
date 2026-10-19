@@ -1,8 +1,6 @@
 name: "CodeQL"
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   schedule:
@@ -43,14 +41,15 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@ebcb5b36ded6beda4ceefea6a8bc4cc885255bb3 # v3.34.1
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           config-file: ./.github/codeql/codeql-config.yml
+          queries: ${{ github.event_name == 'pull_request' && '+security-extended' || '' }}
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@ebcb5b36ded6beda4ceefea6a8bc4cc885255bb3 # v3.34.1
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: "/language:${{ matrix.language }}"
           output: sarif-results
@@ -67,17 +66,23 @@ jobs:
       # further up the stack are modified. The suppression is scoped to this one
       # file/rule pair via SARIF post-filtering so every other callsite of
       # py/weak-sensitive-data-hashing in the repository continues to be analyzed.
-      - name: Filter SARIF (OCI sha256)
+      # The same query fires on the HIBP k-anonymity lookup in
+      # litellm/proxy/auth/password_policy.py, where the password's SHA-1 is only
+      # a lookup key into the haveibeenpwned range API (the protocol mandates
+      # SHA-1) and the digest itself never leaves the proxy beyond its first 5
+      # characters.
+      - name: Filter SARIF (OCI sha256, HIBP sha1)
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
+            -litellm/proxy/auth/password_policy.py:py/weak-sensitive-data-hashing
           input: sarif-results/python.sarif
           output: sarif-results/python.sarif
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@ebcb5b36ded6beda4ceefea6a8bc4cc885255bb3 # v3.34.1
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: sarif-results
           category: "/language:${{ matrix.language }}"
