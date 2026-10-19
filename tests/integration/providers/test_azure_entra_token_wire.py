@@ -459,6 +459,34 @@ def test_username_password_deployments_share_one_entra_token_until_the_password_
     assert minted == ("first-password", "rotated-password")
 
 
+def test_a_cold_burst_across_deployments_sharing_a_user_mints_one_entra_token(
+    user_gateway: Gateway, entra: Entra, azure: Wire
+) -> None:
+    username: Final = _username("burst")
+    holds: Final = (Hold(), Hold())
+    for hold in holds:
+        entra.authority.holds.put(hold)
+    with user_gateway.scenario() as scenario:
+        models: Final = tuple(
+            _user_deployment(scenario, azure.url, username, "burst-password", api_version)
+            for api_version in (_LEGACY_API_VERSION, _TWIN_API_VERSION)
+        )
+        with ThreadPoolExecutor(max_workers=len(models)) as pool:
+            sent: Final = tuple(pool.submit(_chat_authorization, user_gateway, model) for model in models)
+            try:
+                eventually(holds[0].arrived.is_set, bool, seconds=30)
+                second_mint_started: Final = holds[1].arrived.wait(_PROBE_SECONDS)
+            finally:
+                _release(entra.authority.holds, holds)
+            answers: Final = tuple(future.result(timeout=60) for future in sent)
+        minted: Final = tuple(form["password"] for form in entra.authority.token_forms() if "password" in form)
+
+    token: Final = f"Bearer {_ropc_token(username, 'burst-password')}"
+    assert not second_mint_started
+    assert answers == (token, token)
+    assert minted == ("burst-password",)
+
+
 def test_a_slow_entra_mint_for_legacy_chat_leaves_liveliness_answering(
     user_gateway: Gateway, entra: Entra, azure: Wire
 ) -> None:
