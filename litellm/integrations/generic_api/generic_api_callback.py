@@ -197,6 +197,7 @@ class GenericAPILogger(CustomBatchLogger):
         # Init variables for batch flushing logs
         #########################################################
         self.flush_lock = asyncio.Lock()
+        self._full_queue_flush: asyncio.Task[None] | None = None
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
         self.log_queue: list[Mapping[str, object] | StandardLoggingPayload] = []
@@ -315,7 +316,7 @@ class GenericAPILogger(CustomBatchLogger):
                 self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                self._flush_full_queue_in_background()
 
         except Exception as e:
             verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
@@ -346,13 +347,18 @@ class GenericAPILogger(CustomBatchLogger):
                 self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                self._flush_full_queue_in_background()
 
         except Exception as e:
             verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
 
     async def flush_queue(self) -> None:
         await self.async_send_batch()
+
+    def _flush_full_queue_in_background(self) -> None:
+        if self._full_queue_flush is not None and not self._full_queue_flush.done():
+            return
+        self._full_queue_flush = asyncio.create_task(self.flush_queue())
 
     async def async_send_batch(self) -> None:
         async with self.flush_lock:

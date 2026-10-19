@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Awaitable, Final, TypedDict, TypeVar
+from typing import Awaitable, Final, Literal, TypedDict, TypeVar
 from unittest.mock import AsyncMock
 
 import httpx
@@ -19,7 +19,7 @@ from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.gcs_pubsub.pub_sub import *
 from litellm.integrations.generic_api.generic_api_callback import LOG_FORMAT_TYPES, GenericAPILogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -791,6 +791,58 @@ async def test_generic_api_concurrent_flushes_deliver_each_event_once(log_format
         assert tuple(_received_log_ids(sink.requests, log_format)) == ("once",)
     finally:
         sink.release.set()
+        for task in owned_tasks:
+            task.cancel()
+        await asyncio.gather(*owned_tasks, return_exceptions=True)
+        await handler.close()
+
+
+class _RecoveringLogSink:
+    def __init__(self) -> None:
+        self.arrived: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+        self.attempts: int = 0
+        self.delivered: tuple[httpx.Request, ...] = ()
+
+    async def respond(self, request: httpx.Request) -> httpx.Response:
+        self.attempts += 1
+        if self.attempts == 1:
+            self.arrived.set()
+            await self.release.wait()
+            return httpx.Response(503)
+        self.delivered = (*self.delivered, request)
+        return httpx.Response(200)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", ("success", "failure"))
+async def test_generic_api_full_queue_send_survives_logging_worker_timeout(
+    event_type: Literal["success", "failure"],
+) -> None:
+    sink: Final = _RecoveringLogSink()
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    worker: Final = LoggingWorker(timeout=0.05)
+    before_tasks: Final = frozenset(asyncio.all_tasks())
+    logger: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        async_httpx_client=handler,
+        batch_size=1,
+        flush_interval=3600,
+        max_retries=1,
+        retry_delay=0,
+    )
+    owned_tasks: Final = frozenset(asyncio.all_tasks()) - before_tasks
+    log_event: Final = logger.async_log_success_event if event_type == "success" else logger.async_log_failure_event
+    try:
+        worker.ensure_initialized_and_enqueue(log_event({"standard_logging_object": {"id": "queued"}}, None, None, None))
+        await worker.flush()
+        await sink.arrived.wait()
+        sink.release.set()
+        await logger.flush_queue()
+        assert tuple(_received_log_ids(sink.delivered, "json_array")) == ("queued",)
+    finally:
+        sink.release.set()
+        await worker.stop()
         for task in owned_tasks:
             task.cancel()
         await asyncio.gather(*owned_tasks, return_exceptions=True)
