@@ -76082,5 +76082,23 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "meta/muse-image-1.0": {
+        "litellm_provider": "meta",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
     }
 }
