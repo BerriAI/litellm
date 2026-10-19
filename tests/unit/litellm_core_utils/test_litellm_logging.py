@@ -30,7 +30,12 @@ from litellm._internal_context import in_post_response_phase
 from litellm._logging import session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
+from litellm.constants import (
+    KUBERNETES_POD_ROUTING_KEY,
+    LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
+    REDACTED_BY_LITELLM,
+    SENTRY_PII_DENYLIST,
+)
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
@@ -2064,6 +2069,56 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
     logger.log_failure_event.assert_not_called()
     assert captured["litellm_params"].get("_arealtime") is True
     assert LitellmLogging.is_sync_litellm_request(captured["litellm_params"]) is False
+
+
+@pytest.mark.asyncio
+async def test_aresponses_websocket_turn_reaches_a_custom_logger_through_the_async_hook_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils import thread_pool_executor
+    from litellm.responses.main import base_llm_http_handler
+
+    class InlineExecutor:
+        def submit(self, fn, *args, **kwargs):
+            fn(*args, **kwargs)
+
+    sessions: list[LitellmLogging] = []
+
+    async def open_session(**kwargs):
+        sessions.append(kwargs["logging_obj"])
+
+    async_logged = asyncio.Event()
+    sync_call_ids: list[str] = []
+    async_call_ids: list[str] = []
+
+    class CaptureLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            sync_call_ids.append(kwargs["litellm_call_id"])
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            async_call_ids.append(kwargs["litellm_call_id"])
+            async_logged.set()
+
+    logger = CaptureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "success_callback", ["cache", logger])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logger])
+    monkeypatch.setattr(thread_pool_executor, "executor", InlineExecutor())
+    with patch.object(  # test-quality-ok: the provider socket is the seam; how a turn of the session logs is under test
+        base_llm_http_handler, "async_responses_websocket", AsyncMock(side_effect=open_session)
+    ):
+        await litellm._aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
+    turn = sessions[0].copy_for_new_call("ws-turn-2", dt_object.now())
+
+    await turn.dispatch_success_handlers(
+        litellm.ResponsesAPIResponse(
+            id="resp_turn_2", created_at=0, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[]
+        ),
+        prefer_async_handlers=True,
+    )
+    await asyncio.wait_for(async_logged.wait(), timeout=10)
+
+    assert (async_call_ids, sync_call_ids) == (["ws-turn-2"], [])
 
 
 @pytest.mark.asyncio
@@ -5661,6 +5716,97 @@ def test_get_standard_logging_object_payload_takes_used_client_oauth_token_from_
 
     assert payload is not None
     assert payload["metadata"]["used_client_oauth_token"] is expected
+
+
+@pytest.mark.parametrize(
+    ("metadata", "litellm_metadata", "expected"),
+    [
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {},
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.1",
+                "pod_count": 3,
+                "selection": "round_robin",
+            },
+        ),
+        (
+            {},
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.2",
+                    "pod_count": 3,
+                    "selection": "session_affinity",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.2",
+                "pod_count": 3,
+                "selection": "session_affinity",
+            },
+        ),
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.3",
+                    "pod_count": 3,
+                    "selection": "session_affinity_retry",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.3",
+                "pod_count": 3,
+                "selection": "session_affinity_retry",
+            },
+        ),
+    ],
+)
+def test_standard_logging_payload_resolves_kubernetes_pod_routing_from_metadata_buckets(
+    logging_obj: LitellmLogging,
+    metadata: dict[str, object],
+    litellm_metadata: dict[str, object],
+    expected: dict[str, object],
+) -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime(2026, 1, 1)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-4o",
+            "messages": [],
+            "litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"][KUBERNETES_POD_ROUTING_KEY] == expected
 
 
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
