@@ -559,12 +559,28 @@ def preserve_upstream_non_openai_attributes(
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
     expected_keys: Final = frozenset(type(model_response).model_fields) | frozenset({"usage"})
-    candidate_keys: Final = (
-        frozenset(type(original_chunk).model_fields) | frozenset((original_chunk.__pydantic_extra__ or {}).keys())
-    ) - expected_keys
+    candidate_keys: Final = tuple(
+        key
+        for key in (*type(original_chunk).model_fields, *(original_chunk.__pydantic_extra__ or {}))
+        if key not in expected_keys
+    )
     if not candidate_keys:
         return
-    for key, value in original_chunk.model_dump(include=candidate_keys).items():
+    candidate_values: Final[tuple[tuple[str, object], ...]] = tuple(
+        (
+            key,
+            cast(  # cast-ok: Pydantic extras are scalar-checked before assignment
+                object,
+                getattr(original_chunk, key),
+            ),
+        )
+        for key in candidate_keys
+    )
+    if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
+        for key, value in candidate_values:
+            setattr(model_response, key, value)
+        return
+    for key, value in original_chunk.model_dump(include=frozenset(candidate_keys)).items():
         setattr(model_response, key, value)
 
 
