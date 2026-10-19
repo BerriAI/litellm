@@ -68,6 +68,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    KUBERNETES_POD_ROUTING_KEY,
     MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
@@ -267,6 +268,13 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.router_utils.kubernetes_pod_discovery import (
+    KubernetesPodDiscovery,
+    async_resolve_pods_after,
+    async_resolve_pods_after_bound,
+    resolve_pods_after,
+    resolve_pods_after_bound,
+)
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
@@ -1291,6 +1299,7 @@ class Router:
         cache_config: Final[dict[str, Any]] = {}
 
         self.client_ttl = client_ttl
+        self.kubernetes_pod_discovery: Final = KubernetesPodDiscovery()
         if redis_url is not None or (redis_host is not None and redis_port is not None):
             cache_type = "redis"
 
@@ -4600,6 +4609,7 @@ class Router:
         deployment_that_just_failed: Final = _deployment_that_just_failed(
             _FALLBACK_HOP_ADAPTER.validate_python(kwargs).get(metadata_variable_name)
         )
+        routing: Final = deployment.get(KUBERNETES_POD_ROUTING_KEY)
 
         kwargs.setdefault(metadata_variable_name, {}).update(
             {
@@ -4607,8 +4617,16 @@ class Router:
                 "model_info": model_info,
                 "api_base": deployment_api_base,
                 "deployment_model_name": deployment_model_name,
+                KUBERNETES_POD_ROUTING_KEY: routing,
             }
         )
+        other_bucket: Final = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
+        other_bucket_metadata: Final = kwargs.get(other_bucket)
+        if isinstance(other_bucket_metadata, Mapping) and KUBERNETES_POD_ROUTING_KEY in other_bucket_metadata:
+            kwargs[other_bucket] = {  # rebind-ok: this method updates the router's request kwargs in place
+                **other_bucket_metadata,
+                KUBERNETES_POD_ROUTING_KEY: routing,
+            }
 
         # A retry/fallback reuses this same kwargs dict for the next deployment.
         # Refund and clear any reservation the previous deployment attempt left
@@ -13519,6 +13537,13 @@ class Router:
                 client = self.cache.get_cache(key=cache_key, local_only=True, parent_otel_span=parent_otel_span)
             return client
         elif client_type == "async":
+            if (
+                deployment["litellm_params"].get(  # pyright: ignore[reportUnknownMemberType]  # legacy mapping
+                    "kubernetes_pod_discovery"
+                )
+                is True
+            ):
+                return None
             if kwargs.get("stream") is True:
                 cache_key = f"{model_id}_stream_async_client"
                 client = self.cache.get_cache(key=cache_key, local_only=True, parent_otel_span=parent_otel_span)
@@ -13528,6 +13553,13 @@ class Router:
                 client = self.cache.get_cache(key=cache_key, local_only=True, parent_otel_span=parent_otel_span)
                 return client
         else:
+            if (
+                deployment["litellm_params"].get(  # pyright: ignore[reportUnknownMemberType]  # legacy mapping
+                    "kubernetes_pod_discovery"
+                )
+                is True
+            ):
+                return None
             if kwargs.get("stream") is True:
                 cache_key = f"{model_id}_stream_client"
                 client = self.cache.get_cache(key=cache_key, parent_otel_span=parent_otel_span)
@@ -14558,7 +14590,7 @@ class Router:
         Router._pop_effort_from_nested_carrier(request_kwargs, "output_config")
         Router._pop_effort_from_nested_carrier(request_kwargs, "reasoning")
 
-    async def async_get_available_deployment(
+    async def _async_get_available_deployment_unresolved(  # noqa: ANN202  # legacy selector result remains inferred
         self,
         model: str,
         request_kwargs: dict,
@@ -14595,7 +14627,7 @@ class Router:
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
-            return self.get_available_deployment(
+            return self._get_available_deployment_unresolved(
                 model=model,
                 messages=messages,
                 input=input,
@@ -14733,6 +14765,12 @@ class Router:
                         )
                     )
             raise e
+
+    async_get_available_deployment = (  # pyright: ignore[reportUnknownVariableType]  # legacy selector return
+        async_resolve_pods_after(
+            _async_get_available_deployment_unresolved  # pyright: ignore[reportUnknownArgumentType]  # legacy type
+        )
+    )
 
     async def async_get_available_deployment_for_pass_through(
         self,
@@ -15500,7 +15538,7 @@ class Router:
         }
         return cast(StandardLoggingRoutingDecision, kept)  # cast-ok: dropping optional keys preserves the type
 
-    def get_available_deployment(
+    def _get_available_deployment_unresolved(  # noqa: ANN202  # legacy selector result remains inferred
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
@@ -15672,6 +15710,12 @@ class Router:
         )
         phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
         return deployment
+
+    get_available_deployment = (  # pyright: ignore[reportUnknownVariableType]  # legacy selector return
+        resolve_pods_after(
+            _get_available_deployment_unresolved  # pyright: ignore[reportUnknownArgumentType]  # legacy annotations
+        )
+    )
 
     def get_available_deployment_for_pass_through(
         self,
@@ -16094,15 +16138,22 @@ class Router:
             CustomRoutingStrategy: litellm.router.CustomRoutingStrategyBase
         """
 
+        strategy: Final = CustomRoutingStrategy
         setattr(
             self,
             "get_available_deployment",
-            CustomRoutingStrategy.get_available_deployment,
+            resolve_pods_after_bound(
+                strategy.get_available_deployment,  # pyright: ignore[reportUnknownArgumentType]  # legacy stub
+                self.kubernetes_pod_discovery,
+            ),
         )
         setattr(
             self,
             "async_get_available_deployment",
-            CustomRoutingStrategy.async_get_available_deployment,
+            async_resolve_pods_after_bound(
+                strategy.async_get_available_deployment,  # pyright: ignore[reportUnknownArgumentType]  # legacy stub
+                self.kubernetes_pod_discovery,
+            ),
         )
 
     def _reset_custom_routing_strategy(self) -> None:

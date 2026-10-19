@@ -1674,11 +1674,9 @@ class LiteLLMProxyRequestSetup:
             metadata_from_headers["agent_id"] = agent_id_from_header
             verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
-        spend_log_session_id: Final = (
+        caller_session_beside_trace: Final = (
             _caller_session_beside_trace_header(normalized_headers, request_body, _metadata_variable_name)
-            if litellm.request_correlation_in_logs
-            and chain_id is not None
-            and chain_id == normalized_headers.get("x-litellm-trace-id")
+            if chain_id is not None and chain_id == normalized_headers.get("x-litellm-trace-id")
             else None
         )
         if chain_id:
@@ -1740,8 +1738,8 @@ class LiteLLMProxyRequestSetup:
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(
-                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: spend_log_session_id}
-                if spend_log_session_id
+                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: caller_session_beside_trace}
+                if caller_session_beside_trace
                 else metadata_from_headers
             )
         return data
