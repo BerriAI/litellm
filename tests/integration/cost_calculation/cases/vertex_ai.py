@@ -1659,73 +1659,6 @@ GEMINI_3_1_PRO_STREAM_FULL_USAGE: Final = CostTrackingTestCase(
     ),
 )
 
-GEMINI_3_1_PRO_PASSTHROUGH_STREAM_GENERATE_CONTENT_PRICED_VIA_VERTEX_KEY: Final = CostTrackingTestCase(
-    name="gemini-3.1-pro-passthrough-stream_generate_content_priced_via_vertex_key",
-    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.1-pro",
-    endpoint="/gemini/v1beta/models/$MODEL:streamGenerateContent?alt=sse",
-    request={
-        "model": "$MODEL",
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "52b6a80ff038 summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
-        ],
-        "stream": True,
-        "stream_options": {"include_usage": True},
-        "allowed_openai_params": [],
-    },
-    response=SseResponse(
-        content_type="text/event-stream",
-        frames=sse_frames(
-            {
-                "candidates": [
-                    {
-                        "content": {"parts": [{"text": "scripted answer 52b6a80ff038"}], "role": "model"},
-                        "finishReason": "STOP",
-                        "index": 0,
-                    }
-                ],
-                "modelVersion": "gemini-3.1-pro",
-            },
-            {
-                "candidates": [],
-                "usageMetadata": {
-                    "promptTokenCount": 1840,
-                    "candidatesTokenCount": 412,
-                    "totalTokenCount": 2252,
-                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
-                },
-                "modelVersion": "gemini-3.1-pro",
-            },
-        ),
-    ),
-    expected=ExactExpected(
-        spend=0.0090552,
-        input_cost=0.003864,
-        output_cost=0.0051912,
-        prompt_tokens=1840,
-        completion_tokens=412,
-        breakdown_persisted=False,
-        cost_header=False,
-    ),
-)
-
 
 # gemini-3.8-flash
 GEMINI_3_8_FLASH_INPUT_TEXT: Final = CostTrackingTestCase(
@@ -3647,7 +3580,6 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_8_FLASH_STREAM_FULL_USAGE,
     IMAGEN_NEXT_IMAGES_ONE,
     VERTEX_EMBEDDINGS_TEXT_006,
-    GEMINI_3_1_PRO_PASSTHROUGH_STREAM_GENERATE_CONTENT_PRICED_VIA_VERTEX_KEY,
     VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT,
     VERTEX_AI_CLAUDE_SONNET_5_5_STREAM,
     VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT,

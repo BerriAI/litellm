@@ -129,10 +129,11 @@ class PassThroughStreamingHandler:
         usage: Final = getattr(partial_response, "usage", None)
         if not isinstance(usage, Usage):
             return
-        response_cost: Final = kwargs.get("response_cost")
+        logger_cost: Final = litellm_logging_obj.response_cost_calculator(result=partial_response)
+        handler_cost: Final = kwargs.get("response_cost")
+        fallback_cost: Final = float(handler_cost) if isinstance(handler_cost, (int, float)) else 0.0
         litellm_logging_obj.record_partial_usage_for_failure(
-            usage=usage,
-            response_cost=float(response_cost) if isinstance(response_cost, (int, float)) else 0.0,
+            usage=usage, response_cost=fallback_cost if logger_cost is None else logger_cost
         )
 
     @staticmethod
