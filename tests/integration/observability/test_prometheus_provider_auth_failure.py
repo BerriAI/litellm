@@ -16,7 +16,7 @@ import openai
 import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
-from integration._support.database import read_rows, write_rows
+from integration._support.database import write_rows
 from integration._support.mcp import ENTRY_POINTS, McpCaller, McpPeer, echo_tool, register_mcp, scripted_peer
 from integration._support.process import owned_proxy
 from integration._support.prometheus_series import Sample, scrape
@@ -939,6 +939,7 @@ def _gated_key(scenario: Scenario, cell: str) -> str | None:
         write_rows(
             "UPDATE \"LiteLLM_VerificationToken\" SET expires = now() - interval '1 hour' WHERE token = %s",
             (sha256(key.encode()).hexdigest(),),
+            database_url=scenario.gateway.database_url,
         )
         return key
     scenario.gateway.post("/key/block", {"key": key})
@@ -1021,7 +1022,7 @@ def test_an_mcp_tool_call_the_proxy_rejects_for_the_caller_stays_out_of_the_llm_
             outcome.error is not None and "Agent 365 guardrail rejected" in outcome.raw for outcome in outcomes.values()
         ), {entry: outcome.raw for entry, outcome in outcomes.items()}
         eventually(
-            lambda: read_rows(GUARDRAIL_ROWS, (AGENT_365_GUARDRAIL, hashed, "call_mcp_tool")),
+            lambda: rig.gateway.rows(GUARDRAIL_ROWS, (AGENT_365_GUARDRAIL, hashed, "call_mcp_tool")),
             lambda rows: [row["status"] for row in rows] == ["guardrail_intervened"] * len(ENTRY_POINTS),
             seconds=70,
         )
