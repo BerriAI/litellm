@@ -28730,3 +28730,27 @@ async def test_router_configured_stream_usage_keeps_a_choice_on_the_usage_chunk(
     assert getattr(chunks[-1], "usage", None) is not None
     assert len(chunks[-1].choices) == usage_chunk_choice_count
     assert all(len(chunk.choices) == 1 for chunk in chunks[:-1])
+
+
+@pytest.mark.parametrize(
+    ("stream_options", "marked_injected"),
+    [({"include_usage": True}, True), (None, False)],
+    ids=["include-usage", "no-stream-options"],
+)
+def test_update_kwargs_with_deployment_reads_stream_options_from_pydantic_litellm_params(
+    stream_options: dict[str, bool] | None, marked_injected: bool
+):
+    from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
+    from litellm.types.router import LiteLLM_Params
+
+    kwargs: dict = {"stream": True, "metadata": {}}
+    Router()._update_kwargs_with_deployment(
+        deployment={
+            "model_name": "gpt-5-mini",
+            "litellm_params": LiteLLM_Params(model="openai/gpt-5-mini", api_key="fake-key", stream_options=stream_options),
+            "model_info": {"id": "pydantic-params"},
+        },
+        kwargs=kwargs,
+    )
+
+    assert (kwargs.get(STREAM_USAGE_INJECTED_FIELD) is True) is marked_injected
