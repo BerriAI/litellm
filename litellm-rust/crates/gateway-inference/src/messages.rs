@@ -61,7 +61,15 @@ async fn handle(
         &name,
     )
     .await?;
-    let (mut body, cache_options) = crate::caching::prepare(identity, object)?;
+    let (mut body, cache_options) = match crate::caching::prepare(identity, object) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if let Some(tracking) = tracking {
+                tracking.fail(&error);
+            }
+            return Err(error);
+        }
+    };
     let edit = |body: &mut Map<String, Value>| {
         if let Some(tracking) = &tracking {
             tracking.edit_body(body);

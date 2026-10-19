@@ -47,11 +47,13 @@ impl Hooks {
     }
 }
 
-/// One request's admission, and the deployment its last attempt went to.
+/// One request's admission, and the deployment its last attempt went to. Dropped before it
+/// finishes, as when the client goes away mid-route, it records the request as interrupted so
+/// the hooks still return what they reserved.
 pub(crate) struct Tracking {
     pipeline: Arc<Pipeline>,
     route: Route,
-    admission: Admission,
+    admission: Option<Admission>,
     /// The deployment the latest attempt went to, and when it was sent.
     deployment: Mutex<Option<(DeploymentFacts, SystemTime)>>,
     started: Instant,
@@ -100,7 +102,7 @@ pub(crate) async fn admit(
     Ok(Some(Tracking {
         pipeline: pipeline.clone(),
         route,
-        admission,
+        admission: Some(admission),
         deployment: Mutex::new(None),
         started: Instant::now(),
     }))
@@ -152,7 +154,9 @@ fn end_user(body: &Map<String, Value>) -> Option<&str> {
 impl Tracking {
     /// Applies the hooks' body changes to an attempt's body.
     pub(crate) fn edit_body(&self, body: &mut Map<String, Value>) {
-        self.admission.edit().apply_upstream_body(body);
+        if let Some(admission) = &self.admission {
+            admission.edit().apply_upstream_body(body);
+        }
     }
 
     /// The headers the gateway would forward, after the hooks' changes; `None` when no hook
@@ -161,7 +165,7 @@ impl Tracking {
         &self,
         forwarded: Vec<(String, String)>,
     ) -> Option<Vec<(String, String)>> {
-        let edit = self.admission.edit();
+        let edit = self.admission.as_ref()?.edit();
         edit.changes_upstream_headers().then(|| {
             let mut forwarded = forwarded;
             edit.apply_upstream_headers(&mut forwarded);
@@ -186,37 +190,55 @@ impl Tracking {
             Some((facts, SystemTime::now()));
     }
 
+    /// Records a request that ended with an error before a response.
+    pub(crate) fn fail(mut self, error: &Error) {
+        self.record_failure(error.status().as_u16(), false);
+    }
+
+    fn record_failure(&mut self, status: u16, interrupted: bool) {
+        let Some(admission) = self.admission.take() else {
+            return;
+        };
+        let (deployment, upstream_started_at) = self.take_deployment();
+        let outcome = Outcome {
+            deployment,
+            status,
+            usage: None,
+            cost: None,
+            time_to_first_byte: None,
+            upstream_started_at,
+            ended_at: SystemTime::now(),
+            interrupted,
+        };
+        self.pipeline.finish(admission, outcome, None);
+    }
+
+    fn take_deployment(&self) -> (Option<DeploymentFacts>, Option<SystemTime>) {
+        self.deployment
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .unzip()
+    }
+
     /// Adds the hooks' response headers and follows the body to its end; an error is recorded
     /// at once.
-    pub(crate) async fn finish(self, result: Result<Response, Error>) -> Result<Response, Error> {
-        let Self {
-            pipeline,
-            route,
-            admission,
-            deployment,
-            started,
-        } = self;
-        let (deployment, upstream_started_at) = deployment
-            .into_inner()
-            .unwrap_or_else(|e| e.into_inner())
-            .unzip();
+    pub(crate) async fn finish(
+        mut self,
+        result: Result<Response, Error>,
+    ) -> Result<Response, Error> {
         let mut response = match result {
             Ok(response) => response,
             Err(error) => {
-                let outcome = Outcome {
-                    deployment,
-                    status: error.status().as_u16(),
-                    usage: None,
-                    cost: None,
-                    time_to_first_byte: None,
-                    upstream_started_at,
-                    ended_at: SystemTime::now(),
-                    interrupted: false,
-                };
-                pipeline.finish(admission, outcome, None);
+                self.fail(&error);
                 return Err(error);
             }
         };
+        let Some(admission) = self.admission.take() else {
+            return Ok(response);
+        };
+        let (deployment, upstream_started_at) = self.take_deployment();
+        let (pipeline, route, started) = (self.pipeline.clone(), self.route, self.started);
         if response.status().is_success() {
             let headers = response.headers_mut();
             for (name, value) in admission.edit().response_headers() {
@@ -275,6 +297,13 @@ enum Meter {
     Stream(StreamUsage),
     /// A JSON body, read for its `usage` once complete.
     Body(Vec<Bytes>),
+}
+
+impl Drop for Tracking {
+    fn drop(&mut self) {
+        // 499, the status the proxy's logs give a request the client closed.
+        self.record_failure(499, true);
+    }
 }
 
 /// Records the request when the response body ends or is dropped.
