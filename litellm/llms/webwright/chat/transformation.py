@@ -42,6 +42,8 @@ class WebwrightChatConfig(OpenAILikeChatConfig):
         WebWright supports the OpenAI-compatible chat completion parameters that
         its published model abilities reference declares.
         Reference: https://webwright.ai/models
+        Reasoning is declared in the abilities reference, but no caller-facing
+        reasoning field or allowed values are published, so it is not advertised.
         """
         return [
             "messages",  # Required
@@ -54,5 +56,4 @@ class WebwrightChatConfig(OpenAILikeChatConfig):
             "tools",  # Optional
             "tool_choice",  # Optional
             "response_format",  # Optional
-            "reasoning_effort",  # Optional
         ]
