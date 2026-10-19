@@ -1387,6 +1387,9 @@ class Router:
         )
         self._ptu_share_teams = lru_cache(maxsize=1)(self._collect_ptu_share_teams)
         self._cached_team_ptu_ceiling = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(self._resolve_team_ptu_ceiling)
+        self._cached_deployment_tracks_usage = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
+            self._deployment_tracks_usage
+        )
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=max(len(model_list or ()), 1),
             default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
@@ -9049,30 +9052,9 @@ class Router:
     ) -> str | None:
         from litellm.types.caching import RedisPipelineIncrementOperation
 
-        deployment_info: Final = self.get_deployment(model_id=deployment_id)
-        if deployment_info is None:
-            return None
-        deployment_model_info: Final = self.get_router_model_info(
-            deployment=deployment_info,
-            received_model_name=model_group,
-        )
-        configured_limits: Final = (
-            deployment_info.get("tpm", None),
-            deployment_info.get("rpm", None),
-            deployment_info.litellm_params.tpm,
-            deployment_info.litellm_params.rpm,
-            deployment_model_info.get("tpm", None),
-            deployment_model_info.get("rpm", None),
-        )
-        ## Nothing to track only when neither tpm/rpm nor itpm/otpm limits are
-        ## set. IO deployments still record TPM/RPM usage here so TPM-aware
-        ## routing strategies see their real load in mixed model groups; their
-        ## itpm/otpm enforcement runs separately in ModelRateLimitingCheck.
-        if all(limit is None for limit in configured_limits) and not deployment_has_io_token_limits(
-            deployment_info.model_dump()
-        ):
-            return None
         if total_tokens <= 0 and rpm_increment <= 0:
+            return None
+        if not self._cached_deployment_tracks_usage(deployment_id, model_group):
             return None
 
         current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
@@ -9096,6 +9078,30 @@ class Router:
                     operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
                 )
         return tpm_key
+
+    def _deployment_tracks_usage(self, deployment_id: str, model_group: str) -> bool:
+        deployment_info: Final = self.get_deployment(model_id=deployment_id)
+        if deployment_info is None:
+            return False
+        deployment_model_info: Final = self.get_router_model_info(
+            deployment=deployment_info,
+            received_model_name=model_group,
+        )
+        configured_limits: Final = (
+            deployment_info.get("tpm", None),
+            deployment_info.get("rpm", None),
+            deployment_info.litellm_params.tpm,
+            deployment_info.litellm_params.rpm,
+            deployment_model_info.get("tpm", None),
+            deployment_model_info.get("rpm", None),
+        )
+        ## Nothing to track only when neither tpm/rpm nor itpm/otpm limits are
+        ## set. IO deployments still record TPM/RPM usage here so TPM-aware
+        ## routing strategies see their real load in mixed model groups; their
+        ## itpm/otpm enforcement runs separately in ModelRateLimitingCheck.
+        return any(limit is not None for limit in configured_limits) or deployment_has_io_token_limits(
+            deployment_info.model_dump()
+        )
 
     def sync_deployment_callback_on_success(
         self,
@@ -13308,6 +13314,7 @@ class Router:
         self.cached_deployment_model_info.cache_clear()
         self._ptu_share_teams.cache_clear()
         self._cached_team_ptu_ceiling.cache_clear()
+        self._cached_deployment_tracks_usage.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
 
