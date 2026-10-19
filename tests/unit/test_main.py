@@ -4379,6 +4379,7 @@ class _RecordedSpeechSuccess:
     response_cost: float | None
     logged_response_cost: float | None
     logged_tokens: tuple[object, object]
+    logged_cache_hit: object
 
 
 def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess:
@@ -4393,6 +4394,7 @@ def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess
         response_cost=response_cost if isinstance(response_cost, float) else None,
         logged_response_cost=logged_cost if isinstance(logged_cost, float) else None,
         logged_tokens=(logged.get("prompt_tokens"), logged.get("completion_tokens")),
+        logged_cache_hit=logged.get("cache_hit"),
     )
 
 
@@ -4418,6 +4420,16 @@ async def _wait_for_success_event(recorder: _SuccessEventRecorder, call_type: st
             return event
         await asyncio.sleep(0.05)
     pytest.fail(f"no {call_type} success event; got {[e.call_type for e in recorder.events]}")
+
+
+async def _wait_for_success_events(
+    recorder: _SuccessEventRecorder, call_type: str, count: int
+) -> tuple[_RecordedSpeechSuccess, ...]:
+    for _ in range(100):
+        if len(events := tuple(e for e in recorder.events if e.call_type == call_type)) >= count:
+            return events
+        await asyncio.sleep(0.05)
+    pytest.fail(f"expected {count} {call_type} success events; got {[e.call_type for e in recorder.events]}")
 
 
 def _gemini_tts_generate_content_response() -> dict[str, object]:
@@ -4486,6 +4498,37 @@ async def test_aspeech_gemini_bridge_bills_one_call_with_proxy_metadata_and_comp
     assert expected_cost > 0
     assert speech_event.response_cost == pytest.approx(expected_cost)
     assert speech_event.logged_response_cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_logs_a_cached_reply_as_a_free_cache_hit(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    recorder: Final = _SuccessEventRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    mock_route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+
+    for _ in range(2):
+        await litellm.aspeech(
+            model="gemini/gemini-2.5-flash-preview-tts",
+            input="cache hit check",
+            voice="Kore",
+            api_key="fake-gemini-key",
+        )
+
+    first, cached = await _wait_for_success_events(recorder, call_type="aspeech", count=2)
+    assert mock_route.call_count == 1
+    assert len(recorder.events) == 2
+    assert first.logged_cache_hit is not True
+    assert first.logged_response_cost is not None and first.logged_response_cost > 0
+    assert cached.logged_cache_hit is True
+    assert cached.logged_response_cost == 0.0
 
 
 def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:

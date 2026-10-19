@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final, cast
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+from litellm.litellm_core_utils.hidden_params import served_from_cache, set_hidden_param
 
 if TYPE_CHECKING:
     from litellm import Logging as LiteLLMLoggingObj
@@ -187,4 +188,6 @@ class SpeechToCompletionBridgeTransformationHandler:
         binary_response: Final = HttpxBinaryResponseContent(response)
         binary_response.set_response_cost(_completion_response_cost(model_response))
         binary_response.usage = _completion_usage(model_response)
+        if served_from_cache(model_response):
+            set_hidden_param(binary_response, "cache_hit", True)
         return binary_response
