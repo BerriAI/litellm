@@ -402,6 +402,40 @@ async def test_provider_errors_return_labelled_local_estimates(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "part",
+    (
+        {"fileData": {"mimeType": "image/png", "fileUri": "gs://bucket/image.png"}},
+        {"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}},
+        {"text": "Reasoning about the request", "thought": True},
+    ),
+)
+async def test_google_provider_errors_preserve_legacy_translated_message_estimates(
+    monkeypatch: pytest.MonkeyPatch, part: dict[str, JsonValue]
+) -> None:
+    model: Final = "openai/gpt-6.1-sol"
+    request: Final = _google_count_tokens_request(
+        "counted", {"contents": [{"role": "user", "parts": [{"text": "Describe this"}, part]}]}
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "counted", "litellm_params": {"model": model, "api_key": "test-key"}}]),
+    )
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(400, json={"error": {"message": "Count unavailable"}})
+        )
+        counted: Final = await token_counter(request=request, call_endpoint=True)
+    assert counted.total_tokens == litellm.token_counter(model="gpt-6.1-sol", messages=request.messages)
+    assert counted.count_source == "local_estimate"
+    assert counted.error is False
+
+
+@pytest.mark.asyncio
 async def test_anthropic_endpoint_error_handling():
     """
     Test error handling in the /v1/messages/count_tokens endpoint
@@ -1409,38 +1443,6 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
                 ],
             },
             id="array_schema_without_items",
-        ),
-        pytest.param(
-            {"messages": [], "contents": [{"role": "user", "parts": [{"text": "What is new?"}]}]},
-            id="google_contents",
-        ),
-        pytest.param(
-            {
-                "messages": [{"role": "user", "content": "Describe this"}],
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [
-                            {"text": "Describe this"},
-                            {"fileData": {"mimeType": "image/png", "fileUri": "gs://b/c.png"}},
-                        ],
-                    }
-                ],
-            },
-            id="google_contents_with_media_the_translation_dropped",
-        ),
-        pytest.param(
-            {
-                "messages": [
-                    {"role": "user", "content": "What is new?"},
-                    {"role": "assistant", "content": "Weighing the release notes"},
-                ],
-                "contents": [
-                    {"role": "user", "parts": [{"text": "What is new?"}]},
-                    {"role": "model", "parts": [{"text": "Weighing the release notes", "thought": True}]},
-                ],
-            },
-            id="google_contents_with_a_thought_the_translation_counts_as_text",
         ),
     ],
 )
