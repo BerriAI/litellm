@@ -76100,5 +76100,21 @@
         "supported_output_modalities": [
             "image"
         ]
+    },
+    "fireworks_ai/accounts/fireworks/models/minimax-m3p1-flash": {
+        "cache_read_input_token_cost_priority": 2.25e-08,
+        "input_cost_per_token_priority": 2.25e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token_priority": 9e-07,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
