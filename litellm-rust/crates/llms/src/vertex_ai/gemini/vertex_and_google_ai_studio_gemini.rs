@@ -1461,7 +1461,14 @@ pub fn transform_generate_content_response(
     }
     let usage = calculate_usage(&body)?;
     let [grounding, url_context, safety, citations] = metadata;
-    let extra = Map::from_iter([
+    // Python names the answer by Gemini's `responseId` when there is one; the host mints an id
+    // otherwise.
+    let response_id = body
+        .get("responseId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(|id| ("id".to_owned(), Value::from(id)));
+    let extra = Map::from_iter(response_id.into_iter().chain([
         (
             "vertex_ai_grounding_metadata".to_owned(),
             Value::Array(grounding),
@@ -1475,7 +1482,7 @@ pub fn transform_generate_content_response(
             "vertex_ai_citation_metadata".to_owned(),
             Value::Array(citations),
         ),
-    ]);
+    ]));
     Ok(ChatCompletionsResponse {
         created: unix_now(),
         model,
@@ -2058,6 +2065,18 @@ mod tests {
     fn response(body: Value) -> Value {
         serde_json::to_value(transform_generate_content_response("gemini-2.5-flash", body).unwrap())
             .unwrap()
+    }
+
+    #[rstest]
+    #[case::named(json!("resp_1"), Some(json!("resp_1")))]
+    #[case::unnamed(Value::Null, None)]
+    fn the_answer_is_named_by_the_response_id(#[case] id: Value, #[case] expected: Option<Value>) {
+        let answer = response(json!({
+            "responseId": id,
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Hi"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2}
+        }));
+        assert_eq!(answer.get("id").cloned(), expected);
     }
 
     #[rstest]
