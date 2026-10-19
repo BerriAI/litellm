@@ -1,7 +1,7 @@
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .base import GuardrailConfigModel
 
@@ -16,6 +16,8 @@ def validate_reco_tenant_id(value: str) -> str:
 
 class RecoOptionalParams(BaseModel):
     """Configuration parameters for the Reco guardrail"""
+
+    model_config = ConfigDict(frozen=True)
 
     reco_tenant_id: str = Field(
         description="Tenant identifier for the Reco account, as a UUID. Sent as the X-Reco-Tenant-Id header on every guardrail request.",
