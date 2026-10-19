@@ -20,9 +20,10 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
+    from litellm.models.skills import LiteLLM_SkillsTable
     from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 DEFAULT_SKILL_SEARCH_TOP_K: Final = 5
 MAX_SKILL_SEARCH_TOP_K: Final = 100
@@ -106,7 +107,11 @@ class SkillSearchIndex:
         if isinstance(scores, EmbeddingFailed):
             return SkillSearchEmbeddingFailed(reason=scores.reason)
         ranked: Final = sorted(
-            (SkillSearchHit(skill=skill, score=score) for skill, score in zip(skills, scores, strict=True)),
+            (
+                SkillSearchHit(skill=skill, score=score)
+                for skill, score in zip(skills, scores, strict=True)
+                if score is not None
+            ),
             key=lambda hit: hit.score,
             reverse=True,
         )

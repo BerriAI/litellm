@@ -9,6 +9,8 @@ import sys
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
+from types import MappingProxyType
 from typing import Final
 
 import yaml
@@ -30,12 +32,12 @@ IGNORE_ARG_RE: Final = re.compile(r"--ignore(?:-glob)?[= ](\S+)")
 DOCKERFILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]*Dockerfile[A-Za-z0-9_.-]*")
 COMMENT_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
 GLOB_CHARS = frozenset("*?")
+DEDICATED_INTEGRATION_WORKFLOWS: Final = MappingProxyType({"image-scan.yml": "tests/integration/database/image/"})
 
 # Trees whose jobs are sharded with no catch-all bucket, so every child that holds
 # tests has to be named by some shard or it runs nowhere. A child listed here is
 # itself decomposed one level deeper and is checked through its own entry.
 SHARDED_ROOTS: tuple[str, ...] = (
-    "tests/test_litellm",
     "tests/unit",
     "tests/unit/enterprise",
     "tests/unit/enterprise/enterprise_callbacks",
@@ -316,6 +318,7 @@ def _keyword_terms(
 def _slices() -> tuple[Slice, ...]:
     if not CIRCLECI_CONFIG.exists():
         return ()
+    test_files: Final = frozenset(_test_files())
     jobs: Final = yaml.safe_load(CIRCLECI_CONFIG.read_text()).get("jobs", {})
     return tuple(
         Slice(job=job, globs=globs, named=named, required=required, excluded=excluded, understood=understood)
@@ -323,7 +326,7 @@ def _slices() -> tuple[Slice, ...]:
         for text in ("\n".join(_strings(body)),)
         if "pytest" in text
         for globs in (tuple(GLOB_CALL_RE.findall(text)),)
-        for named in (frozenset(TEST_TOKEN_RE.findall(text)) & frozenset(_test_files()),)
+        for named in (frozenset(TEST_TOKEN_RE.findall(text)) & test_files,)
         for required, excluded, understood in (
             _keyword_terms(tuple(KEYWORD_RE.findall(text)), attributable=len(globs) < 2),
         )
@@ -363,6 +366,7 @@ def _workflow_named_tokens() -> frozenset[str]:
 
 
 def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
+    matchable_names: Final = lru_cache(maxsize=None)(_matchable_names)
     slices: Final = _slices()
     named_by_workflow: Final = _workflow_named_tokens()
     globbed: Final = tuple(
@@ -376,7 +380,7 @@ def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
         for path in globbed
         if not allowlist.covers_test(path)
         and not any(_token_covers(token, path) for token in named_by_workflow)
-        and not any(slice_.claims(path, _matchable_names(path)) for slice_ in slices)
+        and not any(slice_.claims(path, matchable_names(path)) for slice_ in slices)
     )
 
 
@@ -557,6 +561,17 @@ def _integration_github_files(runner: pathlib.Path) -> frozenset[str]:
     return frozenset(ast.literal_eval(values))
 
 
+def _owns(workflow: str, relative_path: str) -> bool:
+    owned_root: Final = DEDICATED_INTEGRATION_WORKFLOWS.get(workflow)
+    return owned_root is not None and relative_path.startswith(owned_root)
+
+
+def _tokens_outside_owner(relative_path: str, workflow_tokens: Mapping[str, frozenset[str]]) -> frozenset[str]:
+    return frozenset[str]().union(
+        *(tokens for workflow, tokens in workflow_tokens.items() if not _owns(workflow, relative_path))
+    )
+
+
 def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozenset[str], tuple[Finding, ...]]:
     runner: Final = repo_root / "tests/integration/run.py"
     if not runner.exists():
@@ -608,15 +623,20 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         )
         != 1
     )
-    gha_tokens: Final = _invoked_test_tokens(
-        scalar
-        for path in (repo_root / ".github/workflows").glob("*.y*ml")
-        for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
+    workflow_tokens: Final = MappingProxyType(
+        {
+            path.name: _invoked_test_tokens(_scalars(yaml.safe_load(path.read_text()), path.name))
+            for path in (repo_root / ".github/workflows").glob("*.y*ml")
+        }
+    )
+    gha_tokens: Final = frozenset[str]().union(*workflow_tokens.values())
+    circle_owned: Final = (
+        frozenset(str(path.relative_to(repo_root)) for path in integration_root.rglob("test_*.py")) - github_files
     )
     findings: Final = (
         tuple(
-            Finding(path, "integration contract is also selected by GitHub Actions")
-            for path in paths
+            Finding(path, "integration file outside GITHUB_FILES is selected by GitHub Actions")
+            for path in sorted(circle_owned)
             if any(_token_covers(token, path) for token in gha_tokens)
         )
         + tuple(
@@ -628,6 +648,11 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
             Finding(path, "GitHub-owned integration file is missing")
             for path in sorted(github_files)
             if not (repo_root / path).is_file()
+        )
+        + tuple(
+            Finding(path, "GitHub-owned integration contract runs outside a dedicated integration workflow")
+            for path in sorted(github_files)
+            if any(_token_covers(token, path) for token in _tokens_outside_owner(path, workflow_tokens))
         )
     )
     browser_commands: Final = tuple(
@@ -685,13 +710,9 @@ def main() -> int:
     scalars = _all_scalars()
 
     integration_paths, ownership_findings = _integration_ownership()
-    test_findings = (
-        _uncovered_tests(
-            allowlist,
-            _invoked_selections(scalars)
-            + (Selection(included=integration_paths, ignored=frozenset()),),
-        )
-        + ownership_findings
+    test_findings = _uncovered_tests(
+        allowlist,
+        _invoked_selections(scalars) + (Selection(included=integration_paths, ignored=frozenset()),),
     )
     dockerfile_findings = _uncovered_dockerfiles(allowlist, _built_dockerfile_tokens(scalars))
     stale_findings = _stale_allowlist_paths(allowlist, test_files=_test_files(), dockerfiles=_dockerfiles())
@@ -708,13 +729,25 @@ def main() -> int:
             test_findings,
             "Add each to a job's test path, or list it in .github/ci-coverage-allowlist.yml with a reason.",
         )
+    if ownership_findings:
+        browser_remedy = (
+            " CircleCI's browser group owns the integrationCritical Playwright contracts, so no GitHub workflow may "
+            "select them and the default Playwright config must exclude them."
+            if any("browser" in finding.detail or "Playwright" in finding.detail for finding in ownership_findings)
+            else ""
+        )
+        _report(
+            "integration contracts with the wrong CI owner",
+            ownership_findings,
+            "Follow tests/integration/AGENTS.md, which says which CI job owns each integration file." + browser_remedy,
+        )
     if dockerfile_findings:
         _report(
             "Dockerfiles that no CI job builds",
             dockerfile_findings,
             "Build each in a workflow, or list it in .github/ci-coverage-allowlist.yml with a reason.",
         )
-    if stale_findings or test_findings or dockerfile_findings:
+    if stale_findings or test_findings or ownership_findings or dockerfile_findings:
         return 1
 
     _write(
