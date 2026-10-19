@@ -18206,11 +18206,9 @@ async def async_queue_request(
                 on_late_failure=audit_late_failure,
             )
 
+        queued_priority, _ = router.split_request_priority(model=data["model"], kwargs=data)
         response: Final = await router.schedule_acompletion(**data)
-        requested_priority: Final = data.get("priority")
-        fastapi_response.headers.update(
-            {"x-litellm-priority": str(router.default_priority if requested_priority is None else requested_priority)}
-        )
+        fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -18225,6 +18223,10 @@ async def async_queue_request(
             )
         elif isinstance(e, ProxyException):
             raise e
+        elif isinstance(e, litellm.BadRequestError):
+            raise ProxyException(
+                message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
+            )
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,

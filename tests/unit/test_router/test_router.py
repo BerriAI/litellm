@@ -25573,7 +25573,10 @@ def _priority_provider(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyP
         (3, {"priority": 2}, 2),
         (None, {"priority": 2}, 2),
         (None, {"priority": 0}, 0),
-        (3, {"priority": "1", "drop_params": True}, 3),
+        (None, {"priority": "1"}, 1),
+        (None, {"priority": True}, 1),
+        (3, {"priority": 1.0}, 1),
+        (3, {"priority": "high", "drop_params": True}, 3),
     ],
 )
 async def test_acompletion_queues_the_resolved_priority_exactly_once(
@@ -25597,7 +25600,7 @@ async def test_acompletion_without_any_priority_never_enters_the_scheduler() -> 
     assert "x-litellm-request-prioritization-used" not in response._hidden_params.get("additional_headers", {})
 
 
-@pytest.mark.parametrize("priority", ["1", [1], True])
+@pytest.mark.parametrize("priority", ["high", [1], 1.5])
 async def test_acompletion_rejects_a_non_integer_priority_before_the_provider_sees_it(
     priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -25614,16 +25617,17 @@ async def test_acompletion_drops_a_non_integer_priority_from_the_provider_call_u
 ) -> None:
     provider: Final = _priority_provider(respx_mock, monkeypatch)
     router: Final = _priority_router(None)
-    await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, priority="1", drop_params=True)
+    await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, priority="high", drop_params=True)
     assert "priority" not in json.loads(provider.calls.last.request.content)
 
 
+@pytest.mark.parametrize("priority", [0, "1"])
 async def test_acompletion_with_an_integer_priority_sends_no_priority_to_the_provider(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     provider: Final = _priority_provider(respx_mock, monkeypatch)
     router: Final = _priority_router(None)
-    await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, priority=0)
+    await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, priority=priority)
     assert "priority" not in json.loads(provider.calls.last.request.content)
 
 
@@ -25661,7 +25665,7 @@ async def test_acompletion_drops_a_non_integer_priority_under_the_router_or_depl
     )
     with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
         response: Final = await router.acompletion(
-            model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong", priority="1"
+            model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong", priority="high"
         )
     assert add_request.await_args.kwargs["request"].priority == 3
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
@@ -25704,7 +25708,7 @@ async def test_deployment_drop_params_drop_a_non_integer_priority_for_team_route
             model=requested_model,
             messages=_PRIORITY_MESSAGES,
             mock_response="pong",
-            priority="1",
+            priority="high",
             metadata=request_metadata,
         )
     assert add_request.await_args.kwargs["request"].priority == 3
@@ -25748,14 +25752,14 @@ async def test_schedule_acompletion_queues_a_prompt_management_model(monkeypatch
 
 @pytest.mark.parametrize(
     ("configured", "expected"),
-    [(3, 3), ("3", 3), (0, 0), (None, None)],
-    ids=["int", "digit-string", "zero", "unset"],
+    [(3, 3), ("3", 3), ("-1", -1), (0, 0), (None, None)],
+    ids=["int", "digit-string", "negative-string", "zero", "unset"],
 )
 def test_the_router_parses_default_priority_once_at_init(configured: object, expected: int | None) -> None:
     assert _priority_router(configured).default_priority == expected
 
 
-@pytest.mark.parametrize("configured", ["high", True, 1.5], ids=["word", "bool", "float"])
+@pytest.mark.parametrize("configured", ["high", 1.5, [3]], ids=["word", "float", "list"])
 def test_an_invalid_default_priority_is_ignored_with_a_warning(
     configured: object, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -25771,6 +25775,17 @@ async def test_an_invalid_default_priority_leaves_every_request_unscheduled() ->
         response: Final = await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong")
     assert add_request.await_count == 0
     assert "x-litellm-request-prioritization-used" not in response._hidden_params.get("additional_headers", {})
+
+
+async def test_schedule_acompletion_without_a_priority_or_a_default_is_rejected_before_the_provider(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider: Final = _priority_provider(respx_mock, monkeypatch)
+    router: Final = _priority_router(None)
+    with pytest.raises(litellm.BadRequestError, match="priority is required") as raised:
+        await router.schedule_acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES)
+    assert raised.value.param == "priority"
+    assert not provider.called
 
 
 async def test_schedule_acompletion_without_a_priority_queues_the_default_once() -> None:
@@ -25791,7 +25806,8 @@ async def test_schedule_acompletion_without_a_priority_queues_the_default_once()
         (3, {"priority": None}, 3),
         (3, {"priority": 2}, 2),
         (None, {"priority": 0}, 0),
-        (3, {"priority": "1", "drop_params": True}, 3),
+        (None, {"priority": "1"}, 1),
+        (3, {"priority": "high", "drop_params": True}, 3),
     ],
 )
 async def test_atext_completion_queues_the_resolved_priority_exactly_once(
@@ -25823,7 +25839,7 @@ async def test_atext_completion_without_any_priority_never_enters_the_scheduler(
     assert provider.called
 
 
-@pytest.mark.parametrize("priority", ["1", [1], True])
+@pytest.mark.parametrize("priority", ["high", [1], 1.5])
 async def test_atext_completion_rejects_a_non_integer_priority_before_the_provider_sees_it(
     priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

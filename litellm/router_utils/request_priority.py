@@ -2,6 +2,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 
@@ -15,26 +17,38 @@ class InvalidPriority:
         return f"priority must be an integer, got {type(self.value).__name__} {self.value!r}"
 
 
+def priority_error(model: str, message: str) -> litellm.BadRequestError:
+    return litellm.BadRequestError(
+        message=message,
+        model=model,
+        llm_provider="",
+        body={"message": message, "type": "invalid_request_error", "param": "priority", "code": "400"},
+    )
+
+
+_PRIORITY: Final = TypeAdapter(int)
+
+
+def _as_priority(value: object) -> int | InvalidPriority:
+    try:
+        return _PRIORITY.validate_python(value)
+    except ValidationError:
+        return InvalidPriority(value=value)
+
+
 def resolve_request_priority(
     requested: object, default_priority: int | None, drops_params: Callable[[], bool]
 ) -> int | None | InvalidPriority:
     if requested is None:
         return default_priority
-    if isinstance(requested, int) and not isinstance(requested, bool):
-        return requested
-    if drops_params():
+    priority: Final = _as_priority(requested)
+    if isinstance(priority, InvalidPriority) and drops_params():
         return default_priority
-    return InvalidPriority(value=requested)
+    return priority
 
 
 def parse_default_priority(value: object) -> int | None | InvalidPriority:
-    if value is None:
-        return None
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, str) and value.strip().isdecimal():
-        return int(value.strip())
-    return InvalidPriority(value=value)
+    return None if value is None else _as_priority(value)
 
 
 def _explicit_drop_params(scope: Mapping[str, object]) -> bool | None:
@@ -46,15 +60,12 @@ def request_drops_params(
     router_defaults: Mapping[str, object],
     deployment_params: Iterable[Mapping[str, object]],
 ) -> bool:
+    if litellm.drop_params is True:
+        return True
     request_flag: Final = _explicit_drop_params(kwargs)
     if request_flag is not None:
         return request_flag
     router_flag: Final = _explicit_drop_params(router_defaults)
     if router_flag is not None:
         return router_flag
-    deployment_flags: Final = tuple(
-        flag for flag in (_explicit_drop_params(params) for params in deployment_params) if flag is not None
-    )
-    if deployment_flags:
-        return any(deployment_flags)
-    return litellm.drop_params is True
+    return any(_explicit_drop_params(params) is True for params in deployment_params)

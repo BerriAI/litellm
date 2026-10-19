@@ -6,10 +6,11 @@ Pins (PR2):
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm import Router
 from litellm.proxy import proxy_server
 
 from .conftest import normalize  # type: ignore[import-not-found]
@@ -34,6 +35,7 @@ HAPPY_RESPONSE = {
 @pytest.fixture
 def patched_queue(monkeypatch):
     router = MagicMock()
+    router.split_request_priority = MagicMock(return_value=(0, {}))
     router.schedule_acompletion = AsyncMock(return_value=dict(HAPPY_RESPONSE))
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
@@ -89,3 +91,72 @@ def test_queue_chat_completions_no_router_error(client, auth_as, queue_no_router
         response = client.post("/queue/chat/completions", json=payload)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+def _queue_router(monkeypatch: pytest.MonkeyPatch, default_priority: int | None) -> Router:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-queue-test", "mock_response": "queued"},
+            }
+        ],
+        default_priority=default_priority,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
+    return router
+
+
+@pytest.mark.parametrize(
+    ("default_priority", "priority_fields", "expected_priority"),
+    [
+        (3, {"priority": "high", "drop_params": True}, 3),
+        (3, {"priority": "1"}, 1),
+        (None, {"priority": 1.0}, 1),
+        (3, {"priority": 1}, 1),
+        (3, {}, 3),
+    ],
+    ids=("dropped-word-takes-default", "digit-string", "integral-float", "explicit", "absent-takes-default"),
+)
+def test_queue_chat_completions_reports_the_priority_the_router_queued_at(
+    client,
+    auth_as,
+    monkeypatch: pytest.MonkeyPatch,
+    default_priority: int | None,
+    priority_fields: dict[str, object],
+    expected_priority: int,
+) -> None:
+    router = _queue_router(monkeypatch, default_priority)
+    payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        with auth_as():
+            response = client.post("/queue/chat/completions", json=payload)
+    assert response.status_code == 200, response.text
+    assert [call.kwargs["request"].priority for call in add_request.await_args_list] == [expected_priority]
+    assert response.headers.get("x-litellm-priority") == str(expected_priority)
+
+
+@pytest.mark.parametrize(
+    ("default_priority", "priority_fields", "message"),
+    [(None, {}, "priority is required"), (3, {"priority": "high"}, "priority must be an integer")],
+    ids=("no-priority-and-no-default", "malformed"),
+)
+def test_queue_chat_completions_rejects_a_request_it_cannot_queue_as_an_invalid_request(
+    client,
+    auth_as,
+    monkeypatch: pytest.MonkeyPatch,
+    default_priority: int | None,
+    priority_fields: dict[str, object],
+    message: str,
+) -> None:
+    router = _queue_router(monkeypatch, default_priority)
+    payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        with auth_as():
+            response = client.post("/queue/chat/completions", json=payload)
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", "priority")
+    assert message in error["message"]
+    assert add_request.await_count == 0
