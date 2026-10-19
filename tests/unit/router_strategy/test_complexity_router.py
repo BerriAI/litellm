@@ -5546,13 +5546,12 @@ class TestRouterPreRoutingSharedAliasName:
                 for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
             }
         }
-        router = Router(model_list=[marker, self._bedrock_tier_entry()])
-        mock_acompletion = AsyncMock(return_value=litellm.ModelResponse(choices=[{"message": {"content": "hi"}}]))
+        tier_target = self._bedrock_tier_entry()
+        tier_target["litellm_params"]["mock_response"] = "sent upstream"
+        router = Router(model_list=[marker, tier_target])
 
-        with patch.object(litellm, "acompletion", mock_acompletion), pytest.raises(ValueError, match="oidc/"):
+        with pytest.raises(ValueError, match="oidc/"):
             await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
-
-        mock_acompletion.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_a_markers_explicit_flag_beats_the_tiers_pydantic_default(self):

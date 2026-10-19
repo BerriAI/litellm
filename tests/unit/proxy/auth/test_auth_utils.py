@@ -366,11 +366,11 @@ def test_configuring_a_deployment_still_cannot_carry_federation_fields_inline(ro
 _SERVICE_ACCOUNT_TOKEN_REFERENCE: Final = "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"
 
 
-def _user_config_with(litellm_params: dict) -> dict:
+def _user_config_with(litellm_params: dict[str, str]) -> dict[str, object]:
     return {"model_list": [{"model_name": "devstral", "litellm_params": {"model": "mistral/devstral-latest", **litellm_params}}]}
 
 
-def _user_config_defaulting_to(litellm_params: dict) -> dict:
+def _user_config_defaulting_to(litellm_params: dict[str, str]) -> dict[str, object]:
     return {
         "model_list": [
             {
@@ -382,7 +382,7 @@ def _user_config_defaulting_to(litellm_params: dict) -> dict:
     }
 
 
-def _user_config_search_tool_with(litellm_params: dict) -> dict:
+def _user_config_search_tool_with(litellm_params: dict[str, str]) -> dict[str, object]:
     return {
         "search_tools": [
             {
@@ -410,7 +410,7 @@ def oidc_api_key_credential(monkeypatch):
     )
 
 
-def _vector_store_embedding_config_with(embedding_config: dict) -> dict:
+def _vector_store_embedding_config_with(embedding_config: dict[str, str]) -> dict[str, object]:
     return {
         "vector_store_id": "docs",
         "custom_llm_provider": "milvus",
