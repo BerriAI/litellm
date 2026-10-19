@@ -627,7 +627,9 @@ class TestBedrockRealtimeSessionLifecycle:
         assert first_event["session"]["model"] == "amazon.nova-sonic-v1:0"
 
     @pytest.mark.asyncio
-    async def test_region_lookup_on_connect_leaves_the_event_loop_free(self, stub_aws_sdk_client, monkeypatch):
+    async def test_region_lookup_on_connect_leaves_the_event_loop_free(
+        self, stub_aws_sdk_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
         vault: Final = host_in_slow_vault(monkeypatch, "AWS_REGION_NAME")
         websocket: Final = RealtimeClientWS()

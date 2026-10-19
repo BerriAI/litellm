@@ -80,6 +80,12 @@ class _AssumeRoleParams(TypedDict):
     Tags: ReadOnly[NotRequired[tuple[AwsSessionTag, ...]]]
 
 
+class _StsClientKwargs(TypedDict):
+    verify: ReadOnly[bool | str]
+    endpoint_url: ReadOnly[NotRequired[str]]
+    region_name: ReadOnly[NotRequired[str]]
+
+
 def _assume_role_params(
     aws_role_name: str,
     aws_session_name: str,
@@ -275,7 +281,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "aws_session_tags",
         ]
 
-    def _get_ssl_verify(self, ssl_verify: bool | str | None = None):
+    def _get_ssl_verify(self, ssl_verify: bool | str | None = None) -> bool | str:
         """
         Get SSL verification setting for boto3 clients.
 
@@ -875,15 +881,18 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_sts_endpoint: str | None = None,
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
-    ) -> dict:
+    ) -> _StsClientKwargs:
         """STS client kwargs with aligned endpoint_url and region_name (SigV4)."""
-        kwargs: Final[dict] = {"verify": self._get_ssl_verify(ssl_verify)}
-        if aws_sts_endpoint is not None:
-            kwargs["endpoint_url"] = aws_sts_endpoint
-        sts_region: Final = self._resolve_sts_region(aws_sts_endpoint, aws_region_name)
-        if sts_region is not None:
-            kwargs["region_name"] = sts_region
-        return kwargs
+        verify: Final = self._get_ssl_verify(ssl_verify)
+        match (aws_sts_endpoint, self._resolve_sts_region(aws_sts_endpoint, aws_region_name)):
+            case (None, None):
+                return _StsClientKwargs(verify=verify)
+            case (None, region):
+                return _StsClientKwargs(verify=verify, region_name=region)
+            case (endpoint, None):
+                return _StsClientKwargs(verify=verify, endpoint_url=endpoint)
+            case (endpoint, region):
+                return _StsClientKwargs(verify=verify, endpoint_url=endpoint, region_name=region)
 
     def get_aws_region_name_for_non_llm_api_calls(
         self,

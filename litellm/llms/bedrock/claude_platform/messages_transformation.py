@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -23,14 +23,14 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],  # mutable-ok: overrides the base signature
         model: str,
-        messages: list[Any],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: list[object],  # mutable-ok: overrides the base signature
+        optional_params: dict[str, object],  # mutable-ok: overrides the base signature
+        litellm_params: dict[str, object],  # mutable-ok: overrides the base signature
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
+    ) -> tuple[dict[str, str], str | None]:  # mutable-ok: overrides the base signature
         workspace_id: Final = self._get_workspace_id(optional_params, litellm_params)
         if workspace_id is None:
             raise litellm.AuthenticationError(
@@ -69,14 +69,14 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
 
     async def avalidate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        headers: dict[str, str],  # mutable-ok: mirrors validate_anthropic_messages_environment
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
-        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
-        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        messages: list[object],  # mutable-ok: mirrors validate_anthropic_messages_environment
+        optional_params: dict[str, object],  # mutable-ok: mirrors validate_anthropic_messages_environment
+        litellm_params: dict[str, object],  # mutable-ok: mirrors validate_anthropic_messages_environment
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+    ) -> tuple[dict[str, str], str | None]:  # mutable-ok: mirrors validate_anthropic_messages_environment
         return await run_aws_signing(
             self.validate_anthropic_messages_environment,
             headers=headers,

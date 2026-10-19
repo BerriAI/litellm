@@ -64,7 +64,9 @@ def _count_tokens_in_us_west_2(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_handle_count_tokens_request_looks_up_its_region_off_the_event_loop(monkeypatch):
+async def test_handle_count_tokens_request_looks_up_its_region_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")

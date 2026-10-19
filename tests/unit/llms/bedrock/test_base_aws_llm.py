@@ -3443,7 +3443,7 @@ class TestGetRequestHeadersResign:
 
 
 @pytest.mark.asyncio
-async def test_run_off_loop_if_aws_keeps_the_loop_serving_while_credentials_refresh():
+async def test_run_off_loop_if_aws_keeps_the_loop_serving_while_credentials_refresh() -> None:
     """Regression for issue #40165: an AWS provider's signing (and the botocore credential refresh
     inside it) must run off the event loop, so other requests keep being served meanwhile."""
     probe = EventLoopProbe()

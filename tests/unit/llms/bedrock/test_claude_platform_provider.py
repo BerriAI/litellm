@@ -685,7 +685,9 @@ async def test_anthropic_messages_claude_platform_sends_exact_body_through_stric
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_claude_platform_workspace_and_region_lookups_leave_the_event_loop_free(monkeypatch):
+async def test_anthropic_messages_claude_platform_workspace_and_region_lookups_leave_the_event_loop_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
 
     monkeypatch.setenv("ANTHROPIC_AWS_WORKSPACE_ID", "wrkspc_test")
