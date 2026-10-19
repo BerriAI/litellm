@@ -1482,15 +1482,16 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
     return num_retries, kwargs
 
 
-def _get_wrapper_timeout(kwargs: dict[str, object], exception: Exception) -> float | int | httpx.Timeout | None:
-    """
-    Get the timeout from the kwargs
-    Used for the wrapper functions.
-    """
+def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
-    timeout: Final = cast(float | int | httpx.Timeout | None, kwargs.get("timeout", None))
-
-    return timeout
+    if kwargs.get("stream") is not True:
+        return kwargs.get("timeout")
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging) and logging_obj.applied_timeout is not None:
+        return logging_obj.applied_timeout
+    stream_timeout: Final = kwargs.get("stream_timeout")
+    return kwargs.get("timeout") if stream_timeout is None else stream_timeout
 
 
 def check_coroutine(value) -> bool:
@@ -2353,7 +2354,7 @@ def client(original_function):
             if deployment_num_retries is not None:
                 setattr(e, "num_retries", deployment_num_retries)
 
-            timeout: Final = _get_wrapper_timeout(kwargs=kwargs, exception=e)
+            timeout: Final = _get_wrapper_timeout(kwargs=kwargs)
             setattr(e, "timeout", timeout)
             raise e
 
@@ -3520,19 +3521,33 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
     )
 
 
+def _skips_builtin_registration_lookup(key: str, provider: object) -> bool:
+    return provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO or any(
+        key.startswith(f"{p}/") for p in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _RegistrationWrite:
     key: str
     entry: Mapping[str, object]
 
 
+def model_cost_registration_row(key: str, provider: object) -> Mapping[str, object]:
+    """The row a ``register_model`` write of a ``key`` entry with this ``litellm_provider`` merges onto: the
+    ``litellm.model_cost`` row it resolves to (``openai/o3-pro`` lands on ``o3-pro``), else the row it seeds ``key``
+    with from the built-in entry it falls back to (an OpenAI fine-tune takes its base model's row)."""
+    base: Final = _registration_base(
+        key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None
+    )
+    return _builtin_cost_map().get(base.key) or base.entry
+
+
 def _registration_base(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
     provider: Final = str(value.get("litellm_provider") or "")
-    if provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO or any(
-        key.startswith(f"{p}/") for p in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
-    ):
+    if _skips_builtin_registration_lookup(key, provider):
         return _RegistrationWrite(key=key, entry=dict(_builtin_cost_map().get(key, {})))
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
         model=key, custom_llm_provider=custom_llm_provider
@@ -6250,11 +6265,13 @@ def get_provider_info(model: str, custom_llm_provider: str | None) -> ProviderSp
             model=model, provider=LlmProviders(custom_llm_provider)
         )
 
-    model_info: ProviderSpecificModelInfo | None = None
     if provider_config:
-        model_info = provider_config.get_provider_info(model=model)
+        return provider_config.get_provider_info(model=model)
 
-    return model_info
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    return json_provider.provider_info if json_provider is not None and json_provider.provider_info else None
 
 
 def _is_potential_model_name_in_model_cost(
@@ -6677,6 +6694,9 @@ def get_model_info_helper(
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
                 supported_audio_formats=_model_info.get("supported_audio_formats", None),
+                token_count_framing=_model_info.get("token_count_framing", None),
+                token_count_model=_model_info.get("token_count_model", None),
+                token_count_tokenizer=_model_info.get("token_count_tokenizer", None),
                 vertex_ai_audio_api=_model_info.get("vertex_ai_audio_api", None),
             )
             for cost_key, cost_value in _model_info.items():
@@ -6711,7 +6731,7 @@ def _build_model_info(
     provider_info: Final = get_provider_info(model=model, custom_llm_provider=custom_llm_provider)
     if provider_info:
         for key, value in provider_info.items():
-            if value is not None:
+            if value is not None and _model_info.get(key) is None:
                 _model_info[key] = value
 
     # if verbose_logger.isEnabledFor(logging.DEBUG):
@@ -8286,8 +8306,8 @@ def get_base_model_from_metadata(model_call_details: Mapping[str, object] | None
     litellm_params: Final = cast(Mapping[str, object], model_call_details.get("litellm_params", {}))
     if litellm_params is not None:
         base_model: Final = litellm_params.get("base_model", None)
-        if base_model is not None:
-            return cast(str | None, base_model)
+        if isinstance(base_model, str):
+            return base_model
         metadata: Final = cast(Mapping[str, object], litellm_params.get("metadata") or {})
         base_model_metadata_getter: Final[_BaseModelFromMetadataGetter] = (
             litellm_utils.get_base_model_from_litellm_call_metadata
@@ -9347,6 +9367,15 @@ class ProviderConfigManager:
                 )
 
                 return AzureAnthropicMessagesConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            from litellm.llms.databricks.common_utils import DatabricksBase
+
+            if DatabricksBase.serves_native_anthropic_messages(model):
+                from litellm.llms.databricks.messages.transformation import (
+                    DatabricksAnthropicMessagesConfig,
+                )
+
+                return DatabricksAnthropicMessagesConfig()
         elif litellm.LlmProviders.MINIMAX == provider:
             from litellm.llms.minimax.messages.transformation import (
                 MinimaxMessagesConfig,

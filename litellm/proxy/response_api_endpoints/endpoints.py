@@ -25,12 +25,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from starlette.websockets import WebSocket, WebSocketDisconnect
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
@@ -54,12 +55,19 @@ from litellm.proxy.common_request_processing import (
     create_response,
     resolve_counted_tool_fields,
 )
+from litellm.proxy.common_utils.error_body_call_id import error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
+    error_status_code,
+    openai_error_type_for_status,
+)
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.litellm_pre_call_utils import (
@@ -70,7 +78,8 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
-from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard
+from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -79,6 +88,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.token_count import TokenCountSourceFields
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
@@ -1366,7 +1376,7 @@ class _ResponsesApiErrorBody(TypedDict):
     error: ReadOnly[_ResponsesApiErrorDetail]
 
 
-class _ResponsesInputTokensResult(TypedDict):
+class _ResponsesInputTokensResult(TokenCountSourceFields):
     object: ReadOnly[str]
     input_tokens: ReadOnly[int]
 
@@ -1409,6 +1419,85 @@ def _responses_invalid_request_response(message: str, param: str | None, code: s
         }
     }
     return JSONResponse(status_code=400, content=body)
+
+
+class _ProviderErrorMessage(TypedDict):
+    message: ReadOnly[str]
+
+
+class _NestedProviderError(TypedDict):
+    error: ReadOnly[_ProviderErrorMessage]
+
+
+@with_config(ConfigDict(extra="ignore"))
+class _ProviderOpenAIErrorDetail(TypedDict):
+    message: ReadOnly[str]
+    type: ReadOnly[str]
+    param: NotRequired[ReadOnly[str | None]]
+    code: NotRequired[ReadOnly[str | None]]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class _ProviderOpenAIError(TypedDict):
+    error: ReadOnly[_ProviderOpenAIErrorDetail]
+
+
+_PROVIDER_COUNT_ERROR_TYPE: Final = "token_counting_error"
+_PROVIDER_OPENAI_ERROR: Final = TypeAdapter(_ProviderOpenAIError)
+_NESTED_PROVIDER_ERROR: Final = TypeAdapter(_NestedProviderError)
+
+
+def _provider_error_json(raw_message: str) -> str:
+    start: Final = raw_message.find("{")
+    return raw_message if start == -1 else raw_message[start:]
+
+
+def _provider_error_message(raw_message: str) -> str:
+    error_json: Final = _provider_error_json(raw_message)
+    try:
+        return _NESTED_PROVIDER_ERROR.validate_json(error_json)["error"]["message"]
+    except ValidationError:
+        flat_message: Final = AnthropicExceptionMapping.extract_error_message(error_json)
+        return raw_message if flat_message == error_json else flat_message
+
+
+def _provider_count_error_body(raw_message: str, status_code: int) -> _ResponsesApiErrorBody:
+    try:
+        provider_error: Final = _PROVIDER_OPENAI_ERROR.validate_json(_provider_error_json(raw_message))["error"]
+    except ValidationError:
+        return {
+            "error": {
+                "message": _provider_error_message(raw_message),
+                "type": openai_error_type_for_status(status_code),
+                "param": None,
+                "code": None,
+            }
+        }
+    return {
+        "error": {
+            "message": provider_error["message"],
+            "type": provider_error["type"],
+            "param": provider_error.get("param"),
+            "code": provider_error.get("code"),
+        }
+    }
+
+
+def _provider_count_error_response(exc: ProxyException, request: Request) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a route that answers an error itself must stamp the OTel server span like the global ProxyException handler does
+        general_settings_view,
+    )
+
+    status_code: Final = error_status_code(exc, 500)
+    _close_dangling_otel_server_span(request, status_code, exc=exc)
+    body: Final = _provider_count_error_body(exc.message, status_code)
+    call_id: Final = error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER))
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": with_call_id({**body["error"]}, call_id)},
+        headers=exc.headers,
+    )
 
 
 def _missing_responses_param_response(param: str) -> JSONResponse:
@@ -1515,10 +1604,16 @@ async def responses_input_tokens(
             message=f"Invalid request for token counting: {e}", param=None, code=None
         )
 
-    token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+    try:
+        token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+    except ProxyException as e:
+        if e.type != _PROVIDER_COUNT_ERROR_TYPE:
+            raise
+        return _provider_count_error_response(e, request)
     result: Final[_ResponsesInputTokensResult] = {
         "object": "response.input_tokens",
         "input_tokens": token_response.total_tokens,
+        **count_source_fields(token_response),
     }
     return result
 
@@ -1767,12 +1862,14 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
 
 
 def _responses_ws_failure_frame(failure: Exception) -> str:
-    raw_status: Final = getattr(failure, "status_code", None)
-    status: Final = raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else 500
+    proxy_exception: Final = handle_exception_on_proxy(failure)
+    status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
     error_type: Final = (
         "rate_limit_exceeded" if status == 429 else "invalid_request_error" if 400 <= status < 500 else "server_error"
     )
-    return json.dumps({"type": "error", "status": status, "error": {"type": error_type, "message": str(failure)}})
+    return json.dumps(
+        {"type": "error", "status": status, "error": {"type": error_type, "message": proxy_exception.message}}
+    )
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
@@ -1840,7 +1937,10 @@ class _PreCallGuardrailWalk(Protocol):
 
 
 def _responses_ws_frame_guard(
-    admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: _PreCallGuardrailWalk
+    admitted: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: _PreCallGuardrailWalk,
+    record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
@@ -1899,10 +1999,12 @@ def _responses_ws_frame_guard(
             if isinstance(nested, dict)
             else {**kept, **guarded_fields}
         )
+        guardrail_information: Final = _recorded_guardrail_information(guarded_data.get(metadata_key))
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
-            guardrail_information=_recorded_guardrail_information(guarded_data.get(metadata_key)),
+            guardrail_information=guardrail_information,
             pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
+            bill_refusal=partial(record_refused_turn, guardrail_information),
         )
 
     return guard
@@ -1946,6 +2048,33 @@ def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
 
 
 _NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+@dataclass(slots=True)
+class _RefusedTurns:
+    """Turns the deployment refused after their guardrails passed. The socket's close-time failure row bills their
+    guardrail records, so its failure hooks, model group and call type cover those turns too, and the first refusal
+    is that row's exception when the session limit cancels the relay before it returns one."""
+
+    first: Exception | None = None
+    records: tuple[Mapping[str, object], ...] = ()
+
+    def add(self, records: tuple[Mapping[str, object], ...], refusal: Exception) -> None:
+        self.records = (*self.records, *records)
+        if self.first is None:
+            self.first = refusal
+
+    def billed_on(self, request_data: Mapping[str, object]) -> Mapping[str, object]:
+        if not self.records:
+            return request_data
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
+        bucket: Final = request_data.get(metadata_key)
+        fields: Final = _WS_FRAME.validate_python(bucket) if isinstance(bucket, dict) else {}
+        recorded: Final = (*_recorded_guardrail_information(fields), *self.records)
+        return {
+            **request_data,
+            metadata_key: {**fields, _GUARDRAIL_INFORMATION_KEY: [dict(record) for record in recorded]},
+        }
 
 
 def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:
@@ -2051,39 +2180,58 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
+    refused_turns: Final = _RefusedTurns()
     routed_data: Final = dict(
         data,
         user_api_key_dict=user_api_key_dict,
-        responses_ws_frame_guard=_responses_ws_frame_guard(data, user_api_key_dict, proxy_logging_obj),
+        responses_ws_frame_guard=_responses_ws_frame_guard(
+            data, user_api_key_dict, proxy_logging_obj, refused_turns.add
+        ),
         **_routing_hints_from_first_ws_frame(first_message),
     )
-    # Phase 2: route to upstream provider
-    try:
-        llm_call: Final = await route_request(
-            data=routed_data,
-            route_type="_aresponses_websocket",
-            llm_router=llm_router,
-            user_model=user_model,
-        )
-        failure: Final = await llm_call
-        if isinstance(failure, Exception):
-            await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=failure,
-                request_data=routed_data,
-            )
-    except Exception as e:
-        verbose_proxy_logger.exception("Responses WebSocket error")
-        with contextlib.suppress(Exception):
-            await websocket.send_text(_responses_ws_failure_frame(e))
+
+    async def write_failure_row(exception: Exception) -> None:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=routed_data,
+            original_exception=exception,
+            request_data=dict(refused_turns.billed_on(routed_data)),
         )
-        await websocket.close(code=1011, reason="Internal server error")
+
+    def bill_socket_failure(exception: Exception) -> asyncio.Task[object]:
+        return spawn_logging_task(
+            asyncio.get_running_loop(), write_failure_row(exception), task_name="Responses WebSocket failure row"
+        )
+
+    async def relay_and_bill_failure() -> asyncio.Task[object] | None:
+        try:
+            llm_call: Final = await route_request(
+                data=routed_data,
+                route_type="_aresponses_websocket",
+                llm_router=llm_router,
+                user_model=user_model,
+            )
+            outcome: Final = await llm_call
+        except asyncio.CancelledError:
+            if refused_turns.first is not None:
+                _ = bill_socket_failure(refused_turns.first)
+            raise
+        except Exception as e:
+            crash_row: Final = bill_socket_failure(e)
+            with contextlib.suppress(Exception):
+                await websocket.send_text(_responses_ws_failure_frame(e))
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1011, reason="Internal server error")
+            return crash_row
+        return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
+
+    # Phase 2: route to upstream provider
+    try:
+        failure_row: Final = await relay_and_bill_failure()
     finally:
         await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+    if failure_row is not None:
+        with contextlib.suppress(Exception):
+            await asyncio.shield(failure_row)
 
 
 @router.websocket("/v1/responses")
