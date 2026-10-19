@@ -42,9 +42,11 @@ def get_all_functions_called_in_tests(base_dir):
         print("dir_path: ", dir_path)
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith(".py") and ("router" in file.lower() or test_dir == "unit"):
+                file_path = os.path.join(root, file)
+                if file.endswith(".py") and (
+                    "router" in os.path.relpath(file_path, dir_path).lower() or test_dir == "unit"
+                ):
                     print("file: ", file)
-                    file_path = os.path.join(root, file)
                     with open(file_path, "r", encoding="utf-8") as f:
                         try:
                             tree = ast.parse(f.read())
@@ -134,6 +136,9 @@ ignored_function_names = [
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
+    "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
 ]
 
 
