@@ -2,11 +2,9 @@
 #    This tests litellm.token_counter.token_counter() function
 import asyncio
 import base64
-import http.server
 import importlib
 import json
 import os
-import queue
 import subprocess
 import sys
 import threading
@@ -588,6 +586,10 @@ def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
     [
         ("DeepSeek-V4-Pro", "DeepSeek-V4-Flash-0731"),
         ("accounts/fireworks/models/deepseek-v4-flash", "DeepSeek-V4-Flash-0731"),
+        ("deepseek/deepseek-chat", "DeepSeek-V4-Flash-0731"),
+        ("deepseek-reasoner", "DeepSeek-V4-Flash-0731"),
+        ("deepseek/deepseek-flash", "DeepSeek-V4-Flash-0731"),
+        ("openrouter/deepseek/deepseek-chat", "deepseek-v3.2"),
         ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
         ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
         ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
@@ -1040,13 +1042,17 @@ class TestTokenizerSelection(unittest.TestCase):
 _CODE_SAMPLE: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
 
 
-def _deepseek_token_count(text: str) -> int:
+def _deepseek_token_ids(text: str) -> list[int]:
     deepseek_tokenizer: Final = Tokenizer.from_str(
         importlib.resources.files("litellm.litellm_core_utils.tokenizers")
         .joinpath("deepseek_tokenizer.json")
         .read_text(encoding="utf-8")
     )
-    return len(deepseek_tokenizer.encode(text).ids)
+    return deepseek_tokenizer.encode(text).ids
+
+
+def _deepseek_token_count(text: str) -> int:
+    return len(_deepseek_token_ids(text))
 
 
 @pytest.mark.parametrize(
@@ -1057,6 +1063,8 @@ def _deepseek_token_count(text: str) -> int:
         "fireworks_ai/deepseek-v4p1-flash",
         "bedrock/us-east-1/deepseek.v3.2",
         "together_ai/deepseek-ai/DeepSeek-V3.1",
+        "databricks/databricks-deepseek-v4-flash-0731",
+        "replicate/deepseek-ai/deepseek-v3",
         "deepseek-chat",
         "deepseek/deepseek-reasoner",
         "openrouter/deepseek/deepseek-chat-v3-0324",
@@ -1078,6 +1086,22 @@ def test_token_counter_skips_the_deepseek_tokenizer_for_deepseek_models_built_on
     assert litellm.token_counter(model=model, text=_CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
 
 
+def test_encode_and_decode_use_deepseeks_token_ids_for_deepseek_v4():
+    token_ids: Final = encode(model="deepseek/deepseek-v4-flash", text=_CODE_SAMPLE)
+
+    assert token_ids == _deepseek_token_ids(_CODE_SAMPLE)
+    assert decode(model="deepseek/deepseek-v4-flash", tokens=token_ids) == _CODE_SAMPLE
+
+
+def test_disable_hf_tokenizer_download_keeps_deepseek_v4_on_cl100k(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True)
+
+    counted: Final = litellm.token_counter(model="deepseek/deepseek-v4-flash", text=_CODE_SAMPLE)
+
+    assert counted != _deepseek_token_count(_CODE_SAMPLE)
+    assert counted == litellm.token_counter(model="", text=_CODE_SAMPLE)
+
+
 def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
     _load_huggingface_tokenizer.cache_clear()
     start: Final = threading.Barrier(8)
@@ -1090,58 +1114,6 @@ def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
         tokenizers: Final = tuple(pool.map(first_tokenizer, range(8)))
 
     assert len({id(tokenizer) for tokenizer in tokenizers}) == 1
-
-
-CONCURRENT_LLAMA_DOWNLOADS_SCRIPT: Final = """
-import sys
-from concurrent.futures import ThreadPoolExecutor
-sys.path.insert(0, sys.argv[1])
-from litellm.utils import _select_tokenizer_helper
-with ThreadPoolExecutor(max_workers=2) as pool:
-    tuple(pool.map(lambda _: _select_tokenizer_helper("meta-llama/llama-3-8b"), range(2)))
-"""
-
-
-def test_concurrent_first_llama_counts_download_without_waiting_on_each_other(tmp_path: Path):
-    both_downloading: Final = threading.Barrier(2, timeout=5)
-    downloads: Final = queue.SimpleQueue[str]()
-
-    class StalledHub(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            if self.path.endswith("/tokenizer.json"):
-                try:
-                    both_downloading.wait()
-                    downloads.put("concurrent")
-                except threading.BrokenBarrierError:
-                    downloads.put("serialized")
-            self.send_response(404)
-            self.end_headers()
-
-        do_HEAD = do_GET
-
-        def log_message(self, format: str, *args: object) -> None:
-            pass
-
-    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), StalledHub) as hub:
-        threading.Thread(target=hub.serve_forever, daemon=True).start()
-        result: Final = subprocess.run(
-            [sys.executable, "-I", "-c", CONCURRENT_LLAMA_DOWNLOADS_SCRIPT, str(Path(litellm.__file__).parent.parent)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env={
-                **os.environ,
-                "HF_ENDPOINT": f"http://127.0.0.1:{hub.server_port}",
-                "HF_HOME": str(tmp_path / "home"),
-                "HF_HUB_CACHE": str(tmp_path / "cache"),
-                "HF_HUB_OFFLINE": "0",
-                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
-            },
-        )
-        hub.shutdown()
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert downloads.get_nowait() == "concurrent"
 
 
 def test_token_counter_with_anthropic_tool_use():

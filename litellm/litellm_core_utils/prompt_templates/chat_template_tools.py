@@ -24,7 +24,7 @@ def _qwen3_5_tool_schemas(functions: Sequence[Mapping[str, object]]) -> str:
 
 _TOOL_SECTIONS: Final = (
     (
-        re.compile(r"deepseek-v4(?![.\d]|p\d)", re.IGNORECASE),
+        re.compile(r"deepseek-v4(?![.\d]|p\d)|^(?:deepseek/)?deepseek-(?:chat|reasoner|flash)$", re.IGNORECASE),
         ChatTemplateToolSection(222, 0, _deepseek_v4_tool_schemas),
     ),
     (re.compile(r"qwen3[._]?5(?!\d)", re.IGNORECASE), ChatTemplateToolSection(196, 5, _qwen3_5_tool_schemas)),
