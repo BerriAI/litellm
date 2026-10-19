@@ -7633,34 +7633,30 @@ def test_completion_novita_ai_dynamic_params(api_key):
     "enable_preview_features",
     [True, False],
 )
-def test_completion_openai_metadata(monkeypatch, enable_preview_features):
+def test_completion_openai_metadata(
+    monkeypatch, enable_preview_features, respx_mock: respx.MockRouter
+):
     from openai import OpenAI
 
     client = OpenAI()
-
-    litellm.set_verbose = True
-
     monkeypatch.setattr(litellm, "enable_preview_features", enable_preview_features)
-    with patch.object(
-        client, "post", return_value=MagicMock()
-    ) as mock_completion:
-        try:
-            resp = litellm.completion(
-                model="openai/gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hello world"}],
-                metadata={"my-test-key": "my-test-value"},
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=_mocked_openai_chat_response("gpt-3.5-turbo")
+    )
 
-        mock_completion.assert_called_once()
-        if enable_preview_features:
-            assert mock_completion.call_args.kwargs["body"]["metadata"] == {
-                "my-test-key": "my-test-value"
-            }
-        else:
-            assert "metadata" not in mock_completion.call_args.kwargs["body"]
+    litellm.completion(
+        model="openai/gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello world"}],
+        metadata={
+            "session_id": "abc-123",
+            "hidden_params": {"api_key": "should-not-leak"},
+            "non_string": 123,
+        },
+        client=client,
+    )
+
+    request_body = json.loads(respx_mock.calls[0].request.content)
+    assert request_body["metadata"] == {"session_id": "abc-123"}
 
 
 AZURE_TTS_BASE: Final = "https://tts.example.azure.com"
