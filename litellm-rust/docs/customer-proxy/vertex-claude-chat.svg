@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="820" viewBox="0 0 980 820" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="820" fill="#ffffff"/>
+  <text x="20" y="30" font-size="17" font-weight="bold" fill="#111">POST /v1/chat/completions to a vertex_ai/ Claude deployment</text>
+
+  <!-- client -->
+  <rect x="20" y="60" width="150" height="56" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="95" y="84" text-anchor="middle" fill="#111" font-weight="bold">Client</text>
+  <text x="95" y="102" text-anchor="middle" fill="#333">OpenAI SDK body</text>
+
+  <!-- gateway handle -->
+  <rect x="220" y="50" width="330" height="94" rx="6" fill="#f5f5f5" stroke="#666"/>
+  <text x="385" y="72" text-anchor="middle" fill="#111" font-weight="bold">gateway-inference chat_completions</text>
+  <text x="385" y="92" text-anchor="middle" fill="#333">auth, hooks admit, route deployment</text>
+  <text x="385" y="110" text-anchor="middle" fill="#333">os.environ/ refs resolved via the secret source,</text>
+  <text x="385" y="128" text-anchor="middle" fill="#333">deployment vertex_* params added to the call</text>
+  <line x1="170" y1="88" x2="218" y2="88" stroke="#333" marker-end="url(#a)"/>
+
+  <rect x="590" y="50" width="370" height="94" rx="6" fill="#fff8e6" stroke="#b8860b"/>
+  <text x="775" y="72" text-anchor="middle" fill="#111" font-weight="bold">inference-chat chat_completions_provider</text>
+  <text x="775" y="92" text-anchor="middle" fill="#333">vertex_ai + Gemini model: VertexGeminiConfig</text>
+  <text x="775" y="110" text-anchor="middle" fill="#333">vertex_ai + Claude partner model: VertexAiAnthropicConfig</text>
+  <text x="775" y="128" text-anchor="middle" fill="#555">Llama, Mistral, AI21, Gemma on Vertex: still refused</text>
+  <line x1="550" y1="97" x2="588" y2="97" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- shared request build -->
+  <rect x="20" y="176" width="560" height="256" rx="6" fill="#eef7ee" stroke="#3c8d3c"/>
+  <text x="300" y="198" text-anchor="middle" fill="#111" font-weight="bold">llms anthropic/chat build_messages_request (AnthropicHost::VertexAi)</text>
+  <text x="36" y="222" fill="#333">1. anthropic_version: vertex-2023-10-16 added after the params</text>
+  <text x="36" y="242" fill="#333">2. sort_params + map_openai_params: the Anthropic port; cost map</text>
+  <text x="54" y="260" fill="#333">read as vertex_ai/{m} first, then the model-map walk</text>
+  <text x="36" y="280" fill="#333">3. service_tier and speed are refused (400) or dropped</text>
+  <text x="54" y="298" fill="#333">with drop_params: Anthropic API only</text>
+  <text x="36" y="318" fill="#333">4. messages, system, tools, thinking as for anthropic/</text>
+  <text x="36" y="338" fill="#111" font-weight="bold">VertexAIAnthropicConfig.transform_request</text>
+  <text x="36" y="358" fill="#333">model popped; output_format folded into output_config,</text>
+  <text x="54" y="376" fill="#333">effort kept only where the model takes it</text>
+  <text x="36" y="396" fill="#333">context_management + extra_headers betas, filtered for</text>
+  <text x="54" y="414" fill="#333">Vertex, in body anthropic_beta and the anthropic-beta header</text>
+  <line x1="300" y1="144" x2="300" y2="174" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- urls and auth -->
+  <rect x="610" y="176" width="350" height="256" rx="6" fill="#ffffff" stroke="#4a6fa5"/>
+  <text x="785" y="198" text-anchor="middle" fill="#111" font-weight="bold">URL and credential</text>
+  <text x="626" y="222" fill="#333">https://{l}-aiplatform.googleapis.com</text>
+  <text x="626" y="240" fill="#333">global: https://aiplatform.googleapis.com</text>
+  <text x="626" y="258" fill="#333">/v1/projects/{p}/locations/{l}/publishers/</text>
+  <text x="644" y="276" fill="#333">anthropic/models/{m@version}:rawPredict</text>
+  <text x="626" y="296" fill="#333">api_base or VERTEXAI_API_BASE: path grafted,</text>
+  <text x="644" y="314" fill="#333">or {api_base}:rawPredict when it has its own</text>
+  <text x="626" y="334" fill="#333">location default us-central1</text>
+  <text x="626" y="358" fill="#333">Bearer: a Google access token from</text>
+  <text x="644" y="376" fill="#333">vertex_credentials, env or ADC; it replaces</text>
+  <text x="644" y="394" fill="#333">a forwarded Authorization, as Python does</text>
+  <text x="626" y="414" fill="#333">anthropic-version: 2023-06-01 header</text>
+  <line x1="580" y1="304" x2="608" y2="304" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- upstream -->
+  <rect x="610" y="464" width="350" height="96" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="785" y="488" text-anchor="middle" fill="#111" font-weight="bold">Claude on Vertex AI</text>
+  <text x="785" y="508" text-anchor="middle" fill="#333">rawPredict: Messages API JSON</text>
+  <text x="785" y="526" text-anchor="middle" fill="#333">stream: :streamRawPredict, "stream": true</text>
+  <text x="785" y="544" text-anchor="middle" fill="#555">custom api_base also gets ?alt=sse</text>
+  <line x1="785" y1="432" x2="785" y2="462" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- response -->
+  <rect x="20" y="464" width="560" height="160" rx="6" fill="#eef7ee" stroke="#3c8d3c"/>
+  <text x="300" y="486" text-anchor="middle" fill="#111" font-weight="bold">response and stream (anthropic/chat, shared)</text>
+  <text x="36" y="510" fill="#333">model: the requested {m@version}, as Python sets it</text>
+  <text x="36" y="530" fill="#333">text, tool_use to tool_calls with names put back,</text>
+  <text x="36" y="550" fill="#333">thinking to reasoning_content and thinking_blocks</text>
+  <text x="36" y="570" fill="#333">json_tool_call answer becomes the content</text>
+  <text x="36" y="590" fill="#333">stream: Anthropic SSE through ModelResponseIterator and</text>
+  <text x="54" y="608" fill="#333">StreamWrapper, usage handed to ReportedUsage</text>
+  <line x1="608" y1="512" x2="580" y2="512" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- bottom boxes -->
+  <rect x="20" y="656" width="440" height="144" rx="6" fill="#ffffff" stroke="#b8860b"/>
+  <text x="240" y="678" text-anchor="middle" fill="#111" font-weight="bold">usage and cost (gateway-inference Finish)</text>
+  <text x="36" y="702" fill="#333">prompt_tokens: input + cache read + cache write</text>
+  <text x="36" y="722" fill="#333">completion_tokens: output_tokens</text>
+  <text x="36" y="742" fill="#333">streams report it whether or not the client</text>
+  <text x="54" y="760" fill="#333">asked for include_usage</text>
+  <text x="36" y="780" fill="#555">config prices win, then the vertex_ai/{m} entry</text>
+
+  <rect x="500" y="656" width="460" height="144" rx="6" fill="#ffffff" stroke="#3c8d3c"/>
+  <text x="730" y="678" text-anchor="middle" fill="#111" font-weight="bold">gateway startup (hooks::install)</text>
+  <text x="516" y="702" fill="#333">a vertex_ai deployment loads the cost map and</text>
+  <text x="516" y="722" fill="#333">installs it as ModelInfo: supports_reasoning,</text>
+  <text x="516" y="742" fill="#333">supports_adaptive_thinking, supports_output_config,</text>
+  <text x="516" y="762" fill="#333">supports_native_structured_output (vertex entry only),</text>
+  <text x="516" y="782" fill="#333">default max_tokens: the bare {m} entry, else 4096</text>
+  <line x1="240" y1="624" x2="240" y2="654" stroke="#333" marker-end="url(#a)"/>
+</svg>

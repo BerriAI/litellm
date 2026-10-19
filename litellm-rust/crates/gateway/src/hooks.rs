@@ -205,8 +205,8 @@ fn is_azure(model: &Model) -> bool {
 }
 
 /// Whether the deployment's chat param rules read model capabilities from the cost map:
-/// Azure, the Anthropic, Bedrock and Gemini chat translations, and the OpenAI-compatible
-/// providers.
+/// Azure, the Anthropic, Bedrock, Gemini and Claude on Vertex AI chat translations, and the
+/// OpenAI-compatible providers.
 fn reads_model_info(model: &Model) -> bool {
     is_azure(model)
         || litellm_inference::provider::resolve_llm_provider(
