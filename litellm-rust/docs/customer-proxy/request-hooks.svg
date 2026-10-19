@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1000" height="560" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Configurable request hooks: litellm_settings.hooks, run top to bottom</text>
+
+  <rect x="24" y="60" width="230" height="200" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="38" y="84" font-weight="600" fill="#1e3a8a">Client request</text>
+  <text x="38" y="108" fill="#1e293b" font-size="13">x-trace-id: trace-1</text>
+  <text x="38" y="126" fill="#1e293b" font-size="13">x-cost-center: cc-9</text>
+  <text x="38" y="144" fill="#1e293b" font-size="13">x-litellm-spend-logs-</text>
+  <text x="38" y="162" fill="#1e293b" font-size="13">   metadata: {...}</text>
+  <text x="38" y="180" fill="#1e293b" font-size="13">anthropic-beta: ...</text>
+  <text x="38" y="198" fill="#1e293b" font-size="13">authorization: Bearer sk-...</text>
+  <text x="38" y="226" fill="#64748b" font-size="13">key: user, team alias,</text>
+  <text x="38" y="244" fill="#64748b" font-size="13">metadata; end user</text>
+  <line x1="254" y1="160" x2="286" y2="160" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="290" y="60" width="430" height="44" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="304" y="87" fill="#1e293b" font-size="13"><tspan font-weight="600">forward_headers</tspan>  copies listed client headers (exact or prefix-*)</text>
+  <rect x="290" y="112" width="430" height="44" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="304" y="139" fill="#1e293b" font-size="13"><tspan font-weight="600">spend_metadata</tspan>  headers (json or one key) + key metadata</text>
+  <rect x="290" y="164" width="430" height="44" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="304" y="191" fill="#1e293b" font-size="13"><tspan font-weight="600">strip_headers</tspan>  removes forwarded and pass-through headers</text>
+  <rect x="290" y="216" width="430" height="44" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="304" y="243" fill="#1e293b" font-size="13"><tspan font-weight="600">provider_metadata</tspan>  "{end_user|key.user_id}" templates</text>
+  <line x1="505" y1="104" x2="505" y2="110" stroke="#475569" stroke-width="1.5"/>
+  <line x1="505" y1="156" x2="505" y2="162" stroke="#475569" stroke-width="1.5"/>
+  <line x1="505" y1="208" x2="505" y2="214" stroke="#475569" stroke-width="1.5"/>
+
+  <rect x="756" y="60" width="220" height="200" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="770" y="84" font-weight="600" fill="#065f46">Provider request</text>
+  <text x="770" y="108" fill="#1e293b" font-size="13">x-trace-id: trace-1</text>
+  <text x="770" y="126" fill="#1e293b" font-size="13">x-caller-team: research</text>
+  <text x="770" y="144" fill="#1e293b" font-size="13">metadata.user_id: user-1</text>
+  <text x="770" y="162" fill="#1e293b" font-size="13">   (messages only)</text>
+  <text x="770" y="186" fill="#64748b" font-size="13">no x-cost-center, no</text>
+  <text x="770" y="204" fill="#64748b" font-size="13">anthropic-beta, never</text>
+  <text x="770" y="222" fill="#64748b" font-size="13">client credentials</text>
+  <line x1="720" y1="160" x2="752" y2="160" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="290" y="296" width="430" height="70" rx="8" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="304" y="320" font-weight="600" fill="#5b21b6">Spend log</text>
+  <text x="304" y="342" fill="#1e293b" font-size="13">the spend_metadata annotation lands in</text>
+  <text x="304" y="358" fill="#1e293b" font-size="13">LiteLLM_SpendLogs.metadata.spend_logs_metadata</text>
+  <path d="M290 134 L270 134 L270 330 L286 330" fill="none" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="400" width="952" height="140" rx="8" fill="#f8fafc" stroke="#64748b"/>
+  <text x="38" y="424" font-weight="600" fill="#0f172a">Rules</text>
+  <text x="38" y="448" fill="#1e293b" font-size="13">Each hook declares what it reads and writes; a later hook in the list wins on the same header or field.</text>
+  <text x="38" y="468" fill="#1e293b" font-size="13">Header edits reach the provider on both endpoints and every provider, Bedrock's signed requests included.</text>
+  <text x="38" y="488" fill="#1e293b" font-size="13">Credentials, signer and framing headers (authorization, x-api-key, cookie, x-amz-*, ...) are never forwarded or set.</text>
+  <text x="38" y="508" fill="#1e293b" font-size="13">An unknown hook, setting or template fact stops the gateway at startup; a bad JSON header is dropped with a warning.</text>
+  <text x="38" y="528" fill="#64748b" font-size="13">Templates name facts only: end_user, model, request_id, key.alias|user_id|team_id|team_alias, key.metadata.*, team.metadata.*, header.*</text>
+</svg>

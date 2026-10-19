@@ -128,6 +128,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ),
         ));
     }
+    hooks.extend(litellm_gateway::request_hooks::from_config(&config)?);
     let mut observers: Vec<Arc<dyn litellm_gateway_hooks::Observer>> = Vec::new();
     let spend = database.zip(litellm_gateway::spend::SpendSettings::from_config(&config));
     let spend_tracking = spend.is_some();
