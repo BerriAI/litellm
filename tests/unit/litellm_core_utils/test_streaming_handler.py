@@ -5181,6 +5181,65 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
     assert finish_output.choices[0].delta.content is None
 
 
+def _openai_chunk(chunk_id: str, delta: Mapping[str, object]) -> ChatCompletionChunk:
+    return ChatCompletionChunk(
+        id=chunk_id,
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[{"index": 0, "delta": delta, "finish_reason": None}],
+    )
+
+
+def _missed_attributes(wrapper: CustomStreamWrapper, chunks: Sequence[ChatCompletionChunk]) -> tuple[str, ...]:
+    attribute_lookup: Final = BaseModel.__getattr__.__code__
+    misses: Final[list[str]] = []
+
+    def record_miss(frame: FrameType, event: str, arg: object) -> Callable[[FrameType, str, object], object]:
+        if event == "exception" and isinstance(arg, tuple) and isinstance(arg[1], AttributeError):
+            misses.append(str(frame.f_locals["item"]))
+        return record_miss
+
+    def trace_lookups(frame: FrameType, event: str, _arg: object) -> Callable[[FrameType, str, object], object] | None:
+        return record_miss if event == "call" and frame.f_code is attribute_lookup else None
+
+    previous_tracer: Final = sys.gettrace()
+    sys.settrace(trace_lookups)
+    try:
+        tuple(wrapper.chunk_creator(chunk=chunk) for chunk in chunks)
+    finally:
+        sys.settrace(previous_tracer)
+    return tuple(misses)
+
+
+def test_openai_chunk_creator_builds_one_delta_and_misses_no_attribute_per_later_chunk(
+    logging_obj: Logging,
+) -> None:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+    wrapper.chunk_creator(chunk=_openai_chunk("chunk-1", {"role": "assistant", "content": ""}))
+    plain_chunks: Final = (
+        _openai_chunk("chunk-2", {"content": "hello"}),
+        _openai_chunk("chunk-3", {"content": " world"}),
+    )
+    nested_chunk: Final = _openai_chunk(
+        "chunk-4", {"content": "!", "reasoning_details": [{"type": "reasoning.text", "text": "thought"}]}
+    )
+    delta_init: Final = Delta.__init__.__code__
+    streaming_choices_init: Final = StreamingChoices.__init__.__code__
+
+    outputs, calls = _chunk_creator_calls(wrapper, plain_chunks, frozenset({delta_init, streaming_choices_init}))
+
+    assert sum(call.code is delta_init for call in calls) == len(plain_chunks)
+    assert sum(call.code is streaming_choices_init for call in calls) == len(plain_chunks)
+    assert [output.choices[0].delta.content if output else None for output in outputs] == ["hello", " world"]
+    assert _missed_attributes(wrapper, (*plain_chunks, nested_chunk)) == ()
+
+
 def test_chunk_creator_skips_full_dump_of_model_response_stream_chunks(
     logging_obj: Logging,
 ) -> None:

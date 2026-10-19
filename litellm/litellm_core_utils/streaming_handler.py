@@ -101,8 +101,27 @@ def _prepend_upstream_choice_extras(
 
 
 def _holds_only_scalars(model: BaseModel) -> bool:
-    values: Final[Mapping[str, object]] = dict(model)
-    return all(value is None or isinstance(value, (str, int, float, bool)) for value in values.values())
+    fields: Final[Iterator[tuple[str, object]]] = iter(model)
+    return all(value is None or isinstance(value, (str, int, float, bool)) for _, value in fields)
+
+
+def _delta_from_upstream(upstream_delta: BaseModel | None) -> Delta | None:
+    if upstream_delta is None:
+        return Delta()
+    try:
+        return Delta(**dict(iter(upstream_delta)))
+    except Exception:
+        return None
+
+
+def _stored_attribute(obj: object, name: str) -> object:
+    if not isinstance(obj, BaseModel):
+        return getattr(obj, name, None)
+    values: Final[Mapping[str, object]] = vars(obj)
+    if name in values:
+        return values[name]
+    extras: Final[Mapping[str, object]] = obj.__pydantic_extra__ or {}
+    return extras.get(name)
 
 
 def _is_transport_timeout(error: BaseException) -> bool:
@@ -269,6 +288,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self._openai_handler_receives_chat_chunks = False
         self._failure_logging: asyncio.Task[None] | None = None
         self._closed = False
         self._stream_created_time: float = time.time()
@@ -806,7 +826,10 @@ class CustomStreamWrapper:
             raise e
 
     def model_response_creator(
-        self, chunk: dict | None = None, hidden_params: Mapping[str, object] | None = None
+        self,
+        chunk: dict | None = None,
+        hidden_params: Mapping[str, object] | None = None,
+        delta: Delta | None = None,
     ) -> ModelResponseStream:
         _model: Final = self._cached_model_name
         _logging_obj_llm_provider: Final = self._cached_logging_llm_provider
@@ -819,7 +842,11 @@ class CustomStreamWrapper:
             if chunk:
                 args.update({k: v for k, v in chunk.items() if k != "stream"})
 
-        model_response: Final = ModelResponseStream(**args)
+        model_response: Final = (
+            ModelResponseStream(**args)
+            if delta is None
+            else ModelResponseStream(**args, choices=[StreamingChoices(delta=delta)])
+        )
         if self.response_id is not None:
             model_response.id = self.response_id
         elif model_response.id:
@@ -960,6 +987,26 @@ class CustomStreamWrapper:
             model_response.choices[0].delta = Delta(**_initial_delta)
         return model_response
 
+    def _prebuilt_plain_delta(self, chunk: object) -> Delta | None:
+        if (
+            not self._openai_handler_receives_chat_chunks
+            or not isinstance(chunk, ChatCompletionChunk)
+            or not chunk.choices
+        ):
+            return None
+        upstream_delta: Final = cast(  # cast-ok: [LIT006] runtime delta may be absent
+            ChoiceDelta | None,
+            chunk.choices[0].delta,
+        )
+        if (
+            upstream_delta is None
+            or upstream_delta.function_call is not None
+            or upstream_delta.tool_calls is not None
+            or self._has_any_special_delta_attributes(upstream_delta)
+        ):
+            return None
+        return _delta_from_upstream(upstream_delta)
+
     def _set_role_on_fresh_delta(self, model_response: ModelResponseStream) -> None:
         delta: Final = model_response.choices[0].delta
         if self.sent_first_chunk is False:
@@ -1005,11 +1052,11 @@ class CustomStreamWrapper:
         """
         return self.strip_role_from_delta(model_response)
 
-    def _has_special_delta_attribute(self, delta, attribute_name: str) -> bool:
+    def _has_special_delta_attribute(self, delta: object, attribute_name: str) -> bool:
         """
         Check if delta has a specific attribute and it's not None.
         """
-        return delta is not None and getattr(delta, attribute_name, None) is not None
+        return delta is not None and _stored_attribute(delta, attribute_name) is not None
 
     def _copy_delta_attribute(self, source_delta, target_delta, attribute_name: str) -> None:
         """
@@ -1017,7 +1064,7 @@ class CustomStreamWrapper:
         """
         setattr(target_delta, attribute_name, getattr(source_delta, attribute_name))
 
-    def _has_any_special_delta_attributes(self, delta) -> bool:
+    def _has_any_special_delta_attributes(self, delta: object) -> bool:
         """
         Check if delta has any special attributes (audio, image).
         """
@@ -1067,7 +1114,8 @@ class CustomStreamWrapper:
                         )
                         upstream_choice: Final = (
                             original_chunk_for_reuse.choices[0]
-                            if isinstance(original_chunk_for_reuse, ChatCompletionChunk)
+                            if plain_delta_created
+                            and isinstance(original_chunk_for_reuse, ChatCompletionChunk)
                             and len(original_chunk_for_reuse.choices) == 1
                             else None
                         )
@@ -1079,8 +1127,7 @@ class CustomStreamWrapper:
                             (upstream_choice.__pydantic_extra__ or {}) if upstream_choice is not None else ()
                         )
                         can_reuse_choice: Final = (
-                            plain_delta_created
-                            and upstream_choice is not None
+                            upstream_choice is not None
                             and upstream_delta is not None
                             and "enhancements" not in upstream_choice_extra_keys
                             and upstream_choice.logprobs is None
@@ -1113,7 +1160,7 @@ class CustomStreamWrapper:
                     setattr(
                         model_response,
                         "citations",
-                        getattr(original_chunk, "citations", None),
+                        _stored_attribute(original_chunk, "citations"),
                     )
                     preserve_upstream_non_openai_attributes(
                         model_response=model_response,
@@ -1469,6 +1516,8 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         else:  # openai / azure chat model
+            if isinstance(chunk, ChatCompletionChunk):
+                self._openai_handler_receives_chat_chunks = True
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
@@ -1533,8 +1582,11 @@ class CustomStreamWrapper:
         provider_response_model: Final = _provider_response_model(chunk)
         if provider_response_model is not None:
             self._provider_response_model = provider_response_model
+        prebuilt_delta: Final = self._prebuilt_plain_delta(chunk)
+        plain_delta_created: bool = prebuilt_delta is not None  # rebind-ok: the first chunk builds its delta below
         model_response = self.model_response_creator(
-            hidden_params=_provider_hidden_params(chunk, self._provider_response_model)
+            hidden_params=_provider_hidden_params(chunk, self._provider_response_model),
+            delta=prebuilt_delta,
         )
         response_obj: dict[str, Any] = {}
         try:
@@ -1558,7 +1610,7 @@ class CustomStreamWrapper:
                 # enter this branch when no content has been passed in response
                 if hasattr(original_chunk, "id"):
                     model_response = self.set_model_id(original_chunk.id, model_response)
-                if hasattr(original_chunk, "provider_specific_fields"):
+                if _stored_attribute(original_chunk, "provider_specific_fields") is not None:
                     model_response = self.copy_model_response_level_provider_specific_fields(
                         original_chunk, model_response
                     )
@@ -1610,17 +1662,10 @@ class CustomStreamWrapper:
                             model_response.choices[0].delta = Delta()
                     elif self._has_any_special_delta_attributes(delta):
                         self._handle_special_delta_attributes(delta, model_response)
-                    else:
-                        try:
-                            delta = (
-                                dict()
-                                if original_chunk.choices[0].delta is None
-                                else dict(original_chunk.choices[0].delta)
-                            )
-                            model_response.choices[0].delta = Delta(**delta)
-                            response_obj["_plain_delta_created"] = True
-                        except Exception:
-                            model_response.choices[0].delta = Delta()
+                    elif prebuilt_delta is None:
+                        plain_delta: Final = _delta_from_upstream(delta)
+                        model_response.choices[0].delta = plain_delta if plain_delta is not None else Delta()
+                        plain_delta_created = plain_delta is not None  # rebind-ok: the first chunk builds its delta
                 else:
                     if self.send_stream_usage is True:
                         model_response.choices = []
@@ -1647,7 +1692,7 @@ class CustomStreamWrapper:
                 completion_obj=completion_obj,
                 model_response=model_response,
                 response_obj=response_obj,
-                plain_delta_created=response_obj.get("_plain_delta_created") is True,
+                plain_delta_created=plain_delta_created,
             )
             return result
 

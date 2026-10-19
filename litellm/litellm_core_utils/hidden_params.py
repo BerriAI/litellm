@@ -1,5 +1,7 @@
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Iterator, Mapping, MutableMapping
 from typing import Final, Protocol, cast
+
+from pydantic import BaseModel
 
 from litellm.types.llms.base import HiddenParams
 
@@ -48,7 +50,12 @@ class HiddenParamsModelView(MutableMapping[str, object]):
 
 
 def _get_hidden_params_storage(obj: object) -> object | None:
-    return obj.get(_HIDDEN_PARAMS_ATTR) if isinstance(obj, dict) else getattr(obj, _HIDDEN_PARAMS_ATTR, None)
+    if isinstance(obj, dict):
+        return obj.get(_HIDDEN_PARAMS_ATTR)
+    if isinstance(obj, BaseModel) and _HIDDEN_PARAMS_ATTR not in type(obj).__private_attributes__:
+        instance_values: Final[Mapping[str, object]] = vars(obj)
+        return instance_values.get(_HIDDEN_PARAMS_ATTR)
+    return getattr(obj, _HIDDEN_PARAMS_ATTR, None)
 
 
 def get_hidden_params_storage(obj: object) -> dict[str, object] | HiddenParams | None:
