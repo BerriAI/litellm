@@ -4071,6 +4071,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
+ "litellm-token-counter",
  "litellm-tracing",
  "reqwest 0.12.28",
  "rstest",
