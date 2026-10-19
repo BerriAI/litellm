@@ -206,6 +206,15 @@ enum Line {
     Skipping,
 }
 
+/// What the stream's `event:` line named for the event in progress. Anthropic streams name every
+/// event, which decides a data line whatever order its JSON keys come in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Event {
+    Unnamed,
+    Usage,
+    Other,
+}
+
 /// Reads usage out of a server-sent-event stream as its chunks pass through. Only the line in
 /// progress is buffered, and only while it may carry usage.
 #[derive(Debug)]
@@ -213,6 +222,7 @@ pub struct StreamUsage {
     format: StreamFormat,
     line: Vec<u8>,
     state: Line,
+    event: Event,
     usage: Option<Usage>,
     model: Option<String>,
 }
@@ -223,6 +233,7 @@ impl StreamUsage {
             format,
             line: Vec::new(),
             state: Line::Reading,
+            event: Event::Unnamed,
             usage: None,
             model: None,
         }
@@ -239,8 +250,10 @@ impl StreamUsage {
                 self.take(part);
             }
             if end.is_some() {
-                if let Line::Reading = self.state {
-                    self.read_line();
+                match self.state {
+                    Line::Reading => self.read_line(),
+                    // A skipped line is content, never the blank line that ends an event.
+                    Line::Skipping => {}
                 }
                 self.line.clear();
                 self.state = Line::Reading;
@@ -294,23 +307,43 @@ impl StreamUsage {
             return false;
         }
         match self.format {
-            StreamFormat::Anthropic if line.len() >= DECIDE_BYTES => {
-                let head = &line[..DECIDE_BYTES];
-                contains(head, b"\"message_start\"") || contains(head, b"\"message_delta\"")
-            }
+            StreamFormat::Anthropic if line.len() >= DECIDE_BYTES => match self.event {
+                Event::Usage => true,
+                Event::Other => false,
+                Event::Unnamed => {
+                    let head = &line[..DECIDE_BYTES];
+                    contains(head, b"\"message_start\"") || contains(head, b"\"message_delta\"")
+                }
+            },
             StreamFormat::Anthropic | StreamFormat::OpenAi => true,
         }
     }
 
     fn read_line(&mut self) {
         let line = self.line.strip_suffix(b"\r").unwrap_or(&self.line);
+        if line.is_empty() {
+            self.event = Event::Unnamed;
+            return;
+        }
+        if let Some(name) = line.strip_prefix(b"event:") {
+            let name = name.strip_prefix(b" ").unwrap_or(name);
+            self.event = match name {
+                b"message_start" | b"message_delta" => Event::Usage,
+                _ => Event::Other,
+            };
+            return;
+        }
         let Some(data) = line.strip_prefix(b"data:") else {
             return;
         };
         let data = data.strip_prefix(b" ").unwrap_or(data);
         match self.format {
             StreamFormat::Anthropic => {
-                if !(contains(data, b"\"message_start\"") || contains(data, b"\"message_delta\"")) {
+                let named = self.event == Event::Usage;
+                if !named
+                    && !(contains(data, b"\"message_start\"")
+                        || contains(data, b"\"message_delta\""))
+                {
                     return;
                 }
                 let Ok(event) = serde_json::from_slice::<AnthropicEvent>(data) else {
@@ -415,6 +448,32 @@ mod tests {
         assert!(meter.line.capacity() < 4 * DECIDE_BYTES);
         meter.feed(b"\"}}\n\n");
         assert_eq!(meter.usage(), None);
+    }
+
+    /// Key order is not part of JSON: an upstream may put `type` after the message object, past
+    /// the decision window, and the event line still marks the usage events.
+    #[rstest]
+    #[case::whole(usize::MAX)]
+    #[case::bytes(1)]
+    #[case::small(7)]
+    fn anthropic_usage_events_are_found_by_event_name(#[case] size: usize) {
+        let stream = concat!(
+            "event: message_start\n",
+            "data: {\"message\":{\"content\":[],\"id\":\"msg_0123456789abcdef0123456789abcdef\",\"model\":\"claude-x\",\"role\":\"assistant\",\"stop_reason\":null,\"type\":\"message\",\"usage\":{\"input_tokens\":1234,\"output_tokens\":1}},\"type\":\"message_start\"}\n",
+            "\n",
+            "event: content_block_delta\n",
+            "data: {\"delta\":{\"text\":\"text that mentions \\\"message_delta\\\" and is longer than the decision window\",\"type\":\"text_delta\"},\"index\":0,\"type\":\"content_block_delta\",\"usage\":{\"output_tokens\":999}}\n",
+            "\n",
+            "event: message_delta\n",
+            "data: {\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"type\":\"message_delta\",\"usage\":{\"output_tokens\":42}}\n",
+            "\n",
+        );
+        let mut meter = StreamUsage::new(StreamFormat::Anthropic);
+        for chunk in stream.as_bytes().chunks(size.min(stream.len())) {
+            meter.feed(chunk);
+        }
+        let usage = meter.usage().expect("usage");
+        assert_eq!((usage.input_tokens, usage.output_tokens), (1234, 42));
     }
 
     #[rstest]
