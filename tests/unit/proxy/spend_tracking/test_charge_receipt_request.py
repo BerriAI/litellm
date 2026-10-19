@@ -56,6 +56,8 @@ class FrozenJWTClock(datetime):
         "none",
         "prefix",
         "stripped",
+        "mounted_prefix",
+        "mounted_stripped",
         "wrong_prefix",
         "body",
         "scope",
@@ -80,7 +82,9 @@ async def test_signed_context_binds_the_original_scope_and_exact_request(
     monkeypatch.setattr(jwt.api_jwt, "datetime", FrozenJWTClock)
     body: Final = json.dumps({"model": RECEIPT.model, "background": changed == "background"}).encode()
     issued: Final = int(STAMP.timestamp()) - (600 if changed == "expired" else 0)
-    root: Final = "/genai" if changed in ("prefix", "stripped", "wrong_prefix") else ""
+    root: Final = (
+        "/genai" if changed in ("prefix", "stripped", "mounted_prefix", "mounted_stripped", "wrong_prefix") else ""
+    )
     path: Final = "/v1/embeddings" if changed == "unsupported" else "/v1/responses"
     token: Final = jwt.encode(
         {
@@ -109,13 +113,16 @@ async def test_signed_context_binds_the_original_scope_and_exact_request(
         return {"type": "http.request", "body": body, "more_body": False}
 
     supplied: Final = {"missing": "", "oversized": "x" * 4097, "malformed": "not-a-jwt"}.get(changed, token)
-    request: Final = Request(request_for(path if changed == "stripped" else root + path, token=supplied).scope, receive)
+    request: Final = Request(
+        request_for(path if changed.endswith("stripped") else root + path, token=supplied).scope, receive
+    )
     request.scope["root_path"] = root
+    request.scope["app_root_path"] = "" if changed.startswith("mounted") else root
     request.scope["headers"].append((b"host", b"gateway.example.test/v1/chat/completions?"))
     request.scope["litellm_websocket_auth"] = changed == "websocket"
     query: Final = ScriptedQuery((({"installed": True, "durable": True},),))
     runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
-    if changed in ("none", "prefix", "stripped"):
+    if changed in ("none", "prefix", "stripped", "mounted_prefix", "mounted_stripped"):
         await authorize_charge_receipt(request, UserAPIKeyAuth(api_key=RECEIPT.key_hash), runtime, json.loads(body))
         with pytest.raises(HTTPException) as missing:
             await await_charge_receipt(request)
@@ -149,6 +156,7 @@ async def test_signed_context_binds_the_original_scope_and_exact_request(
 async def test_prefixed_non_inference_routes_do_not_require_signed_context(method: str, path: str) -> None:
     request: Final = request_for("/genai" + path, method=method)
     request.scope["root_path"] = "/genai"
+    request.scope["app_root_path"] = ""
     query: Final = ScriptedQuery()
     await authorize_charge_receipt(
         request, UserAPIKeyAuth(api_key=RECEIPT.key_hash), ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query)), {}

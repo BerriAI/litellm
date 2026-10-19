@@ -109,14 +109,14 @@ async def authorize_charge_receipt(
         raise HTTPException(400, "WebSocket inference does not support required charge receipts.")
     from litellm.proxy.auth.auth_utils import get_request_route
 
-    route: Final = get_request_route(request)
+    root: Final = str(request.scope.get("root_path", "")).rstrip("/")
+    route: Final = get_request_route(Request({**request.scope, "app_root_path": root}))
     if request.method in {"GET", "HEAD"} and RouteChecks.is_info_route(route):
         return
     if request.method == "POST" and route == "/utils/token_counter":
         return
     if request.method != "POST" or route not in SUPPORTED_RECEIPT_ROUTES:
         raise HTTPException(400, "This route does not support required charge receipts.")
-    root: Final = str(request.scope.get("app_root_path", request.scope.get("root_path", ""))).rstrip("/")
     token: Final = request.headers.get("x-litellm-billing-context", "")
     if not token or len(token) > 4096:
         raise HTTPException(400, "A signed billing context is required for this key.")
