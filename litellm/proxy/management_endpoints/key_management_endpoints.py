@@ -322,9 +322,9 @@ def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialIt
     )
 
 
-def _config_table(prisma_client: PrismaClient) -> _ConfigTableActions:
+def _config_table(prisma_client: PrismaClient, *, use_writer: bool = False) -> _ConfigTableActions:
     return cast(  # cast-ok: ConfigRepository.table hides the write actions this module needs on that same object
-        "_ConfigTableActions", ConfigRepository(prisma_client).table
+        "_ConfigTableActions", ConfigRepository(prisma_client, use_writer=use_writer).table
     )
 
 
@@ -450,7 +450,7 @@ def _generate_budget_windows(
 
 
 def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> LiteLLM_VerificationToken:
-    requested: Final = data.model_dump(exclude_unset=True, exclude_none=True)
+    requested: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
     metadata_fields: Final = MappingProxyType(
         {field: value for field, value in requested.items() if field in _KEY_METADATA_REQUEST_FIELDS}
     )
@@ -493,7 +493,7 @@ def _regenerate_request_as_update_request(key: str, data: RegenerateKeyRequest) 
     changed_fields: Final = MappingProxyType(
         {
             field: value
-            for field, value in data.model_dump(exclude_unset=True).items()
+            for field, value in _as_object_dict(data.model_dump(exclude_unset=True)).items()
             if field in UpdateKeyRequest.model_fields
             and field != "key"
             and not (field in _EMPTY_DURATION_MEANS_UNCHANGED and value == "")
@@ -5566,7 +5566,7 @@ async def rotate_master_key(
         await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
     # 3. process config table
     try:
-        config = await _config_table(prisma_client).find_many()
+        config = await _config_table(prisma_client, use_writer=True).find_many()
     except Exception:
         config = None
 
@@ -5589,7 +5589,7 @@ async def rotate_master_key(
             if encrypted_env_vars:
                 await _config_table(prisma_client).update(
                     where={"param_name": "environment_variables"},
-                    data={"param_value": prisma.Json(encrypted_env_vars)},
+                    data={"param_value": prisma.Json({**environment_variables_dict, **encrypted_env_vars})},
                 )
 
     try:
@@ -7713,6 +7713,11 @@ async def block_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
+    record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
+        where={"token": hashed_token},
+        data=with_settings_updated_at({"blocked": True}),
+    )
+
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
@@ -7733,11 +7738,6 @@ async def block_key(
                 )
             )
         )
-
-    record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
-        where={"token": hashed_token},
-        data=with_settings_updated_at({"blocked": True}),
-    )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
     await delete_cache_key_object(
@@ -7827,6 +7827,11 @@ async def unblock_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
+    record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
+        where={"token": hashed_token},
+        data=with_settings_updated_at({"blocked": False}),
+    )
+
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
@@ -7847,11 +7852,6 @@ async def unblock_key(
                 )
             )
         )
-
-    record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
-        where={"token": hashed_token},
-        data=with_settings_updated_at({"blocked": False}),
-    )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
     await delete_cache_key_object(

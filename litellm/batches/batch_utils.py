@@ -5,6 +5,8 @@ from dataclasses import replace as dataclasses_replace
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
@@ -17,7 +19,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
 )
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
-from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
 
 
@@ -35,6 +37,7 @@ class BatchCostUsageResult:
 
 
 _COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
+_DECODED_BATCH_LINE: Final = TypeAdapter(object)
 
 
 def _uses_native_vertex_output(
@@ -566,6 +569,7 @@ def extract_file_access_credentials(
             # A federated deployment holds no api_key, so without these the fetch that reads a
             # finished batch's output has nothing to authenticate with and its cost is never billed.
             *sorted(ANTHROPIC_WIF_KWARGS_KEYS),
+            *sorted(OPENAI_WIF_KWARGS_KEYS),
         )
         for key in credential_keys:
             if key in litellm_params:
@@ -624,7 +628,7 @@ def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict[str, object
 
 def parse_batch_output_line(line: bytes) -> dict[str, object] | None:
     try:
-        parsed: Final[object] = json.loads(line)
+        parsed: Final = _DECODED_BATCH_LINE.validate_python(json.loads(line))
     except ValueError as e:
         verbose_logger.warning("skipping malformed batch output line: %s", str(e))
         return None
@@ -790,11 +794,17 @@ def _batch_response_was_successful(
     message batch results lines report ``result.type == "succeeded"``; Bedrock
     batch output lines report ``modelOutput`` (and no ``error``).
     """
-    if custom_llm_provider == "anthropic":
-        return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("type") == "succeeded"
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput") is not None and batch_job_output_file.get("error") is None
-    _response: Final[dict[str, object]] = cast(  # cast-ok: batch response bodies come from provider JSON
-        dict[str, object], batch_job_output_file.get("response", None) or {}
+    envelope_key: Final = "result" if custom_llm_provider == "anthropic" else "response"
+    envelope: Final = batch_job_output_file.get(envelope_key)
+    if not isinstance(envelope, Mapping):
+        if envelope is not None:
+            verbose_logger.warning("batch output %s must be an object, treating the line as unsuccessful", envelope_key)
+        return False
+    response: Final = cast(Mapping[object, object], envelope)  # cast-ok: mapping shape validated above
+    return (
+        response.get("type") == "succeeded"
+        if custom_llm_provider == "anthropic"
+        else response.get("status_code") == 200
     )
-    return _response.get("status_code", None) == 200

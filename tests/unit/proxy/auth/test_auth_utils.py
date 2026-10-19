@@ -35,7 +35,7 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
 )
 from litellm.router import Router
-from litellm.types.utils import oauth_token_exchange_litellm_params
+from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 
@@ -163,13 +163,45 @@ def test_every_server_owned_identity_param_is_refused_from_a_request_body(param:
         )
 
 
+def _client_router_config(placement: str, litellm_params: dict[str, str]) -> dict[str, object]:
+    if placement == "model_list":
+        return {"model_list": [{"model_name": "gpt-5.4-nano", "litellm_params": litellm_params}]}
+    return {"default_litellm_params": litellm_params}
+
+
+@pytest.mark.parametrize("param", server_owned_wif_litellm_params)
+@pytest.mark.parametrize("placement", ["model_list", "default_litellm_params"])
+def test_every_server_owned_auth_param_is_refused_from_a_client_router_config(param: str, placement: str):
+    user_config: Final = _client_router_config(placement, {"model": "openai/gpt-5.4-nano", param: "attacker-chosen"})
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ):
+        is_request_body_safe(
+            request_body={"model": "gpt-5.4-nano", "user_config": user_config},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="gpt-5.4-nano",
+        )
+
+
 @pytest.mark.parametrize(
     "body",
     [
         {"model": "claude-sonnet-5", "litellm_credential_name": "admin-wif"},
         {"model": "claude-sonnet-5", "litellm_params": {"litellm_credential_name": "admin-wif"}},
+        {
+            "model": "claude-sonnet-5",
+            "user_config": _client_router_config(
+                "model_list", {"model": "anthropic/claude-sonnet-5", "litellm_credential_name": "admin-wif"}
+            ),
+        },
+        {
+            "model": "claude-sonnet-5",
+            "user_config": _client_router_config("default_litellm_params", {"litellm_credential_name": "admin-wif"}),
+        },
     ],
-    ids=["top_level", "nested_litellm_params"],
+    ids=["top_level", "nested_litellm_params", "client_router_model_list", "client_router_defaults"],
 )
 def test_a_request_body_cannot_pick_a_federated_identity_by_credential_name(monkeypatch, body: dict):
     """Naming a federated credential moves the token exchange onto that credential's federation rule
@@ -1471,6 +1503,124 @@ async def test_managed_batch_routes_pass_team_model_access_check(route, request_
             team_object=LiteLLM_TeamTable(team_id="team-other", models=["some-other-model"]),
             llm_router=llm_router,
         )
+
+
+_TEAM_DEPLOYMENT_ID: Final = "team-a-deployment-id"
+_TEAM_INTERNAL_MODEL_NAME: Final = "model_name_team-a_6d1f3c2e-0000-4000-8000-000000000000"
+_TEAM_PUBLIC_MODEL_NAME: Final = "team-batch-model"
+_TEAM_MANAGED_BATCH_ID: Final = _encode_managed_id(
+    f"litellm_proxy;model_id:{_TEAM_DEPLOYMENT_ID};llm_batch_id:provider-batch-789"
+)
+
+
+def _team_scoped_router(public_model_name: str | None = _TEAM_PUBLIC_MODEL_NAME) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": _TEAM_INTERNAL_MODEL_NAME,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {
+                    "id": _TEAM_DEPLOYMENT_ID,
+                    "team_id": "team-a",
+                    **({"team_public_model_name": public_model_name} if public_model_name else {}),
+                },
+            },
+        ]
+    )
+
+
+def _team_scoped_character_id() -> str:
+    from litellm.types.videos.utils import encode_character_id_with_provider
+
+    return encode_character_id_with_provider(character_id="char_team", provider="openai", model_id=_TEAM_DEPLOYMENT_ID)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, request_data",
+    [
+        pytest.param("/v1/batches/{batch_id}", {"batch_id": _TEAM_MANAGED_BATCH_ID}, id="batch-retrieve"),
+        pytest.param("/v1/batches/{batch_id}/cancel", {"batch_id": _TEAM_MANAGED_BATCH_ID}, id="batch-cancel"),
+        pytest.param(
+            "/v1/fine_tuning/jobs/{fine_tuning_job_id}",
+            {
+                "fine_tuning_job_id": _encode_managed_id(
+                    f"litellm_proxy;model_id:{_TEAM_DEPLOYMENT_ID};generic_response_id:ftjob-1"
+                )
+            },
+            id="fine-tuning-job",
+        ),
+        pytest.param(
+            "/v1/vector_stores/{vector_store_id}",
+            {
+                "vector_store_id": _encode_managed_id(
+                    "litellm_proxy:vector_store;unified_id,vs-unified;"
+                    f"target_model_names,{_TEAM_PUBLIC_MODEL_NAME};resource_id,vs_1;model_id,{_TEAM_DEPLOYMENT_ID}"
+                )
+            },
+            id="vector-store",
+        ),
+        pytest.param(
+            "/v1/videos/characters/{character_id}",
+            {"character_id": _team_scoped_character_id()},
+            id="character",
+        ),
+    ],
+)
+async def test_team_scoped_managed_ids_authorize_only_the_owning_team_by_public_name(
+    route: str, request_data: dict[str, str]
+) -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    llm_router: Final = _team_scoped_router()
+
+    async def check(team_id: str) -> None:
+        await can_key_call_resolved_model(
+            model=get_model_from_request(
+                request_data=request_data, route=route, llm_router=llm_router, team_id=team_id
+            ),
+            llm_model_list=None,
+            valid_token=UserAPIKeyAuth(api_key="sk-team", team_id=team_id, team_models=[_TEAM_PUBLIC_MODEL_NAME]),
+            llm_router=llm_router,
+        )
+
+    await check("team-a")
+    with pytest.raises(ProxyException) as exc_info:
+        await check("team-b")
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_legacy_team_alias_authorizes_a_team_batch_only_for_keys_granted_the_alias() -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    llm_router: Final = _team_scoped_router(public_model_name=None)
+
+    async def check(key_models: list[str]) -> None:
+        await can_key_call_resolved_model(
+            model=get_model_from_request(
+                request_data={"batch_id": _TEAM_MANAGED_BATCH_ID},
+                route="/v1/batches/{batch_id}",
+                llm_router=llm_router,
+                team_id="team-a",
+            ),
+            llm_model_list=None,
+            valid_token=UserAPIKeyAuth(
+                api_key="sk-team",
+                team_id="team-a",
+                models=key_models,
+                team_models=["legacy-team-model"],
+                team_model_aliases={"legacy-team-model": _TEAM_INTERNAL_MODEL_NAME},
+            ),
+            llm_router=llm_router,
+        )
+
+    await check(["legacy-team-model"])
+    with pytest.raises(ProxyException) as exc_info:
+        await check(["some-other-model"])
+    assert exc_info.value.code == "403"
 
 
 def test_get_model_from_request_resolves_character_id_model_with_router():
