@@ -1,6 +1,7 @@
 import asyncio
 import itertools
 import threading
+from _collections_abc import dict_items
 from collections.abc import Callable
 from typing import Final
 
@@ -94,6 +95,35 @@ async def test_concurrent_cold_requests_share_one_build():
         responses: Final = await asyncio.gather(first_request, second_request)
 
     assert [response.json() for response in responses] == [{"build": 0}, {"build": 0}]
+
+
+async def test_warm_requests_reuse_the_rendered_schema():
+    app: Final = FastAPI()
+    renders: Final = itertools.count()
+
+    class RenderCountingSchema(dict[str, JsonValue]):
+        def items(self) -> "dict_items[str, JsonValue]":
+            _ = next(renders)
+            return super().items()
+
+    serve_openapi_off_the_event_loop(app, _route_paths(app), lambda paths: RenderCountingSchema(paths=[*paths]))
+    async with _client(app) as client:
+        bodies: Final = [(await client.get("/openapi.json")).content for _ in range(3)]
+
+    assert (len(set(bodies)), next(renders)) == (1, 1)
+
+
+async def test_a_rebuilt_schema_is_served_instead_of_the_previous_one():
+    app: Final = FastAPI()
+    builds: Final = itertools.count()
+    serve_openapi_off_the_event_loop(app, _route_paths(app), lambda paths: {"build": next(builds)})
+
+    async with _client(app) as client:
+        first: Final = await client.get("/openapi.json")
+        app.openapi_schema = None
+        second: Final = await client.get("/openapi.json")
+
+    assert (first.json(), second.json()) == ({"build": 0}, {"build": 1})
 
 
 @pytest.mark.parametrize(

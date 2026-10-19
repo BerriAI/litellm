@@ -1,9 +1,11 @@
 import asyncio
+import functools
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Final, TypeAlias, TypeVar
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import TypeAdapter
 from starlette.routing import BaseRoute, Route
 
@@ -12,6 +14,17 @@ from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
 OpenAPISchema: TypeAlias = JsonObject
 Inputs: Final = TypeVar("Inputs")
 _SERVERS: Final = TypeAdapter(list[dict[str, object]])
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _SameSchema:
+    schema: Mapping[str, object]
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _SameSchema) and other.schema is self.schema
+
+    def __hash__(self) -> int:
+        return id(self.schema)
 
 
 def serve_openapi_off_the_event_loop(
@@ -34,18 +47,22 @@ def serve_openapi_off_the_event_loop(
                 app.openapi_schema = schema
             return schema
 
-    async def openapi(request: Request) -> JSONResponse:
+    async def openapi(request: Request) -> Response:
         schema: Final = app.openapi_schema or await built_schema()
         scope_root_path: Final[object] = request.scope.get("root_path")
         root_path: Final = scope_root_path.rstrip("/") if isinstance(scope_root_path, str) else ""
-        if root_path and app.root_path_in_servers:
-            return JSONResponse(_with_root_path_server(schema, root_path))
-        return JSONResponse(schema)
+        servers_root_path: Final = root_path if app.root_path_in_servers else ""
+        return Response(_rendered(_SameSchema(schema), servers_root_path), media_type="application/json")
 
     app.router.routes[:] = [  # rebind-ok: the app owns its route table
         Route(openapi_url, openapi, include_in_schema=False) if _serves(route, openapi_url) else route
         for route in app.router.routes
     ]
+
+
+@functools.lru_cache(maxsize=1)
+def _rendered(served: _SameSchema, root_path: str) -> bytes | memoryview:
+    return JSONResponse(_with_root_path_server(served.schema, root_path) if root_path else served.schema).body
 
 
 def _with_root_path_server(schema: Mapping[str, object], root_path: str) -> Mapping[str, object]:
