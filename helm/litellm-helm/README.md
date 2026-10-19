@@ -70,11 +70,18 @@ proxyConfigMap:
 proxy_config:
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
+  model_list: []
+```
+
+The chart ships no models, so add them under `proxy_config.model_list` or from the Admin UI with `store_model_in_db: true`
+
+```
+proxy_config:
   model_list:
-    - model_name: gpt-3.5-turbo
+    - model_name: gpt-5.6
       litellm_params:
-        model: gpt-3.5-turbo
-        api_key: eXaMpLeOnLy
+        model: openai/gpt-5.6
+        api_key: os.environ/OPENAI_API_KEY
 ```
 
 #### Example using existing `proxyConfigMap` instead of creating it:

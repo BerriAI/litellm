@@ -270,6 +270,32 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: '(?m)^\s*health_check_details:\s*false$'
+  - it: should not render any placeholder models when the user sets proxy_config without model_list
+    template: configmap-litellm.yaml
+    set:
+      proxy_config.general_settings.store_model_in_db: true
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'model_name:'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'store_model_in_db: true'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'master_key: os.environ/PROXY_MASTER_KEY'
+  - it: should render a user-supplied model_list as the only models
+    template: configmap-litellm.yaml
+    set:
+      proxy_config.model_list:
+        - model_name: my-model
+          litellm_params:
+            model: openai/my-model
+            api_key: os.environ/OPENAI_API_KEY
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'model_list:\n- litellm_params:\n    api_key: os.environ/OPENAI_API_KEY\n    model: openai/my-model\n  model_name: my-model\n$'
   - it: should allow overriding liveness, readiness, and startup probes
     template: deployment.yaml
     set:
