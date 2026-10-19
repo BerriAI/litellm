@@ -82,17 +82,17 @@ mod tests {
     use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
     #[rstest]
-    #[case::tencent("tencent")]
-    #[case::anthropic("anthropic")]
-    #[case::azure_ai("azure_ai")]
-    #[case::bedrock("bedrock")]
-    #[case::deepseek("deepseek")]
-    #[case::edenai("edenai")]
-    #[case::minimax("minimax")]
-    #[case::vertex_ai("vertex_ai")]
-    fn provider_keeps_its_python_name(#[case] name: &str) {
-        let provider =
-            messages_provider(name.parse::<LlmProviders>().unwrap(), "claude-sonnet-4-5").unwrap();
+    #[case::tencent(LlmProviders::Tencent, "tencent")]
+    #[case::anthropic(LlmProviders::Anthropic, "anthropic")]
+    #[case::azure_ai(LlmProviders::AzureAi, "azure_ai")]
+    #[case::bedrock(LlmProviders::Bedrock, "bedrock")]
+    #[case::deepseek(LlmProviders::Deepseek, "deepseek")]
+    #[case::edenai(LlmProviders::Edenai, "edenai")]
+    #[case::minimax(LlmProviders::Minimax, "minimax")]
+    #[case::vertex_ai(LlmProviders::VertexAi, "vertex_ai")]
+    #[case::openrouter(LlmProviders::Openrouter, "openrouter")]
+    fn provider_keeps_its_python_name(#[case] provider: LlmProviders, #[case] name: &str) {
+        let provider = messages_provider(provider, "claude-sonnet-4-5").unwrap();
         assert_eq!(provider.as_str(), name);
     }
 

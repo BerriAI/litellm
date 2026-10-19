@@ -6,7 +6,7 @@ use litellm_auth_aws::bedrock_model_id_and_region;
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{with_header, without_headers};
 use litellm_llms_types::{
-    formats::messages::MessagesRequest,
+    formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
 };
 use litellm_router_types::LitellmParams;
@@ -59,6 +59,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
+        _optional_params: &MessagesOptionalParams,
         params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -317,7 +318,14 @@ mod tests {
             "https://private.test/anthropic/v1/messages"
         );
         let environment = BEDROCK_MANTLE_MESSAGES_CONFIG
-            .validate_environment(vec![], None, model, &params, &|_| None)
+            .validate_environment(
+                vec![],
+                None,
+                model,
+                &MessagesOptionalParams::default(),
+                &params,
+                &|_| None,
+            )
             .unwrap();
         assert!(
             matches!(environment.auth, AuthScheme::AwsSigV4 { region: actual, service: "bedrock", .. } if actual == region)
@@ -347,7 +355,14 @@ mod tests {
             .get_complete_url(None, "claude-test", &params, false, &|_| None)
             .unwrap();
         let environment = BEDROCK_MANTLE_MESSAGES_CONFIG
-            .validate_environment(vec![], None, "claude-test", &params, &|_| None)
+            .validate_environment(
+                vec![],
+                None,
+                "claude-test",
+                &MessagesOptionalParams::default(),
+                &params,
+                &|_| None,
+            )
             .unwrap();
         assert_eq!(
             url,
@@ -401,6 +416,7 @@ mod tests {
                 ],
                 key,
                 "claude-test",
+                &MessagesOptionalParams::default(),
                 &LitellmParams::default(),
                 &|name| match name {
                     "BEDROCK_MANTLE_API_KEY" => Some("mantle".into()),
