@@ -218,6 +218,12 @@ def update_logging(
     )
 
 
+def record_gateway_injection(kwargs: Mapping[str, object], added: int) -> None:
+    from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+    AnthropicCacheControlHook.record_gateway_injection(kwargs, added)
+
+
 def pre_call(logger: LoggingSurface, input: str, api_key: str | None, additional_args: dict[str, object]) -> None:
     logger.pre_call(input=input, api_key=api_key, additional_args=additional_args)
 

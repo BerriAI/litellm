@@ -75,6 +75,8 @@ pub struct ExecutionFacts {
     pub provider: ProviderIdentity,
     pub source: ResultSource,
     pub cost: Cost,
+    /// The gateway placed prompt-cache breakpoints on the request the provider answered.
+    pub gateway_injected_cache_control: bool,
 }
 
 /// Answers the hook points a call raises. `InterceptRequest` lists every point; an

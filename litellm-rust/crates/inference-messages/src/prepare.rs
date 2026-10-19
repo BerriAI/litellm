@@ -6,6 +6,7 @@ use litellm_core_utils::{
     get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
 };
 use litellm_http::request::with_default_headers;
+use litellm_integrations::{InjectionInputs, maybe_inject_cache_control};
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
@@ -32,6 +33,7 @@ pub(super) struct ProviderMessagesRequest {
     pub(super) timeout: Option<Duration>,
     /// The caller's own credential, reported to the host beside the wire request.
     pub(super) api_key: Option<SecretValue>,
+    pub(super) gateway_injected_cache_control: bool,
 }
 
 #[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
@@ -84,11 +86,36 @@ fn prepare_provider_request(
     let env_lookup = |key: &str| secrets.get(key);
 
     let sanitized = config.shape_request(
-        MessagesRequest { model, ..body },
+        MessagesRequest {
+            model: model.clone(),
+            ..body
+        },
         shaping.settings.reasoning_auto_summary,
     )?;
+    let one_shot_subagent =
+        litellm_llms::anthropic::common_utils::is_claude_code_one_shot_subagent_request(
+            &sanitized,
+            shaping.settings.user_agent.as_deref(),
+        );
+    let supports_anthropic_cache_control =
+        litellm_llms::anthropic::common_utils::supports_anthropic_cache_control(
+            &model,
+            provider.as_str(),
+            shaping.capabilities.supports_prompt_caching,
+        );
+    let injected = maybe_inject_cache_control(
+        sanitized,
+        &InjectionInputs {
+            points: &shaping.settings.cache_control_injection_points,
+            enable_prompt_caching: shaping.settings.enable_prompt_caching,
+            supports_anthropic_cache_control,
+            one_shot_subagent,
+            ttl: shaping.settings.prompt_caching_ttl.clone(),
+        },
+    );
+    let gateway_injected_cache_control = injected.added > 0;
     let trimmed =
-        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
+        without_additional_drop_params(injected.request, &shaping.settings.additional_drop_params)?;
     let transformed = config.transform_anthropic_messages_request(
         trimmed,
         &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
@@ -126,6 +153,7 @@ fn prepare_provider_request(
         environment,
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         api_key: api_key.map(SecretValue::new),
+        gateway_injected_cache_control,
     })
 }
 

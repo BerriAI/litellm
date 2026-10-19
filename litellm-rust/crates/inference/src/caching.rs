@@ -181,6 +181,7 @@ where
             provider: identity,
             source,
             cost,
+            gateway_injected_cache_control: false,
         },
         interceptors,
         observers,
@@ -223,6 +224,7 @@ where
         ExecutionFacts {
             provider: identity,
             cost: Cost::settle(&source, None),
+            gateway_injected_cache_control: false,
             source: source.clone(),
         },
         interceptors,

@@ -88,6 +88,7 @@ impl MessagesRoute {
             );
             let identity = request.identity.clone();
             let config = request.provider.config();
+            let gateway_injected_cache_control = request.gateway_injected_cache_control;
             let (output, source) = match cache.lookup().await {
                 Some(hit) => hit,
                 None => (
@@ -103,6 +104,8 @@ impl MessagesRoute {
                 .result_ready(ExecutionFacts {
                     provider: identity,
                     cost: Cost::settle(&source, reported),
+                    gateway_injected_cache_control: gateway_injected_cache_control
+                        && source == ResultSource::Provider,
                     source: source.clone(),
                 })
                 .await?;

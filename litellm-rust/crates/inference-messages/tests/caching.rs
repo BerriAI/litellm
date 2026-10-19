@@ -314,3 +314,45 @@ async fn provider_reported_cost_is_delivered_once_and_never_charged_for_a_cache_
     assert!(matches!(cached.source, ResultSource::Cache { .. }));
     assert_eq!(cached.cost, Cost::CacheHit);
 }
+
+#[rstest]
+#[case::gateway_injected(json!([{"location": "message", "index": -1}]), true)]
+#[case::nothing_injected(json!([]), false)]
+#[tokio::test]
+async fn gateway_injected_cache_control_is_attributed_only_to_the_provider_result(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] points: Value,
+    #[case] expected: bool,
+) {
+    use litellm_inference_messages::MessagesCall;
+    let response = json!({"id": "msg_cache", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "answer"}], "stop_reason": "end_turn", "stop_sequence": null,
+        "usage": {"input_tokens": 3, "output_tokens": 2}});
+    let upstream = support::upstream([support::json_response(response)]).await;
+    let hooks = ChangingHooks::default();
+    let route = support::messages_route(litellm_inference_testing::no_secrets())
+        .with_cache(ScopedCache::new(cache, CacheScope::Shared));
+    let request = || {
+        MessagesCall {
+        body: serde_json::from_value(json!({"model": "claude-sonnet-5-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16})).unwrap(),
+        api_key: Some("anthropic-key".into()), api_base: Some(upstream.uri()), custom_llm_provider: Some("anthropic".into()),
+        litellm_params: Default::default(), extra_headers: None, provider_specific_header: None, timeout: None,
+        shaping: serde_json::from_value(json!({
+            "capabilities": {"supports_prompt_caching": true},
+            "cache_control_injection_points": points,
+        }))
+        .unwrap(),
+    }
+    };
+    route.execute(request(), &hooks, None).await.unwrap();
+    route.execute(request(), &hooks, None).await.unwrap();
+    let sent: Value = support::only_request(&upstream).await.body_json().unwrap();
+    assert_eq!(sent.to_string().contains("cache_control"), expected);
+    let facts = hooks.facts.lock().unwrap();
+    let [provider, cached] = facts.as_slice() else {
+        panic!("expected provider and cache results");
+    };
+    assert_eq!(provider.gateway_injected_cache_control, expected);
+    assert!(matches!(cached.source, ResultSource::Cache { .. }));
+    assert!(!cached.gateway_injected_cache_control);
+}

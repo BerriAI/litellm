@@ -40,6 +40,8 @@ pub(crate) enum Logging {
     CustomPricingFields,
     #[strum(serialize = "update_logging")]
     Update,
+    #[strum(serialize = "record_gateway_injection")]
+    RecordGatewayInjection,
     #[strum(serialize = "pre_call")]
     PreCall,
     #[strum(serialize = "post_call")]

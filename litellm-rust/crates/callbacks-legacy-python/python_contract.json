@@ -21,6 +21,10 @@
     "litellm_params",
     "custom_llm_provider"
   ],
+  "record_gateway_injection": [
+    "kwargs",
+    "added"
+  ],
   "pre_call": [
     "logger",
     "input",

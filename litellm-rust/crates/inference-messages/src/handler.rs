@@ -30,6 +30,7 @@ pub(super) struct ProviderCall {
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
     stream: bool,
+    pub gateway_injected_cache_control: bool,
 }
 
 impl ProviderCall {
@@ -51,6 +52,7 @@ impl MessagesRoute {
             environment,
             timeout,
             api_key,
+            gateway_injected_cache_control,
         } = request;
         let request_context = RequestContext {
             model: body.model.clone(),
@@ -98,6 +100,7 @@ impl MessagesRoute {
             signer: authenticated.signer,
             timeout,
             stream,
+            gateway_injected_cache_control,
         })
     }
 
@@ -113,6 +116,7 @@ impl MessagesRoute {
             signer,
             timeout,
             stream,
+            ..
         } = request;
         let provider_name = provider.as_str();
         log_request_body(provider_name, stream, &wire.body);

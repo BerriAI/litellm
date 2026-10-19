@@ -452,6 +452,9 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, ()>> {
         use litellm_host::interceptors::{Cost, ResultSource};
 
+        if facts.gateway_injected_cache_control {
+            crate::python::Logging::RecordGatewayInjection.call(py, (self.call.kwargs(), 1))?;
+        }
         let logger = self.logger()?.object(py);
         let params = logger
             .getattr("litellm_params")?
@@ -722,7 +725,7 @@ if asynchronous:
         });
     }
 
-    #[rstest::rstest]
+    #[rstest]
     fn kwargs_returned_by_the_pre_call_hook_are_what_the_call_prepares() {
         Python::initialize();
         Python::attach(|py| {
@@ -995,6 +998,50 @@ check = lambda: None
 ";
 
     #[rstest]
+    #[case::not_injected(false, None)]
+    #[case::gateway_injected(true, Some(1))]
+    fn result_ready_marks_gateway_cache_control_for_the_spend_log(
+        #[case] gateway_injected_cache_control: bool,
+        #[case] expected: Option<usize>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(
+                py,
+                &locals,
+                c"
+metadata = {}
+kwargs = {'litellm_metadata': metadata}
+logger.litellm_params = {}
+logger.optional_params = {}
+logger.model_call_details = {}
+",
+            );
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            let facts = litellm_host::interceptors::ExecutionFacts {
+                provider: litellm_host::interceptors::ProviderIdentity {
+                    model: "claude-sonnet-5-5".into(),
+                    provider: "anthropic".into(),
+                },
+                source: litellm_host::interceptors::ResultSource::Provider,
+                cost: litellm_host::interceptors::Cost::Deferred,
+                gateway_injected_cache_control,
+            };
+            logging.result_ready(py, &facts).unwrap();
+            locals.set_item("expected", expected).unwrap();
+            run(
+                py,
+                &locals,
+                c"assert metadata.get('gateway_injection') == expected, metadata",
+            );
+        });
+    }
+
+    #[rstest]
     #[case::reported(Some(0.37), false)]
     #[case::free(Some(0.0), false)]
     #[case::deferred(None, false)]
@@ -1038,6 +1085,7 @@ logger._provider_reported_cost = None
                     reported.and_then(serde_json::Number::from_f64),
                 ),
                 source,
+                gateway_injected_cache_control: false,
             };
             let previous = litellm_host::interceptors::ExecutionFacts {
                 provider: facts.provider.clone(),
@@ -1045,6 +1093,7 @@ logger._provider_reported_cost = None
                     amount: serde_json::Number::from_f64(9.0).unwrap(),
                 },
                 source: litellm_host::interceptors::ResultSource::Provider,
+                gateway_injected_cache_control: false,
             };
             logging.result_ready(py, &previous).unwrap();
             local(&locals, "logger")
