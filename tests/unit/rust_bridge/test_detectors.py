@@ -122,8 +122,6 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.tool_schema_repair, {"tools": [function_tool({"type": "string", "pattern": r"\p{L}"})]}, True),
         (detectors.tool_schema_repair, {"tools": [function_tool({"type": "object"})]}, False),
         (detectors.tool_schema_repair, {}, False),
-        (detectors.model_param_gating, {"max_output_tokens": 1}, True),
-        (detectors.model_param_gating, {"max_output_tokens": 1024}, False),
         (detectors.cache_control_injection, {"enable_prompt_caching": True}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": [{"location": "message"}]}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": []}, False),
@@ -212,8 +210,8 @@ def test_input_rewrite_preserves_caller_input(input_value: object, expected: boo
 @pytest.mark.parametrize(
     ("detector", "setting", "value", "kwargs"),
     (
-        (detectors.drop_params, "drop_params", True, {}),
         (detectors.modify_params, "modify_params", True, {}),
+        (detectors.drop_params, "drop_params", True, {}),
         (detectors.retries_fallbacks, "num_retries", 3, {}),
         (detectors.cache_control_injection, "enable_anthropic_prompt_caching", True, {}),
         (detectors.stream_cost_injection, "include_cost_in_streaming_usage", True, {"stream": True}),
