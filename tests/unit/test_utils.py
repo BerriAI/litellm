@@ -10113,9 +10113,14 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
 )
 def test_runtime_model_cost_registration_resolves_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
     from litellm import utils as model_utils
+    from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 
     rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {key: rates})
+    alias: Final = "openai.test-converse-alias"
+    entry: Final = AliasedCostEntry({"litellm_provider": "bedrock_converse", "mode": "chat"}, (key, alias))
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, key: entry, alias: entry})
+    litellm.register_model({key: rates}, persist_across_reloads=False)
 
     assert model_utils.runtime_model_cost_registration("bedrock/converse/openai.test-converse", "bedrock") == rates
+    assert model_utils.runtime_model_cost_registration(alias, "bedrock") == rates
     assert model_utils.runtime_model_cost_registration("bedrock/converse/openai.other-converse", "bedrock") is None

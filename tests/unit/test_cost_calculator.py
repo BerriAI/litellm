@@ -9839,12 +9839,14 @@ def test_non_bedrock_cost_ignores_bedrock_model_id(_local_model_cost_map: None) 
 
 
 @pytest.mark.parametrize("rate", (0.0, 0.001))
+@pytest.mark.parametrize("persist_across_reloads", (True, False))
 def test_bedrock_converse_profile_preserves_registered_price_override(
-    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, rate: float
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, rate: float, persist_across_reloads: bool
 ) -> None:
     import litellm.utils as model_utils
 
     monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
+    catalog: Final = dict(litellm.model_cost)
     model: Final = "openai.gpt-5.6-sol"
     litellm.register_model(
         {
@@ -9854,9 +9856,13 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
                 "litellm_provider": "bedrock_converse",
                 "mode": "chat",
             }
-        }
+        },
+        persist_across_reloads=persist_across_reloads,
     )
-    litellm.register_model({model: {"supports_function_calling": True, "input_cost_per_token": None}})
+    litellm.register_model(
+        {model: {"supports_function_calling": True, "input_cost_per_token": None}},
+        persist_across_reloads=persist_across_reloads,
+    )
     response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
 
     assert completion_cost(
@@ -9867,13 +9873,31 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
     ) == pytest.approx(15 * rate)
 
     updated_rate: Final = rate + 0.002
-    litellm.register_model({model: {"input_cost_per_token": str(updated_rate)}})
+    litellm.register_model(
+        {model: {"input_cost_per_token": str(updated_rate)}}, persist_across_reloads=persist_across_reloads
+    )
     assert completion_cost(
         completion_response=response,
         model=f"bedrock/converse/{model}",
         custom_llm_provider="bedrock",
         optional_params={"model_id": f"us.{model}"},
     ) == pytest.approx(10 * updated_rate + 5 * rate)
+
+    monkeypatch.setattr(litellm, "model_cost", catalog)
+    model_utils._invalidate_model_cost_lowercase_map()
+    model_utils.reapply_runtime_model_cost_registrations()
+    profile_prices: Final = litellm.get_model_info(f"us.{model}", custom_llm_provider="bedrock")
+    expected_after_reload: Final = (
+        10 * updated_rate + 5 * rate
+        if persist_across_reloads
+        else 10 * profile_prices["input_cost_per_token"] + 5 * profile_prices["output_cost_per_token"]
+    )
+    assert completion_cost(
+        completion_response=response,
+        model=f"bedrock/converse/{model}",
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": f"us.{model}"},
+    ) == pytest.approx(expected_after_reload)
 
 
 def test_bedrock_converse_profile_ignores_registered_capabilities_without_prices(
