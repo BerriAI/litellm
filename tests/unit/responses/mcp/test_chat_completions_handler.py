@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import ModelResponse, StandardLoggingPayload
 
 from litellm.responses.mcp import chat_completions_handler
@@ -1593,12 +1594,9 @@ def _chat_round_cost(body: Mapping[str, object]) -> float:
     )
 
 
-async def _settled(recorder: _ChatRoundRecorder) -> None:
-    for _ in range(200):
-        if recorder.logged or recorder.failed:
-            break
-        await asyncio.sleep(0.01)
-    await asyncio.sleep(0.2)
+async def _settled() -> None:
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
 
 
 async def _auto_execute_chat_echo(
@@ -1646,9 +1644,9 @@ async def _auto_execute_chat_echo(
                 litellm_logging_obj=logging_obj,
             )
         except Exception as error:
-            await _settled(recorder)
+            await _settled()
             return recorder, error
-    await _settled(recorder)
+    await _settled()
     assert isinstance(response, ModelResponse)
     return recorder, response
 

@@ -5,8 +5,8 @@ from types import MappingProxyType
 from typing import Final, TypeVar
 
 from pydantic import TypeAdapter
+from pydantic_core import to_jsonable_python
 
-from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -52,6 +52,11 @@ def merged_round_usage(first: ResponseAPIUsage | None, final: ResponseAPIUsage |
     return ResponseAPIUsage.model_validate(_summed_mapping(first.model_dump(), final.model_dump()))
 
 
+def _merged_chat_usage(first: Usage, final: Usage) -> Usage:
+    summed: Final = _summed_mapping(first.model_dump(), final.model_dump())
+    return Usage.model_validate(to_jsonable_python(summed, fallback=dict))
+
+
 def _chat_usage(round_response: ResponsesAPIResponse | ModelResponse) -> Usage | None:
     if isinstance(round_response, ResponsesAPIResponse):
         return (
@@ -77,7 +82,7 @@ def _usage_of_both_rounds(
     final_usage: Final = _chat_usage(final)
     if first_usage is None or final_usage is None:
         return final_usage if first_usage is None else first_usage
-    return BaseTokenUsageProcessor.combine_usage_objects([first_usage, final_usage])
+    return _merged_chat_usage(first_usage, final_usage)
 
 
 def _repeated_fixed_margin(
