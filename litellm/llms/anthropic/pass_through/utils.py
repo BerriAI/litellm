@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
@@ -224,3 +224,52 @@ def normalize_reasoning_effort_value(
 
     accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
     return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
+
+
+_OBJECT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def object_items(value: object) -> tuple[object, ...]:
+    return _OBJECT_ITEMS.validate_python(value) if isinstance(value, list) else ()
+
+
+_OBJECT_FIELDS: Final = TypeAdapter(dict[object, object])
+
+
+def _object_fields(value: object) -> Mapping[object, object]:
+    return _OBJECT_FIELDS.validate_python(value) if isinstance(value, dict) else MappingProxyType({})
+
+
+def search_result_inner_texts(block: object) -> tuple[tuple[int, str], ...]:
+    """Each non-empty text a search_result block carries, with its index in the block's content."""
+    fields: Final = _object_fields(block)
+    if fields.get("type") != "search_result":
+        return ()
+    return tuple(
+        (index, text)
+        for index, item in enumerate(object_items(fields.get("content")))
+        if isinstance(text := _object_fields(item).get("text"), str) and text
+    )
+
+
+def search_result_fields(block: object) -> tuple[tuple[Literal["title", "source"], str], ...]:
+    """The non-empty title and source strings of a search_result block."""
+    fields: Final = _object_fields(block)
+    if fields.get("type") != "search_result":
+        return ()
+    title: Final = fields.get("title")
+    source: Final = fields.get("source")
+    return (
+        *((("title", title),) if isinstance(title, str) and title else ()),
+        *((("source", source),) if isinstance(source, str) and source else ()),
+    )
+
+
+def search_result_text(block: Mapping[str, object]) -> str:
+    """A search_result block as plain text: its title and source lines, then its text blocks."""
+    labels: Final = {"title": "Title", "source": "Source"}
+    lines: Final = (
+        *(f"{labels[field]}: {value}" for field, value in search_result_fields(block)),
+        *(text for _, text in search_result_inner_texts(block)),
+    )
+    return "\n".join(lines)

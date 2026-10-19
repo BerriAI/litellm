@@ -1965,6 +1965,48 @@ class TestAnthropicMessagesToolResultScanning:
         assert blocks[1]["text"] == "second [BLOCKED] block"
 
     @pytest.mark.asyncio
+    async def test_search_result_inside_tool_result_is_scanned_and_written_back(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCanaryMaskingGuardrail()
+        messages = [
+            {"role": "user", "content": "search the docs"},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu1",
+                        "content": [
+                            {
+                                "type": "search_result",
+                                "source": "https://example.com/POISON",
+                                "title": "Docs about POISON",
+                                "content": [
+                                    {"type": "text", "text": "first POISON snippet"},
+                                    {"type": "text", "text": "second POISON snippet"},
+                                ],
+                            },
+                            {"type": "text", "text": "trailing POISON text"},
+                        ],
+                    }
+                ],
+            },
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert "first POISON snippet" in guardrail.seen_texts
+        assert "second POISON snippet" in guardrail.seen_texts
+        blocks = messages[1]["content"][0]["content"]
+        assert blocks[0]["title"] == "Docs about [BLOCKED]"
+        assert blocks[0]["source"] == "https://example.com/[BLOCKED]"
+        assert [inner["text"] for inner in blocks[0]["content"]] == [
+            "first [BLOCKED] snippet",
+            "second [BLOCKED] snippet",
+        ]
+        assert blocks[1]["text"] == "trailing [BLOCKED] text"
+
+    @pytest.mark.asyncio
     async def test_write_back_targets_stay_aligned_across_mixed_shapes(self):
         """The write-back is positional, so a single mis-indexed target silently
         writes one message's masked text over another's."""
