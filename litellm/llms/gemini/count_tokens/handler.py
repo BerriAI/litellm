@@ -1,9 +1,10 @@
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
@@ -28,11 +29,11 @@ class GoogleAIStudioTokenCounter:
         """
         import copy
 
-        from google.genai.types import FunctionResponse
-
         # Handle None or empty contents
         if not contents:
             return contents
+
+        from google.genai.types import FunctionResponse
 
         cleaned_contents: Final = copy.deepcopy(contents)
 
@@ -53,6 +54,28 @@ class GoogleAIStudioTokenCounter:
         """
         base_url: Final = api_base or "https://generativelanguage.googleapis.com"
         return f"{base_url}/v1beta/models/{model}:countTokens"
+
+    def __init__(self, client: AsyncHTTPHandler | None = None) -> None:
+        super().__init__()
+        self._client: Final = client
+
+    def _build_count_tokens_request_body(
+        self,
+        model: str,
+        contents: object,
+        system_instruction: Mapping[str, object] | None,
+        tools: Sequence[Mapping[str, object]] | None,
+    ) -> Mapping[str, object]:
+        if system_instruction is None and not tools:
+            return {"contents": contents}
+
+        generate_content_request: Final = {
+            "model": model if model.startswith("models/") else f"models/{model}",
+            "contents": contents,
+            **({"systemInstruction": dict(system_instruction)} if system_instruction is not None else {}),
+            **({"tools": [dict(tool) for tool in tools]} if tools else {}),
+        }
+        return {"generateContentRequest": generate_content_request}
 
     async def validate_environment(
         self,
@@ -84,6 +107,8 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
+        system_instruction: Mapping[str, object] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         """
@@ -130,14 +155,19 @@ class GoogleAIStudioTokenCounter:
 
         # Prepare request body - clean up contents to remove unsupported fields
         cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = {"contents": cleaned_contents}
+        request_body: Final = self._build_count_tokens_request_body(
+            model=model,
+            contents=cleaned_contents,
+            system_instruction=system_instruction,
+            tools=tools,
+        )
 
-        async_httpx_client: Final = get_async_httpx_client(
-            llm_provider=LlmProviders.GEMINI,
+        async_httpx_client: Final = (
+            self._client if self._client is not None else get_async_httpx_client(llm_provider=LlmProviders.GEMINI)
         )
 
         try:
-            response: Final = await async_httpx_client.post(url=url, headers=headers, json=request_body)
+            response: Final = await async_httpx_client.post(url=url, headers=headers, json=dict(request_body))
 
             # Check for HTTP errors
             response.raise_for_status()
