@@ -56,10 +56,6 @@ pub struct MessagesShaping {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesSettings {
     #[serde(default)]
-    pub drop_params: bool,
-    #[serde(default)]
-    pub reasoning_auto_summary: bool,
-    #[serde(default)]
     pub additional_drop_params: Vec<String>,
     #[serde(default)]
     pub request_timeout: Option<f64>,
@@ -91,20 +87,6 @@ mod tests {
 
     #[rstest]
     #[case::nothing_projected(json!({}), MessagesShaping::default())]
-    #[case::only_drop_params(
-        json!({"drop_params": true}),
-        MessagesShaping {
-            settings: MessagesSettings { drop_params: true, ..MessagesSettings::default() },
-            ..MessagesShaping::default()
-        },
-    )]
-    #[case::only_reasoning_auto_summary(
-        json!({"reasoning_auto_summary": true}),
-        MessagesShaping {
-            settings: MessagesSettings { reasoning_auto_summary: true, ..MessagesSettings::default() },
-            ..MessagesShaping::default()
-        },
-    )]
     #[case::only_additional_drop_params(
         json!({"additional_drop_params": ["tools[*].input_examples"]}),
         MessagesShaping {
@@ -143,19 +125,13 @@ mod tests {
                 "thinking_always_on": false,
                 "supports_legacy_thinking": false,
                 "supports_output_config": true,
-                "supports_sampling_params": false,
-                "supports_speed": true,
                 "effort_tiers": {"minimal": false, "low": true, "medium": true, "high": true, "xhigh": true, "max": false}
             },
-            "drop_params": true,
-            "reasoning_auto_summary": true,
             "additional_drop_params": ["metadata.user_id", "thinking"],
             "request_timeout": 1800.0
         }),
         MessagesShaping {
             settings: MessagesSettings {
-                drop_params: true,
-                reasoning_auto_summary: true,
                 additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
                 request_timeout: Some(1800.0),
                 ..MessagesSettings::default()
@@ -166,8 +142,6 @@ mod tests {
                 thinking_always_on: false,
                 supports_legacy_thinking: false,
                 supports_output_config: true,
-                supports_sampling_params: false,
-                supports_speed: true,
                 supports_mid_conversation_system: false,
                 supports_prompt_caching: false,
                 effort_tiers: SupportedEffortTiers {
@@ -188,14 +162,6 @@ mod tests {
         let shaping: MessagesShaping = serde_json::from_value(projected).unwrap();
         assert_eq!(shaping, expected);
         let serialized = serde_json::to_value(&shaping).unwrap();
-        assert_eq!(
-            serialized["drop_params"],
-            json!(expected.settings.drop_params)
-        );
-        assert_eq!(
-            serialized["reasoning_auto_summary"],
-            json!(expected.settings.reasoning_auto_summary)
-        );
         assert_eq!(
             serialized["additional_drop_params"],
             json!(expected.settings.additional_drop_params)

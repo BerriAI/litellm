@@ -10,45 +10,18 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
-from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
+from litellm.llms.anthropic.pass_through.messages.utils import AnthropicMessagesRequestUtils
 from litellm.rust_bridge import failures
-from litellm.rust_bridge.public_call import known_params, optional_str
+from litellm.rust_bridge.host.provider import resolved_provider
+from litellm.rust_bridge.public_call import optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
-_BODY_FIELDS: Final = frozenset(
-    {
-        "max_tokens",
-        "metadata",
-        "stop_sequences",
-        "stream",
-        "system",
-        "temperature",
-        "thinking",
-        "tool_choice",
-        "tools",
-        "top_k",
-        "inference_geo",
-        "top_p",
-        "mcp_servers",
-        "context_management",
-        "compaction",
-        "container",
-        "output_format",
-        "speed",
-        "output_config",
-        "cache_control",
-        "reasoning_effort",
-        "safeguards",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
 class MessagesSettings:
-    drop_params: bool
-    reasoning_auto_summary: bool
     additional_drop_params: Sequence[str]
     request_timeout: float | None
     cache_control_injection_points: Sequence[Mapping[str, object]]
@@ -65,7 +38,12 @@ def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
 
 
 def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
-    return known_params(_BODY_FIELDS, request)
+    model, provider = resolved_provider(str(request["model"]), optional_str(request.get("custom_llm_provider")))
+    return dict(
+        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            request, model=model, drop_params=_drop_params(request), custom_llm_provider=provider
+        )
+    )
 
 
 def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:
@@ -132,8 +110,6 @@ def _prompt_caching_ttl() -> str | None:
 def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
     return asdict(
         MessagesSettings(
-            drop_params=_drop_params(kwargs),
-            reasoning_auto_summary=is_reasoning_auto_summary_enabled(),
             additional_drop_params=_additional_drop_params(kwargs),
             request_timeout=get_configured_request_timeout(),
             cache_control_injection_points=_cache_control_injection_points(kwargs),

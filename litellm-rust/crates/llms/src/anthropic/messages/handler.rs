@@ -1,10 +1,4 @@
-use litellm_llms_types::{
-    formats::messages::{
-        AdaptiveThinking, EnabledThinking, Message, MessagesOptionalParams, MessagesRequest,
-        ThinkingConfig, ThinkingDisplay,
-    },
-    recognized::Recognized,
-};
+use litellm_llms_types::formats::messages::{Message, MessagesOptionalParams, MessagesRequest};
 use serde_json::{Value, json};
 
 use crate::{
@@ -17,7 +11,6 @@ use crate::{
 
 pub fn shape_anthropic_messages_request(
     request: MessagesRequest,
-    reasoning_auto_summary: bool,
 ) -> Result<MessagesRequest, Error> {
     Ok(MessagesRequest {
         messages: sanitize_anthropic_messages(request.messages),
@@ -28,7 +21,6 @@ pub fn shape_anthropic_messages_request(
                 .as_ref()
                 .map(validate_anthropic_api_metadata)
                 .transpose()?,
-            thinking: with_reasoning_auto_summary(request.params.thinking, reasoning_auto_summary),
             ..request.params
         },
         ..request
@@ -57,40 +49,6 @@ fn validate_anthropic_api_metadata(metadata: &Value) -> Result<Value, Error> {
             expected: "a string",
             actual: other.clone(),
         })),
-    }
-}
-
-fn with_reasoning_auto_summary(
-    thinking: Option<Recognized<ThinkingConfig>>,
-    enabled: bool,
-) -> Option<Recognized<ThinkingConfig>> {
-    if !enabled {
-        return thinking;
-    }
-    let summarized = Some(Recognized::Known(ThinkingDisplay::Summarized));
-    match thinking {
-        Some(Recognized::Known(ThinkingConfig::Enabled(enabled))) => Some(Recognized::Known(
-            ThinkingConfig::Enabled(EnabledThinking {
-                display: summarized,
-                ..enabled
-            }),
-        )),
-        Some(Recognized::Known(ThinkingConfig::Adaptive(adaptive))) => Some(Recognized::Known(
-            ThinkingConfig::Adaptive(AdaptiveThinking {
-                display: summarized,
-                ..adaptive
-            }),
-        )),
-        Some(Recognized::Unrecognized(Value::Object(fields))) => {
-            Some(Recognized::Unrecognized(Value::Object(
-                fields
-                    .into_iter()
-                    .filter(|(key, _)| key != "display")
-                    .chain([("display".to_string(), json!("summarized"))])
-                    .collect(),
-            )))
-        }
-        other => other,
     }
 }
 
@@ -228,74 +186,18 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::adaptive(
-        Some(json!({"type": "adaptive", "budget_tokens": 5000})),
-        true,
-        Some(json!({"type": "adaptive", "budget_tokens": 5000, "display": "summarized"})),
-    )]
-    #[case::enabled(
-        Some(json!({"type": "enabled", "budget_tokens": 10000})),
-        true,
-        Some(json!({"type": "enabled", "budget_tokens": 10000, "display": "summarized"})),
-    )]
-    #[case::no_type(Some(json!({})), true, Some(json!({"display": "summarized"})))]
-    #[case::display_omitted_is_overridden(
-        Some(json!({"type": "enabled", "budget_tokens": 10000, "display": "omitted"})),
-        true,
-        Some(json!({"type": "enabled", "budget_tokens": 10000, "display": "summarized"})),
-    )]
-    #[case::display_summarized_is_kept(
-        Some(json!({"type": "enabled", "display": "summarized"})),
-        true,
-        Some(json!({"type": "enabled", "display": "summarized"})),
-    )]
-    #[case::disabled_thinking(Some(json!({"type": "disabled"})), true, Some(json!({"type": "disabled"})))]
-    #[case::flag_off(
-        Some(json!({"type": "enabled", "budget_tokens": 10000})),
-        false,
-        Some(json!({"type": "enabled", "budget_tokens": 10000})),
-    )]
-    #[case::flag_off_keeps_callers_display(
-        Some(json!({"type": "enabled", "display": "omitted"})),
-        false,
-        Some(json!({"type": "enabled", "display": "omitted"})),
-    )]
-    #[case::no_thinking(None, true, None)]
-    #[case::non_object_thinking(Some(json!("enabled")), true, Some(json!("enabled")))]
-    #[case::unknown_type(
-        Some(json!({"type": "future"})),
-        true,
-        Some(json!({"type": "future", "display": "summarized"})),
-    )]
-    fn reasoning_auto_summary_marks_active_thinking_as_summarized(
-        #[case] thinking: Option<Value>,
-        #[case] enabled: bool,
-        #[case] expected: Option<Value>,
-    ) {
-        let thinking = thinking.map(|thinking| serde_json::from_value(thinking).unwrap());
-        assert_eq!(
-            with_reasoning_auto_summary(thinking, enabled)
-                .map(|thinking| serde_json::to_value(thinking).unwrap()),
-            expected
-        );
-    }
-
     #[test]
-    fn shaping_cleans_messages_metadata_and_thinking() {
-        let sanitized = shape_anthropic_messages_request(
-            request(json!({
-                "model": "m",
-                "messages": [{"role": "assistant", "content": [
-                    {"type": "text", "text": ""},
-                    {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}
-                ]}],
-                "metadata": {"user_id": "u", "trace_id": "t"},
-                "thinking": {"type": "enabled", "budget_tokens": 1024},
-                "safeguards": [{"type": "dangerous_tool_use"}]
-            })),
-            true,
-        )
+    fn shaping_cleans_messages_and_metadata() {
+        let sanitized = shape_anthropic_messages_request(request(json!({
+            "model": "m",
+            "messages": [{"role": "assistant", "content": [
+                {"type": "text", "text": ""},
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}
+            ]}],
+            "metadata": {"user_id": "u", "trace_id": "t"},
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "safeguards": [{"type": "dangerous_tool_use"}]
+        })))
         .unwrap();
         assert_eq!(
             serde_json::to_value(sanitized).unwrap(),
@@ -305,7 +207,7 @@ mod tests {
                     {"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}}
                 ]}],
                 "metadata": {"user_id": "u"},
-                "thinking": {"type": "enabled", "budget_tokens": 1024, "display": "summarized"},
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
                 "safeguards": [{"type": "dangerous_tool_use"}]
             })
         );

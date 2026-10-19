@@ -8,11 +8,7 @@ pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
 
 pub trait BaseMessagesConfig: Sync {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        _reasoning_auto_summary: bool,
-    ) -> Result<MessagesRequest, Error> {
+    fn shape_request(&self, request: MessagesRequest) -> Result<MessagesRequest, Error> {
         Ok(request)
     }
 
@@ -85,7 +81,6 @@ pub trait BaseMessagesConfig: Sync {
 mod tests {
     use super::*;
     use crate::base_llm::auth::AuthScheme;
-    use rstest::rstest;
 
     struct DefaultsConfig;
 
@@ -135,10 +130,8 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::disabled(false)]
-    #[case::enabled(true)]
-    fn default_shaping_preserves_provider_policy_inputs(#[case] reasoning_auto_summary: bool) {
+    #[test]
+    fn default_shaping_preserves_provider_policy_inputs() {
         let request: MessagesRequest = serde_json::from_value(serde_json::json!({
             "model": "test-model",
             "metadata": {"user_id": 7, "extra": "keep"},
@@ -146,10 +139,7 @@ mod tests {
             "messages": [{"role": "system", "content": "context"}]
         }))
         .unwrap();
-        assert_eq!(
-            DefaultsConfig.shape_request(request.clone(), reasoning_auto_summary),
-            Ok(request)
-        );
+        assert_eq!(DefaultsConfig.shape_request(request.clone()), Ok(request));
         assert_eq!(
             DefaultsConfig.default_headers(),
             &[("content-type", "application/json")]
