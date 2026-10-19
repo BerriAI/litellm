@@ -4,6 +4,7 @@ import json
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import closing
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, cast
@@ -18,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -287,18 +289,17 @@ def get_azure_ad_token_from_oidc(
     if azure_ad_token_access_token is not None:
         return azure_ad_token_access_token
 
-    client: Final = litellm.module_level_client
-
-    req_token: Final = client.post(
-        f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
-        data={
-            "client_id": azure_client_id,
-            "grant_type": "client_credentials",
-            "scope": scope,
-            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            "client_assertion": oidc_token,
-        },
-    )
+    with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
+        req_token: Final = client.post(
+            f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
+            data={
+                "client_id": azure_client_id,
+                "grant_type": "client_credentials",
+                "scope": scope,
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": oidc_token,
+            },
+        )
 
     if req_token.status_code != 200:
         raise AzureOpenAIError(

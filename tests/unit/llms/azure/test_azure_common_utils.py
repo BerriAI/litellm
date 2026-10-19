@@ -2,7 +2,9 @@ import json
 import os
 import threading
 import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Final, Optional
+from urllib.parse import parse_qs
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +16,7 @@ from litellm.llms.azure.common_utils import (
     _cached_entra_id_token_provider,
     get_azure_ad_token,
     get_azure_ad_token_from_entra_id,
+    get_azure_ad_token_from_oidc,
     get_azure_ad_token_from_username_password,
 )
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -2241,6 +2244,46 @@ async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(
     response: Final = await client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
 
     assert response.choices[0].message.content == "Bearer async-token"
+
+
+def test_oidc_token_exchange_closes_its_token_endpoint_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed_connections: Final = threading.Semaphore(0)
+
+    class TokenEndpoint(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:
+            form: Final = parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
+            body: Final = json.dumps(
+                {"access_token": f"minted-for-{form['client_assertion'][0]}", "expires_in": 3600}
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def finish(self) -> None:
+            super().finish()
+            closed_connections.release()
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), TokenEndpoint)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("AZURE_AUTHORITY_HOST", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("AZURE_TEST_OIDC_ASSERTION", "workload-jwt")
+    try:
+        token: Final = get_azure_ad_token_from_oidc(
+            azure_ad_token="os.environ/AZURE_TEST_OIDC_ASSERTION",
+            azure_client_id="client",
+            azure_tenant_id="tenant",
+        )
+        connection_closed: Final = closed_connections.acquire(timeout=5)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert token == "minted-for-workload-jwt"
+    assert connection_closed
 
 
 def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):
