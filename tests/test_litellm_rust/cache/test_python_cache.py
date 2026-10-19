@@ -416,6 +416,7 @@ async def test_cache_lookup_uses_backend_request_callback_semantics(
     assert second_hit_requests == ()
     assert logger.names.count("log_pre_api_call") == 4
     assert len(first_requests) == 1
+    assert json.loads(first_requests[0].body)["temperature"] == 0.1
     assert len(second_requests) == int(not legacy)
     if not legacy:
         assert json.loads(second_requests[0].body)["temperature"] == 0.8
