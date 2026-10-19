@@ -9,13 +9,20 @@ ARN unified_object_id) batches with no managed unified id.
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from datetime import datetime
 from hashlib import sha256
-from typing import TYPE_CHECKING, Final
+from queue import SimpleQueue
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 from fastapi import HTTPException
+
+from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
     from litellm.batches.batch_utils import BatchCostUsageResult
@@ -668,10 +675,16 @@ class TestCheckBatchCost:
         assert check_batch_cost_instance._has_batch_processed_column is True
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
 
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-        mock_response.output_file_id = "file-output-123"
-        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+        mock_response: Final = LiteLLMBatch(
+            id="batch-1",
+            status="completed",
+            output_file_id="file-output-123",
+            created_at=1,
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-1",
+            object="batch",
+        )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
         mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
@@ -730,10 +743,10 @@ class TestCheckBatchCost:
 
             await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count >= 3, (
             "Expected update() to be called exactly once for the completed job"
         )
-        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[1]["data"]
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True, (
             "update() must include batch_processed=True when column is present"
         )
@@ -863,7 +876,7 @@ class TestCheckBatchCost:
 
         mock_update_database.assert_awaited_once()
         assert mock_update_database.call_args.kwargs["response_cost"] == 0.01
-        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count >= 3, (
             "the job must still be marked processed once cost tracking succeeds"
         )
 
@@ -1285,11 +1298,16 @@ class TestCheckBatchCost:
         assert check_batch_cost_instance._has_batch_processed_column is True
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
 
-        mock_response = MagicMock()
-        mock_response.status = terminal_status
-        mock_response.output_file_id = "file-output-123"
-        mock_response.error_file_id = None
-        mock_response.model_dump_json.return_value = f'{{"id":"batch-1","status":"{terminal_status}"}}'
+        mock_response: Final = LiteLLMBatch(
+            id="batch-1",
+            status=terminal_status,
+            output_file_id="file-output-123",
+            created_at=1,
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-1",
+            object="batch",
+        )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
         mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
@@ -1352,8 +1370,8 @@ class TestCheckBatchCost:
             f"{terminal_status} batch with an output file must fetch results and be billed"
         )
         mock_logging_obj.async_success_handler.assert_awaited_once()
-        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
-        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[1]["data"]
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count >= 3
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == terminal_status, (
             f"billed {terminal_status} batch must keep its real terminal status in the DB"
@@ -1646,10 +1664,9 @@ class TestCheckBatchCost:
             model_name="gpt-5-batch",
         )
         assert mock_hook.store_batch_output_file.await_count == 2
-        assert {
-            call.kwargs["model_name"]
-            for call in mock_hook.store_batch_output_file.await_args_list
-        } == {"gpt-5-batch"}
+        assert {call.kwargs["model_name"] for call in mock_hook.store_batch_output_file.await_args_list} == {
+            "gpt-5-batch"
+        }
         stored = {
             c.kwargs["provider_file_id"]: c.kwargs["unified_file_id"]
             for c in mock_hook.store_batch_output_file.call_args_list
@@ -1847,13 +1864,16 @@ class TestUnmanagedVertexRouting:
         router.resolve_model_name_from_model_id.return_value = "gemini-2.5-flash"
         router.get_model_ids.return_value = ["deploy-1"]
 
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-        mock_response.output_file_id = "gs://bucket/out/predictions.jsonl"
-        mock_response.error_file_id = None
-        mock_response.completed_at = None
-        mock_response.created_at = None
-        mock_response.model_dump_json.return_value = '{"id":"8823717160934178816","status":"completed"}'
+        mock_response: Final = LiteLLMBatch(
+            id="8823717160934178816",
+            status="completed",
+            output_file_id="gs://bucket/out/predictions.jsonl",
+            created_at=1,
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-1",
+            object="batch",
+        )
         router.aretrieve_batch = AsyncMock(return_value=mock_response)
         router.get_deployment_credentials_with_provider = MagicMock(
             return_value={"vertex_project": "p", "vertex_location": "us-central1"}
@@ -1921,8 +1941,8 @@ class TestUnmanagedVertexRouting:
         mock_logging_obj.async_success_handler.assert_awaited_once()
         assert mock_logging_obj.async_success_handler.call_args[1]["batch_cost"] == 0.01
 
-        assert prisma.db.litellm_managedobjecttable.update.call_count == 1
-        update_data = prisma.db.litellm_managedobjecttable.update.call_args[1]["data"]
+        assert prisma.db.litellm_managedobjecttable.update_many.call_count >= 3
+        update_data = prisma.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == "complete"
 
@@ -2065,13 +2085,16 @@ class TestUnmanagedBedrockRouting:
         router.resolve_model_name_from_model_id.return_value = "claude-sonnet-4"
         router.get_model_ids.return_value = ["deploy-1"]
 
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-        mock_response.output_file_id = "s3://bucket/out/predictions.jsonl"
-        mock_response.error_file_id = None
-        mock_response.completed_at = None
-        mock_response.created_at = None
-        mock_response.model_dump_json.return_value = f'{{"id":"{self._ARN}","status":"completed"}}'
+        mock_response: Final = LiteLLMBatch(
+            id=self._ARN,
+            status="completed",
+            output_file_id="s3://bucket/out/predictions.jsonl",
+            created_at=1,
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-1",
+            object="batch",
+        )
         router.aretrieve_batch = AsyncMock(return_value=mock_response)
         router.get_deployment_credentials_with_provider = MagicMock(return_value={"aws_region_name": "us-east-1"})
 
@@ -2135,8 +2158,8 @@ class TestUnmanagedBedrockRouting:
         mock_logging_obj.async_success_handler.assert_awaited_once()
         assert mock_logging_obj.async_success_handler.call_args[1]["batch_cost"] == 0.02
 
-        assert prisma.db.litellm_managedobjecttable.update.call_count == 1
-        update_data = prisma.db.litellm_managedobjecttable.update.call_args[1]["data"]
+        assert prisma.db.litellm_managedobjecttable.update_many.call_count >= 3
+        update_data = prisma.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == "complete"
 
@@ -2502,9 +2525,7 @@ class TestBatchCostAttribution:
     async def test_raw_cli_session_token_on_a_legacy_batch_row_is_not_treated_as_the_alias(self):
         instance = self._instance(key_row=None)
 
-        metadata = await instance.batch_metadata(
-            self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1"
-        )
+        metadata = await instance.batch_metadata(self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1")
 
         assert metadata.get("user_api_key_alias") is None
 
@@ -3003,13 +3024,20 @@ class TestMultiPodBatchCostClaim:
 
     @staticmethod
     def _router():
-        response = MagicMock()
-        response.status = "completed"
-        response.output_file_id = _CLAIM_OUTPUT_FILE_ID
-        response.error_file_id = None
-        response.created_at = 1
-        response.completed_at = 2
-        response.model_dump_json.return_value = '{"id":"batch-456","status":"completed"}'
+        from litellm.types.utils import LiteLLMBatch
+
+        response: Final = LiteLLMBatch(
+            id="batch-456",
+            status="completed",
+            output_file_id=_CLAIM_OUTPUT_FILE_ID,
+            error_file_id=None,
+            created_at=1,
+            completed_at=2,
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-1",
+            object="batch",
+        )
 
         deployment = MagicMock()
         deployment.litellm_params.custom_llm_provider = "openai"
@@ -3089,8 +3117,9 @@ class TestMultiPodBatchCostClaim:
             ("openai/batch-test-model", 2, 0, "batch-test-model"),
         ),
     )
+    @pytest.mark.parametrize("failure_envelope", (None, 1, "invalid", [1]))
     async def test_batch_accounting_preserves_models_and_mixed_results(
-        self, deployment_model: str, successes: int, failures: int, expected_model: str
+        self, deployment_model: str, successes: int, failures: int, expected_model: str, failure_envelope: object
     ) -> None:
         import base64
         from datetime import datetime
@@ -3125,7 +3154,7 @@ class TestMultiPodBatchCostClaim:
             },
             "error": None,
         }
-        failure: Final = {"response": None, "error": {"code": "batch_expired", "message": "expired"}}
+        failure: Final = {"response": failure_envelope, "error": {"code": "batch_expired", "message": "expired"}}
         rows: Final = (success,) * successes + (failure,) * failures
         content: Final = b"\n".join(json.dumps(row).encode() for row in rows)
 
@@ -3218,6 +3247,30 @@ class TestMultiPodBatchCostClaim:
             await guard._check_file_deletion_allowed(file_id)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ("completed", "failed", "expired", "cancelled"))
+    @pytest.mark.parametrize("metadata_text", ("before\x00after", r"\u0000"))
+    async def test_cost_claim_persists_terminal_metadata_without_a_later_write(
+        self, status: str, metadata_text: str
+    ) -> None:
+        row: Final = _FakeManagedObjectRow()
+        journal: Final = []
+        prisma: Final = self._prisma(row, journal)
+        router: Final = self._router()
+        router.aretrieve_batch.return_value = router.aretrieve_batch.return_value.model_copy(
+            update={"status": status, "metadata": {"annotation": metadata_text}}
+        )
+        prisma.db.litellm_managedobjecttable.update.side_effect = RuntimeError("final write unavailable")
+        worker: Final = self._instance(prisma, router)
+        with self._billing_patches(journal) as logging_obj:
+            await worker.check_batch_cost()
+            await worker.check_batch_cost()
+        assert row.batch_processed is True
+        assert row.status == ("complete" if status == "completed" else status)
+        assert json.loads(row.file_object)["status"] == status
+        assert json.loads(row.file_object)["metadata"] == {"annotation": metadata_text.replace("\x00", "")}
+        assert logging_obj.async_success_handler.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_winning_pod_claims_the_row_between_fetching_and_billing(self):
         """The claim flips batch_processed false -> true after the results are in hand and
         before the spend log is written, so a concurrent pod's claim finds no matching row."""
@@ -3228,13 +3281,9 @@ class TestMultiPodBatchCostClaim:
         with self._billing_patches(journal) as logging_obj:
             await self._instance(prisma, self._router()).check_batch_cost()
 
-        assert journal == ["fetch", "claim", "bill", "finalize"]
-        assert self._claim_calls(prisma) == [
-            {
-                "where": {"id": "job-claim-1", "batch_processed": False},
-                "data": {"batch_processed": True},
-            }
-        ]
+        assert journal == ["fetch", "claim", "bill"]
+        assert row.status == "complete"
+        assert json.loads(row.file_object)["usage"] == {"prompt_tokens": 10, "completion_tokens": 5}
         logging_obj.async_success_handler.assert_awaited_once()
         assert row.batch_processed is True
 
@@ -3254,18 +3303,17 @@ class TestMultiPodBatchCostClaim:
 
         assert journal == ["fetch"]
         logging_obj.async_success_handler.assert_not_awaited()
-        assert self._claim_calls(prisma) == [
-            {
-                "where": {"id": "job-claim-1", "batch_processed": False},
-                "data": {"batch_processed": True},
-            }
-        ]
+        assert row.status == "in_progress"
+        assert json.loads(row.file_object)["status"] == "in_progress"
 
     @pytest.mark.asyncio
-    async def test_a_failed_spend_log_write_releases_the_claim(self):
+    @pytest.mark.parametrize("stored_as_json_string", (True, False))
+    async def test_a_failed_spend_log_write_releases_the_claim(self, stored_as_json_string: bool) -> None:
         """A transient failure while billing a claimed batch must hand the row back, or its
         spend is silently lost instead of being retried on the next cycle."""
         row = _FakeManagedObjectRow()
+        original_file_object: Final = row.file_object if stored_as_json_string else json.loads(row.file_object)
+        row.file_object = original_file_object
         journal = []
         prisma = self._prisma(row, journal)
 
@@ -3274,10 +3322,16 @@ class TestMultiPodBatchCostClaim:
 
         assert journal == ["fetch", "claim", "bill", "release"]
         assert row.batch_processed is False
-        assert self._claim_calls(prisma)[-1] == {
-            "where": {"id": "job-claim-1", "batch_processed": True},
-            "data": {"batch_processed": False},
-        }
+        assert row.status == "in_progress"
+        assert json.loads(row.file_object) == original_file_object
+
+        with self._billing_patches(journal) as logging_obj:
+            await self._instance(prisma, self._router()).check_batch_cost()
+            await self._instance(prisma, self._router()).check_batch_cost()
+
+        assert row.batch_processed is True
+        assert row.status == "complete"
+        logging_obj.async_success_handler.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_a_worker_interrupted_mid_costing_leaves_the_batch_billable(self):
@@ -3309,7 +3363,7 @@ class TestMultiPodBatchCostClaim:
         with self._billing_patches(survivor_journal) as survivor_logging:
             await self._instance(survivor_prisma, self._router()).check_batch_cost()
 
-        assert survivor_journal == ["fetch", "claim", "bill", "finalize"]
+        assert survivor_journal == ["fetch", "claim", "bill"]
         survivor_logging.async_success_handler.assert_awaited_once()
         assert row.batch_processed is True
 
@@ -3340,7 +3394,7 @@ class TestMultiPodBatchCostClaim:
             finish_fetch.set()
             await asyncio.wait_for(costing, timeout=5)
 
-        assert journal == ["fetch", "claim", "bill", "finalize"]
+        assert journal == ["fetch", "claim", "bill"]
         assert row.batch_processed is True
         await self._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
 
@@ -3465,7 +3519,6 @@ class TestBatchLineItemsFromThePoller:
             f"read {_CLAIM_OUTPUT_FILE_ID}",
             "claim",
             "bill",
-            "finalize",
             f"read {_CLAIM_OUTPUT_FILE_ID}",
             "read file-input-1",
             "lines",
@@ -3539,7 +3592,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal[-4:] == ["finalize", f"read {_CLAIM_OUTPUT_FILE_ID}", "read file-input-1", "lines"]
+        assert journal[-4:] == ["bill", f"read {_CLAIM_OUTPUT_FILE_ID}", "read file-input-1", "lines"]
         ((line,),) = [payload["lines"] for payload in logger.payloads]
         assert line["request"] == json.loads(self._INPUT)
         assert line["response"] == json.loads(self._OUTPUT)
@@ -3558,7 +3611,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert [step for step in journal if not step.startswith("read")] == ["claim", "bill", "finalize", "lines"]
+        assert [step for step in journal if not step.startswith("read")] == ["claim", "bill", "lines"]
         assert row.batch_processed is True
         assert row.status == "complete"
 
@@ -3574,7 +3627,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill"]
 
     @pytest.mark.asyncio
     async def test_a_batch_where_every_line_failed_sends_its_error_lines_after_it_is_retired(self, monkeypatch):
@@ -3681,9 +3734,7 @@ class TestBatchLineItemsFromThePoller:
         assert len(logger.payloads) == stored
 
     @pytest.mark.asyncio
-    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_after_it_is_retired(
-        self, monkeypatch
-    ):
+    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_after_it_is_retired(self, monkeypatch):
         import litellm
 
         journal: list = []
@@ -3751,7 +3802,6 @@ class TestBatchLineItemsFromThePoller:
                 f"read {_CLAIM_OUTPUT_FILE_ID}",
                 "claim",
                 "bill",
-                "finalize",
                 f"read {_CLAIM_OUTPUT_FILE_ID}",
                 "read file-input-1",
                 "lines started",
@@ -3783,7 +3833,6 @@ class TestBatchLineItemsFromThePoller:
         assert logger.payloads == []
         assert row.batch_processed is True
         assert f"so the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
-
 
     @pytest.mark.asyncio
     async def test_batches_store_their_lines_one_at_a_time_in_the_order_they_were_retired(self, monkeypatch):
@@ -3834,7 +3883,6 @@ class TestBatchLineItemsFromThePoller:
             f"read {_CLAIM_OUTPUT_FILE_ID}",
             "claim",
             "bill",
-            "finalize",
             "store batch-earlier",
             "store batch-456",
         ]
@@ -3863,7 +3911,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill"]
         assert logger.payloads == []
         assert (row.batch_processed, row.status) == (True, "complete")
         assert f"the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
@@ -3887,7 +3935,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill"]
         assert logger.payloads == []
         assert (row.batch_processed, row.status) == (True, "complete")
         assert f"the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
@@ -4060,3 +4108,166 @@ class TestCreatorTurnedOffMessageLogging:
 
         assert await instance._creator_turned_off_message_logging(self._job(api_key=api_key)) is False
         instance.prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind", ["sync", "async", "custom", "overlapping", "general", "mixed", "sync_only", "executor_shutdown"]
+)
+@pytest.mark.parametrize("initialized", [False, True])
+@pytest.mark.parametrize("claimed", [False, True])
+async def test_batch_cost_reaches_configured_success_callbacks(
+    kind: Literal["sync", "async", "custom", "overlapping", "general", "mixed", "sync_only", "executor_shutdown"],
+    initialized: bool,
+    claimed: bool,
+) -> None:
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.types.utils import LiteLLMBatch
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    events: Final[SimpleQueue[tuple[str, object, int, int]]] = SimpleQueue()
+
+    def record(
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        recipient: str = "function",
+    ) -> None:
+        if kwargs.get("call_type") != "aretrieve_batch":
+            return
+        assert isinstance(response_obj, LiteLLMBatch)
+        assert response_obj.usage is not None
+        events.put(
+            (recipient, kwargs["response_cost"], response_obj.usage.prompt_tokens, response_obj.usage.completion_tokens)
+        )
+
+    async def async_record(
+        kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        record(kwargs, response_obj, start_time, end_time)
+        if kind == "executor_shutdown" and kwargs.get("call_type") == "aretrieve_batch":
+            executor.shutdown(wait=True)
+
+    class BatchRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            record(kwargs, response_obj, start_time, end_time, "custom")
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            record(kwargs, response_obj, start_time, end_time, "custom")
+
+    class SyncRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            record(kwargs, response_obj, start_time, end_time, "custom")
+
+    callback: Final = SyncRecorder() if kind == "sync_only" else BatchRecorder()
+    match kind:
+        case "sync":
+            litellm.logging_callback_manager.add_litellm_success_callback(record)
+        case "async":
+            litellm.logging_callback_manager.add_litellm_success_callback(async_record)
+        case "executor_shutdown":
+            litellm.logging_callback_manager.add_litellm_success_callback(async_record)
+            litellm.logging_callback_manager.add_litellm_success_callback(record)
+        case "custom" | "overlapping" | "sync_only":
+            litellm.logging_callback_manager.add_litellm_success_callback(callback)
+            if kind == "overlapping":
+                litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+        case "general":
+            litellm.logging_callback_manager.add_litellm_callback(callback)
+        case "mixed":
+            litellm.logging_callback_manager.add_litellm_success_callback(callback)
+            litellm.logging_callback_manager.add_litellm_success_callback(record)
+
+    model: Final = "gpt-6.1-sol"
+    credentials: Final = {
+        "api_key": "synthetic-key",
+        "api_base": "https://batch.invalid/v1",
+        "custom_llm_provider": "openai",
+    }
+    deployment: Final = SimpleNamespace(
+        litellm_params=SimpleNamespace(model=f"openai/{model}", custom_llm_provider="openai", api_base=None),
+        model_name="batch-group",
+    )
+    prisma: Final = MagicMock()
+    prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=int(claimed))
+    checker: Final = CheckBatchCost(
+        proxy_logging_obj=SimpleNamespace(get_proxy_hook=lambda _: None),
+        prisma_client=prisma,
+        llm_router=SimpleNamespace(
+            get_deployment_credentials_with_provider=lambda _: credentials,
+            get_deployment=lambda **_: deployment,
+        ),
+    )
+    job: Final = SimpleNamespace(
+        id="job",
+        unified_object_id="batch-record",
+        status="in_progress",
+        file_object={},
+        created_by=None,
+        team_id=None,
+        api_key=None,
+        org_id=None,
+        request_tags=None,
+    )
+    response: Final = LiteLLMBatch(
+        id="batch-record",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="input",
+        object="batch",
+        status="completed",
+        output_file_id="output",
+    )
+    output: Final = json.dumps(
+        {
+            "id": "line",
+            "response": {
+                "status_code": 200,
+                "body": {
+                    "model": model,
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                },
+            },
+        }
+    ).encode()
+    with (
+        ThreadPoolExecutor(max_workers=1) as executor,
+        patch("litellm.litellm_core_utils.litellm_logging.executor", executor),
+        respx.mock(assert_all_called=True) as transport,
+    ):
+        transport.get("https://batch.invalid/v1/files/output/content").respond(200, content=output)
+        if initialized:
+            await litellm.afile_content(file_id="output", **credentials)
+            await GLOBAL_LOGGING_WORKER.flush()
+        result: Final = await checker._track_completed_batch_cost(job, response, "deployment", "batch-record", None)
+        assert result == ((model, "openai") if claimed else None)
+        if kind == "executor_shutdown" and claimed:
+            prisma.db.litellm_managedobjecttable.update_many.assert_awaited_once()
+        await GLOBAL_LOGGING_WORKER.flush()
+    recipients: Final = (
+        ("custom", "function")
+        if kind == "mixed"
+        else ("custom",)
+        if kind in ("custom", "overlapping", "general", "sync_only")
+        else ("function",)
+    )
+    expected: Final = recipients if claimed else ()
+    assert events.qsize() == len(expected)
+    received: Final = tuple(events.get_nowait() for _ in expected)
+    assert tuple(sorted(event[0] for event in received)) == expected
+    for _, cost, prompt_tokens, completion_tokens in received:
+        assert isinstance(cost, float) and cost > 0
+        assert (prompt_tokens, completion_tokens) == (10, 5)

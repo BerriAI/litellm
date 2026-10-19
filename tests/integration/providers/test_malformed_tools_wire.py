@@ -46,6 +46,7 @@ _CLAUDE_BACKEND: Final = "claude-haiku-4-5"
 _GEMINI_BACKEND: Final = "gemini-2.5-flash"
 _PROVIDER_KEY: Final = "scripted-malformed-tools-key"
 _COUNT: Final = 37
+_PROVIDER_SOURCE: Final[Mapping[str, JsonValue]] = MappingProxyType({"litellm_count_source": "provider"})
 _CONFIG_STORE: Final = "vs_integration_config_store"
 _OTHER_STORE: Final = "vs_malformed_tools_other_store"
 _CLAUDE_CODE_AGENT: Final = "claude-cli/2.1.0 (external, cli)"
@@ -821,7 +822,7 @@ def test_count_tokens_forwards_well_formed_tools(rig: _Rig) -> None:
         "POST", "/v1/messages/count_tokens", _count_body(rig, marker, tools=[MESSAGES.tool])
     )
     assert response.status_code == 200, response.text
-    assert _JSON_OBJECT.validate_json(response.content) == {"input_tokens": _COUNT}, response.text
+    assert _JSON_OBJECT.validate_json(response.content) == {"input_tokens": _COUNT, **_PROVIDER_SOURCE}, response.text
     assert _one_delivery(rig, marker, "/v1/messages/count_tokens")["tools"] == [MESSAGES.tool]
 
 
@@ -853,6 +854,7 @@ def test_responses_input_tokens_counts_well_formed_tools(rig: _Rig) -> None:
     assert _JSON_OBJECT.validate_json(response.content) == {
         "object": "response.input_tokens",
         "input_tokens": _COUNT,
+        **_PROVIDER_SOURCE,
     }, response.text
     sent: Final = _one_delivery(rig, marker, "/v1/messages/count_tokens")
     assert "get_weather" in json.dumps(sent["tools"]), sent
@@ -1396,7 +1398,7 @@ def test_count_tokens_drops_the_bad_entry_a_deployment_list_names(rig: _Rig, fie
         {**_count_body(rig, marker, tools=[MESSAGES.tool, 5]), "model": field_groups.anthropic},
     )
     assert response.status_code == 200, response.text
-    assert _JSON_OBJECT.validate_json(response.content) == {"input_tokens": _COUNT}, response.text
+    assert _JSON_OBJECT.validate_json(response.content) == {"input_tokens": _COUNT, **_PROVIDER_SOURCE}, response.text
     assert _one_delivery(rig, marker, "/v1/messages/count_tokens")["tools"] == [MESSAGES.tool]
 
 
@@ -1656,7 +1658,7 @@ _CHECKED: Final[Mapping[str, _Checked]] = MappingProxyType(
             named_as=MESSAGES,
             send=_count_tokens,
             target="/v1/messages/count_tokens",
-            answered=_counted({"input_tokens": _COUNT}),
+            answered=_counted({"input_tokens": _COUNT, **_PROVIDER_SOURCE}),
             kept_by_a_tools_list=("get_weather",),
             bad_entry=_MESSAGES_BAD_ENTRY,
         ),
@@ -1666,7 +1668,7 @@ _CHECKED: Final[Mapping[str, _Checked]] = MappingProxyType(
             named_as=MESSAGES,
             send=_input_tokens,
             target="/v1/messages/count_tokens",
-            answered=_counted({"object": "response.input_tokens", "input_tokens": _COUNT}),
+            answered=_counted({"object": "response.input_tokens", "input_tokens": _COUNT, **_PROVIDER_SOURCE}),
             kept_by_a_tools_list=("get_weather",),
             bad_entry=_RESPONSES_BAD_ENTRY,
         ),

@@ -40,6 +40,8 @@ from integration.authorization._responses_compact import (
     vendor_id,
 )
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _Kind = Literal["owner", "other_user", "other_team", "unmanaged"]
 _KINDS: Final[tuple[_Kind, ...]] = ("owner", "other_user", "other_team", "unmanaged")
 _REFUSING: Final[tuple[_Kind, ...]] = ("other_user", "other_team", "unmanaged")

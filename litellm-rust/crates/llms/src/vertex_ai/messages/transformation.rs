@@ -114,6 +114,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         headers: Headers,
         _api_key: Option<&str>,
         _model: &str,
+        _optional_params: &MessagesOptionalParams,
         litellm_params: &LitellmParams,
         _env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -439,6 +440,7 @@ mod tests {
                     .collect(),
                 Some("ignored-api-key"),
                 "claude-sonnet-4-5",
+                &MessagesOptionalParams::default(),
                 &params(Some("proj"), None),
                 &no_env,
             )

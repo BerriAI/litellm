@@ -4273,13 +4273,25 @@ def add_provider_specific_headers_to_request(
     }
 
     scoped_headers: Final = [
-        ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
-        for providers, extra_headers in (
-            (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
-            (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
-            (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
+        scoped_header
+        for scoped_header in (
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.DATABRICKS.value,
+                extra_headers=anthropic_api_headers,
+                native_anthropic_messages_only=True,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
+                extra_headers=anthropic_oauth_credential_headers,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.TYPESAFE.value, extra_headers=typesafe_danger_zone_headers
+            ),
         )
-        if extra_headers
+        if scoped_header["extra_headers"]
     ]
 
     if scoped_headers:
