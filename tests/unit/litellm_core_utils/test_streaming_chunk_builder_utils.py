@@ -2267,6 +2267,60 @@ def test_stream_chunk_builder_keeps_logprobs_from_every_text_completion_chunk() 
     }
 
 
+def _text_completion_chunk(*choices: dict[str, object]) -> dict[str, object]:
+    return {"id": "cmpl-1", "object": "text_completion", "created": 1, "model": "my-model", "choices": list(choices)}
+
+
+def _text_choice(
+    index: int, text: str, offset: int, top_logprobs: list[dict[str, float]] | None, finish_reason: str | None = None
+) -> dict[str, object]:
+    return {
+        "text": text,
+        "index": index,
+        "logprobs": {"tokens": [text], "token_logprobs": [-0.5], "top_logprobs": top_logprobs, "text_offset": [offset]},
+        "finish_reason": finish_reason,
+    }
+
+
+def test_stream_chunk_builder_rebuilds_each_text_completion_choice_by_index() -> None:
+    usage_trailer: Final = {
+        **_text_completion_chunk(),
+        "usage": {"prompt_tokens": 1, "completion_tokens": 4, "total_tokens": 5},
+    }
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=[
+            _text_completion_chunk(_text_choice(0, "Hi", 5, [{"Hi": -0.5}])),
+            _text_completion_chunk(_text_choice(1, "Hey", 5, [{"Hey": -0.5}])),
+            _text_completion_chunk(_text_choice(0, " there", 7, [{" there": -0.5}], "stop")),
+            _text_completion_chunk(_text_choice(1, " you", 8, [{" you": -0.5}], "length")),
+            usage_trailer,
+        ]
+    )
+
+    assert [
+        (choice.index, choice.text, choice.finish_reason, choice.logprobs.tokens, choice.logprobs.text_offset)
+        for choice in response.choices
+    ] == [(0, "Hi there", "stop", ["Hi", " there"], [5, 7]), (1, "Hey you", "length", ["Hey", " you"], [5, 8])]
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (1, 4)
+
+
+def test_stream_chunk_builder_keeps_null_text_completion_logprobs_fields_null() -> None:
+    response: Final = litellm.stream_chunk_builder(
+        chunks=[
+            _text_completion_chunk(_text_choice(0, "Hello", 5, None)),
+            _text_completion_chunk(_text_choice(0, " world", 10, None, "length")),
+        ]
+    )
+
+    assert response.choices[0].logprobs.model_dump() == {
+        "tokens": ["Hello", " world"],
+        "token_logprobs": [-0.5, -0.5],
+        "top_logprobs": None,
+        "text_offset": [5, 10],
+    }
+
+
 def test_stream_chunk_builder_text_completion_survives_uncountable_prompt() -> None:
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder_text_completion
     from litellm.types.utils import TextCompletionResponse

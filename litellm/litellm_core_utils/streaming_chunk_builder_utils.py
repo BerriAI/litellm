@@ -1,11 +1,11 @@
 import base64
 import builtins
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional, TypeAlias, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Final, Optional, TypeAlias, TypedDict, TypeVar, Union, cast
 
 from pydantic import BaseModel
 from typing_extensions import ReadOnly, Required
@@ -1205,7 +1205,7 @@ class ChunkProcessor:
         return returned_usage
 
 
-def concatenate_base64_list(base64_strings: list[str]) -> str:
+def concatenate_base64_list(base64_strings: Sequence[str]) -> str:
     """
     Concatenates a list of base64-encoded strings.
 
@@ -1226,15 +1226,36 @@ def _as_text_completion_chunk(chunk: TextCompletionResponse | Mapping[str, objec
     return chunk if isinstance(chunk, TextCompletionResponse) else TextCompletionResponse.model_validate(chunk)
 
 
+_LogprobsValue: Final = TypeVar("_LogprobsValue")
+
+
+def _joined_or_none(fields: Iterable[Sequence[_LogprobsValue] | None]) -> list[_LogprobsValue] | None:
+    sent: Final = tuple(field for field in fields if field is not None)
+    return list(chain.from_iterable(sent)) if sent else None
+
+
 def _merged_logprobs(choices: Sequence[TextChoices]) -> Logprobs | None:
     parts: Final = tuple(choice.logprobs for choice in choices if isinstance(choice.logprobs, Logprobs))
     if not parts:
         return None
     return Logprobs(
-        text_offset=list(chain.from_iterable(part.text_offset or () for part in parts)),
-        token_logprobs=list(chain.from_iterable(part.token_logprobs or () for part in parts)),
-        tokens=list(chain.from_iterable(part.tokens or () for part in parts)),
-        top_logprobs=list(chain.from_iterable(part.top_logprobs or () for part in parts)),
+        text_offset=_joined_or_none(part.text_offset for part in parts),
+        token_logprobs=_joined_or_none(part.token_logprobs for part in parts),
+        tokens=_joined_or_none(part.tokens for part in parts),
+        top_logprobs=_joined_or_none(part.top_logprobs for part in parts),
+    )
+
+
+def _text_of(choice: TextChoices) -> str:
+    return choice.text if isinstance(choice.text, str) else ""
+
+
+def _rebuilt_text_choice(index: int, choices: Sequence[TextChoices]) -> TextChoices:
+    return TextChoices(
+        text="".join(map(_text_of, choices)),
+        index=index,
+        logprobs=_merged_logprobs(choices),
+        finish_reason=next((choice.finish_reason for choice in reversed(choices) if choice.finish_reason), None),
     )
 
 
@@ -1253,14 +1274,13 @@ def stream_chunk_builder_text_completion(
     created: Final = text_chunks[0].created
     model: Final = text_chunks[0].model
     system_fingerprint: Final = text_chunks[0].get("system_fingerprint", None)
-    chunks_with_choices: Final = [chunk for chunk in text_chunks if chunk.choices]
-    finish_reason: Final = next(
-        (c.choices[0].finish_reason for c in reversed(chunks_with_choices) if c.choices[0].finish_reason),
-        None,
-    )
     all_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in text_chunks))
-    logprobs: Final = _merged_logprobs(all_choices)
-    combined_content: Final = "".join(choice.text for choice in all_choices if choice.text)
+    indexes: Final = sorted({choice.index for choice in all_choices}) or [0]
+    choices: Final = [
+        _rebuilt_text_choice(index, tuple(choice for choice in all_choices if choice.index == index))
+        for index in indexes
+    ]
+    combined_content: Final = "".join(map(_text_of, choices))
 
     reported_usages: Final = tuple(reported for reported in map(_reported_usage, text_chunks) if reported is not None)
     usage: Final = ChunkProcessor(list(text_chunks), messages).calculate_usage(
@@ -1276,14 +1296,7 @@ def stream_chunk_builder_text_completion(
         "created": created,
         "model": model,
         "system_fingerprint": system_fingerprint,
-        "choices": [
-            {
-                "text": combined_content,
-                "index": 0,
-                "logprobs": logprobs,
-                "finish_reason": finish_reason,
-            }
-        ],
+        "choices": choices,
         "usage": usage,
     }
     return TextCompletionResponse(**response)
