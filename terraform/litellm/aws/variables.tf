@@ -135,38 +135,53 @@ variable "azs" {
 
 # ---------- Component images ----------
 #
-# Defaults pin the four componentized images at the same release tag on
-# GHCR. Override on a per-component basis in tfvars when bumping; bump them
-# together when bumping the LiteLLM release.
+variable "image_registry" {
+  description = "Registry path prefix used to compose the four LiteLLM image URIs as `<image_registry>/litellm-<component>:<image_tag>`. Per-component overrides (`gateway_image`, `backend_image`, `ui_image`, `migrations_image`) bypass this entirely when set."
+  type        = string
+  default     = "ghcr.io/berriai"
+}
+
+variable "image_tag" {
+  description = "Tag applied to all four litellm-* images when composed from `image_registry`. A published module version ships with this stamped to its own release tag, which matches the `v`-prefixed tag published to GHCR for the same LiteLLM release. Set it to pin a different LiteLLM release. When sourcing the module from a git ref of the monorepo it has no default and must be set."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.image_tag != "" || (var.gateway_image != "" && var.backend_image != "" && var.ui_image != "" && var.migrations_image != "")
+    error_message = "image_tag is empty. Published module versions (registry.terraform.io/modules/BerriAI/litellm) ship with it stamped to their own release. A git ref of the monorepo has no published images of its own, so set image_tag to a published LiteLLM release tag or set all four *_image URIs."
+  }
+}
 
 variable "gateway_image" {
-  description = "Container image for the gateway (data plane, port 4000). Tag must match a tag actually published to GHCR — the split images use the `v`-prefixed semver convention."
+  description = "Full image URI for the gateway (data plane, port 4000). Empty (default) composes from `image_registry` + `image_tag`."
   type        = string
-  default     = "ghcr.io/berriai/litellm-gateway:v1.86.0-dev"
+  default     = ""
 }
 
 variable "backend_image" {
-  description = "Container image for the backend (management API, port 4001)."
+  description = "Full image URI for the backend (management API, port 4001). Empty (default) composes from `image_registry` + `image_tag`."
   type        = string
-  default     = "ghcr.io/berriai/litellm-backend:v1.86.0-dev"
+  default     = ""
 }
 
 variable "ui_image" {
-  description = "Container image for the UI (nginx static export, port 3000)."
+  description = "Full image URI for the UI (nginx static export, port 3000). Empty (default) composes from `image_registry` + `image_tag`."
   type        = string
-  default     = "ghcr.io/berriai/litellm-ui:v1.86.0-dev"
+  default     = ""
 }
 
 variable "migrations_image" {
   description = <<-EOT
-    Container image for the one-off prisma migration task. Built from
+    Full image URI for the one-off prisma migration task. Empty (default)
+    composes from `image_registry` + `image_tag`. Built from
     `migrations/Dockerfile` — slim image whose ENTRYPOINT runs
     `python3 /app/run.py` (assembles DATABASE_URL from DATABASE_* env vars
     via DatabaseURLSettings, then runs `prisma migrate deploy`). Should track
     the same release tag as gateway/backend/ui.
   EOT
   type        = string
-  default     = "ghcr.io/berriai/litellm-migrations:v1.86.0-dev"
+  default     = ""
 }
 
 # ---------- Service sizing ----------

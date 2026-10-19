@@ -39,7 +39,11 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
+    REDACTED_BY_LITELLM,
+    REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
+)
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -56,6 +60,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
 from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
+from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -562,6 +567,14 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
+def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    key: Final = "litellm_metadata" if request_kwargs.get("litellm_metadata") else "metadata"
+    metadata: Final = request_kwargs.get(key)
+    if not isinstance(metadata, dict):
+        return MappingProxyType({})
+    return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), CALLER_SESSION_ID_METADATA_KEY: chain_session}}
+
+
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
@@ -749,8 +762,8 @@ class LiteLLMCompletionResponsesConfig:
         """
         Whether ``litellm.completion`` will route this model back onto the Responses API.
 
-        Delegates to the same check ``litellm.completion`` itself runs, and is asked with the
-        params this transform is about to emit, so the two cannot reach different answers.
+        Delegates to the same check ``litellm.completion`` itself runs, asked with the params this
+        transform is about to emit. A deployment's own ``model_info.mode`` pin is not passed here.
         """
         from litellm.main import responses_api_bridge_check
 
@@ -785,8 +798,8 @@ class LiteLLMCompletionResponsesConfig:
         provider either rejects it or silently drops it, and dropping it turns reasoning off while
         still billing for the turn. ``summary`` has no chat equivalent, so it rides the
         ``reasoning_summary`` alias, which ``litellm.completion`` reassembles into ``{effort,
-        summary}`` when it bridges the model back onto the Responses API, and is sent to nothing
-        else.
+        summary}`` when it bridges the model back onto the Responses API or targets a chat provider
+        whose config maps a summary ask (Gemini's thought summaries), and is sent to nothing else.
         """
         if not reasoning_param:
             return ResponsesReasoningChatForm(effort=None, summary=None)
@@ -807,7 +820,10 @@ class LiteLLMCompletionResponsesConfig:
             reasoning_summary=summary,
             api_base=api_base,
         )
-        return ResponsesReasoningChatForm(effort=effort, summary=summary if bridges_back else None)
+        forwards_summary: Final = bridges_back or (
+            isinstance(effort, str) and chat_target_accepts_reasoning_summary(model, custom_llm_provider)
+        )
+        return ResponsesReasoningChatForm(effort=effort, summary=summary if forwards_summary else None)
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -992,6 +1008,7 @@ class LiteLLMCompletionResponsesConfig:
         instructions: str | None,
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
+        previous_response_client_ids: tuple[str, ...] = (),
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1006,6 +1023,7 @@ class LiteLLMCompletionResponsesConfig:
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
+            client_response_ids=previous_response_client_ids,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -1074,8 +1092,6 @@ class LiteLLMCompletionResponsesConfig:
             else:
                 # Both are empty - this likely means function_call_output had empty/invalid call_id
                 # Provide a helpful error message
-                import litellm
-
                 raise litellm.BadRequestError(
                     message=(
                         f"Unable to create messages for completion request. "
@@ -1090,8 +1106,14 @@ class LiteLLMCompletionResponsesConfig:
                 )
 
         litellm_completion_request["messages"] = combined_messages
-        litellm_completion_request["litellm_trace_id"] = chat_completion_session.get("litellm_session_id")
-        return litellm_completion_request
+        chain_session: Final = chat_completion_session.get("litellm_session_id")
+        litellm_completion_request["litellm_trace_id"] = chain_session
+        chain_session_metadata: Final[Mapping[str, object]] = (
+            _chain_session_metadata(chain_session, request_kwargs)
+            if chain_session and litellm.request_correlation_in_logs
+            else MappingProxyType({})
+        )
+        return {**litellm_completion_request, **chain_session_metadata}
 
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(

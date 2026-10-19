@@ -5,15 +5,29 @@ clients saw, what the mocks received and how the workers' memory moved."""
 
 from __future__ import annotations
 
+import os
 import time
+from datetime import UTC, datetime
 from typing import Final
 
 import pytest
+from cases import CASES
 from idp import Keycloak
 from lifecycle import ResourceManager
 from memory_readings import read_rss_everywhere
 from models import SpendLogsParams
-from cases import CASES
+from proxy_client import ProxyClient
+from setup.datastore import read_db_counters, read_redis_counters, redis_monitor
+from setup.event_loop import (
+    LOG_FILE_ENV,
+    OPT_IN_ENV,
+    StallRow,
+    offenders,
+    parse_stalls,
+    read_gateway_log,
+    render_stalls,
+    summarize,
+)
 from setup.observe import (
     Observation,
     evaluate,
@@ -26,11 +40,9 @@ from setup.observe import (
 )
 from setup.performance_test_case import PerformanceTestCase
 from setup.plan import build_plan
-from setup.datastore import read_db_counters, read_redis_counters
 from setup.podcpu import gateway_cpu_sampler
 from setup.provision import MOCK_PROVIDERS, build_setup, guardrail_url, mock_url
 from setup.run import run_plan
-from proxy_client import ProxyClient
 
 pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
 _SPEND_SAMPLE: Final = 40
@@ -48,6 +60,17 @@ def _spend_logged_share(proxy: ProxyClient, call_ids: tuple[str, ...]) -> float 
     return found / len(call_ids)
 
 
+def _event_loop_rows(case: PerformanceTestCase, since: datetime) -> tuple[StallRow, ...]:
+    """The gateway's asyncio debug holds for the traffic window; a case that asks for them cannot pass without a log."""
+    assert case.event_loop is not None
+    lines: Final = read_gateway_log(since)
+    assert lines is not None, (
+        f"{case.name} needs the gateway log: run in the perf lane (pods/log with the runner service account) or set "
+        f"{LOG_FILE_ENV} to the gateway's log file"
+    )
+    return summarize(case.event_loop, parse_stalls(lines))
+
+
 @pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
 def test_perf_case(
     case: PerformanceTestCase,
@@ -56,6 +79,11 @@ def test_perf_case(
     resources: ResourceManager,
     request: pytest.FixtureRequest,
 ) -> None:
+    if case.event_loop is not None and not os.environ.get(OPT_IN_ENV):
+        pytest.skip(
+            f"{case.name} reads asyncio debug output: deploy the gateway with PYTHONASYNCIODEBUG=1 and "
+            f"LITELLM_EVENT_LOOP=asyncio, then set {OPT_IN_ENV}=1"
+        )
     plan: Final = build_plan(case)
     mock_urls: Final = {provider: mock_url(provider) for provider in MOCK_PROVIDERS}
     for url in (*mock_urls.values(), guardrail_url()):
@@ -68,9 +96,12 @@ def test_perf_case(
     db_before: Final = read_db_counters()
     redis_before: Final = read_redis_counters()
     run_started: Final = time.monotonic()
-    with gateway_cpu_sampler() as cpu:
+    traffic_started_at: Final = datetime.now(tz=UTC)
+    with gateway_cpu_sampler() as cpu, redis_monitor() as monitor:
         outcome: Final = run_plan(case, plan, setup)
     run_finished: Final = time.monotonic()
+    db_after: Final = read_db_counters()
+    redis_after: Final = read_redis_counters()
     rss_after: Final = read_rss_everywhere(proxy)
     rss_read: Final = time.monotonic()
     assert outcome.records, f"locust wrote no records (exit {outcome.locust_exit}):\n{outcome.locust_output}"
@@ -81,8 +112,6 @@ def test_perf_case(
         proxy, served_call_ids[:: max(1, len(served_call_ids) // _SPEND_SAMPLE)][:_SPEND_SAMPLE]
     )
     spend_read: Final = time.monotonic()
-    db_after: Final = read_db_counters()
-    redis_after: Final = read_redis_counters()
     mock_requests: Final = tuple(seen for url in mock_urls.values() for seen in read_mock_requests(url))
     guardrail_calls: Final = tuple(read_guardrail_calls(guardrail_url())) if case.guardrails else ()
     mocks_read: Final = time.monotonic()
@@ -98,9 +127,11 @@ def test_perf_case(
         db_after=db_after,
         redis_before=redis_before,
         redis_after=redis_after,
+        redis_commands=monitor.commands,
         gateway_cpu_seconds=cpu.seconds,
     )
     rows, exceeded_limits = evaluate(case, observation)
+    stall_rows: Final = _event_loop_rows(case, traffic_started_at) if case.event_loop is not None else ()
     item: Final = request.node  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pytest: untyped
     assert isinstance(item, pytest.Item)
     item.user_properties[:] = [
@@ -108,6 +139,8 @@ def test_perf_case(
     ]  # rebind-ok: a --reruns retry replaces the first attempt's numbers instead of appending a second set
     item.user_properties.extend(junit_properties(rows))
     print(render(case, observation, rows))
+    if case.event_loop is not None:
+        print(render_stalls(case.event_loop, stall_rows))
     print(
         f"  phases: setup {run_started - setup_started:.0f}s, locust {run_finished - run_started:.0f}s, "
         f"observe {time.monotonic() - run_finished:.0f}s (rss {rss_read - run_finished:.0f}s, spend sample "
@@ -117,3 +150,4 @@ def test_perf_case(
         f"{len(plan)} planned, {len(outcome.records)} recorded; locust said:\n{outcome.locust_output}"
     )
     assert not exceeded_limits, "limits exceeded (observed > max):\n" + "\n".join(exceeded_limits)
+    assert not offenders(stall_rows), "event-loop holds over the threshold:\n" + "\n".join(offenders(stall_rows))

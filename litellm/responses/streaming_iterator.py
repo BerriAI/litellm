@@ -1,18 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import json
 import time
 import traceback
 import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast, overload, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NoReturn,
+    Protocol,
+    TypeAlias,
+    cast,
+    overload,
+    runtime_checkable,
+)
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -28,9 +40,11 @@ from litellm.constants import (
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
@@ -185,7 +199,7 @@ def _running_loop() -> asyncio.AbstractEventLoop | None:
         return None
 
 
-def _spawn_logging_task(
+def spawn_logging_task(
     running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
 ) -> asyncio.Task[object]:
     task: Final = running_loop.create_task(coroutine)
@@ -193,6 +207,14 @@ def _spawn_logging_task(
     task.add_done_callback(_PENDING_LOGGING_TASKS.discard)
     task.add_done_callback(lambda done: _log_background_task_failure(done, task_name=task_name))
     return task
+
+
+async def drain_logging_tasks(timeout: float = 5.0) -> None:
+    if not _PENDING_LOGGING_TASKS:
+        return
+    _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)
+    if pending:
+        verbose_logger.warning("Timed out draining %d logging tasks on shutdown, dropping them", len(pending))
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
@@ -262,7 +284,13 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
     return _status_code_for_error_fields(error_type, error_code), message
 
 
-def _map_stream_error_to_exception(error_obj: object, model: str, custom_llm_provider: str) -> Exception:
+def _map_stream_error_to_exception(
+    error_obj: object,
+    model: str,
+    custom_llm_provider: str,
+    headers: httpx.Headers | None = None,
+    logging_obj: LiteLLMLoggingObj | None = None,
+) -> Exception:
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
     error_message, error_type, error_code = _error_event_fields(error_obj)
@@ -272,14 +300,29 @@ def _map_stream_error_to_exception(error_obj: object, model: str, custom_llm_pro
         status_code=status_code,
         message=f"Error code: {status_code} - {{'error': {error_body}}}",
         body=error_body,
+        headers=headers,
+    )
+    return _mapped_exception(provider_exception, model, custom_llm_provider, logging_obj)
+
+
+def _mapped_exception(
+    original_exception: Exception,
+    model: str,
+    custom_llm_provider: str,
+    logging_obj: LiteLLMLoggingObj | None,
+) -> Exception:
+    litellm_params: Final = (
+        None
+        if logging_obj is None
+        else _typed_gets_litellm_params(logging_obj.model_call_details.get)("litellm_params", {})
     )
     try:
         return litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            original_exception=provider_exception,
+            original_exception=original_exception,
             completion_kwargs={},
-            extra_kwargs={},
+            extra_kwargs=with_deployment_api_base(litellm_params),
         )
     except Exception as mapped_exception:
         return mapped_exception
@@ -667,7 +710,13 @@ class BaseResponsesAPIStreamingIterator:
         )
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
-        return _map_stream_error_to_exception(error_obj, self.model or "", self.custom_llm_provider or "")
+        return _map_stream_error_to_exception(
+            error_obj,
+            self.model or "",
+            self.custom_llm_provider or "",
+            headers=provider_request_id_headers(self._raw_response_headers),
+            logging_obj=self.logging_obj,
+        )
 
     def _maybe_raise_for_error_event(self, result: object) -> None:
         chunk_type: Final = getattr(result, "type", None)
@@ -683,11 +732,17 @@ class BaseResponsesAPIStreamingIterator:
         mapped_exception: Final = self._map_error_event_exception(error_obj)
         if not _mid_stream_fallback_eligible(mapped_exception):
             raise mapped_exception
+        mapped_status: Final = getattr(mapped_exception, "status_code", None)
         raise MidStreamFallbackError(
             message=str(mapped_exception),
             model=self.model or "",
             llm_provider=self.custom_llm_provider or "",
             original_exception=mapped_exception,
+            response=httpx.Response(
+                status_code=int(mapped_status) if mapped_status is not None else 503,
+                headers=provider_request_id_headers(self._raw_response_headers),
+                request=httpx.Request(method="POST", url=f"https://{self.custom_llm_provider or ''}.com/v1/"),
+            ),
             generated_content=self._generated_content,
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
@@ -884,7 +939,7 @@ class BaseResponsesAPIStreamingIterator:
         running_loop: Final = _running_loop()
         if running_loop is not None:
             self._record_pending_logging_task(
-                _spawn_logging_task(
+                spawn_logging_task(
                     running_loop,
                     async_post_call_success_deployment_hook(
                         request_data=request_payload,
@@ -920,7 +975,7 @@ class BaseResponsesAPIStreamingIterator:
         running_loop: Final = _running_loop()
         if running_loop is not None:
             self._record_pending_logging_task(
-                _spawn_logging_task(
+                spawn_logging_task(
                     running_loop,
                     self._run_failure_handlers_in_order(exception, traceback_exception, end_time),
                     task_name="Responses stream failure logging",
@@ -1006,6 +1061,11 @@ class BaseResponsesAPIStreamingIterator:
         if self._output_started:
             raise error
         raise self._fallback_error(error) from error
+
+    def _raise_for_transport_timeout(self, error: httpx.TimeoutException) -> NoReturn:
+        self.finished = True
+        self._handle_failure(error)
+        raise _mapped_exception(error, self.model or "", self.custom_llm_provider or "", self.logging_obj) from error
 
     def _raise_for_transport_error(self, error: httpx.ReadError | httpx.RemoteProtocolError) -> NoReturn:
         self._handle_failure(error)
@@ -1103,6 +1163,8 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             if self.completed_response is not None:
                 raise StopAsyncIteration from e
             self._raise_for_transport_error(e)
+        except httpx.TimeoutException as e:
+            self._raise_for_transport_timeout(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
@@ -1186,6 +1248,8 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             if self.completed_response is not None:
                 raise StopIteration from e
             self._raise_for_transport_error(e)
+        except httpx.TimeoutException as e:
+            self._raise_for_transport_timeout(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
@@ -1892,6 +1956,38 @@ async def _enforce_frame_project_quota(
         )
 
 
+async def _admit_frame_turn(turn_admission: Callable[[], Awaitable[None]] | None, raw_message: str) -> Exception | None:
+    frame: Final = _json_object_or_none(raw_message)
+    if turn_admission is None or frame is None or frame.get("type") != "response.create":
+        return None
+    try:
+        await turn_admission()
+    except RateLimitError as refusal:
+        return refusal
+    except Exception as e:
+        verbose_logger.exception("Responses WS turn admission failed: %s", e)
+        return e
+    return None
+
+
+def _turn_refusal_frame(refusal: RateLimitError) -> str:
+    return json.dumps(
+        {"type": "error", "status": 429, "error": {"type": "rate_limit_exceeded", "message": str(refusal)}}
+    )
+
+
+def _turn_admission_error_frame(failure: Exception) -> str:
+    return json.dumps({"type": "error", "status": 500, "error": {"type": "server_error", "message": str(failure)}})
+
+
+def _turn_rejection_frame(rejection: Exception) -> str:
+    match rejection:
+        case RateLimitError():
+            return _turn_refusal_frame(rejection)
+        case _:
+            return _turn_admission_error_frame(rejection)
+
+
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.created",
     "response.completed",
@@ -1906,6 +2002,87 @@ RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output
 
 _RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"})
 _PER_TURN_METADATA_KEYS: Final = frozenset({"metadata", "litellm_metadata"})
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+
+
+_PII_DELTA_EVENT_TYPES: Final = frozenset(
+    {
+        "response.output_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.refusal.delta",
+        "response.function_call_arguments.delta",
+    }
+)
+
+
+def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], unmask_pii_text: _UnmasksPiiText) -> str:
+    """Put the original PII back into one client-bound event: ``response.completed`` output text, or a delta."""
+    try:
+        evt_obj: Final = _load_json_object(response_str)
+    except (json.JSONDecodeError, TypeError):
+        return response_str
+    event_type: Final = evt_obj.get("type")
+
+    if event_type == "response.completed":
+        modified = False
+        response_obj: Final = evt_obj.get("response")
+        if not _is_json_object(response_obj):
+            return response_str
+        output_items: Final = response_obj.get("output")
+        for output_item in output_items if _is_json_array(output_items) else []:
+            if not _is_json_object(output_item):
+                continue
+            content = output_item.get("content")
+            if not _is_json_array(content):
+                continue
+            for content_block in content:
+                if not _is_json_object(content_block):
+                    continue
+                text = content_block.get("text")
+                if isinstance(text, str):
+                    unmasked = unmask_pii_text(text, pii_tokens)
+                    if unmasked != text:
+                        content_block["text"] = unmasked
+                        modified = True
+        return json.dumps(evt_obj) if modified else response_str
+
+    if event_type in _PII_DELTA_EVENT_TYPES:
+        delta: Final = evt_obj.get("delta")
+        if isinstance(delta, str):
+            unmasked = unmask_pii_text(delta, pii_tokens)
+            if unmasked != delta:
+                evt_obj["delta"] = unmasked
+                return json.dumps(evt_obj)
+
+    return response_str
+
+
+@dataclass(frozen=True, slots=True)
+class GuardedResponsesWsFrame:
+    """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
+    may rewrite ``input`` and ``instructions``), the guardrail records that bill against this turn only, the
+    Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply, and how
+    to carry those guardrail records onto the connection's failure row when the deployment then refuses the turn."""
+
+    frame: str
+    guardrail_information: tuple[Mapping[str, object], ...] = ()
+    pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    bill_refusal: Callable[[Exception], None] | None = None
+
+
+ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
+
+
+async def _reject_guarded_turn(
+    websocket: ResponsesClientWebSocket, guarded: GuardedResponsesWsFrame, rejection: Exception
+) -> None:
+    """Answers the refused turn and leaves its guardrail records to the connection's close-time failure row, which
+    runs every failure hook once per socket, like the first refusal it records."""
+    if guarded.bill_refusal is not None:
+        guarded.bill_refusal(rejection)
+    with contextlib.suppress(Exception):
+        await websocket.send_text(_turn_rejection_frame(rejection))
+
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
 
@@ -1938,6 +2115,30 @@ def _user_texts_in_input_item(item: object) -> tuple[str, ...]:
     )
 
 
+def _set_turn_guardrail_information(
+    turn_logging_obj: LiteLLMLoggingObj, guardrail_information: tuple[Mapping[str, object], ...]
+) -> None:
+    """A turn bills the guardrails that ran on its own ``response.create`` frame, never the records the
+    connection-level logging object carries from an earlier frame."""
+    litellm_params: Final = _json_object_or_none(
+        turn_logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+    )
+    if litellm_params is None:
+        return
+    for key in _PER_TURN_METADATA_KEYS:
+        _replace_guardrail_information(litellm_params.get(key), guardrail_information)
+
+
+def _replace_guardrail_information(bucket: object, guardrail_information: tuple[Mapping[str, object], ...]) -> None:
+    if not _is_json_object(bucket):
+        return
+    bucket.pop(_GUARDRAIL_INFORMATION_KEY, None)
+    if guardrail_information:
+        bucket[_GUARDRAIL_INFORMATION_KEY] = [  # rebind-ok: the turn copy's own metadata bucket
+            dict(entry) for entry in guardrail_information
+        ]
+
+
 def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], ...]:
     frame: Final = _json_object_or_none(client_frame)
     if frame is None or frame.get("type") != "response.create":
@@ -1968,13 +2169,17 @@ class _ResponsesWsTurn:
     def with_event(self, event: Mapping[str, object]) -> _ResponsesWsTurn:
         return _ResponsesWsTurn(logging_obj=self.logging_obj, events=(*self.events, event))
 
-    def failure(self, model: str, custom_llm_provider: str) -> Exception | None:
+    def failure(
+        self, model: str, custom_llm_provider: str, connection_logging_obj: LiteLLMLoggingObj
+    ) -> Exception | None:
         failed_event: Final = next(
             (event for event in self.events if event.get("type") in _RESPONSES_WS_FAILURE_EVENT_TYPES), None
         )
         if failed_event is None:
             return None
-        return _map_stream_error_to_exception(_ws_event_error(failed_event), model, custom_llm_provider)
+        return _map_stream_error_to_exception(
+            _ws_event_error(failed_event), model, custom_llm_provider, logging_obj=connection_logging_obj
+        )
 
 
 _RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
@@ -2092,11 +2297,14 @@ class ResponsesWebSocketStreaming:
         authorized_model: str | None = None,
         custom_llm_provider: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        turn_admission: Callable[[], Awaitable[None]] | None = None,
+        frame_guard: ResponsesWsFrameGuard | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
+        self.frame_guard: ResponsesWsFrameGuard | None = frame_guard
         self.request_data: dict[str, object] = request_data or {}
         litellm_metadata: Final = self.request_data.get("litellm_metadata")
         self.litellm_metadata: dict[str, object] = litellm_metadata if _is_json_object(litellm_metadata) else {}
@@ -2112,13 +2320,17 @@ class ResponsesWebSocketStreaming:
         self.authorized_model: str | None = authorized_model
         self.request_defaults: ResponsesWebSocketRequestDefaults | None = request_defaults
         self._pending_inject_client_ids: Mapping[str, tuple[str, ...]] = EMPTY_MAPPING
+        self.turn_admission: Callable[[], Awaitable[None]] | None = turn_admission
 
-    def _start_turn(self, client_frame: str | None) -> None:
+    def _start_turn(
+        self, client_frame: str | None, guardrail_information: tuple[Mapping[str, object], ...] = ()
+    ) -> None:
         start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
         turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
             litellm_call_id=str(uuid.uuid4()), start_time=start_time
         )
         self._detach_budget_reservation()
+        _set_turn_guardrail_information(turn_logging_obj, guardrail_information)
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
@@ -2137,10 +2349,48 @@ class ResponsesWebSocketStreaming:
             for key, value in litellm_params.items()
         }
 
-    def _record_client_frame(self, client_frame: str) -> None:
+    def _record_client_frame(
+        self, client_frame: str, guardrail_information: tuple[Mapping[str, object], ...] = ()
+    ) -> None:
         frame: Final = _json_object_or_none(client_frame)
         if frame is not None and frame.get("type") == "response.create":
-            self._start_turn(client_frame)
+            self._start_turn(client_frame, guardrail_information)
+
+    async def _guard_frame(self, message: str) -> GuardedResponsesWsFrame | None:
+        """Run the proxy's pre_call guardrails on one ``response.create`` frame.
+
+        Returns None when a guardrail rejects the frame: the client gets an ``error`` event and the
+        frame is dropped while the connection stays open for the next turn.
+        """
+        frame: Final = _json_object_or_none(message)
+        if self.frame_guard is None or frame is None or frame.get("type") != "response.create":
+            return GuardedResponsesWsFrame(frame=message)
+        try:
+            return await self.frame_guard(message)
+        except Exception as e:  # noqa: BLE001  # any guardrail rejection maps to one client-facing error event
+            verbose_logger.info("Responses WebSocket: pre_call guardrail rejected a response.create frame: %s", e)
+            await self._send_error_event("invalid_request_error", str(e))
+            return None
+
+    async def _forward_guarded_frame(
+        self, message: str, turn_admission: Callable[[], Awaitable[None]] | None = None
+    ) -> None:
+        guarded: Final = await self._guard_frame(message)
+        if guarded is None or not await self._admit_or_reject_turn(guarded, message, turn_admission):
+            return
+        if guarded.pii_tokens:
+            self._remember_pii_tokens(guarded.pii_tokens)
+        masked: Final = await self._mask_response_create(guarded.frame)
+        self._record_client_frame(masked, guarded.guardrail_information)
+        await self.backend_ws.send(masked)
+
+    def _remember_pii_tokens(self, pii_tokens: Mapping[str, str]) -> None:
+        metadata: Final = self.request_data.get("metadata")
+        known: Final = metadata.get("pii_tokens") if _is_json_object(metadata) else None
+        self.request_data["metadata"] = {
+            **(metadata if _is_json_object(metadata) else {}),
+            "pii_tokens": {**(known if _is_str_mapping(known) else {}), **pii_tokens},
+        }
 
     def _record_backend_event(self, event: str) -> None:
         event_obj: Final = _json_object_or_none(event)
@@ -2164,7 +2414,7 @@ class ResponsesWebSocketStreaming:
 
     def _log_turn(self, turn: _ResponsesWsTurn) -> None:
         events: Final = list(turn.events)
-        exception: Final = turn.failure(self.authorized_model or "", self.custom_llm_provider or "")
+        exception: Final = turn.failure(self.authorized_model or "", self.custom_llm_provider or "", self.logging_obj)
         if exception is None:
             asyncio.create_task(turn.logging_obj.dispatch_success_handlers(events, prefer_async_handlers=True))
             return
@@ -2415,14 +2665,7 @@ class ResponsesWebSocketStreaming:
         return json.dumps(msg_obj) if modified else message
 
     # Delta event types whose ``delta`` field may contain PII tokens.
-    _DELTA_EVENT_TYPES = frozenset(
-        {
-            "response.output_text.delta",
-            "response.reasoning_summary_text.delta",
-            "response.refusal.delta",
-            "response.function_call_arguments.delta",
-        }
-    )
+    _DELTA_EVENT_TYPES = _PII_DELTA_EVENT_TYPES
 
     # Terminal events that carry the full output text or tool-call arguments
     # already delivered by ``response.completed``. Suppressed when output masking
@@ -2462,47 +2705,9 @@ class ResponsesWebSocketStreaming:
         if not pii_tokens:
             return response_str
 
-        try:
-            evt_obj: Final = _load_json_object(response_str)
-        except (json.JSONDecodeError, TypeError):
-            return response_str
-
         cb: Final = self.guardrail_callbacks[0]
         unmask_pii_text: Final[_UnmasksPiiText] = getattr(cb, _UNMASK_PII_TEXT_ATTR)
-        event_type: Final = evt_obj.get("type")
-
-        if event_type == "response.completed":
-            modified = False
-            response_obj: Final = evt_obj.get("response")
-            if not _is_json_object(response_obj):
-                return response_str
-            output_items: Final = response_obj.get("output")
-            for output_item in output_items if _is_json_array(output_items) else []:
-                if not _is_json_object(output_item):
-                    continue
-                content = output_item.get("content")
-                if not _is_json_array(content):
-                    continue
-                for content_block in content:
-                    if not _is_json_object(content_block):
-                        continue
-                    text = content_block.get("text")
-                    if isinstance(text, str):
-                        unmasked = unmask_pii_text(text, pii_tokens)
-                        if unmasked != text:
-                            content_block["text"] = unmasked
-                            modified = True
-            return json.dumps(evt_obj) if modified else response_str
-
-        if event_type in self._DELTA_EVENT_TYPES:
-            delta: Final = evt_obj.get("delta")
-            if isinstance(delta, str):
-                unmasked = unmask_pii_text(delta, pii_tokens)
-                if unmasked != delta:
-                    evt_obj["delta"] = unmasked
-                    return json.dumps(evt_obj)
-
-        return response_str
+        return _unmask_responses_event(response_str, pii_tokens, unmask_pii_text)
 
     async def _mask_response_completed(self, response_str: str) -> str:
         """
@@ -2596,38 +2801,46 @@ class ResponsesWebSocketStreaming:
                 self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
             )
         except RateLimitError as e:
-            try:
-                await self.websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "error": {
-                                "type": "rate_limit_exceeded",
-                                "message": str(e),
-                            },
-                        }
-                    )
-                )
-            except Exception:  # noqa: BLE001, S110  # client may already be gone
-                pass
+            await self._send_turn_refusal(e)
             return False
         return True
+
+    async def _admit_or_reject_turn(
+        self, guarded: GuardedResponsesWsFrame, message: str, turn_admission: Callable[[], Awaitable[None]] | None
+    ) -> bool:
+        rejection: Final = await _admit_frame_turn(turn_admission, message)
+        if rejection is None:
+            return True
+        if self._failure is None:
+            self._failure = rejection
+        await _reject_guarded_turn(self.websocket, guarded, rejection)
+        return False
+
+    async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
+        try:
+            await self.websocket.send_text(_turn_refusal_frame(refusal))
+        except Exception:  # noqa: BLE001, S110  # client may already be gone
+            pass
+
+    async def _send_error_event(self, error_type: str, message: str) -> None:
+        try:
+            await self.websocket.send_text(
+                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+            )
+        except Exception:  # noqa: BLE001, S110  # client may already be gone
+            pass
 
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
             if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
-                masked_first: Final = await self._mask_response_create(self.first_message)
-                self._record_client_frame(masked_first)
-                await self.backend_ws.send(masked_first)
+                await self._forward_guarded_frame(self.first_message)
 
             while True:
                 message = await self.websocket.receive_text()
                 if not await self._enforce_or_reject_frame(message):
                     continue
-                masked = await self._mask_response_create(message)
-                self._record_client_frame(masked)
-                await self.backend_ws.send(masked)
+                await self._forward_guarded_frame(message, self.turn_admission)
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
@@ -2704,10 +2917,16 @@ class ManagedResponsesWebSocketHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
+        turn_admission: Callable[[], Awaitable[None]] | None = None,
+        frame_guard: ResponsesWsFrameGuard | None = None,
+        guardrail_callbacks: Sequence[PresidioGuardrailCallback] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
         self.model = model
+        self.frame_guard = frame_guard
+        self.guardrail_callbacks: tuple[PresidioGuardrailCallback, ...] = tuple(guardrail_callbacks or ())
+        self._pii_tokens: Mapping[str, str] = {}
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.litellm_metadata: Mapping[str, object] = litellm_metadata or {}
@@ -2722,6 +2941,8 @@ class ManagedResponsesWebSocketHandler:
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
         self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
+        self.turn_admission: Callable[[], Awaitable[None]] | None = turn_admission
+        self._failure: Exception | None = None
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
@@ -2750,12 +2971,11 @@ class ManagedResponsesWebSocketHandler:
             return None
 
     async def _send_error(self, message: str, error_type: str = "server_error") -> None:
-        try:
-            await self.websocket.send_text(
-                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
-            )
-        except Exception:
-            pass
+        await self._send_frame(json.dumps({"type": "error", "error": {"type": error_type, "message": message}}))
+
+    async def _send_frame(self, frame: str) -> None:
+        with contextlib.suppress(Exception):
+            await self.websocket.send_text(frame)
 
     def _get_history_messages(self, previous_response_id: str) -> list[dict[str, object]]:
         """
@@ -3015,6 +3235,27 @@ class ManagedResponsesWebSocketHandler:
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
 
+    async def _guard_frame(self, raw_message: str) -> GuardedResponsesWsFrame | None:
+        """Same per-frame pre_call guardrail walk as the native socket: a rejected frame errors and is not sent."""
+        if self.frame_guard is None:
+            return GuardedResponsesWsFrame(frame=raw_message)
+        try:
+            return await self.frame_guard(raw_message)
+        except Exception as e:  # noqa: BLE001  # any guardrail rejection maps to one client-facing error event
+            verbose_logger.info("ManagedResponsesWS: pre_call guardrail rejected a response.create frame: %s", e)
+            await self._send_error(str(e), error_type="invalid_request_error")
+            return None
+
+    @staticmethod
+    def _metadata_with_turn_guardrails(
+        existing: object, guardrail_information: tuple[Mapping[str, object], ...]
+    ) -> Mapping[str, object]:
+        """Each turn is its own ``litellm.aresponses`` call, so its guardrail records ride on that call's metadata."""
+        return {
+            **(existing if _is_json_object(existing) else {}),
+            _GUARDRAIL_INFORMATION_KEY: [dict(record) for record in guardrail_information],
+        }
+
     @staticmethod
     def _update_proxy_request(call_kwargs: dict[str, Any], model: str) -> None:
         """Update proxy_server_request body so spend logs record the full request."""
@@ -3058,11 +3299,18 @@ class ManagedResponsesWebSocketHandler:
                 except Exception:
                     pass
             try:
-                await self.websocket.send_text(serialized)
+                await self.websocket.send_text(self._unmask_for_client(serialized))
             except Exception as send_exc:
                 verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
                 return terminal_event  # Client disconnected
         return terminal_event
+
+    def _unmask_for_client(self, serialized: str) -> str:
+        """The provider and the turn history keep Presidio's tokens, the client gets the original text back."""
+        if not self._pii_tokens or not self.guardrail_callbacks:
+            return serialized
+        unmask_pii_text: Final[_UnmasksPiiText] = getattr(self.guardrail_callbacks[0], _UNMASK_PII_TEXT_ATTR)
+        return _unmask_responses_event(serialized, self._pii_tokens, unmask_pii_text)
 
     def _save_turn_history(
         self,
@@ -3089,7 +3337,9 @@ class ManagedResponsesWebSocketHandler:
     # Core request handler
     # ------------------------------------------------------------------
 
-    async def _process_response_create(self, raw_message: str) -> None:
+    async def _process_response_create(
+        self, raw_message: str, turn_admission: Callable[[], Awaitable[None]] | None = None
+    ) -> None:
         """
         Parse one ``response.create`` event, call ``litellm.aresponses(stream=True)``,
         and forward every streaming event to the client.
@@ -3130,10 +3380,21 @@ class ManagedResponsesWebSocketHandler:
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
             )
         except RateLimitError as e:
-            await self._send_error(str(e), error_type="rate_limit_exceeded")
+            await self._send_frame(_turn_refusal_frame(e))
             return
+        guarded: Final = await self._guard_frame(raw_message)
+        if guarded is None:
+            return
+        rejection: Final = await _admit_frame_turn(turn_admission, raw_message)
+        if rejection is not None:
+            if self._failure is None:
+                self._failure = rejection
+            await _reject_guarded_turn(self.websocket, guarded, rejection)
+            return
+        if guarded.pii_tokens:
+            self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}
 
-        call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
+        call_kwargs: Final = self._build_base_call_kwargs(_load_json_object(guarded.frame))
         call_kwargs["stream"] = True
 
         # A frame that repeats the connection's public alias (model_group) must
@@ -3153,6 +3414,10 @@ class ManagedResponsesWebSocketHandler:
 
         self._apply_history(call_kwargs, previous_response_id, current_messages, prior_history)
         self._inject_credentials(call_kwargs, model=model)
+        if guarded.guardrail_information:
+            call_kwargs["litellm_metadata"] = self._metadata_with_turn_guardrails(
+                call_kwargs.get("litellm_metadata"), guarded.guardrail_information
+            )
         self._update_proxy_request(call_kwargs, requested_model or self.model_group or model)
         call_kwargs.update(self.extra_kwargs)
 
@@ -3169,7 +3434,7 @@ class ManagedResponsesWebSocketHandler:
     # Main entry point
     # ------------------------------------------------------------------
 
-    async def run(self) -> None:
+    async def run(self) -> Exception | None:
         """
         Main loop: accept ``response.create`` events sequentially and handle
         each one before waiting for the next message.
@@ -3185,8 +3450,9 @@ class ManagedResponsesWebSocketHandler:
                     verbose_logger.debug("ManagedResponsesWS: client disconnected: %s", exc)
                     break
 
-                await self._process_response_create(message)
+                await self._process_response_create(message, self.turn_admission)
 
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: unexpected error: %s", exc)
             await self._send_error(f"Internal server error: {exc}")
+        return self._failure

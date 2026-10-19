@@ -321,6 +321,48 @@ def test_messages_count_tokens_sends_the_input_v1_messages_inference_sends(
         assert count_body["model"] == inference_body["model"]
 
 
+_UNCONVERTIBLE_BODY: Final[Mapping[str, JsonValue]] = {
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize the notes."},
+                {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "notes"}},
+                {"type": "search_result", "source": "https://example.com/notes", "title": "Notes", "content": []},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "search", "input": {}}]},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [
+                        {
+                            "type": "search_result",
+                            "source": "https://example.com/hits",
+                            "title": "Hits",
+                            "content": [{"type": "text", "text": "hit"}],
+                        }
+                    ],
+                }
+            ],
+        },
+    ],
+}
+
+
+def test_messages_count_tokens_rejects_blocks_it_cannot_convert(counting_proxy: OwnedProxy) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_responses_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire.url)
+        response: Final = gateway.request("POST", "/v1/messages/count_tokens", {"model": model, **_UNCONVERTIBLE_BODY})
+        assert response.status_code == 400, response.text
+        assert "document with a text source, search_result, search_result inside a tool_result" in response.text
+        assert wire.drain() == ()
+
+
 def test_messages_count_tokens_without_a_role_answers_400_before_calling_openai(counting_proxy: OwnedProxy) -> None:
     gateway: Final = counting_proxy.gateway
     with wire_server(_count_response) as wire, gateway.scenario() as scenario:
@@ -349,3 +391,28 @@ def test_google_count_tokens_sends_the_system_instruction_text(counting_proxy: O
         )
         assert response.status_code == 200, response.text
         assert _count_body(wire)["instructions"] == "Be brief.\nAnswer in English."
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(
+            {"message": "Invalid input", "type": "invalid_request_error", "param": "input", "code": "invalid_value"},
+            id="full",
+        ),
+        pytest.param({"message": "Invalid input", "type": "invalid_request_error"}, id="bare"),
+    ],
+)
+def test_responses_input_tokens_passes_an_openai_count_error_through(
+    counting_proxy: OwnedProxy, error: dict[str, JsonValue]
+) -> None:
+    def rejecting(_request: Request) -> Reply:
+        return Reply(status=400, body=json.dumps({"error": error}).encode())
+
+    gateway: Final = counting_proxy.gateway
+    with wire_server(rejecting) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire.url)
+        response: Final = gateway.request("POST", "/v1/responses/input_tokens", {"model": model, "input": "hello"})
+        assert response.status_code == 400, response.text
+        assert response.json() == {"error": {"param": None, "code": None, **error}}, response.text
+        assert _count_body(wire)["input"] == [{"role": "user", "content": "hello"}]

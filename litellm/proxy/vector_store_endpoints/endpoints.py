@@ -9,12 +9,14 @@ from typing import (
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from litellm.constants import VECTOR_STORE_CALLER_METADATA_KWARG
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.http_parsing_utils import read_raw_json_body
 from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
@@ -23,6 +25,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
@@ -213,6 +216,9 @@ async def vector_store_create(
     )
 
     data: Final = await read_request_body(request=request)
+    data[VECTOR_STORE_CALLER_METADATA_KWARG] = callers_metadata_snapshot(
+        await read_raw_json_body(request), VectorStoreWriteBody.model_validate(data)
+    )
 
     # Check for target_model_names parameter
     target_model_names: Final = data.pop("target_model_names", None)
@@ -448,6 +454,9 @@ async def vector_store_update(
     data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
+    data[VECTOR_STORE_CALLER_METADATA_KWARG] = callers_metadata_snapshot(
+        await read_raw_json_body(request), VectorStoreWriteBody.model_validate(data)
+    )
 
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict

@@ -15,6 +15,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
     CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -33,6 +34,8 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
+from litellm.integrations.otel.model.metadata import caller_session_id
+from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
     classifier_audit_fields,
@@ -44,6 +47,7 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import (
     coerce_model_access_groups,
@@ -175,8 +179,14 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_baseline_observation",
         "used_client_oauth_token",
         "litellm_roi_estimator",
+        "user_api_key_user_email",
     )
 )
+
+
+def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
+    email: Final = metadata.get("user_api_key_user_email")
+    return email if isinstance(email, str) and email.strip() else None
 
 
 def _get_spend_logs_metadata(
@@ -210,6 +220,7 @@ def _get_spend_logs_metadata(
             user_api_key_project_alias=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
+            user_api_key_user_email=None,
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
@@ -247,9 +258,7 @@ def _get_spend_logs_metadata(
             azure_spillover=azure_spillover,
             used_client_oauth_token=used_client_oauth_token,
         )
-    verbose_proxy_logger.debug(
-        "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
-    )
+    verbose_proxy_logger.debug("getting payload for SpendLogs, available keys in metadata: %s", [*metadata])
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
@@ -263,6 +272,7 @@ def _get_spend_logs_metadata(
         azure_spillover=azure_spillover,
         used_client_oauth_token=used_client_oauth_token,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
+        user_api_key_user_email=_stored_user_email(metadata),
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
@@ -539,6 +549,7 @@ def get_logging_payload(
         kwargs = {}
 
     rejected_as_unknown_model: Final = isinstance(response_obj, ProxyModelNotFoundError)
+    response_served_from_cache: Final = served_from_cache(response_obj)
     if response_obj is None:
         response_obj = {}
     elif not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict):
@@ -570,11 +581,11 @@ def get_logging_payload(
         elif isinstance(_usage, dict):
             usage = _usage
 
-    # A request that failed mid-stream has no usable response_obj usage, but the
-    # streaming handler may have recovered the usage from the chunks already
-    # delivered. Honor that override so the partial usage lands in spend tracking.
+    # A request that failed mid-stream has no usable response_obj usage, and a stream
+    # continued on a fallback only has the fallback's. combined_usage_object holds the
+    # usage of every call the client's answer took, so it wins in both cases.
     _combined_usage: Final = kwargs.get("combined_usage_object")
-    if not usage and isinstance(_combined_usage, litellm.Usage):
+    if (not usage or "continued_partial_usage" in kwargs) and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)
@@ -809,7 +820,7 @@ def get_logging_payload(
         cache_key = litellm_params["preset_cache_key"]
     else:
         cache_key = litellm.cache.get_cache_key(**kwargs)
-    if cache_hit is True:
+    if cache_hit is True or response_served_from_cache:
         import time
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
@@ -930,6 +941,16 @@ def _get_batch_trace_session_id(call_type: str | None, request_id: str | None) -
     return request_id.removesuffix(BATCH_COST_REQUEST_ID_SUFFIX)
 
 
+def _caller_session_for_spend_log(kwargs: Mapping[str, object], metadata: Mapping[str, object] | None) -> str | None:
+    beside_trace_header: Final = metadata.get(CALLER_SESSION_ID_METADATA_KEY) if metadata else None
+    caller_session: Final = (
+        beside_trace_header
+        if isinstance(beside_trace_header, str) and beside_trace_header
+        else caller_session_id(kwargs, TraceControls())
+    )
+    return caller_session if caller_session and "\x00" not in caller_session else None
+
+
 def _get_session_id_for_spend_log(
     kwargs: Mapping[str, object],
     metadata: Mapping[str, object] | None,
@@ -937,9 +958,12 @@ def _get_session_id_for_spend_log(
     omit_when_missing: bool,
     batch_trace_session_id: str | None = None,
 ) -> str | None:
-    """Under `omit` only `metadata.session_id`, the key Langfuse reads, counts as a session; `litellm_session_id` may
-    be a copied trace id. Batch call types carry a deterministic session derived from the batch id, which outranks
-    the per-request trace ids because those differ between the create call and the cost poller's row."""
+    """Resolve the session id for the spend log row: `omit` honors only metadata.session_id,
+    batch sessions outrank everything, then the conversation id the caller sent (also one an x-litellm-trace-id header
+    displaced from the request's session), then trace ids.
+
+    A session minted by `missing_session_id: generate` or copied from the request's trace id is not a conversation, so
+    it yields to the trace id, which the Responses bridge points at the previous turn's session to keep a chain whole."""
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
         return str(session_id) if session_id else None
@@ -948,11 +972,14 @@ def _get_session_id_for_spend_log(
 
     if batch_trace_session_id is not None:
         return batch_trace_session_id
-    if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
-        return str(standard_logging_payload.get("trace_id"))
-    if kwargs.get("litellm_trace_id") is not None:
-        return str(kwargs.get("litellm_trace_id"))
-    return str(uuid.uuid4())
+    if litellm.request_correlation_in_logs and (caller_session := _caller_session_for_spend_log(kwargs, metadata)):
+        return caller_session
+    match standard_logging_payload:
+        case {"trace_id": trace_id} if trace_id is not None:
+            return str(trace_id)
+        case _:
+            litellm_trace_id: Final = kwargs.get("litellm_trace_id")
+            return str(litellm_trace_id) if litellm_trace_id is not None else str(uuid.uuid4())
 
 
 def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> int | None:
