@@ -1,0 +1,324 @@
+diff --git a/benchmark.go b/benchmark.go
+index de26d8f..1dd03bd 100644
+--- a/benchmark.go
++++ b/benchmark.go
+@@ -10,6 +10,7 @@ import (
+ 	"log"
+ 	"net/http"
+ 	"os"
++	"sort"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -29,6 +30,7 @@ import (
+ // Provider represents an API provider to be benchmarked
+ // It holds the necessary information to target the provider's API.
+ type Provider struct {
++	ExtraHeaders    http.Header
+ 	Name            string // Name of the provider (e.g., "bifrost", "litellm")
+ 	Endpoint        string // API endpoint path (e.g., "v1/chat/completions")
+ 	Port            string // Port number the provider's server is listening on
+@@ -41,6 +43,7 @@ type Provider struct {
+ 
+ // BenchmarkResult holds the aggregated metrics from a single benchmark run for a provider.
+ type BenchmarkResult struct {
++	FirstEvents       []time.Duration
+ 	ProviderName      string          // Name of the provider benchmarked
+ 	Metrics           *vegeta.Metrics // Vegeta metrics (latency, success rate, etc.)
+ 	CPUUsage          float64         // (Currently unused) Placeholder for CPU usage metrics
+@@ -89,6 +92,8 @@ func main() {
+ 	rampUp := flag.Bool("ramp-up", false, "Enable gradual ramp-up of users (only with --users, requires --ramp-up-duration)")
+ 	rampUpDuration := flag.Int("ramp-up-duration", 0, "Duration in seconds to ramp up to target users (only with --users and --ramp-up)")
+ 	debug := flag.Bool("debug", false, "Enable debug mode with detailed logging and periodic status updates")
++	requestFile := flag.String("request-file", "", "Exact request JSON file")
++	headersFile := flag.String("headers-file", "", "Additional request headers as JSON")
+ 
+ 	// Parse the command line flags.
+ 	flag.Parse()
+@@ -136,6 +141,32 @@ func main() {
+ 
+ 	// Initialize providers
+ 	providers := initializeProviders(*bigPayload, *model, *maxOutputTokens, *suffix, *path, *requestType, filePrompt, *host)
++	if *requestFile != "" {
++		payload, err := os.ReadFile(*requestFile)
++		if err != nil {
++			log.Fatal(err)
++		}
++		for i := range providers {
++			providers[i].Payload = payload
++			providers[i].PayloadTemplate = string(payload)
++		}
++	}
++	if *headersFile != "" {
++		data, err := os.ReadFile(*headersFile)
++		if err != nil {
++			log.Fatal(err)
++		}
++		var headers map[string]string
++		if err := sonic.Unmarshal(data, &headers); err != nil {
++			log.Fatal(err)
++		}
++		for i := range providers {
++			providers[i].ExtraHeaders = make(http.Header)
++			for key, value := range headers {
++				providers[i].ExtraHeaders.Set(key, value)
++			}
++		}
++	}
+ 
+ 	// Filter providers if specific provider is requested
+ 	if *provider != "" {
+@@ -392,6 +423,7 @@ func runBenchmarks(providers []Provider, rate int, users int, duration int, time
+ 
+ 		// Run the benchmark based on mode
+ 		var metrics vegeta.Metrics
++		firstEvents := make([]time.Duration, 0)
+ 
+ 		if users > 0 {
+ 			// Users mode: use concurrent package to maintain N concurrent requests
+@@ -419,6 +451,19 @@ func runBenchmarks(providers []Provider, rate int, users int, duration int, time
+ 			metrics.Latencies.Mean = meanLatency
+ 			metrics.Latencies.Min = concurrentMetrics.MinLatency
+ 			metrics.Latencies.Max = concurrentMetrics.MaxLatency
++			latencies := make([]time.Duration, len(concurrentMetrics.Results))
++			for i, result := range concurrentMetrics.Results {
++				latencies[i] = result.Latency
++				if result.Success && result.FirstEvent > 0 {
++					firstEvents = append(firstEvents, result.FirstEvent)
++				}
++			}
++			sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
++			if len(latencies) > 0 {
++				metrics.Latencies.P50 = latencies[int(float64(len(latencies)-1)*0.50)]
++				metrics.Latencies.P95 = latencies[int(float64(len(latencies)-1)*0.95)]
++				metrics.Latencies.P99 = latencies[int(float64(len(latencies)-1)*0.99)]
++			}
+ 
+ 			// Count status codes and failures
+ 			statusCodes := make(map[string]int)
+@@ -435,8 +480,9 @@ func runBenchmarks(providers []Provider, rate int, users int, duration int, time
+ 			metrics.StatusCodes = statusCodes
+ 
+ 			// Calculate request rate and throughput
+-			metrics.Rate = float64(concurrentMetrics.TotalRequests) / float64(duration)
+-			metrics.Throughput = metrics.Rate // Approximate as same as request rate
++			metrics.Duration = concurrentMetrics.Elapsed
++			metrics.Rate = float64(concurrentMetrics.TotalRequests) / concurrentMetrics.Elapsed.Seconds()
++			metrics.Throughput = float64(concurrentMetrics.SuccessCount) / concurrentMetrics.Elapsed.Seconds()
+ 		} else {
+ 			// Rate mode: use Vegeta with fixed RPS
+ 			attacker := vegeta.NewAttacker(vegeta.Client(httpClient))
+@@ -482,6 +528,7 @@ func runBenchmarks(providers []Provider, rate int, users int, duration int, time
+ 		// Add results
+ 		results = append(results, BenchmarkResult{
+ 			ProviderName:      provider.Name,
++			FirstEvents:       firstEvents,
+ 			Metrics:           &metrics,
+ 			ServerMemoryStats: serverMemStatsCopy,
+ 			DropReasons:       dropReasons,
+@@ -635,6 +682,10 @@ func createTargeter(provider Provider) vegeta.Targeter {
+ 			// "x-bf-vk":      []string{"f452b625-a65e-4dfd-b48d-0ee3ba0e8d46"},
+ 		}
+ 
++		for key, values := range provider.ExtraHeaders {
++			tgt.Header[key] = values
++		}
++
+ 		// Add Authorization header for OpenAI
+ 		if provider.Name == "OpenAI" {
+ 			openaiApiKey := os.Getenv("OPENAI_API_KEY")
+@@ -678,6 +729,10 @@ func createConcurrentTargeter(provider Provider) func() (concurrent.Request, err
+ 			"Content-Type": []string{"application/json"},
+ 		}
+ 
++		for key, values := range provider.ExtraHeaders {
++			headers[key] = values
++		}
++
+ 		// Add Authorization header for OpenAI
+ 		if provider.Name == "OpenAI" {
+ 			openaiApiKey := os.Getenv("OPENAI_API_KEY")
+@@ -712,6 +767,11 @@ func createConcurrentTargeter(provider Provider) func() (concurrent.Request, err
+ // and memory values to megabytes for the output.
+ func saveResults(results []BenchmarkResult, outputFile string) {
+ 	type SerializableResult struct {
++		FirstEventP50Ms    float64        `json:"first_event_p50_ms"`
++		FirstEventP95Ms    float64        `json:"first_event_p95_ms"`
++		FirstEventP99Ms    float64        `json:"first_event_p99_ms"`
++		P95LatencyMs       float64        `json:"p95_latency_ms"`
++		ElapsedSeconds     float64        `json:"elapsed_seconds"`
+ 		Requests           uint64         `json:"requests"`
+ 		Rate               float64        `json:"rate"`
+ 		SuccessRate        float64        `json:"success_rate"`
+@@ -768,13 +828,19 @@ func saveResults(results []BenchmarkResult, outputFile string) {
+ 			avgMem = float64(totalMem) / float64(len(res.ServerMemoryStats)) / (1024 * 1024)
+ 		}
+ 
++		sort.Slice(res.FirstEvents, func(i, j int) bool { return res.FirstEvents[i] < res.FirstEvents[j] })
+ 		resultsMap[strings.ToLower(res.ProviderName)] = SerializableResult{
+ 			Requests:           res.Metrics.Requests,
++			FirstEventP50Ms:    float64(quantile(res.FirstEvents, 0.5)) / float64(time.Millisecond),
++			FirstEventP95Ms:    float64(quantile(res.FirstEvents, 0.95)) / float64(time.Millisecond),
++			FirstEventP99Ms:    float64(quantile(res.FirstEvents, 0.99)) / float64(time.Millisecond),
+ 			Rate:               res.Metrics.Rate,
+ 			SuccessRate:        100.0 * res.Metrics.Success,
+ 			MeanLatencyMs:      float64(res.Metrics.Latencies.Mean) / float64(time.Millisecond),
+ 			P50LatencyMs:       float64(res.Metrics.Latencies.P50) / float64(time.Millisecond),
+ 			P99LatencyMs:       float64(res.Metrics.Latencies.P99) / float64(time.Millisecond),
++			P95LatencyMs:       float64(res.Metrics.Latencies.P95) / float64(time.Millisecond),
++			ElapsedSeconds:     (res.Metrics.Duration + res.Metrics.Wait).Seconds(),
+ 			MaxLatencyMs:       float64(res.Metrics.Latencies.Max) / float64(time.Millisecond),
+ 			ThroughputRPS:      res.Metrics.Throughput,
+ 			Timestamp:          time.Now().Format(time.RFC3339),
+@@ -801,3 +867,10 @@ func saveResults(results []BenchmarkResult, outputFile string) {
+ 
+ 	fmt.Printf("Results saved to %s\n", outputFile)
+ }
++
++func quantile(values []time.Duration, fraction float64) time.Duration {
++	if len(values) == 0 {
++		return 0
++	}
++	return values[int(float64(len(values)-1)*fraction)]
++}
+diff --git a/pkg/concurrent/concurrent.go b/pkg/concurrent/concurrent.go
+index 9bd5042..7c44548 100644
+--- a/pkg/concurrent/concurrent.go
++++ b/pkg/concurrent/concurrent.go
+@@ -3,11 +3,13 @@
+ package concurrent
+ 
+ import (
++	"bufio"
+ 	"bytes"
+ 	"context"
+ 	"fmt"
+ 	"io"
+ 	"net/http"
++	"strings"
+ 	"sync"
+ 	"time"
+ )
+@@ -22,6 +24,7 @@ type Request struct {
+ 
+ // Result represents the outcome of a single request.
+ type Result struct {
++	FirstEvent time.Duration
+ 	StatusCode int
+ 	Latency    time.Duration
+ 	Error      string
+@@ -30,15 +33,16 @@ type Result struct {
+ 
+ // Metrics holds aggregated metrics from a concurrent benchmark run.
+ type Metrics struct {
+-	TotalRequests  int
+-	SuccessCount   int
+-	FailureCount   int
+-	SuccessRate    float64
+-	Results        []Result
+-	TotalLatency    time.Duration
+-	MinLatency      time.Duration
+-	MaxLatency      time.Duration
+-	mu             sync.Mutex
++	Elapsed       time.Duration
++	TotalRequests int
++	SuccessCount  int
++	FailureCount  int
++	SuccessRate   float64
++	Results       []Result
++	TotalLatency  time.Duration
++	MinLatency    time.Duration
++	MaxLatency    time.Duration
++	mu            sync.Mutex
+ }
+ 
+ // Runner executes requests concurrently while maintaining a fixed number of in-flight requests.
+@@ -66,7 +70,7 @@ func NewRunner(client *http.Client, numUsers int, duration time.Duration, reques
+ 			Results: make([]Result, 0),
+ 		},
+ 		semaphore: make(chan struct{}, numUsers),
+-		debug:      debug,
++		debug:     debug,
+ 	}
+ }
+ 
+@@ -79,6 +83,7 @@ func (r *Runner) WithRampUp(rampUpDuration time.Duration) *Runner {
+ 
+ // Run executes the concurrent request benchmark and returns metrics.
+ func (r *Runner) Run(ctx context.Context) *Metrics {
++	started := time.Now()
+ 	ctx, cancel := context.WithTimeout(ctx, r.duration)
+ 	defer cancel()
+ 
+@@ -100,6 +105,7 @@ func (r *Runner) Run(ctx context.Context) *Metrics {
+ 
+ 	// Wait for all workers to complete
+ 	r.wg.Wait()
++	r.metrics.Elapsed = time.Since(started)
+ 
+ 	// Calculate success rate
+ 	if r.metrics.TotalRequests > 0 {
+@@ -218,7 +224,7 @@ func (r *Runner) worker(ctx context.Context) {
+ 		select {
+ 		case r.semaphore <- struct{}{}:
+ 			// Slot acquired, make request in background
+-			go r.makeRequest()
++			r.makeRequest()
+ 		case <-ctx.Done():
+ 			return
+ 		}
+@@ -263,23 +269,29 @@ func (r *Runner) makeRequest() {
+ 	// Make request and measure latency
+ 	start := time.Now()
+ 	resp, err := r.client.Do(httpReq)
+-	latency := time.Since(start)
+ 
+ 	// Handle request error
+ 	if err != nil {
+ 		r.recordResult(Result{
+ 			Success: false,
+ 			Error:   fmt.Sprintf("request failed: %v", err),
+-			Latency: latency,
++			Latency: time.Since(start),
+ 		})
+ 		return
+ 	}
+ 	defer resp.Body.Close()
++	firstEvent, readErr := readResponse(resp, start)
++	if readErr != nil {
++		r.recordResult(Result{Success: false, Error: fmt.Sprintf("response read failed: %v", readErr), Latency: time.Since(start)})
++		return
++	}
++	latency := time.Since(start)
+ 
+ 	// Record result
+ 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
+ 	r.recordResult(Result{
+ 		StatusCode: resp.StatusCode,
++		FirstEvent: firstEvent,
+ 		Latency:    latency,
+ 		Success:    success,
+ 	})
+@@ -308,3 +320,22 @@ func (r *Runner) recordResult(result Result) {
+ 
+ 	r.metrics.Results = append(r.metrics.Results, result)
+ }
++
++func readResponse(response *http.Response, started time.Time) (time.Duration, error) {
++	if !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
++		_, err := io.Copy(io.Discard, response.Body)
++		return 0, err
++	}
++	reader := bufio.NewReader(response.Body)
++	for {
++		line, err := reader.ReadString('\n')
++		if err != nil {
++			return 0, err
++		}
++		if line == "\n" || line == "\r\n" {
++			first := time.Since(started)
++			_, err := io.Copy(io.Discard, reader)
++			return first, err
++		}
++	}
++}

@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "jobs": [
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 262144,
+      "response": "buffered",
+      "concurrency": 1,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-262144-buffered-c1"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 262144,
+      "response": "buffered",
+      "concurrency": 1000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-262144-buffered-c1000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 262144,
+      "response": "buffered",
+      "concurrency": 2000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-262144-buffered-c2000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 262144,
+      "response": "sse",
+      "concurrency": 1,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-262144-sse-c1"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 262144,
+      "response": "sse",
+      "concurrency": 1000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-262144-sse-c1000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 262144,
+      "response": "sse",
+      "concurrency": 2000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-262144-sse-c2000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 1048576,
+      "response": "buffered",
+      "concurrency": 1,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-1048576-buffered-c1"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 1048576,
+      "response": "buffered",
+      "concurrency": 1000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-1048576-buffered-c1000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 1048576,
+      "response": "buffered",
+      "concurrency": 2000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-1048576-buffered-c2000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 1048576,
+      "response": "sse",
+      "concurrency": 1,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-1048576-sse-c1"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 1048576,
+      "response": "sse",
+      "concurrency": 1000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-1048576-sse-c1000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 1048576,
+      "response": "sse",
+      "concurrency": 2000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-1048576-sse-c2000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 4194304,
+      "response": "buffered",
+      "concurrency": 1,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-4194304-buffered-c1"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 4194304,
+      "response": "buffered",
+      "concurrency": 1000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-4194304-buffered-c1000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 4194304,
+      "response": "buffered",
+      "concurrency": 2000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-4194304-buffered-c2000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 4194304,
+      "response": "sse",
+      "concurrency": 1,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-4194304-sse-c1"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 4194304,
+      "response": "sse",
+      "concurrency": 1000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-4194304-sse-c1000"
+    },
+    {
+      "profile": "litellm-current",
+      "prompt_bytes": 4194304,
+      "response": "sse",
+      "concurrency": 2000,
+      "seconds": 60,
+      "repetitions": 3,
+      "warmup_seconds": 5,
+      "seed": 20261019,
+      "id": "litellm-current-4194304-sse-c2000"
+    }
+  ]
+}
