@@ -309,7 +309,7 @@ def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
 
 
 def test_initialize_with_enable_token_refresh(setup_mocks, monkeypatch):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     # Enable token refresh
     monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
@@ -471,6 +471,7 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "llm_passthrough_route",
             "asearch",
             "adecisions",
+            "asystemone",
             "avector_store_create",
             "avector_store_search",
             "acreate_skill",
@@ -1407,6 +1408,26 @@ def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
 
     # Verify the token is what we expect from our mock
     assert token == "mock-default-token"
+
+
+def test_get_azure_ad_token_with_token_refresh_reuses_provider_per_scope(setup_mocks):
+    """Repeated requests reuse one token provider per scope instead of building a
+    new credential, and fetching a new token, on every call (#46419)"""
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+    default_scope = "https://cognitiveservices.azure.com/.default"
+    other_scope = "api://other-resource/.default"
+
+    tokens = [
+        get_azure_ad_token(GenericLiteLLMParams()),
+        get_azure_ad_token(GenericLiteLLMParams()),
+        get_azure_ad_token(GenericLiteLLMParams(azure_scope=other_scope)),
+    ]
+
+    assert tokens == ["mock-default-token"] * 3
+    assert [c.kwargs for c in setup_mocks["token_provider"].call_args_list] == [
+        {"azure_scope": default_scope},
+        {"azure_scope": other_scope},
+    ]
 
 
 def test_get_azure_ad_token_with_token_refresh_error(setup_mocks):

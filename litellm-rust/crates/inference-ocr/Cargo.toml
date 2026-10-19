@@ -29,7 +29,8 @@ litellm-auth-aws.workspace = true
 litellm-auth-gcp.workspace = true
 litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
-litellm-inference = { workspace = true, features = ["test-support"] }
+litellm-inference-testing.workspace = true
+litellm-llms = { workspace = true, features = ["test-support"] }
 rand.workspace = true
 rstest.workspace = true
 time.workspace = true

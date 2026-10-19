@@ -3,10 +3,10 @@ use litellm_host::{
     lifecycle::ExecutionEvent,
 };
 use litellm_http::transport::Error as TransportError;
-use litellm_inference::test_support::{
+use litellm_inference_messages::{MessagesCallResponse, messages_body};
+use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
 };
-use litellm_inference_messages::{MessagesCallResponse, messages_body};
 use rstest::rstest;
 
 use super::*;
@@ -104,6 +104,7 @@ async fn the_provider_message_is_returned(call: MessagesCall, #[case] provider: 
 
     let message = run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
+        litellm_params: Default::default(),
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         ..call

@@ -35,7 +35,7 @@ def test_excluded_keys_exact_match():
     masker = SensitiveDataMasker()
 
     data = {
-        "api_key": "sk-1234567890abcdef",
+        "api_key": "sk-9876567890abcdef",
         "litellm_credentials_name": "my-credential-name",
         "access_token": "token-12345",
         "port": 6379,
@@ -43,7 +43,7 @@ def test_excluded_keys_exact_match():
 
     # Without excluded_keys, sensitive keys should be masked
     masked = masker.mask_dict(data)
-    assert masked["api_key"] != "sk-1234567890abcdef"
+    assert masked["api_key"] != "sk-9876567890abcdef"
     assert "*" in masked["api_key"]
     assert masked["access_token"] != "token-12345"
     assert "*" in masked["access_token"]
@@ -54,7 +54,7 @@ def test_excluded_keys_exact_match():
     assert masked["litellm_credentials_name"] == "my-credential-name"
 
     # Other sensitive keys should still be masked
-    assert masked["api_key"] != "sk-1234567890abcdef"
+    assert masked["api_key"] != "sk-9876567890abcdef"
     assert "*" in masked["api_key"]
     assert masked["access_token"] != "token-12345"
     assert "*" in masked["access_token"]
@@ -72,7 +72,7 @@ def test_excluded_keys_exact_match():
 
     # Test with api_key in excluded_keys to verify it works for keys that would be masked
     masked = masker.mask_dict(data, excluded_keys={"api_key"})
-    assert masked["api_key"] == "sk-1234567890abcdef"  # Should NOT be masked
+    assert masked["api_key"] == "sk-9876567890abcdef"  # Should NOT be masked
     assert masked["access_token"] != "token-12345"  # Should still be masked
     assert "*" in masked["access_token"]
 
@@ -108,13 +108,13 @@ def test_lists_with_sensitive_keys_are_masked():
     """
     masker = SensitiveDataMasker()
     data = {
-        "api_key": ["sk-1234567890abcdef", "sk-9876543210fedcba"],
+        "api_key": ["sk-9876567890abcdef", "sk-9876543210fedcba"],
         "tags": ["prod", "test"],
     }
 
     masked = masker.mask_dict(data)
     # sensitive key list entries should be masked
-    assert masked["api_key"][0] != "sk-1234567890abcdef"
+    assert masked["api_key"][0] != "sk-9876567890abcdef"
     assert "*" in masked["api_key"][0]
     assert masked["api_key"][1] != "sk-9876543210fedcba"
     assert "*" in masked["api_key"][1]
@@ -134,11 +134,11 @@ def test_short_secrets_are_fully_masked():
     masker = SensitiveDataMasker()
 
     # Boundary: exactly 8 chars previously returned verbatim.
-    assert masker._mask_value("abcd1234") == "********"
+    assert masker.mask_value("abcd1234") == "********"
     # Below threshold previously hit the early return and leaked verbatim.
-    assert masker._mask_value("sk-12") == "*****"
+    assert masker.mask_value("sk-12") == "*****"
     # Values above the threshold must still partially reveal, not over-mask.
-    assert masker._mask_value("abcd12345") == "abcd*2345"
+    assert masker.mask_value("abcd12345") == "abcd*2345"
 
     masked = masker.mask_dict({"redis_password": "pass1234", "api_key": "sk-7a"})
     assert masked["redis_password"] == "********"
@@ -155,10 +155,10 @@ def test_mask_short_values_false_keeps_short_values_readable():
     masker = SensitiveDataMasker(visible_prefix=50, visible_suffix=0, mask_short_values=False)
 
     short = "Test exception for structure validation"
-    assert masker._mask_value(short) == short
+    assert masker.mask_value(short) == short
 
     long_value = "x" * 60
-    masked = masker._mask_value(long_value)
+    masked = masker.mask_value(long_value)
     assert masked.startswith("x" * 50)
     assert masked.endswith("*" * 10)
     assert len(masked) == 60
@@ -177,7 +177,7 @@ def test_cost_per_token_fields_not_masked():
         "cache_read_input_token_cost": 9.0e-07,
         "cache_creation_input_token_cost": 3.75e-06,
         # Real secret fields should still be masked
-        "api_key": "sk-1234567890abcdef",
+        "api_key": "sk-9876567890abcdef",
         "access_token": "my-secret-token",
     }
 

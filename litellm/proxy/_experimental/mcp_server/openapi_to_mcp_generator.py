@@ -9,7 +9,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Any, Final, TypedDict
+from typing import Final, Literal, Protocol, TypeAlias, TypedDict, overload
 from urllib.parse import quote
 
 import httpx
@@ -27,7 +27,9 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 # tag-namespaced operationIds like "actions/download-job-logs-for-workflow-run"
 # which include '/'. Sanitize here so the same regex passes everywhere downstream.
 _OPENAPI_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
-_OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
+OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
+
+_OPENAPI_TOOL_NAME_MAX_LEN: Final = OPENAPI_TOOL_NAME_MAX_LEN
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -41,7 +43,7 @@ def sanitize_openapi_tool_name(raw_name: str) -> str:
     if not raw_name:
         return raw_name
     sanitized: Final = _OPENAPI_TOOL_NAME_INVALID_CHARS.sub("_", raw_name).lower()
-    return sanitized[:_OPENAPI_TOOL_NAME_MAX_LEN]
+    return sanitized[:OPENAPI_TOOL_NAME_MAX_LEN]
 
 
 from litellm._logging import verbose_logger
@@ -89,14 +91,38 @@ class _OpenAPIOperation(TypedDict, total=False):
     requestBody: _OpenAPIRequestBody
 
 
-class _OpenAPIPathItem(TypedDict, total=False):
-    summary: str
-    description: str
-    parameters: Sequence[_OpenAPIParameter]
+_OpenAPIMethod: TypeAlias = Literal["get", "post", "put", "delete", "patch"]
+
+
+class _OpenAPIPathItem(Protocol):
+    def __contains__(self, key: object, /) -> bool: ...
+
+    def __getitem__(self, key: _OpenAPIMethod, /) -> _OpenAPIOperation: ...
+
+    @overload
+    def get(self, key: _OpenAPIMethod, /) -> _OpenAPIOperation | None: ...
+
+    @overload
+    def get(
+        self, key: Literal["parameters"], default: Sequence[_OpenAPIParameter], /
+    ) -> Sequence[_OpenAPIParameter]: ...
 
 
 class _OpenAPIComponents(TypedDict, total=False):
     parameters: Mapping[str, _OpenAPIParameter]
+
+
+class _OpenAPIServer(TypedDict):
+    url: ReadOnly[str]
+
+
+class _OpenAPISpec(TypedDict, total=False):
+    paths: ReadOnly[Mapping[str, _OpenAPIPathItem]]
+    components: ReadOnly[_OpenAPIComponents]
+    servers: ReadOnly[Sequence[_OpenAPIServer]]
+    host: ReadOnly[str]
+    schemes: ReadOnly[Sequence[str]]
+    basePath: ReadOnly[str]
 
 
 # Store the base URL and headers globally
@@ -106,22 +132,30 @@ HEADERS: Final[dict[str, str]] = {}
 # Per-request auth header override for BYOK servers.
 # Set this ContextVar before calling a local tool handler to inject the user's
 # stored credential into the HTTP request made by the tool function closure.
-_request_auth_header: contextvars.ContextVar[str | None] = contextvars.ContextVar("_request_auth_header", default=None)
+request_auth_header: Final[contextvars.ContextVar[str | None]] = contextvars.ContextVar(
+    "_request_auth_header", default=None
+)
+
+_request_auth_header: Final = request_auth_header
 
 # Per-request extra headers forwarded from the client request.
 # Populated from MCPServer.extra_headers names matched against raw request
 # headers in server.py before dispatching to a local/OpenAPI tool handler.
-_request_extra_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
+request_extra_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
     "_request_extra_headers", default=None
 )
+
+_request_extra_headers: Final = request_extra_headers
 
 # Per-request headers carrying the gateway-resolved upstream credential
 # (stored per-user OAuth token, minted M2M token, exchanged OBO token).
 # Set from MCPServerManager.resolve_openapi_upstream_auth; authoritative
 # over every other Authorization source in _merge_openapi_tool_request_headers.
-_request_resolved_auth_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
+request_resolved_auth_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
     "_request_resolved_auth_headers", default=None
 )
+
+_request_resolved_auth_headers: Final = request_resolved_auth_headers
 
 _request_upstream_url: Final[contextvars.ContextVar[str | None]] = contextvars.ContextVar(
     "_request_upstream_url", default=None
@@ -147,7 +181,7 @@ def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> dict[str, Any]:
+def load_openapi_spec(filepath: str) -> _OpenAPISpec:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """
@@ -165,7 +199,7 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
+async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> _OpenAPISpec:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
         r: Final[httpx.Response] = (
@@ -184,7 +218,7 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
         return json.load(f)
 
 
-def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
+def get_base_url(spec: _OpenAPISpec, spec_path: str | None = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
@@ -369,7 +403,7 @@ async def _drop_credential_across_origin(request: httpx.Request) -> None:
     built would never be closed.
     """
     guard: Final = credential_redirect_hook(
-        _request_upstream_url.get() or "", custom_credential_slot(_request_resolved_auth_headers.get())
+        _request_upstream_url.get() or "", custom_credential_slot(request_resolved_auth_headers.get())
     )
     if guard is not None:
         await guard(request)
@@ -382,7 +416,7 @@ def _upstream_client() -> AsyncHTTPHandler:
     itself, so this arm installs the same hook the MCP client uses. Both variants come from the
     shared cache, so a guarded call reuses its connection pool like any other.
     """
-    if custom_credential_slot(_request_resolved_auth_headers.get()) is None:
+    if custom_credential_slot(request_resolved_auth_headers.get()) is None:
         return get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
     return get_async_httpx_client(
         llm_provider=httpxSpecialProvider.MCP,
@@ -417,20 +451,20 @@ def _merge_openapi_tool_request_headers(
     Header names are compared case-insensitively so different casing cannot
     bypass the precedence rules.
     """
-    request_extra: Final = _request_extra_headers.get() or {}
+    request_extra: Final = request_extra_headers.get() or {}
     static: Final = static_headers or {}
 
     static_lower_names: Final = {k.lower() for k in static}
     effective_headers: dict[str, str] = {k: v for k, v in request_extra.items() if k.lower() not in static_lower_names}
     effective_headers.update(static)
 
-    override_auth: Final = _request_auth_header.get()
+    override_auth: Final = request_auth_header.get()
     if override_auth:
         for existing in [k for k in effective_headers if k.lower() == "authorization"]:
             del effective_headers[existing]
         effective_headers["Authorization"] = override_auth
 
-    resolved_auth_headers: Final = _request_resolved_auth_headers.get() or {}
+    resolved_auth_headers: Final = request_resolved_auth_headers.get() or {}
     for name, value in resolved_auth_headers.items():
         for existing in [k for k in effective_headers if k.lower() == name.lower()]:
             del effective_headers[existing]
@@ -594,13 +628,13 @@ def create_tool_function(
     return tool_function
 
 
-def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
+def register_tools_from_openapi(spec: _OpenAPISpec, base_url: str) -> None:
     """Register MCP tools from OpenAPI specification."""
-    paths: Final[Mapping[str, Mapping[str, _OpenAPIOperation]]] = spec.get("paths", {})
+    paths: Final = spec.get("paths", {})
     used_names: Final = set()
 
     for path, path_item in paths.items():
-        for method in ["get", "post", "put", "delete", "patch"]:
+        for method in ("get", "post", "put", "delete", "patch"):
             if method in path_item:
                 operation = path_item[method]
 
@@ -622,7 +656,7 @@ def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
                 while unique in used_names:
                     n += 1
                     suffix = f"_{n}"
-                    unique = tool_name[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
+                    unique = tool_name[: OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
                 tool_name = unique
                 used_names.add(tool_name)
 

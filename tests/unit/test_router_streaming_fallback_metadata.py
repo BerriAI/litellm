@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,6 +8,7 @@ import litellm
 from litellm.proxy.proxy_server import _should_include_fallback_errors
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.types.llms.base import HiddenParams
 
 
 def test_apply_fallback_hidden_params_copies_from_fallback_response():
@@ -54,6 +56,64 @@ def test_apply_fallback_hidden_params_copies_from_fallback_response():
     }
 
 
+def test_apply_fallback_hidden_params_updates_plain_duck_chunk():
+    class PlainChunk:
+        def __init__(self) -> None:
+            self._hidden_params = {
+                "additional_headers": {"x-existing-chunk-header": "keep"},
+                "model_id": "chunk-model-id",
+            }
+
+    chunk: Final = PlainChunk()
+    fallback_response = {
+        "_hidden_params": {
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+            },
+            "api_base": "https://fallback.example",
+        }
+    }
+
+    Router._apply_fallback_hidden_params_to_item(
+        fallback_item=chunk,
+        prepared_fallback_hidden_params=Router._prepare_fallback_hidden_params(fallback_response),
+    )
+
+    assert chunk._hidden_params["api_base"] == "https://fallback.example"
+    assert chunk._hidden_params["model_id"] == "chunk-model-id"
+    assert chunk._hidden_params["additional_headers"] == {
+        "x-existing-chunk-header": "keep",
+        "x-litellm-attempted-fallbacks": 1,
+    }
+
+
+def test_apply_fallback_hidden_params_normalizes_hidden_params_on_plain_duck_chunk():
+    class PlainChunk:
+        def __init__(self) -> None:
+            self._hidden_params = HiddenParams(
+                api_base="https://original.example",
+                model_id="original-model-id",
+                additional_headers={"x-existing-chunk-header": "keep"},
+            )
+
+    chunk: Final = PlainChunk()
+    Router._apply_fallback_hidden_params_to_item(
+        fallback_item=chunk,
+        prepared_fallback_hidden_params=(
+            {"api_base": "https://fallback.example", "model_id": "fallback-model-id"},
+            {"x-litellm-attempted-fallbacks": 1},
+        ),
+    )
+
+    assert isinstance(chunk._hidden_params, dict)
+    assert chunk._hidden_params["api_base"] == "https://fallback.example"
+    assert chunk._hidden_params["model_id"] == "fallback-model-id"
+    assert chunk._hidden_params["additional_headers"] == {
+        "x-existing-chunk-header": "keep",
+        "x-litellm-attempted-fallbacks": 1,
+    }
+
+
 def _two_group_fallback_router() -> Router:
     return litellm.Router(
         model_list=[
@@ -72,6 +132,20 @@ def _two_group_fallback_router() -> Router:
 
 def _additional_headers(response: object) -> dict:
     return get_hidden_params_dict(response).get("additional_headers", {})
+
+
+@pytest.mark.asyncio
+async def test_fastest_response_marks_the_winning_response_hidden_params() -> None:
+    router: Final = _two_group_fallback_router()
+
+    response: Final = await router.abatch_completion_fastest_response(
+        model="primary-model, fallback-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        mock_testing_fallbacks=True,
+        mock_response="fastest response",
+    )
+
+    assert response.hidden_params["fastest_response_batch_completion"] is True
 
 
 @pytest.mark.asyncio
@@ -125,10 +199,12 @@ def test_apply_fallback_hidden_params_to_item_none_item():
 
 
 def test_apply_fallback_hidden_params_to_item_no_existing_additional_headers():
-    class FakeChunk:
-        _hidden_params = {"model_id": "test-id"}
-
-    chunk = FakeChunk()
+    chunk: Final = litellm.ModelResponseStream(
+        id="test",
+        model="openai/internal-fallback",
+        choices=[],
+    )
+    chunk.hidden_params["model_id"] = "test-id"
     Router._apply_fallback_hidden_params_to_item(
         chunk,
         (
@@ -137,9 +213,9 @@ def test_apply_fallback_hidden_params_to_item_no_existing_additional_headers():
         ),
     )
 
-    assert chunk._hidden_params["api_base"] == "http://fallback.example"
-    assert chunk._hidden_params["model_id"] == "test-id"
-    assert chunk._hidden_params["additional_headers"] == {
+    assert chunk.hidden_params["api_base"] == "http://fallback.example"
+    assert chunk.hidden_params["model_id"] == "test-id"
+    assert chunk.hidden_params["additional_headers"] == {
         "x-litellm-attempted-fallbacks": 1
     }
 

@@ -5,8 +5,8 @@ use litellm_host::{
     interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
     lifecycle::CallEvent,
 };
-use litellm_inference::test_support::{RecordingSecrets, no_secrets};
 use litellm_inference_messages::{MessagesCallResponse, route::Messages};
+use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
 use rstest::rstest;
 
@@ -380,12 +380,14 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let host = RecordingHost::passthrough(authenticated(
         MessagesCall {
             shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params: true,
+                    ..MessagesSettings::default()
+                },
                 capabilities: AnthropicModelCapabilities {
                     supports_sampling_params: false,
                     ..AnthropicModelCapabilities::default()
                 },
-                drop_params: true,
-                ..MessagesShaping::default()
             },
             ..with_fields(call, json!({"temperature": 0.2}))
         },

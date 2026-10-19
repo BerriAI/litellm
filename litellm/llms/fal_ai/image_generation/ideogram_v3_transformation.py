@@ -1,9 +1,10 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
 
@@ -18,6 +19,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FalAIIdeogramV3Config(FalAIBaseConfig):
@@ -56,7 +58,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -92,7 +94,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: Any) -> object:
+    def _map_image_size(self, size: object) -> object:
         if isinstance(size, dict):
             width = size.get("width")
             height = size.get("height")
@@ -162,7 +164,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         """
 
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -189,7 +191,10 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
                     )
                 )
 
-        if hasattr(model_response, "_hidden_params") and "seed" in response_object:
-            model_response._hidden_params["seed"] = response_object["seed"]
+        if hasattr(model_response, HIDDEN_PARAMS_ATTR) and "seed" in response_object:
+            hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+            )
+            hidden_params["seed"] = response_object["seed"]
 
         return model_response

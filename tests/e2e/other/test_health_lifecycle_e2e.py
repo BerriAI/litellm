@@ -17,12 +17,19 @@ import pytest
 from e2e_config import MASTER_KEY
 from e2e_http import UnauthorizedError, unwrap
 from other_client import OtherClient
+from e2e_metadata import Domain, Route, Subject, meta
 
 pytestmark = pytest.mark.e2e
 
 
 class TestHealthLifecycle:
     @pytest.mark.covers("other.lifecycle.liveness.ping")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+            route=Route.HEALTH,
+        )
+    )
     def test_liveness_reports_alive_without_auth(self, client: OtherClient) -> None:
         probe = client.liveness()
         assert probe.status_code == 200, (
@@ -34,6 +41,12 @@ class TestHealthLifecycle:
         )
 
     @pytest.mark.covers("other.lifecycle.readiness.public_probe")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+            route=Route.HEALTH,
+        )
+    )
     def test_readiness_is_reachable_without_credentials(self, client: OtherClient) -> None:
         readiness = unwrap(client.readiness_public())
         assert readiness.status == "healthy", (
@@ -41,6 +54,12 @@ class TestHealthLifecycle:
         )
 
     @pytest.mark.covers("other.lifecycle.readiness.reports_db_status")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+            route=Route.HEALTH,
+        )
+    )
     def test_readiness_reports_connected_db(self, client: OtherClient) -> None:
         readiness = unwrap(client.readiness_public())
         assert readiness.db == "connected", (
@@ -49,6 +68,12 @@ class TestHealthLifecycle:
         )
 
     @pytest.mark.covers("other.lifecycle.readiness_details.authenticated_diagnostics")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+            route=Route.HEALTH,
+        )
+    )
     def test_readiness_details_require_auth_and_expose_diagnostics(self, client: OtherClient) -> None:
         anonymous = client.readiness_details_unauthenticated()
         assert isinstance(anonymous, UnauthorizedError), (

@@ -163,5 +163,5 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if duration is not None:
             response_json["duration"] = duration
 
-        response._hidden_params = response_json
+        response.hidden_params = response_json
         return response

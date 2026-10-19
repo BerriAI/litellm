@@ -15,8 +15,8 @@ from litellm.integrations.prompt_management_base import (
     PromptManagementClient,
 )
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import AllMessageValues
@@ -114,7 +114,7 @@ class GenericPromptManager(CustomPromptManagement):
             "prompt_id": prompt_id,
             **(self.additional_provider_specific_query_params or {}),
         }
-        http_client: Final = _get_httpx_client()
+        http_client: Final = get_httpx_client()
 
         try:
             response: Final = http_client.get(

@@ -430,15 +430,15 @@ def _get_prompt_template(prompt_spec: PromptSpec, base_prompt_id: str) -> Prompt
         dotprompt_content: Final = prompt_spec.litellm_params.dotprompt_content
         if dotprompt_content:
             from litellm.integrations.dotprompt import (
-                _get_prompt_data_from_dotprompt_content,
+                get_prompt_data_from_dotprompt_content,
             )
 
-            parsed: Final = _get_prompt_data_from_dotprompt_content(dotprompt_content)
+            parsed: Final = get_prompt_data_from_dotprompt_content(dotprompt_content)
             if parsed:
                 return PromptTemplateBase(
                     litellm_prompt_id=base_prompt_id,
-                    content=parsed.get("content", ""),
-                    metadata=parsed.get("metadata"),
+                    content=cast(str, parsed.get("content", "")),
+                    metadata=cast(dict[str, object] | None, parsed.get("metadata")),
                 )
         else:
             prompt_callback: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=prompt_spec)
@@ -1064,7 +1064,7 @@ async def test_prompt(
     try:
         # Parse the dotprompt content and create PromptTemplate
         prompt_manager: Final = PromptManager()
-        frontmatter, template_content = prompt_manager._parse_frontmatter(content=request.dotprompt_content)
+        frontmatter, template_content = prompt_manager.parse_frontmatter(content=request.dotprompt_content)
 
         # Create PromptTemplate to leverage existing parameter extraction logic
         template: Final = PromptTemplate(content=template_content, metadata=frontmatter, template_id="test_prompt")

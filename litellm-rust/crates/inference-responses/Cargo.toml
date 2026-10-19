@@ -6,10 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-cache-response.workspace = true
+litellm-core-utils.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true
@@ -26,7 +28,7 @@ tracing.workspace = true
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
 litellm-host-native.workspace = true
-litellm-inference = { workspace = true, features = ["test-support"] }
+litellm-inference-testing.workspace = true
 litellm-tracing.workspace = true
 rstest.workspace = true
 wiremock.workspace = true

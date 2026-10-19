@@ -3,20 +3,22 @@
 import copy
 import logging
 import re
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.types.utils import ModelResponseStream
+    from litellm.types.utils import ModelResponseStream, StandardLoggingKubernetesPodRouting
 
     Span = _Span | Any
 else:
@@ -49,6 +51,37 @@ def safe_divide_seconds(seconds: float, denominator: float, default: float | Non
 
 
 _DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
+
+
+def as_str_mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
+@runtime_checkable
+class _SupportsIter(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, index: int, /) -> object: ...
+
+
+def attribute_or_none(source: object, name: str) -> object:
+    return getattr(source, name, None)
+
+
+def iter_items(value: object) -> Iterable[object]:
+    if isinstance(value, _SupportsIter):
+        return value
+    if isinstance(value, _SupportsGetItem):
+        return iter(value)
+    raise TypeError(f"'{type(value).__name__}' object is not iterable")
+
+
+def attribute_items(source: object, name: str) -> Iterable[object]:
+    value: Final = attribute_or_none(source, name)
+    return iter_items(value) if value else ()
 
 
 def normalize_drop_params(value: object) -> bool | None:
@@ -212,6 +245,7 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     # Gemini / Vertex AI
     "STOP": "stop",
     "MAX_TOKENS": "length",
+    "CONTINUATION": "length",
     "SAFETY": "content_filter",
     "RECITATION": "content_filter",
     "FINISH_REASON_UNSPECIFIED": "stop",
@@ -270,7 +304,13 @@ def remove_index_from_tool_calls(
                         tool_call.pop("index", None)
 
 
-def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> None:
+class _PoppableByIndex(Protocol):
+    def __len__(self) -> int: ...
+
+    def pop(self, index: int, /) -> object: ...
+
+
+def remove_items_at_indices(items: _PoppableByIndex | None, indices: Iterable[int]) -> None:
     """Remove items from a list in-place by index"""
     if items is None:
         return
@@ -279,7 +319,7 @@ def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> 
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: Mapping[str, object]) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -287,7 +327,7 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
     and user_api_key values are in 'metadata'.
     """
     potential_spend_tracking_metadata_substring: Final = "user_api_key"
-    for key, value in metadata.items():
+    for key, value in dict(metadata).items():
         if potential_spend_tracking_metadata_substring in key:
             litellm_metadata[key] = value
     return litellm_metadata
@@ -344,6 +384,54 @@ def proxy_stamped_used_client_oauth_token(metadata: object, litellm_params: Mapp
     if isinstance(litellm_metadata, Mapping) and "used_client_oauth_token" in litellm_metadata:
         return litellm_metadata["used_client_oauth_token"]
     return metadata.get("used_client_oauth_token") if isinstance(metadata, Mapping) else None
+
+
+def proxy_stamped_kubernetes_pod_routing(
+    metadata: object,
+    litellm_params: Mapping[str, object] | None,
+) -> "StandardLoggingKubernetesPodRouting | None":
+    litellm_metadata: Final = litellm_params.get("litellm_metadata") if litellm_params is not None else None
+    litellm_routing: Final = _standard_logging_kubernetes_pod_routing(litellm_metadata)
+    if litellm_routing is not None:
+        return litellm_routing
+    return _standard_logging_kubernetes_pod_routing(metadata)
+
+
+def _standard_logging_kubernetes_pod_routing(
+    metadata: object,
+) -> "StandardLoggingKubernetesPodRouting | None":
+    if not isinstance(metadata, Mapping):
+        return None
+    metadata_mapping: Final = cast(  # cast-ok: routing metadata is a string-keyed mapping
+        Mapping[str, object], metadata
+    )
+    routing: Final = metadata_mapping.get(KUBERNETES_POD_ROUTING_KEY)
+    if not isinstance(routing, Mapping):
+        return None
+    routing_mapping: Final = cast(  # cast-ok: pod routing records use string keys
+        Mapping[str, object], routing
+    )
+    service_host: Final = routing_mapping.get("service_host")
+    pod_ip: Final = routing_mapping.get("pod_ip")
+    pod_count: Final = routing_mapping.get("pod_count")
+    selection: Final = routing_mapping.get("selection")
+    if (
+        not isinstance(service_host, str)
+        or not isinstance(pod_ip, str)
+        or not isinstance(pod_count, int)
+        or isinstance(pod_count, bool)
+        or pod_count < 1
+    ):
+        return None
+    if selection in ("round_robin", "session_affinity", "session_affinity_retry"):
+        routing_record: Final[StandardLoggingKubernetesPodRouting] = {
+            "service_host": service_host,
+            "pod_ip": pod_ip,
+            "pod_count": pod_count,
+            "selection": selection,
+        }
+        return routing_record
+    return None
 
 
 def get_litellm_metadata_from_kwargs(kwargs: dict):
@@ -426,28 +514,41 @@ def reconstruct_model_name(
 
 
 # Helper functions used for OTEL logging
-def _get_parent_otel_span_from_kwargs(
-    kwargs: dict | None = None,
+def get_parent_otel_span_from_kwargs(
+    kwargs: dict[str, object] | None = None,
 ) -> Span | None:
     try:
         if kwargs is None:
             return None
         litellm_params: Final = kwargs.get("litellm_params")
-        _metadata: Final = kwargs.get("metadata") or {}
-        if "litellm_parent_otel_span" in _metadata:
-            return _metadata["litellm_parent_otel_span"]
+        metadata: Final = cast(  # cast-ok: metadata is caller-provided request data
+            Mapping[str, object], kwargs.get("metadata") or {}
+        )
+        if "litellm_parent_otel_span" in metadata:
+            return cast(  # cast-ok: tracing metadata crosses an external boundary
+                Span | None, metadata["litellm_parent_otel_span"]
+            )
         elif (
             litellm_params is not None
-            and litellm_params.get("metadata") is not None
-            and "litellm_parent_otel_span" in litellm_params.get("metadata", {})
+            and cast(Mapping[str, object], litellm_params).get("metadata") is not None
+            and "litellm_parent_otel_span"
+            in cast(
+                Mapping[str, object],
+                cast(Mapping[str, object], litellm_params).get("metadata", {}),
+            )
         ):
-            return litellm_params["metadata"]["litellm_parent_otel_span"]
+            typed_litellm_params: Final = cast(Mapping[str, object], litellm_params)
+            litellm_metadata: Final = cast(Mapping[str, object], typed_litellm_params["metadata"])
+            return cast(Span | None, litellm_metadata["litellm_parent_otel_span"])
         elif "litellm_parent_otel_span" in kwargs:
-            return kwargs["litellm_parent_otel_span"]
+            return cast(Span | None, kwargs["litellm_parent_otel_span"])
         return None
     except Exception as e:
         verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
         return None
+
+
+_get_parent_otel_span_from_kwargs = get_parent_otel_span_from_kwargs
 
 
 def process_response_headers(
@@ -495,7 +596,8 @@ def process_response_headers(
         **processed_headers,
         **additional_headers,
     }
-    return additional_headers
+    request_id: Final = get_provider_request_id(response_headers)
+    return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
 def preserve_upstream_non_openai_attributes(
@@ -758,12 +860,18 @@ _NO_HEADERS: Final[Mapping[str, object]] = MappingProxyType({})
 class _CarriesHiddenParams(Protocol):
     _hidden_params: dict[str, object]  # mutable-ok: the responses billed here keep hidden params in a plain dict
 
+    @property
+    def hidden_params(self) -> dict[str, object]: ...  # mutable-ok: API requires mutation
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
+
 
 def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: float | None) -> None:
     """Record a provider-reported cost where the cost calculator looks before the price map."""
     if cost is None:
         return
-    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params: Final = response.hidden_params
     additional_headers: Final[object] = hidden_params.get("additional_headers")
     merged: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
         **(additional_headers if isinstance(additional_headers, Mapping) else _NO_HEADERS),
@@ -779,7 +887,7 @@ _PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 def set_provider_response_headers_in_hidden_params(
     response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
 ) -> None:
-    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params: Final = response.hidden_params
     existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
     raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
     additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
