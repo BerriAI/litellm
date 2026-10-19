@@ -313,10 +313,7 @@ async fn feature_betas_join_the_callers_betas_in_one_sorted_header(
     #[case] features: &[AnthropicBeta],
 ) {
     let upstream = upstream([message_response()]).await;
-    let capabilities = MessagesModelCapabilities {
-        supports_speed: true,
-        ..MessagesModelCapabilities::default()
-    };
+    let capabilities = MessagesModelCapabilities::default();
 
     run_message(with_fields(
         MessagesCall {
@@ -466,102 +463,6 @@ async fn caller_protocol_headers_win_over_the_defaults(call: MessagesCall, #[cas
         request.header_values("content-type"),
         ["application/json; charset=utf-8"]
     );
-}
-
-fn sampling_removed() -> MessagesModelCapabilities {
-    MessagesModelCapabilities {
-        supports_sampling_params: false,
-        ..MessagesModelCapabilities::default()
-    }
-}
-
-#[rstest]
-#[case::sampling_params(sampling_removed(), json!({"temperature": 0.2, "top_p": 0.9, "top_k": 5}), &["temperature", "top_p", "top_k"], "temperature=0.2")]
-#[case::speed(MessagesModelCapabilities::default(), json!({"speed": "fast"}), &["speed"], "speed='fast'")]
-#[tokio::test]
-async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_it(
-    call: MessagesCall,
-    #[case] capabilities: MessagesModelCapabilities,
-    #[case] fields: Value,
-    #[case] dropped: &[&str],
-    #[case] rejected_as: &str,
-) {
-    let upstream = upstream([message_response(), message_response()]).await;
-    let shaped = |drop_params: bool| {
-        with_fields(
-            MessagesCall {
-                api_key: Some("sk".into()),
-                api_base: Some(upstream.uri()),
-                shaping: MessagesShaping {
-                    capabilities,
-                    settings: MessagesSettings {
-                        drop_params,
-                        ..MessagesSettings::default()
-                    },
-                },
-                body: call.body.clone(),
-                custom_llm_provider: call.custom_llm_provider.clone(),
-                litellm_params: Default::default(),
-                extra_headers: None,
-                provider_specific_header: None,
-                timeout: call.timeout,
-            },
-            fields.clone(),
-        )
-    };
-
-    let error = run(shaped(false))
-        .await
-        .expect_err("an unsupported param is rejected without drop_params");
-    assert!(
-        matches!(&error, Error::InvalidRequest(message) if message.to_string().contains(rejected_as)),
-        "{error:?}"
-    );
-    assert!(received(&upstream).await.is_empty());
-
-    run_message(shaped(true)).await;
-    let sent = only_request(&upstream).await.json();
-    for name in dropped {
-        assert_eq!(sent.get(*name), None, "{name} must be dropped");
-    }
-    assert_eq!(sent["max_tokens"], 16);
-}
-
-#[rstest]
-#[case::adaptive_thinking(json!({"type": "adaptive"}), json!({"type": "adaptive", "display": "summarized"}))]
-#[case::disabled_thinking(json!({"type": "disabled"}), json!({"type": "disabled"}))]
-#[tokio::test]
-async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
-    call: MessagesCall,
-    #[values("anthropic", "minimax")] provider: &str,
-    #[case] thinking: Value,
-    #[case] expected: Value,
-) {
-    let upstream = upstream([message_response()]).await;
-
-    run_message(with_fields(
-        MessagesCall {
-            custom_llm_provider: Some(provider.into()),
-            api_key: Some("sk".into()),
-            api_base: Some(upstream.uri()),
-            shaping: MessagesShaping {
-                settings: MessagesSettings {
-                    reasoning_auto_summary: true,
-                    ..MessagesSettings::default()
-                },
-                capabilities: MessagesModelCapabilities {
-                    supports_reasoning: true,
-                    supports_adaptive_thinking: true,
-                    ..MessagesModelCapabilities::default()
-                },
-            },
-            ..call
-        },
-        json!({"thinking": thinking}),
-    ))
-    .await;
-
-    assert_eq!(only_request(&upstream).await.json()["thinking"], expected);
 }
 
 #[rstest]

@@ -45,12 +45,8 @@ pub const VERTEX_ANTHROPIC_MESSAGES_CONFIG: VertexAiPartnerModelsAnthropicMessag
     VertexAiPartnerModelsAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        reasoning_auto_summary: bool,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+    fn shape_request(&self, request: MessagesRequest) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request)
     }
 
     fn get_complete_url(
@@ -560,7 +556,6 @@ mod tests {
                     },
                     ..ThinkingContext::default()
                 },
-                drop_params: false,
             },
         );
         assert_eq!(body["system"], json!("be terse"));
@@ -577,7 +572,6 @@ mod tests {
                 },
                 ..ThinkingContext::default()
             },
-            drop_params: false,
         }
     }
 

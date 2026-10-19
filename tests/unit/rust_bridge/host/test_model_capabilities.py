@@ -30,7 +30,6 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
         supports_adaptive_thinking=True,
         supports_output_config=True,
         supports_xhigh_reasoning_effort=True,
-        supports_sampling_params=False,
         supports_mid_conversation_system=True,
     )
 
@@ -40,7 +39,6 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
     assert capabilities["supports_output_config"]
     assert capabilities["supports_mid_conversation_system"]
     assert not capabilities["supports_legacy_thinking"]
-    assert not capabilities["supports_sampling_params"]
     assert capabilities["effort_tiers"] == {
         "minimal": False,
         "low": False,
@@ -51,10 +49,9 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
     }
 
 
-def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> None:
+def test_unmapped_model_has_no_reasoning_features() -> None:
     capabilities: Final = anthropic_model_capabilities("anthropic/not-a-real-model", None)
 
-    assert capabilities["supports_sampling_params"]
     assert not capabilities["supports_reasoning"]
     assert not capabilities["supports_adaptive_thinking"]
     assert not capabilities["supports_mid_conversation_system"]

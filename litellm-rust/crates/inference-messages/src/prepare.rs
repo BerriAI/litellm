@@ -85,13 +85,10 @@ fn prepare_provider_request(
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
-    let sanitized = config.shape_request(
-        MessagesRequest {
-            model: model.clone(),
-            ..body
-        },
-        shaping.settings.reasoning_auto_summary,
-    )?;
+    let sanitized = config.shape_request(MessagesRequest {
+        model: model.clone(),
+        ..body
+    })?;
     let one_shot_subagent =
         litellm_llms::anthropic::common_utils::is_claude_code_one_shot_subagent_request(
             &sanitized,
@@ -118,7 +115,7 @@ fn prepare_provider_request(
         without_additional_drop_params(injected.request, &shaping.settings.additional_drop_params)?;
     let transformed = config.transform_anthropic_messages_request(
         trimmed,
-        &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
+        &MessagesTransformContext::new(shaping.capabilities),
     )?;
 
     let scoped =
@@ -467,10 +464,9 @@ mod tests {
     }
 
     #[rstest]
-    fn dropped_thinking_display_is_not_restored_by_auto_summary(shaping: MessagesShaping) {
+    fn a_dropped_path_removes_the_thinking_display_the_host_set(shaping: MessagesShaping) {
         let shaping = MessagesShaping {
             settings: MessagesSettings {
-                reasoning_auto_summary: true,
                 additional_drop_params: vec!["thinking.display".to_string()],
                 ..shaping.settings
             },
@@ -482,7 +478,7 @@ mod tests {
                     "model": "claude-test",
                     "messages": [{"role": "user", "content": "hi"}],
                     "max_tokens": 4096,
-                    "thinking": {"type": "enabled", "budget_tokens": 2048}
+                    "thinking": {"type": "enabled", "budget_tokens": 2048, "display": "summarized"}
                 }),
                 shaping,
             ),
