@@ -304,7 +304,7 @@ class SpendLogsPartitionManager:
                 return
             try:
                 await self._execute_bounded_ddl(prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001  # a partition this run cannot drop is left for the next one
                 verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)
                 return
             yield name

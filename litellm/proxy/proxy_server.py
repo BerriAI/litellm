@@ -11628,7 +11628,7 @@ class ProxyStartupEvent:
             )
             try:
                 if not isinstance(size_check_interval, str):
-                    raise ValueError(size_check_interval)
+                    raise TypeError(size_check_interval)
                 size_check_seconds: Final = duration_in_seconds(size_check_interval)
                 scheduler.add_job(
                     SpendLogCleanup().cleanup_spend_logs_by_size,
@@ -11640,7 +11640,7 @@ class ProxyStartupEvent:
                     misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
                 verbose_proxy_logger.info("Spend log size check scheduled every %s", size_check_interval)
-            except (ValueError, OverflowError):
+            except (TypeError, ValueError, OverflowError):
                 verbose_proxy_logger.error(
                     "Invalid maximum_spend_logs_size_check_interval value: %r", size_check_interval
                 )

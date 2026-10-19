@@ -1771,19 +1771,12 @@ async def test_size_pass_deletes_oldest_first_in_steps_until_the_live_estimate_i
     """
     db = MagicMock()
     _wire_tx(db)
-    # per step: spend logs 1000 then 0 (step cap not reached), tool index 300 then 0
-    db.execute_raw = AsyncMock(side_effect=[1000, 0, 300, 0, 1000, 0, 300, 0])
+    # 3 GiB over 3000 rows is 1 MiB a row, so 2560 rows take it from 3 GiB to the 512 MiB target: one step
+    # of 3 batches; the tool index is cleaned on the same cutoff
+    db.execute_raw = AsyncMock(side_effect=[1000, 1000, 1000, 300, 0])
     step_cutoff = datetime(2026, 9, 1, tzinfo=timezone.utc)
     allocated = 3 * 1024**3
-    _wire_size_probes(
-        db,
-        [
-            _storage(allocated, live=3000, dead=0),  # before: 3 GiB live, over the 1 GiB limit
-            _storage(allocated, live=2000, dead=1000),  # after step 1: 2 GiB live, still over the 512 MiB target
-            _storage(allocated, live=400, dead=2600),  # after step 2: 400 MiB live, under the target
-        ],
-        cutoff=step_cutoff,
-    )
+    _wire_size_probes(db, [_storage(allocated, live=3000, dead=0)], cutoff=step_cutoff)
     client = MagicMock()
     client.db = db
     cleaner = _size_cleaner({"maximum_spend_logs_cleanup_target_size": "512MB"})
@@ -1792,19 +1785,21 @@ async def test_size_pass_deletes_oldest_first_in_steps_until_the_live_estimate_i
         await cleaner.cleanup_spend_logs_by_size(client)
 
     deletes = [(call[0][0], call[0][1:]) for call in db.execute_raw.call_args_list]
-    assert len(deletes) == 8
+    assert len(deletes) == 5
     assert 'DELETE FROM "LiteLLM_SpendLogs"' in deletes[0][0]
     assert 'WHERE "startTime" < $1' in deletes[0][0]
     assert deletes[0][1][0] == step_cutoff
-    assert 'DELETE FROM "LiteLLM_SpendLogToolIndex"' in deletes[2][0]
-    assert deletes[2][1][0] == step_cutoff
+    assert 'DELETE FROM "LiteLLM_SpendLogToolIndex"' in deletes[3][0]
+    assert deletes[3][1][0] == step_cutoff
+    offset_query = next(call for call in db.query_raw.call_args_list if "OFFSET" in call[0][0])
+    assert offset_query[0][1] == 3000
     summary = next(r.getMessage() for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
     assert "outcome=completed" in summary
-    assert "LiteLLM_SpendLogs (size rule): deleted=2000 stop_reason=target_reached" in summary
-    assert "LiteLLM_SpendLogToolIndex (size rule): deleted=600 stop_reason=target_reached" in summary
+    assert "LiteLLM_SpendLogs (size rule): deleted=3000 stop_reason=target_reached" in summary
+    assert "LiteLLM_SpendLogToolIndex (size rule): deleted=300 stop_reason=target_reached" in summary
     assert f"allocated_before={allocated}" in summary
     assert "estimated_live_before=3221225472" in summary
-    assert "estimated_live_after=429496729" in summary
+    assert "estimated_live_after=0" in summary
     assert "target_reached=true above_target=0" in summary
     assert "VACUUM FULL or pg_repack" in summary
 
@@ -1813,25 +1808,26 @@ async def test_size_pass_deletes_oldest_first_in_steps_until_the_live_estimate_i
 async def test_size_pass_stops_at_the_run_batch_cap_and_reports_how_far_above_the_target_it_is(caplog):
     db = MagicMock()
     _wire_tx(db)
-    db.execute_raw = AsyncMock(return_value=1000)
+    # 4 GiB over 4000 rows: 3584 rows must go to reach the 512 MiB target, the cap allows 3 batches
+    db.execute_raw = AsyncMock(side_effect=[1000, 1000, 1000, 0])
     allocated = 4 * 1024**3
     _wire_size_probes(db, [_storage(allocated, live=4000, dead=0)], cutoff=datetime.now(timezone.utc))
     client = MagicMock()
     client.db = db
     cleaner = _size_cleaner(
-        {"maximum_spend_logs_cleanup_target_size": "1GB", "maximum_spend_logs_cleanup_max_batches": 3}
+        {"maximum_spend_logs_cleanup_target_size": "512MB", "maximum_spend_logs_cleanup_max_batches": 3}
     )
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await cleaner.cleanup_spend_logs_by_size(client)
 
-    # the cap spans the whole pass: 3 spend-log batches plus 3 tool-index batches, then stop
-    assert db.execute_raw.await_count == 6
+    assert db.execute_raw.await_count == 4
     summary = next(r for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
     assert summary.levelno == logging.WARNING
     assert "outcome=batch_cap_reached" in summary.getMessage()
     assert "LiteLLM_SpendLogs (size rule): deleted=3000 stop_reason=batch_cap_reached" in summary.getMessage()
-    assert f"target_reached=false above_target={3 * 1024**3}" in summary.getMessage()
+    # 1000 of 4000 rows left is 1 GiB live, 512 MiB above the target
+    assert f"target_reached=false above_target={512 * 1024**2}" in summary.getMessage()
 
 
 @pytest.mark.asyncio
@@ -1886,21 +1882,24 @@ async def test_the_retention_run_carries_the_size_pass_only_when_one_cron_drives
 
 
 @pytest.mark.asyncio
-async def test_partitioned_size_pass_drops_the_oldest_partitions_first_and_skips_row_deletes_once_under_target():
+async def test_partitioned_size_pass_drops_the_oldest_partitions_first_and_skips_row_deletes_once_under_target(
+    caplog,
+):
     db = MagicMock()
     _wire_tx(db)
     db.execute_raw = AsyncMock(return_value=1000)
     _wire_size_probes(
         db,
-        [_storage(10 * 1024**3, live=1000, dead=0), _storage(2 * 1024**3, live=200, dead=0)],
+        [_storage(10 * 1024**3, live=1000, dead=0), _storage(256 * 1024**2, live=25, dead=0)],
         cutoff=datetime.now(timezone.utc),
     )
     client = MagicMock()
     client.db = db
+    verdicts = []
 
     async def _drop(prisma_client, now, remaining_timeout_ms, still_over_target):
-        assert await still_over_target() is False
-        return ["LiteLLM_SpendLogs_p20260601"]
+        verdicts.append(await still_over_target())
+        return ("LiteLLM_SpendLogs_p20260601",)
 
     partition_manager = MagicMock()
     partition_manager.is_partitioned = AsyncMock(return_value=True)
@@ -1910,10 +1909,15 @@ async def test_partitioned_size_pass_drops_the_oldest_partitions_first_and_skips
         partition_manager=partition_manager,
     )
 
-    await cleaner.cleanup_spend_logs_by_size(client)
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        await cleaner.cleanup_spend_logs_by_size(client)
 
     partition_manager.drop_oldest_partitions_while.assert_awaited_once()
+    assert verdicts == [False]
     assert db.execute_raw.await_count == 0
+    summary = next(r.getMessage() for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
+    assert "partitions_dropped=1" in summary
+    assert "target_reached=true" in summary
 
 
 def test_drop_oldest_partitions_while_only_drops_fully_elapsed_partitions_oldest_first():

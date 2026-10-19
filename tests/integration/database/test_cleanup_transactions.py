@@ -180,8 +180,7 @@ async def test_size_rule_deletes_the_oldest_rows_in_steps_until_the_live_estimat
             try:
                 cleanup: Final = SpendLogCleanup(
                     general_settings={
-                        # trigger below what is there, clean down to half of it: three steps of
-                        # 10 batches x 100 rows take out the oldest 3000 of the 6000 rows
+                        # trigger below what is there, clean down to half of it
                         "maximum_spend_logs_size": str(allocated_before * 3 // 4),
                         "maximum_spend_logs_cleanup_target_size": str(allocated_before // 2),
                         "maximum_spend_logs_cleanup_batch_size": 100,
@@ -196,9 +195,9 @@ async def test_size_rule_deletes_the_oldest_rows_in_steps_until_the_live_estimat
                 f'SELECT request_id FROM {logs.as_string(setup)} ORDER BY "startTime"',
                 (),
             )
-            # oldest first, in whole steps of 1000 rows; the row counters can lag one step behind the
-            # deletes before the stats collector flushes, which only ever costs one extra step
-            assert len(remaining) in (3000, 2000), len(remaining)
+            # half the bytes is half the rows: the oldest 3000 spend logs and their 300 index rows go, counted
+            # from the deletes themselves, so the stats collector's lag cannot make the run overshoot
+            assert len(remaining) == 3000
             assert remaining[0]["request_id"] == f"req-{seeded - len(remaining) + 1:06d}"
             assert remaining[-1]["request_id"] == f"req-{seeded:06d}"
             (orphans,) = read_rows(
