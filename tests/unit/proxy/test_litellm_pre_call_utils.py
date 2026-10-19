@@ -3735,7 +3735,7 @@ def test_add_litellm_metadata_groups_opencode_turns_into_one_session():
         assert turn["litellm_trace_id"] == OPENCODE_SESSION_ID
 
 
-PI_AI_SESSION_ID = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
+PI_AI_SESSION_ID: Final = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
 
 
 def _apply_session_sources(
@@ -8754,8 +8754,6 @@ async def test_missing_session_id_reject_accepts_baggage_session_id(path: str, c
 async def test_session_affinity_header_groups_spend_log_session_on_every_llm_route(
     path: str, client_body: dict[str, object], metadata_key: str
 ):
-    """Two turns of a pi-ai session carrying only x-session-affinity must land in SpendLogs under
-    that id on every LLM route, instead of one random session per request."""
     request: Final = _request_for(path)
     request.headers = {"x-session-affinity": PI_AI_SESSION_ID}
 
