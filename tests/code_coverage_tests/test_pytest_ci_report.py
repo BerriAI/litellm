@@ -152,6 +152,69 @@ def test_outcomes_match_pytest_and_metrics_survive_workers(tmp_path: Path, worke
     assert rendered.stdout.index("fixed bug") < rendered.stdout.index("known bug")
 
 
+@pytest.mark.parametrize("workers", ((), ("-n", "2")), ids=("serial", "xdist"))
+def test_collection_errors_are_reported_and_match_terminal(tmp_path: Path, workers: tuple[str, ...]) -> None:
+    report: Final = tmp_path / "report.json"
+    result: Final = run_suite(
+        tmp_path,
+        "import missing_ci_test_module\n",
+        "--ci-report",
+        str(report),
+        *workers,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    data: Final = REPORT_DATA.validate_json(report.read_text())
+    assert len(data.outcomes) == 1
+    outcome: Final = data.outcomes[0]
+    assert outcome.nodeid == "test_sample.py"
+    assert outcome.when == "collect"
+    assert outcome.category == "error"
+    assert "missing_ci_test_module" in outcome.reason
+    terminal_summary: Final = next(
+        line for line in reversed(result.stdout.splitlines()) if re.search(r"\d+ errors? in ", line)
+    )
+    terminal_counts: Final = re.findall(
+        r"\d+ (?:failed|passed|skipped|xfailed|xpassed|errors?)\b", terminal_summary
+    )
+    assert terminal_counts == ["1 error"]
+    rendered: Final = render(report)
+    assert rendered.returncode == 0, rendered.stderr
+    assert ", ".join(terminal_counts) in rendered.stdout
+
+
+def test_collection_skips_are_reported(tmp_path: Path) -> None:
+    report: Final = tmp_path / "report.json"
+    result: Final = run_suite(
+        tmp_path,
+        "import pytest\npytest.skip('not available', allow_module_level=True)\n",
+        "--ci-report",
+        str(report),
+    )
+    data: Final = REPORT_DATA.validate_json(report.read_text())
+    assert data.outcomes == (
+        ReportOutcome(nodeid="test_sample.py", when="collect", category="skipped", reason="Skipped: not available"),
+    )
+    assert "1 skipped" in result.stdout
+    rendered: Final = render(report)
+    assert rendered.returncode == 0, rendered.stderr
+    assert "1 skipped" in rendered.stdout
+
+
+def test_plugin_loads_with_repository_config_without_pythonpath() -> None:
+    environment: Final = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    result: Final = subprocess.run(
+        (sys.executable, "-P", "-m", "pytest", "-p", "pytest_ci_report", "--help"),
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--ci-report" in result.stdout
+
+
 def test_maxfail_still_writes_report(tmp_path: Path) -> None:
     result: Final = run_suite(
         tmp_path, "def test_failure():\n    assert False\n", "--ci-report=report.json", "--maxfail=1"

@@ -51,12 +51,14 @@ def pytest_configure(config: pytest.Config) -> None:
     config.pluginmanager.register(CIReporter(config, Path(path)), "ci-report-writer")
 
 
-def _reason(report: pytest.TestReport) -> str:
+def _reason(report: pytest.TestReport | pytest.CollectReport) -> str:
     xfail: Final[object] = getattr(report, "wasxfail", None)
     if isinstance(xfail, str):
         return xfail
     if report.skipped and isinstance(report.longrepr, tuple):
         return str(report.longrepr[2])
+    if isinstance(report, pytest.CollectReport) and report.failed:
+        return str(report.longrepr)
     return ""
 
 
@@ -76,6 +78,23 @@ def _metric(nodeid: str, prop: object) -> Metric | None:
 class CIReporter:
     config: pytest.Config
     path: Path
+
+    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
+        status: Final = cast(
+            tuple[str, str, object],
+            self.config.hook.pytest_report_teststatus(
+                report=report,
+                config=self.config,
+            ),
+        )
+        category: Final = status[0]
+        if category not in ("error", "skipped"):
+            return
+        previous: Final = self.config.stash[REPORT]
+        self.config.stash[REPORT] = Report(
+            previous.outcomes + (Outcome(report.nodeid, "collect", category, _reason(report)),),
+            previous.metrics,
+        )
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         status: Final = cast(
