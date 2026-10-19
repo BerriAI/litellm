@@ -1179,6 +1179,7 @@ class TestMistralContentListConversion:
         {"type": "reference", "reference_ids": ["doc1"]},
         {"type": "text", "text": "."},
     ]
+    REFERENCE_BLOCK = {"type": "reference", "reference_ids": ["doc1"]}
 
     def test_non_streaming_concatenates_all_text_chunks(self):
         response_data = {"choices": [{"message": {"role": "assistant", "content": self.CITATION_CONTENT}}]}
@@ -1194,7 +1195,24 @@ class TestMistralContentListConversion:
         MistralConfig._handle_content_list_to_str_conversion(response_data)
 
         message = response_data["choices"][0]["message"]
-        assert message["mistral_content_blocks"] == self.CITATION_CONTENT
+        assert message["mistral_reference_blocks"] == [self.REFERENCE_BLOCK]
+
+    def test_non_streaming_exposed_reference_blocks_carry_no_free_text(self):
+        # The output PII-masking hook sanitises `message.content` but not
+        # provider-specific fields, so the exposed copy must not repeat the
+        # text -- a second copy would reach the client unmasked.
+        content = [
+            {"type": "text", "text": "card 4111 1111 1111 1111"},
+            {"type": "reference", "reference_ids": ["doc1"]},
+        ]
+        response_data = {"choices": [{"message": {"role": "assistant", "content": content}}]}
+
+        MistralConfig._handle_content_list_to_str_conversion(response_data)
+
+        message = response_data["choices"][0]["message"]
+        exposed = message["mistral_reference_blocks"]
+        assert exposed == [self.REFERENCE_BLOCK]
+        assert not any("text" in block for block in exposed)
 
     def test_non_streaming_adds_no_content_blocks_key_without_citations(self):
         content = [{"type": "text", "text": "plain answer"}]
@@ -1204,7 +1222,7 @@ class TestMistralContentListConversion:
 
         message = response_data["choices"][0]["message"]
         assert message["content"] == "plain answer"
-        assert "mistral_content_blocks" not in message
+        assert "mistral_reference_blocks" not in message
 
     def test_non_streaming_thinking_blocks_still_extracted(self):
         response_data = {
@@ -1253,7 +1271,7 @@ class TestMistralContentListConversion:
         )
 
         provider_specific_fields = model_response.choices[0].message.provider_specific_fields
-        assert provider_specific_fields["mistral_content_blocks"] == self.CITATION_CONTENT
+        assert provider_specific_fields["mistral_reference_blocks"] == [self.REFERENCE_BLOCK]
 
     def test_streaming_mixed_blocks_concatenate_and_expose_references(self):
         iterator = MistralChatResponseIterator(streaming_response=iter([]), sync_stream=True)
@@ -1263,7 +1281,7 @@ class TestMistralContentListConversion:
 
         delta = result.choices[0].delta
         assert delta.content == "The sky is blue during the day."
-        assert delta.provider_specific_fields["mistral_content_blocks"] == self.CITATION_CONTENT
+        assert delta.provider_specific_fields["mistral_reference_blocks"] == [self.REFERENCE_BLOCK]
 
     def test_streaming_reference_only_delta_exposes_references(self):
         iterator = MistralChatResponseIterator(streaming_response=iter([]), sync_stream=True)
@@ -1274,4 +1292,4 @@ class TestMistralContentListConversion:
 
         delta = result.choices[0].delta
         assert not delta.content
-        assert delta.provider_specific_fields["mistral_content_blocks"] == content
+        assert delta.provider_specific_fields["mistral_reference_blocks"] == content

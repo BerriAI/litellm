@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from itertools import accumulate, count
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
@@ -594,7 +594,7 @@ class MistralConfig(OpenAIGPTConfig):
                     if isinstance(content, list):
                         thinking_content = ""
                         text_segments: list[str] = []  # mutable-ok: accumulated across this choice's blocks
-                        has_reference_blocks = False
+                        reference_blocks: list[dict[str, object]] = []  # mutable-ok: citation chunks for this choice
 
                         # Process each content block
                         for block in content:
@@ -609,19 +609,22 @@ class MistralConfig(OpenAIGPTConfig):
                             elif block_type == "text":
                                 text_segments.append(block.get("text", ""))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # provider content blocks are untyped JSON
                             elif block_type == "reference":
-                                has_reference_blocks = True
+                                reference_blocks.append(block)  # pyright: ignore[reportUnknownArgumentType]  # provider content blocks are untyped JSON
 
                         # Set the extracted content
                         choice["message"]["content"] = "".join(text_segments)
-                        if has_reference_blocks:
+                        if reference_blocks:
                             # The flattened content string cannot carry Mistral
-                            # citation chunks; keep the original block list
-                            # reachable instead of dropping them silently.
-                            # This is the list exactly as the provider sent it
-                            # -- thinking and text blocks included, not only the
-                            # reference blocks -- so the field is the raw
-                            # provider input, not a filtered citation list.
-                            choice["message"]["mistral_content_blocks"] = content
+                            # citation chunks, so expose the citation chunks
+                            # themselves instead of dropping them silently.
+                            #
+                            # Only the citation chunks are exposed, not a copy of
+                            # the whole block list: the text lives in `content`,
+                            # which the output PII-masking hook sanitises, while
+                            # provider-specific fields are not sanitised -- a
+                            # second copy of the text would reach the client
+                            # unmasked.
+                            choice["message"]["mistral_reference_blocks"] = reference_blocks
                         if thinking_content:
                             choice["message"]["reasoning_content"] = thinking_content
 
@@ -720,6 +723,7 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                         normalized_text,
                         thinking_blocks,
                         reasoning_content,
+                        reference_blocks,
                     ) = self._normalize_content_blocks(content)
                     delta["content"] = normalized_text
                     if thinking_blocks:
@@ -728,18 +732,15 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                     else:
                         delta.pop("thinking_blocks", None)
                         delta.pop("reasoning_content", None)
-                    if any(
-                        block.get("type") == "reference"  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # provider content blocks are untyped JSON
-                        for block in content  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # provider content blocks are untyped JSON
-                    ):
+                    if reference_blocks:
                         # citation chunks carry no text; expose them on
                         # provider_specific_fields instead of dropping them
                         existing_fields = delta.get("provider_specific_fields")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # provider_specific_fields comes from the provider payload, which is untyped JSON
                         if isinstance(existing_fields, dict):
                             # keep whatever the provider already put there
-                            existing_fields["mistral_content_blocks"] = content
+                            existing_fields["mistral_reference_blocks"] = reference_blocks
                         else:
-                            delta["provider_specific_fields"] = {"mistral_content_blocks": content}
+                            delta["provider_specific_fields"] = {"mistral_reference_blocks": reference_blocks}
         except Exception:
             # Fall back to default parsing if custom handling fails
             return super().chunk_parser(chunk)
@@ -749,13 +750,20 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
     @staticmethod
     def _normalize_content_blocks(
         content_blocks: list[dict],
-    ) -> tuple[str | None, list[dict], str | None]:
+    ) -> tuple[str | None, list[dict], str | None, Sequence[Mapping[str, object]]]:
         """
         Convert Mistral magistral content blocks into OpenAI-compatible content + thinking_blocks.
+
+        The fourth element carries the citation chunks (`reference` blocks) as
+        the provider sent them. They are returned separately from the text
+        because the text is flattened into `content`, where the output
+        PII-masking hook can sanitise it, while provider-specific fields are
+        not sanitised.
         """
         text_segments: Final[list[str]] = []
         thinking_blocks: Final[list[dict]] = []
         reasoning_segments: Final[list[str]] = []
+        reference_blocks: Final[list[dict[str, object]]] = []  # mutable-ok: citation chunks per response
 
         for block in content_blocks:
             block_type = block.get("type")
@@ -777,7 +785,9 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                     )
             elif block_type == "text":
                 text_segments.append(block.get("text", ""))
+            elif block_type == "reference":
+                reference_blocks.append(block)  # pyright: ignore[reportUnknownArgumentType]  # provider content blocks are untyped JSON
 
         normalized_text: Final = "".join(text_segments) if text_segments else None
         reasoning_content: Final = "\n".join(reasoning_segments) if reasoning_segments else None
-        return normalized_text, thinking_blocks, reasoning_content
+        return normalized_text, thinking_blocks, reasoning_content, reference_blocks
