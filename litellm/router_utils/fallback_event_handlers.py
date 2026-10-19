@@ -7,6 +7,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -650,6 +652,11 @@ async def _is_fallback_target_within_budget(
 # references_provider_scoped_resource below for the same two-key pattern).
 _OCR_HANDLER_FUNCTION_NAMES: Final = frozenset({"aocr", "ocr"})
 
+# Every caller reaches run_async_fallback by spreading a loosely-typed kwargs dict, so this
+# validates it once into a real Mapping[str, object] instead of threading the unannotated
+# **kwargs type into each per-target check below.
+_FALLBACK_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
 
 def _is_ocr_fallback_request(kwargs: Mapping[str, object]) -> bool:
     return any(
@@ -781,6 +788,7 @@ async def run_async_fallback(
     )
     failed_model_group: Final = get_pre_routing_selection(kwargs) or original_model_group
     attempted.record(failed_model_group)
+    request_kwargs: Final[Mapping[str, object]] = _FALLBACK_REQUEST_KWARGS_ADAPTER.validate_python(kwargs, strict=True)
 
     # A dict target is merged straight into kwargs below, and kwargs win over the deployment's own
     # params, so a stored key/team/global fallback could otherwise set a federation field that the
@@ -800,11 +808,11 @@ async def run_async_fallback(
                 original_model_group,
             )
             continue
-        if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
+        if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, request_kwargs):
             continue
-        if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
+        if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, request_kwargs):
             continue
-        if not _is_fallback_target_ocr_capable(litellm_router, mg, original_model_group, kwargs):
+        if not _is_fallback_target_ocr_capable(litellm_router, mg, original_model_group, request_kwargs):
             continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:
