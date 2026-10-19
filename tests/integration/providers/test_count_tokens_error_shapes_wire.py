@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
 
 import anthropic
@@ -29,13 +30,22 @@ _PROVIDER_KEY_VARIABLES: Final = (
 
 
 @pytest.fixture(scope="module")
-def keyless_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
+def provider_error_config(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    config: Final = tmp_path_factory.mktemp("count-tokens-provider-errors") / "config.yaml"
+    base: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
+    config.write_text(base.read_text() + "\nlitellm_settings:\n  disable_token_counter: true\n")
+    return config
+
+
+@pytest.fixture(scope="module")
+def keyless_proxy(tmp_path_factory: pytest.TempPathFactory, provider_error_config: Path) -> Iterator[OwnedProxy]:
     with (
         gateway_from_environment() as gateway,
         owned_proxy_process(
             gateway,
             tmp_path_factory.mktemp("count-tokens-error-shapes"),
             {},
+            config=provider_error_config,
             remove_environment=_PROVIDER_KEY_VARIABLES,
             workers=1,
         ) as owned,
