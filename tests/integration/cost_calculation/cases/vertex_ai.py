@@ -3146,6 +3146,41 @@ VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ: Final = _vertex_claude_shape_case(
         cache_read_cost=0.00351039,
     ),
 )
+VERTEX_AI_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "vertex_ai/claude-haiku-5-5-tiered_input_above_100k",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(input_tokens=150000, output_tokens=480),
+    ExactExpected(
+        spend=0.9906,
+        input_cost=0.975,
+        output_cost=0.0156,
+        prompt_tokens=150000,
+        completion_tokens=480,
+    ),
+    response_content=[
+        {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+        {"type": "text", "text": "scripted answer for cost fixtures"},
+    ],
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    "vertex_ai/claude-haiku-5-5-tiered_cache_read_above_100k",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(input_tokens=4096, output_tokens=480, cache_read_input_tokens=110592),
+    ExactExpected(
+        spend=0.1141088,
+        input_cost=0.0985088,
+        output_cost=0.0156,
+        prompt_tokens=114688,
+        completion_tokens=480,
+        cache_read_cost=0.0718848,
+    ),
+    response_content=[
+        {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+        {"type": "text", "text": "scripted answer for cost fixtures"},
+    ],
+)
 VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M: Final = _vertex_claude_shape_case(
     VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
     "vertex_ai/claude-haiku-5-5-cache_write_5m",
@@ -3530,6 +3565,10 @@ GEMINI_4_ARGON_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_4_ARGON_INPUT_TEXT, GEMINI_4_ARGON_STREAM),
     ("/v1/responses", "/v1/messages"),
 )
+GEMINI_3_8_FLASH_ROUTE_BRIDGES: Final = bridge_pairs(
+    (GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_3_8_FLASH_STREAM),
+    ("/v1/responses", "/v1/messages"),
+)
 GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT, GEMINI_3_1_PRO_PREVIEW_STREAM),
     ("/v1/responses", "/v1/messages"),
@@ -3604,6 +3643,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
     VERTEX_AI_CLAUDE_HAIKU_5_5_STREAM,
     VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K,
     VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
     VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
     VERTEX_AI_CLAUDE_HAIKU_5_5_THINKING,
@@ -3633,6 +3674,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_4_ARGON_REASONING,
     GEMINI_4_ARGON_TOOL_CALL,
     *(pair.bridged for pair in GEMINI_4_ARGON_ROUTE_BRIDGES),
+    *(pair.bridged for pair in GEMINI_3_8_FLASH_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES),
 )
 
@@ -3700,6 +3742,14 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         streamed=GEMINI_4_ARGON_ROUTE_BRIDGES[3].bridged,
     ),
     StreamParityTestCase(
+        plain=GEMINI_3_8_FLASH_ROUTE_BRIDGES[0].bridged,
+        streamed=GEMINI_3_8_FLASH_ROUTE_BRIDGES[2].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_3_8_FLASH_ROUTE_BRIDGES[1].bridged,
+        streamed=GEMINI_3_8_FLASH_ROUTE_BRIDGES[3].bridged,
+    ),
+    StreamParityTestCase(
         plain=GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[0].bridged,
         streamed=GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[2].bridged,
     ),
@@ -3711,9 +3761,10 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *bridge_pairs(
-        (GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_3_8_FLASH_CACHE_READ, GEMINI_3_8_FLASH_STREAM),
+        (GEMINI_3_8_FLASH_CACHE_READ, GEMINI_3_8_FLASH_REASONING),
         ("/v1/responses", "/v1/messages"),
     ),
+    *GEMINI_3_8_FLASH_ROUTE_BRIDGES,
     *GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES,
     *GEMINI_4_ARGON_ROUTE_BRIDGES,
     *VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS,

@@ -3494,6 +3494,10 @@ GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_GEMINI_4_ARGON_INPUT_TEXT, GEMINI_GEMINI_4_ARGON_STREAM),
     ("/v1/responses", "/v1/messages"),
 )
+GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES: Final = bridge_pairs(
+    (GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_GEMINI_3_8_FLASH_STREAM),
+    ("/v1/responses", "/v1/messages"),
+)
 GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT, GEMINI_GEMINI_3_1_PRO_PREVIEW_STREAM),
     ("/v1/responses", "/v1/messages"),
@@ -3572,6 +3576,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY,
     *(pair.bridged for pair in GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES),
+    *(pair.bridged for pair in GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES),
 )
 
@@ -3607,6 +3612,14 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         streamed=GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES[3].bridged,
     ),
     StreamParityTestCase(
+        plain=GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES[0].bridged,
+        streamed=GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES[2].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES[1].bridged,
+        streamed=GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES[3].bridged,
+    ),
+    StreamParityTestCase(
         plain=GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[0].bridged,
         streamed=GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[2].bridged,
     ),
@@ -3618,14 +3631,10 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *bridge_pairs(
-        (
-            GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT,
-            GEMINI_GEMINI_3_8_FLASH_CACHE_READ,
-            GEMINI_GEMINI_3_8_FLASH_REASONING,
-            GEMINI_GEMINI_3_8_FLASH_STREAM,
-        ),
+        (GEMINI_GEMINI_3_8_FLASH_CACHE_READ, GEMINI_GEMINI_3_8_FLASH_REASONING),
         ("/v1/responses", "/v1/messages"),
     ),
+    *GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES,
     *GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES,
     *GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES,
 )
