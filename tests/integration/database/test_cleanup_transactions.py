@@ -107,13 +107,15 @@ async def test_delete_batch_survives_witnessed_lock_past_transaction_default(cap
             setup.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
-async def test_size_rule_deletes_the_oldest_rows_in_steps_until_the_live_estimate_is_under_the_target(
+async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does_not_refire_after_vacuum(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
-    Deleting rows never shrinks the table file, so the size pass must stop on the live-bytes estimate from
-    pg_stat_user_tables, not on pg_total_relation_size, and it must take the oldest rows first and keep the
-    tool index on the same cutoff.
+    Deleting rows never shrinks the table file, so the size pass must stop on live bytes, not on
+    pg_total_relation_size, taking the oldest rows first and keeping the tool index on the same cutoff. Once
+    autovacuum has turned the deleted rows into free space the catalog no longer shows them as dead, and the
+    files still measure the same; the next check must read what the last run freed from its saved count and
+    leave the table alone instead of calling the whole file live again.
     """
     caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
     schema: Final = f"integration_{uuid.uuid4().hex}"
@@ -124,10 +126,12 @@ async def test_size_rule_deletes_the_oldest_rows_in_steps_until_the_live_estimat
     )
     logs: Final = sql.Identifier(schema, "LiteLLM_SpendLogs")
     index: Final = sql.Identifier(schema, "LiteLLM_SpendLogToolIndex")
+    config: Final = sql.Identifier(schema, "LiteLLM_Config")
     seeded: Final = 6000
     now: Final = datetime.now(timezone.utc).replace(tzinfo=None)
     stats_sql: Final = (
-        "SELECT sum(n_live_tup)::int AS live, sum(n_dead_tup)::int AS dead FROM pg_stat_user_tables "
+        "SELECT sum(n_live_tup)::int AS live, sum(n_dead_tup)::int AS dead, sum(n_tup_ins)::int AS inserted "
+        "FROM pg_stat_user_tables "
         "WHERE schemaname = %s AND relname IN ('LiteLLM_SpendLogs', 'LiteLLM_SpendLogToolIndex')"
     )
     with psycopg.connect(url, autocommit=True) as setup:
@@ -145,6 +149,7 @@ async def test_size_rule_deletes_the_oldest_rows_in_steps_until_the_live_estimat
                     "PRIMARY KEY (request_id, tool_name))"
                 ).format(index)
             )
+            setup.execute(sql.SQL("CREATE TABLE {} (param_name text PRIMARY KEY, param_value jsonb)").format(config))
             setup.execute(
                 sql.SQL(
                     "INSERT INTO {} SELECT 'req-' || lpad(i::text, 6, '0'), %s - (%s - i) * interval '1 minute', "
@@ -157,11 +162,23 @@ async def test_size_rule_deletes_the_oldest_rows_in_steps_until_the_live_estimat
                     "INSERT INTO {} SELECT request_id, 'tool', \"startTime\" FROM {} WHERE right(request_id, 1) = '0'"
                 ).format(index, logs)
             )
+            index_rows: Final = seeded // 10
+            inserts_deadline: Final = time.monotonic() + 10
+            while True:
+                # a backend only ships its pending row counters when it runs another command, so give the
+                # seeding connection one; the size rule rolls its count forward from n_tup_ins, which must
+                # show the seed inserts before ANALYZE sets the live estimate or the two add up to double
+                setup.execute("SELECT 1")
+                (inserts,) = read_rows(stats_sql, (schema,))
+                if inserts["inserted"] == seeded + index_rows:
+                    break
+                assert time.monotonic() < inserts_deadline, f"row statistics never saw the seed inserts: {inserts}"
+                await asyncio.sleep(0.1)
             setup.execute(sql.SQL("ANALYZE {}").format(logs))
             setup.execute(sql.SQL("ANALYZE {}").format(index))
-            index_rows: Final = seeded // 10
             stats_deadline: Final = time.monotonic() + 10
             while True:
+                setup.execute("SELECT 1")
                 (stats,) = read_rows(stats_sql, (schema,))
                 if stats["live"] == seeded + index_rows:
                     break
@@ -175,21 +192,25 @@ async def test_size_rule_deletes_the_oldest_rows_in_steps_until_the_live_estimat
             allocated_before: Final = int(str(allocated["allocated"]))
             assert allocated_before > 0
 
-            database: Final = Prisma(datasource={"url": scoped_url})
-            await database.connect()
-            try:
-                cleanup: Final = SpendLogCleanup(
-                    general_settings={
-                        # trigger below what is there, clean down to half of it
-                        "maximum_spend_logs_size": str(allocated_before * 3 // 4),
-                        "maximum_spend_logs_cleanup_target_size": str(allocated_before // 2),
-                        "maximum_spend_logs_cleanup_batch_size": 100,
-                    }
-                )
-                cleanup.pod_lock_manager = None
-                await cleanup.cleanup_spend_logs_by_size(PartitionConnection(database))
-            finally:
-                await database.disconnect()
+            cleanup: Final = SpendLogCleanup(
+                general_settings={
+                    # trigger below what is there, clean down to half of it
+                    "maximum_spend_logs_size": str(allocated_before * 3 // 4),
+                    "maximum_spend_logs_cleanup_target_size": str(allocated_before // 2),
+                    "maximum_spend_logs_cleanup_batch_size": 100,
+                }
+            )
+            cleanup.pod_lock_manager = None
+
+            async def size_check() -> None:
+                database: Final = Prisma(datasource={"url": scoped_url})
+                await database.connect()
+                try:
+                    await cleanup.cleanup_spend_logs_by_size(PartitionConnection(database))
+                finally:
+                    await database.disconnect()
+
+            await size_check()
 
             remaining: Final = read_rows(
                 f'SELECT request_id FROM {logs.as_string(setup)} ORDER BY "startTime"',
@@ -215,8 +236,34 @@ async def test_size_rule_deletes_the_oldest_rows_in_steps_until_the_live_estimat
             )
             assert "target_reached=true" in summary
             assert f"allocated_before={allocated_before}" in summary
-            # the file did not shrink: that is the whole reason the estimate exists
+            # the file did not shrink: that is the whole reason the reclaimable count exists
             assert f"allocated_after={allocated_before}" in summary
             assert "VACUUM FULL or pg_repack" in summary
+
+            deletes_deadline: Final = time.monotonic() + 10
+            while True:
+                (after_deletes,) = read_rows(stats_sql, (schema,))
+                if after_deletes["dead"] == 3300:
+                    break
+                assert time.monotonic() < deletes_deadline, f"row statistics never saw the deletes: {after_deletes}"
+                await asyncio.sleep(0.1)
+            setup.execute(sql.SQL("VACUUM (ANALYZE) {}").format(logs))
+            setup.execute(sql.SQL("VACUUM (ANALYZE) {}").format(index))
+            vacuum_deadline: Final = time.monotonic() + 10
+            while True:
+                (after_vacuum,) = read_rows(stats_sql, (schema,))
+                if after_vacuum["dead"] == 0:
+                    break
+                assert time.monotonic() < vacuum_deadline, f"row statistics never caught up with VACUUM: {after_vacuum}"
+                await asyncio.sleep(0.1)
+            caplog.clear()
+
+            await size_check()
+
+            (still_there,) = read_rows(f"SELECT count(*)::int AS n FROM {logs.as_string(setup)}", ())
+            assert still_there["n"] == 3000, (
+                "the second check deleted rows the first one had already brought under the limit"
+            )
+            assert any("is under maximum_spend_logs_size" in record.getMessage() for record in caplog.records)
         finally:
             setup.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))

@@ -8268,15 +8268,15 @@ class ProxyConfig:
                 )
                 verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
 
-        if not _wants_size_check_job(general_settings):
-            if scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None:
-                scheduler.remove_job(_SPEND_LOG_SIZE_CHECK_JOB_ID)
+        if not _wants_size_check_job(general_settings):  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
+            if scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None:  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+                scheduler.remove_job(_SPEND_LOG_SIZE_CHECK_JOB_ID)  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
                 verbose_proxy_logger.info("Removed existing spend log size check job")
             return
         size_trigger: Final = self._spend_log_size_check_trigger()
         if size_trigger is None:
             return
-        scheduler.add_job(
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
             SpendLogCleanup().cleanup_spend_logs_by_size,
             size_trigger,
             args=[prisma_client],
@@ -8290,7 +8290,7 @@ class ProxyConfig:
         return self._staggered_interval_trigger(
             _SPEND_LOG_SIZE_CHECK_JOB_ID,
             "maximum_spend_logs_size_check_interval",
-            general_settings.get("maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL),
+            general_settings.get("maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # general_settings is an untyped module dict
         )
 
     @staticmethod
@@ -8307,7 +8307,7 @@ class ProxyConfig:
                 job_id=job_id,
                 trigger=IntervalTrigger(seconds=interval_seconds),
                 period_seconds=interval_seconds,
-                settings=parse_stagger_settings(general_settings),
+                settings=parse_stagger_settings(general_settings),  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
             )
         except (ValueError, OverflowError):
             verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
@@ -8474,7 +8474,7 @@ class ProxyConfig:
         wants_job: Final = _wants_cleanup_jobs(self.settings)
         has_job: Final = scheduler is not None and (
             scheduler.get_job(_SPEND_LOG_CLEANUP_JOB_ID) is not None
-            or scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None
+            or scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
         )
         baseline: Final = (
             self._last_cleanup_schedule_attempt
@@ -11630,7 +11630,7 @@ class ProxyStartupEvent:
                 if not isinstance(size_check_interval, str):
                     raise TypeError(size_check_interval)
                 size_check_seconds: Final = duration_in_seconds(size_check_interval)
-                scheduler.add_job(
+                scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
                     SpendLogCleanup().cleanup_spend_logs_by_size,
                     "interval",
                     seconds=size_check_seconds + random.randint(0, 60),

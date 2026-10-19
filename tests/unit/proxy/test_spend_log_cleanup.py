@@ -20,6 +20,9 @@ from litellm.constants import (
     SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+    SizeCleanupState,
+    StorageProbe,
+    advance_size_state,
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
     TableCleanupResult,
@@ -1680,17 +1683,29 @@ async def test_a_cleanup_delete_batch_renders_a_postgres_delete_span_for_its_tab
 # --- size rule (maximum_spend_logs_size) ---------------------------------------------------------------
 
 
-def _storage(allocated: int, live: int, dead: int) -> dict:
-    return {"allocated_bytes": allocated, "live_rows": live, "dead_rows": dead}
+def _storage(allocated: int, live: int, dead: int, inserted: int | None = None, deleted: int | None = None) -> dict:
+    return {
+        "allocated_bytes": allocated,
+        "live_rows": live,
+        "dead_rows": dead,
+        "inserted_total": live + dead if inserted is None else inserted,
+        "deleted_total": dead if deleted is None else deleted,
+    }
 
 
-def _wire_size_probes(db, storage_rows: list[dict], cutoff: datetime) -> None:
+def _wire_size_probes(
+    db, storage_rows: list[dict], cutoff: datetime, saved_state: SizeCleanupState | None = None
+) -> list[SizeCleanupState]:
     """
     Answer the size pass's catalog reads: the storage probe walks `storage_rows` one measurement per call
-    (repeating the last), the step-cutoff query returns `cutoff`, the remaining-rows probe returns 0.
+    (repeating the last), the step-cutoff query returns `cutoff`, the remaining-rows probe returns 0, and the
+    LiteLLM_Config row holds `saved_state`. Writes of that row land in the returned list instead of
+    db.execute_raw, so DELETE counts stay what tests configure.
     """
     measurements = iter(storage_rows)
     last = [storage_rows[-1]]
+    saves: list[SizeCleanupState] = []
+    deletes = db.execute_raw
 
     async def _query_raw(sql, *args):
         if "pg_total_relation_size" in sql:
@@ -1700,9 +1715,20 @@ def _wire_size_probes(db, storage_rows: list[dict], cutoff: datetime) -> None:
             return [row]
         if "OFFSET" in sql:
             return [{"startTime": cutoff}]
+        if '"LiteLLM_Config"' in sql:
+            return [{"state_json": saved_state.model_dump_json()}] if saved_state is not None else []
         return [{"remaining": 0}]
 
+    async def _execute_raw(sql, *args):
+        if '"LiteLLM_Config"' in sql:
+            saves.append(SizeCleanupState.model_validate_json(args[1]))
+            return 1
+        return await deletes(sql, *args)
+
     db.query_raw = AsyncMock(side_effect=_query_raw)
+    db.execute_raw = _execute_raw
+    db.deletes = deletes
+    return saves
 
 
 def _size_cleaner(settings: dict, **kwargs) -> SpendLogCleanup:
@@ -1759,7 +1785,7 @@ async def test_size_pass_under_the_limit_issues_no_delete():
 
     await _size_cleaner({}).cleanup_spend_logs_by_size(client)
 
-    assert db.execute_raw.await_count == 0
+    assert db.deletes.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -1784,7 +1810,7 @@ async def test_size_pass_deletes_oldest_first_in_steps_until_the_live_estimate_i
     with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
         await cleaner.cleanup_spend_logs_by_size(client)
 
-    deletes = [(call[0][0], call[0][1:]) for call in db.execute_raw.call_args_list]
+    deletes = [(call[0][0], call[0][1:]) for call in db.deletes.call_args_list]
     assert len(deletes) == 5
     assert 'DELETE FROM "LiteLLM_SpendLogs"' in deletes[0][0]
     assert 'WHERE "startTime" < $1' in deletes[0][0]
@@ -1811,7 +1837,7 @@ async def test_size_pass_stops_at_the_run_batch_cap_and_reports_how_far_above_th
     # 4 GiB over 4000 rows: 3584 rows must go to reach the 512 MiB target, the cap allows 3 batches
     db.execute_raw = AsyncMock(side_effect=[1000, 1000, 1000, 0])
     allocated = 4 * 1024**3
-    _wire_size_probes(db, [_storage(allocated, live=4000, dead=0)], cutoff=datetime.now(timezone.utc))
+    saves = _wire_size_probes(db, [_storage(allocated, live=4000, dead=0)], cutoff=datetime.now(timezone.utc))
     client = MagicMock()
     client.db = db
     cleaner = _size_cleaner(
@@ -1821,13 +1847,23 @@ async def test_size_pass_stops_at_the_run_batch_cap_and_reports_how_far_above_th
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await cleaner.cleanup_spend_logs_by_size(client)
 
-    assert db.execute_raw.await_count == 4
+    assert db.deletes.await_count == 4
     summary = next(r for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
     assert summary.levelno == logging.WARNING
     assert "outcome=batch_cap_reached" in summary.getMessage()
     assert "LiteLLM_SpendLogs (size rule): deleted=3000 stop_reason=batch_cap_reached" in summary.getMessage()
     # 1000 of 4000 rows left is 1 GiB live, 512 MiB above the target
     assert f"target_reached=false above_target={512 * 1024**2}" in summary.getMessage()
+    # the next check starts from what this run freed, with the deletes already counted out of n_tup_del
+    assert saves == [
+        SizeCleanupState(
+            allocated_bytes=allocated,
+            reclaimable_bytes=round(3000 * allocated / 4000),
+            bytes_per_row=allocated / 4000,
+            inserted_total=4000,
+            deleted_total=3000,
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -1842,8 +1878,83 @@ async def test_size_pass_skips_on_stale_row_statistics_instead_of_trusting_an_es
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await _size_cleaner({}).cleanup_spend_logs_by_size(client)
 
-    assert db.execute_raw.await_count == 0
+    assert db.deletes.await_count == 0
     assert any("row statistics are stale" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_size_pass_does_not_refire_after_autovacuum_forgets_the_rows_it_deleted():
+    """
+    The run before this one deleted 15,000 of 20,000 rows and saved what it freed. Autovacuum has since
+    turned those dead tuples into free space, so pg_stat_user_tables reports 5,000 live and 0 dead rows while
+    the files still measure the full 32 MB. Trusting the live share would call all 32 MB live and empty the
+    table; the saved count says 8 MB are live, under the limit, so nothing is deleted.
+    """
+    db = MagicMock()
+    _wire_tx(db)
+    db.execute_raw = AsyncMock(return_value=1000)
+    after_last_run = SizeCleanupState(
+        allocated_bytes=32_030_720,
+        reclaimable_bytes=24_015_000,
+        bytes_per_row=1601.0,
+        inserted_total=20_000,
+        deleted_total=15_000,
+    )
+    saves = _wire_size_probes(
+        db,
+        [_storage(32_030_720, live=5000, dead=0, inserted=20_000, deleted=15_000)],
+        cutoff=datetime.now(timezone.utc),
+        saved_state=after_last_run,
+    )
+    client = MagicMock()
+    client.db = db
+    cleaner = _size_cleaner({"maximum_spend_logs_size": "16MB", "maximum_spend_logs_cleanup_target_size": "10MB"})
+
+    await cleaner.cleanup_spend_logs_by_size(client)
+
+    assert db.deletes.await_count == 0
+    assert saves[0].reclaimable_bytes == 24_015_000
+
+
+_RUN_STATE = SizeCleanupState(
+    allocated_bytes=32_030_720,
+    reclaimable_bytes=24_015_000,
+    bytes_per_row=1601.0,
+    inserted_total=20_000,
+    deleted_total=15_000,
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "probe", "reclaimable_expected"),
+    [
+        (
+            "vacuum zeroed the dead rows, nothing else changed",
+            _storage(32_030_720, 5000, 0, 20_000, 15_000),
+            24_015_000,
+        ),
+        ("7000 new rows written into the free space", _storage(32_030_720, 12_000, 0, 27_000, 15_000), 12_808_000),
+        (
+            "7000 new rows that all grew the files",
+            _storage(32_030_720 + 7000 * 1601, 12_000, 0, 27_000, 15_000),
+            24_015_000,
+        ),
+        ("VACUUM FULL handed the free space back", _storage(8_015_720, 5000, 0, 20_000, 15_000), 0),
+        ("the retention job deleted 2000 more rows", _storage(32_030_720, 3000, 2000, 20_000, 17_000), 27_217_000),
+        (
+            "statistics reset: counters restart from the dead rows",
+            _storage(32_030_720, 5000, 1000, 5000, 1000),
+            5_338_453,
+        ),
+    ],
+)
+def test_advance_size_state_tracks_free_space_through_vacuum_inserts_and_other_deletes(
+    name, probe, reclaimable_expected
+):
+    advanced = advance_size_state(_RUN_STATE, StorageProbe(**probe))
+
+    assert advanced.reclaimable_bytes == reclaimable_expected, name
+    assert 0 <= probe["allocated_bytes"] - advanced.reclaimable_bytes <= probe["allocated_bytes"], name
 
 
 @pytest.mark.asyncio
@@ -1860,7 +1971,7 @@ async def test_size_only_run_leaves_the_age_rules_to_the_retention_job():
 
     await cleaner.cleanup_spend_logs_by_size(client)
 
-    tables = {call[0][0].split('"')[1] for call in db.execute_raw.call_args_list}
+    tables = {call[0][0].split('"')[1] for call in db.deletes.call_args_list}
     assert tables == {"LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"}
 
 
@@ -1914,7 +2025,7 @@ async def test_partitioned_size_pass_drops_the_oldest_partitions_first_and_skips
 
     partition_manager.drop_oldest_partitions_while.assert_awaited_once()
     assert verdicts == [False]
-    assert db.execute_raw.await_count == 0
+    assert db.deletes.await_count == 0
     summary = next(r.getMessage() for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
     assert "partitions_dropped=1" in summary
     assert "target_reached=true" in summary
