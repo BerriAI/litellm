@@ -276,6 +276,15 @@ impl Record {
         (200..300).contains(&self.outcome.status) && !self.outcome.interrupted
     }
 
+    /// The request reached a provider and was cut off before it reported usage, as when the
+    /// client goes away while the provider works. The provider may still bill it, so what it
+    /// cost is unknown and reservations should be kept rather than returned.
+    pub fn cut_off_after_dispatch(&self) -> bool {
+        self.outcome.interrupted
+            && self.outcome.upstream_started_at.is_some()
+            && self.outcome.usage.is_none()
+    }
+
     pub fn duration(&self) -> Duration {
         self.outcome
             .ended_at

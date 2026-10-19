@@ -41,10 +41,15 @@ async fn upstream() -> (String, Arc<AtomicUsize>) {
     let counted = calls.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let app = Router::new().fallback(move |_: Request<Body>| {
+    let app = Router::new().fallback(move |request: Request<Body>| {
         let counted = counted.clone();
         async move {
             counted.fetch_add(1, Ordering::SeqCst);
+            // A request whose prompt says "hold" stays with the provider until the client leaves.
+            let body = to_bytes(request.into_body(), 1 << 20).await.unwrap();
+            if body.windows(4).any(|window| window == b"hold") {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
             ([(CONTENT_TYPE, "application/json")], MESSAGE).into_response()
         }
     });
@@ -160,6 +165,10 @@ async fn send_as(app: &Router, token: &str, model: &str, end_user: Option<&str>)
     if let Some(end_user) = end_user {
         body["metadata"] = json!({"user_id": end_user});
     }
+    send_body(app, token, body).await
+}
+
+async fn send_body(app: &Router, token: &str, body: Value) -> (u16, Value) {
     let response = app
         .clone()
         .oneshot(
@@ -338,6 +347,64 @@ async fn reservations_hold_back_concurrent_requests() {
     let mut statuses = [first.0, second.0];
     statuses.sort_unstable();
     assert_eq!(statuses, [200, 422]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn requests_refused_after_admission_return_their_reservation() {
+    // The reservation takes the whole budget; a body the gateway rejects after the hooks ran
+    // must hand it back, or the key stays blocked.
+    let key = key(
+        None,
+        KeyBudgets {
+            key: budget(0.0, 0.0001),
+            ..KeyBudgets::default()
+        },
+    );
+    let gateway = gateway(vec![("sk-key", key)], None, "").await;
+    let invalid = json!({
+        "model": "claude",
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hi"}],
+        "cache": {"ttl": -1},
+    });
+    let (status, body) = send_body(&gateway.app, "sk-key", invalid).await;
+    assert_eq!(status, 400, "{body}");
+    settled().await;
+    let (status, body) = send(&gateway.app, "sk-key", "claude").await;
+    assert_eq!(status, 200, "{body}");
+}
+
+#[rstest]
+#[tokio::test]
+async fn requests_cut_off_after_reaching_the_provider_keep_their_reservation() {
+    // The provider may bill a request the client walked away from, so its reservation is kept
+    // rather than refunded: the next request finds the budget taken.
+    let key = key(
+        None,
+        KeyBudgets {
+            key: budget(0.0, 0.0001),
+            ..KeyBudgets::default()
+        },
+    );
+    let gateway = gateway(vec![("sk-key", key)], None, "").await;
+    let held = json!({
+        "model": "claude",
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hold"}],
+    });
+    let request = tokio::spawn({
+        let app = gateway.app.clone();
+        async move { send_body(&app, "sk-key", held).await }
+    });
+    while gateway.calls.load(Ordering::SeqCst) == 0 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    request.abort();
+    let _ = request.await;
+    settled().await;
+    let (status, body) = send(&gateway.app, "sk-key", "claude").await;
+    assert_eq!(status, 422, "{body}");
 }
 
 fn redis_url() -> Option<String> {
