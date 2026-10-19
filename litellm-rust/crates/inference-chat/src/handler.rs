@@ -1,3 +1,4 @@
+use litellm_host::interceptors::InterceptPoints;
 use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use std::time::Duration;
 
@@ -170,6 +171,7 @@ pub(super) fn outbound_request(
 
 #[cfg(test)]
 mod tests {
+    use litellm_host::protocol::InterceptRequest;
     use std::sync::Mutex;
 
     use rstest::rstest;
@@ -192,6 +194,23 @@ mod tests {
     }
 
     impl Interceptors<Error> for RecordingHooks {
+        async fn handle(&self, request: InterceptRequest) -> Result<(), Error> {
+            match request {
+                InterceptRequest::BeforeProviderRequest {
+                    wire,
+                    context,
+                    reply,
+                } => reply.send(self.before_provider_request(*wire, *context).await?),
+                InterceptRequest::AfterProviderResponse { raw, reply } => {
+                    reply.send(self.after_provider_response(raw).await?);
+                }
+                other => other.pass_through(),
+            }
+            Ok(())
+        }
+    }
+
+    impl RecordingHooks {
         async fn before_provider_request(
             &self,
             wire: WireRequest,

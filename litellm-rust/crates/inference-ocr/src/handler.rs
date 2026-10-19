@@ -1,4 +1,5 @@
 use futures_util::future::BoxFuture;
+use litellm_host::interceptors::InterceptPoints;
 use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
 use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use litellm_llms::base_llm::ocr::{

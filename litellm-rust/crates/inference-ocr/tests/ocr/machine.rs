@@ -1,3 +1,4 @@
+use litellm_host::interceptors::InterceptPoints;
 use std::{
     sync::{
         Arc,
@@ -7,7 +8,7 @@ use std::{
 };
 
 use litellm_host::{
-    interceptors::{Interceptors, WireRequest},
+    interceptors::WireRequest,
     machine::{HostFailure, Machine, MachineStep},
     protocol::{HostRequest, InterceptRequest},
 };

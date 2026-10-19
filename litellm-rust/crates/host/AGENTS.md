@@ -4,7 +4,7 @@
 | --- | --- | --- | --- |
 | Input and output conversion | `Protocol::{Request, Response, StreamHead, Chunk, Error}` | Typed input. `ResponseEncoder` and `StreamEncoder` produce HTTP values | `PythonBinding` decodes prepared arguments, encodes public values and maps native errors |
 | Host services | `Protocol::HostCall`, `HostServices::call` | `host-native::services::HostCallHandler` answers typed calls. `()` handles protocols without host calls | `PythonHostCalls` invokes retained Python objects. It may share an owner with the binding |
-| Active hooks | `Interceptors::{before_provider_request, after_provider_response}` and `hooks::CallHooks<Runtime>` | Request interception and fallible execution callbacks | `PythonCallHooks` also prepares arguments, transforms public responses and receives stream callbacks |
+| Active hooks | `Interceptors::handle` over `InterceptRequest`, typed calls through `InterceptPoints`, and `hooks::CallHooks<Runtime>` | Request interception and fallible execution callbacks | `PythonCallHooks` also prepares arguments, transforms public responses and receives stream callbacks |
 | Passive observation | `observation::ObservationSender` | Queued execution and lifecycle snapshots, retained by the response body | Public Python callbacks remain active hooks with their existing failure policy |
 | Runtime driving | `Machine`, `HostRequest::{HostCall, Intercept, Stream}` | Body polling controls demand | Native polling and inline caller-task Python awaits control progress |
 
@@ -18,7 +18,12 @@ Each driver owns terminal dispatch. Hooks can change or fail execution. Passive 
 
 `hooks.rs` owns the call-stage interface and its runtime-associated types. It contains no Python types or legacy callback policy. A runtime supplies its context and continuation representation through `HookRuntime`
 
-`protocol.rs` owns `Protocol` and suspension messages, including `InterceptRequest` and `StreamDelivery`. `call.rs` owns route outputs and their adaptation into a hosted machine. Rust service handling belongs in `host-native::services`. Coroutine channel handles stay in `machine/context.rs`
+`protocol.rs` owns `Protocol` and suspension messages, including `InterceptRequest` and `StreamDelivery`.
+
+`InterceptRequest` is the only list of hook points. Each variant carries its payload and a typed reply, and is either a transform (answered with a value of its input's type) or a notification (answered with `()`). Adding a point means one variant, its `pass_through` and `relay` arms, and its typed call on `InterceptPoints`. Nothing else in this crate or the drivers changes per point
+
+An `Interceptors` implementer writes one `handle` that answers the points it cares about and ends with `other => other.pass_through()`. Routes raise points through `InterceptPoints` and never build an `InterceptRequest` themselves. `ChannelInterceptors` yields each point to the host as `HostRequest::Intercept`, and a driver answers it by passing the whole request to its own `handle`, with no arm per point
+ `call.rs` owns route outputs and their adaptation into a hosted machine. Rust service handling belongs in `host-native::services`. Coroutine channel handles stay in `machine/context.rs`
 
 Rust handlers answer suspensions through `litellm-host-native::Driver`, which `litellm-host-http` and `litellm_host_native::in_process` share. `in_process::Host` is an assembly of services, interceptors, stream consumer and optional observation publisher. It is not a trait mirroring every suspension. Use `run_hosted` to preserve the distinction between stream completion and detachment
 
@@ -26,4 +31,4 @@ Keep API policy in gateway-inference and python-bridge, and legacy callback poli
 
 Interceptors run inline and can rewrite values or fail execution. Observers consume owned `CallEvent` snapshots from `observation_channel`. Its bounded `ObservationSender` never waits for delivery and counts events dropped when the queue is full or closed. The host owns receiver processing and draining. Pass the same publisher to machine construction and the driver when one receiver should collect execution and lifecycle events. Legacy Python callbacks retain their existing awaited, fallible behavior through the Python adapter
 
-`ExecutionFacts` and `ResultSource` describe execution without pricing or budget policy. `Interceptors::result_ready` delivers these facts through an awaited `InterceptRequest::ResultReady`. Hosts receive them before response transformation or stream delivery. `ExecutionEvent::ResultReady` is the matching lifecycle event and can also be published as a passive snapshot. Accounting must consume the awaited path rather than a lossy observation queue
+`ExecutionFacts` and `ResultSource` describe execution without pricing or budget policy. `InterceptPoints::result_ready` delivers these facts through an awaited `InterceptRequest::ResultReady`. Hosts receive them before response transformation or stream delivery. `ExecutionEvent::ResultReady` is the matching lifecycle event and can also be published as a passive snapshot. Accounting must consume the awaited path rather than a lossy observation queue
