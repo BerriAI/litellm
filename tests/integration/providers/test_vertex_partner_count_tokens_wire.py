@@ -7,8 +7,10 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -16,10 +18,11 @@ import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually
-from integration._support.process import owned_proxy_process
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
+from tokenizers import Regex, Tokenizer, models, pre_tokenizers
 
 _BACKEND: Final = "claude-sonnet-4-6"
 _PROJECT: Final = "scripted-project"
@@ -35,9 +38,19 @@ _REPLY_TEXT: Final = "scripted reply"
 _OWNED_MODEL: Final = "partner-claude"
 _OWNED_UNREACHABLE_MODEL: Final = "partner-claude-unreachable"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_GLM_BACKEND: Final = "zai-org/glm-5.2-maas"
+_MISTRAL_BACKEND: Final = "mistral-medium-3"
+_LLAMA_BACKEND: Final = "meta/llama-4-maverick-17b-128e-instruct-maas"
+_LLAMA_COUNT_TARGET: Final = (
+    f"/v1/projects/{_PROJECT}/locations/{_LOCATION}/publishers/meta/models/count-tokens:rawPredict"
+)
+_COUNTED_TEXT: Final = "Count this message"
+_TOKENIZER_REPO: Final = "scripted/char-tokenizer"
+_TOKENIZER_TARGET: Final = f"/{_TOKENIZER_REPO}/resolve/main/tokenizer.json"
+_TOKENIZER_HEADERS: Final = MappingProxyType({"X-Repo-Commit": "0" * 40, "ETag": '"scripted-char-tokenizer"'})
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 
-_MESSAGES: Final[list[JsonValue]] = [{"role": "user", "content": "Count this message"}]
+_MESSAGES: Final[list[JsonValue]] = [{"role": "user", "content": _COUNTED_TEXT}]
 _SYSTEM: Final = "You are a terse assistant that answers in one sentence"
 _SYSTEM_BLOCKS: Final[list[JsonValue]] = [
     {"type": "text", "text": "You are a terse assistant"},
@@ -115,16 +128,16 @@ def _counted(_request: Request) -> Reply:
     return Reply(body=json.dumps({"input_tokens": _PEER_COUNT}).encode())
 
 
-def _rejected(status: int) -> Reply:
+def _rejected(status: int, error_type: str = "invalid_request_error") -> Reply:
     return Reply(
         status=status,
-        body=json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": _REJECTION}}).encode(),
+        body=json.dumps({"type": "error", "error": {"type": error_type, "message": _REJECTION}}).encode(),
     )
 
 
-def _rejecting(status: int) -> Callable[[Request], Reply]:
+def _rejecting(status: int, error_type: str = "invalid_request_error") -> Callable[[Request], Reply]:
     def count(_request: Request) -> Reply:
-        return _rejected(status)
+        return _rejected(status, error_type)
 
     return count
 
@@ -222,6 +235,78 @@ def _local_count(gateway: Gateway, body: Mapping[str, JsonValue]) -> int:
     assert payload["tokenizer_type"] != "vertex_ai_partner_models", response.text
     assert isinstance(total, int) and 0 < total != _PEER_COUNT, response.text
     return total
+
+
+@dataclass(frozen=True, slots=True)
+class _CountRoute:
+    path: Callable[[str], str]
+    body: Callable[[str], dict[str, JsonValue]]
+    rejection: Callable[[str], dict[str, JsonValue]]
+    count_field: str
+    params: Mapping[str, str] = MappingProxyType({})
+
+    def send(self, gateway: Gateway, model: str) -> httpx.Response:
+        return gateway.request("POST", self.path(model), self.body(model), params=self.params)
+
+
+_MESSAGES_ROUTE: Final = _CountRoute(
+    path=lambda _model: "/v1/messages/count_tokens",
+    body=_bare,
+    rejection=lambda message: {"type": "error", "error": {"type": "invalid_request_error", "message": message}},
+    count_field="input_tokens",
+)
+_RESPONSES_ROUTE: Final = _CountRoute(
+    path=lambda _model: "/v1/responses/input_tokens",
+    body=lambda model: {"model": model, "input": _COUNTED_TEXT},
+    rejection=lambda message: {
+        "error": {"message": message, "type": "invalid_request_error", "param": None, "code": None}
+    },
+    count_field="input_tokens",
+)
+_GOOGLE_ROUTE: Final = _CountRoute(
+    path=lambda model: f"/v1beta/models/{model}:countTokens",
+    body=lambda _model: {"contents": [{"role": "user", "parts": [{"text": _COUNTED_TEXT}]}]},
+    rejection=lambda message: {"error": {"code": 400, "message": message, "status": "INVALID_ARGUMENT"}},
+    count_field="totalTokens",
+)
+_UTILS_ROUTE: Final = _CountRoute(
+    path=lambda _model: "/utils/token_counter",
+    body=_bare,
+    rejection=lambda message: {
+        "error": {"message": message, "type": "token_counting_error", "param": "model", "code": "400"}
+    },
+    count_field="total_tokens",
+    params=MappingProxyType({"call_endpoint": "true"}),
+)
+_COUNT_ROUTES: Final = (_MESSAGES_ROUTE, _RESPONSES_ROUTE, _GOOGLE_ROUTE, _UTILS_ROUTE)
+
+
+def _error_message(payload: Mapping[str, JsonValue]) -> str:
+    error: Final = payload.get("error")
+    assert isinstance(error, dict), payload
+    message: Final = error.get("message")
+    assert isinstance(message, str), payload
+    return message
+
+
+def _route_count(gateway: Gateway, route: _CountRoute, model: str) -> tuple[int, JsonValue]:
+    response: Final = route.send(gateway, model)
+    return response.status_code, _JSON_OBJECT.validate_json(response.content).get(route.count_field)
+
+
+def _char_tokenizer() -> bytes:
+    tokenizer: Final = Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = pre_tokenizers.Split(Regex("."), behavior="isolated")
+    return tokenizer.to_str().encode()
+
+
+def _tokenizer_hub(tokenizer: bytes) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.target == _TOKENIZER_TARGET:
+            return Reply(body=tokenizer, headers=_TOKENIZER_HEADERS)
+        return Reply(status=404, body=json.dumps({"error": f"unscripted target {request.target}"}).encode())
+
+    return respond
 
 
 def _closed_port_url() -> str:
@@ -374,9 +459,87 @@ def test_responses_input_tokens_surfaces_the_peer_error(gateway: Gateway) -> Non
             {"model": model, "input": "Count this message", "instructions": "Be terse", "tools": _RESPONSES_TOOLS},
         )
         assert response.status_code == 400, response.text
-        assert "input_tokens" not in response.text, response.text
+        assert response.json() == _RESPONSES_ROUTE.rejection(_REJECTION), response.text
         (sent,) = _counted_bodies(wire)
         assert sent["tools"] == _RESPONSES_TOOLS, sent
+
+
+def test_responses_input_tokens_types_a_peer_error_by_its_status(gateway: Gateway) -> None:
+    with wire_server(_peer(_rejecting(404, "not_found_error"))) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire.url)
+        response: Final = _RESPONSES_ROUTE.send(gateway, model)
+        assert response.status_code == 404, response.text
+        assert response.json() == _RESPONSES_ROUTE.rejection(_REJECTION), response.text
+        assert _counted_bodies(wire) == (_PEER_BARE,)
+
+
+@pytest.mark.parametrize(
+    ("backend", "route"),
+    [
+        pytest.param(_GLM_BACKEND, _MESSAGES_ROUTE, id="glm-messages"),
+        pytest.param(_GLM_BACKEND, _RESPONSES_ROUTE, id="glm-responses"),
+        pytest.param(_GLM_BACKEND, _GOOGLE_ROUTE, id="glm-google"),
+        pytest.param(_GLM_BACKEND, _UTILS_ROUTE, id="glm-utils"),
+        pytest.param(_MISTRAL_BACKEND, _MESSAGES_ROUTE, id="mistral-messages"),
+    ],
+)
+def test_partner_without_a_count_route_answers_400_without_calling_vertex(
+    gateway: Gateway, backend: str, route: _CountRoute
+) -> None:
+    with wire_server(_peer()) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire.url, model=f"vertex_ai/{backend}")
+        response: Final = route.send(gateway, model)
+        assert response.status_code == 400, response.text
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        message: Final = _error_message(payload)
+        assert backend in message, message
+        assert payload == route.rejection(message), response.text
+        assert wire.drain() == ()
+
+
+def test_llama_count_still_reaches_the_meta_count_route(gateway: Gateway) -> None:
+    with wire_server(_peer()) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire.url, model=f"vertex_ai/{_LLAMA_BACKEND}")
+        response: Final = _count(gateway, _bare(model))
+        assert _payload(response) == {"input_tokens": _PEER_COUNT}, response.text
+        (sent,) = _count_bodies(wire.drain(), _LLAMA_COUNT_TARGET)
+        assert sent["messages"] == _MESSAGES, sent
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_custom_tokenizer_partner_counts_locally_on_every_count_route(gateway: Gateway, tmp_path: Path) -> None:
+    environment: Final = {"HF_HOME": str(tmp_path / "hf-home")}
+    with (
+        wire_server(_tokenizer_hub(_char_tokenizer())) as hub,
+        wire_server(_peer()) as vertex,
+        owned_proxy_process(gateway, tmp_path, {**environment, "HF_ENDPOINT": hub.url}) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(
+            owned.gateway,
+            scenario,
+            vertex.url,
+            model=f"vertex_ai/{_GLM_BACKEND}",
+            model_info={"custom_tokenizer": {"identifier": _TOKENIZER_REPO, "revision": "main", "auth_token": None}},
+        )
+        local: Final = _payload(
+            owned.gateway.request("POST", "/utils/token_counter", _bare(model), params={"call_endpoint": "false"})
+        )
+        assert local["tokenizer_type"] == "huggingface_tokenizer", local
+        total: Final = local["total_tokens"]
+        assert isinstance(total, int) and total >= len(_COUNTED_TEXT), local
+        counts: Final = tuple(_route_count(owned.gateway, route, model) for route in _COUNT_ROUTES)
+        assert counts == ((200, total),) * len(_COUNT_ROUTES), counts
+        contents_only: Final = owned.gateway.request(
+            "POST",
+            "/utils/token_counter",
+            {"model": model, "contents": [{"role": "user", "parts": [{"text": _COUNTED_TEXT}]}]},
+            params={"call_endpoint": "true"},
+        )
+        assert contents_only.status_code == 400, contents_only.text
+        assert _GLM_BACKEND in _error_message(_JSON_OBJECT.validate_json(contents_only.content)), contents_only.text
+        assert vertex.drain() == ()
+        assert {request.target for request in hub.drain()} >= {_TOKENIZER_TARGET}
 
 
 def test_gemini_count_tokens_route_reaches_the_partner_peer(gateway: Gateway) -> None:
