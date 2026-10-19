@@ -5,7 +5,7 @@ Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -539,7 +539,8 @@ class WebSearchTransformation:
             result: SearchResponse from litellm.asearch()
 
         Returns:
-            Formatted text with Title, URL, Snippet for each result
+            Formatted text with Title, URL, Snippet for each result, or the response
+            without its provider_metadata (the caller's billing envelope) when there are no results
         """
         # Convert SearchResponse to string
         if hasattr(result, "results") and result.results:
@@ -548,6 +549,9 @@ class WebSearchTransformation:
                 [f"Title: {r.title}\nURL: {r.url}\nSnippet: {r.snippet}" for r in result.results]
             )
         else:
-            search_result_text = str(result)
+            fields: Final[Mapping[str, object]] = dict(result)
+            search_result_text = " ".join(
+                f"{key}={value!r}" for key, value in fields.items() if key != "provider_metadata"
+            )
 
         return search_result_text

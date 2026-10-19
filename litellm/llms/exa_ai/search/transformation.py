@@ -21,6 +21,7 @@ from litellm.secret_managers.main import get_secret_str
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _STRS: Final = TypeAdapter(Iterable[str], config=ConfigDict(hide_input_in_errors=True))
+_RESULT_EXTRAS: Final = (("highlights", "highlights"), ("highlightScores", "highlight_scores"), ("score", "score"))
 
 
 class _ExaAISearchRequestRequired(TypedDict):
@@ -173,6 +174,9 @@ class ExaAISearchConfig(BaseSearchConfig):
         - results[].summary → SearchResult.snippet (fallback when "text" and "highlights" are absent)
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
+        - results[].highlights / highlightScores / score → SearchResult.highlights / highlight_scores / score,
+          each set only when Exa returned it
+        - every top-level key except results (requestId, costDollars, ...) → SearchResponse.provider_metadata
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -197,11 +201,15 @@ class ExaAISearchConfig(BaseSearchConfig):
                     or "",
                     "date": result.get("publishedDate"),  # ISO 8601 datetime string
                     "last_updated": None,  # Exa AI doesn't provide last_updated in response
+                    **{field: result[key] for key, field in _RESULT_EXTRAS if key in result},
                 }
             )
             results.append(search_result)
 
-        return SearchResponse(
-            results=results,
-            object="search",
+        return SearchResponse.model_validate(
+            {
+                "results": results,
+                "object": "search",
+                "provider_metadata": {key: value for key, value in response_json.items() if key != "results"},
+            }
         )
