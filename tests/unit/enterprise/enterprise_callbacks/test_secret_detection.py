@@ -270,7 +270,9 @@ def test_keys_over_a_list_build_one_bounded_context(monkeypatch: pytest.MonkeyPa
     assert max(len(line) for line in scans[0].splitlines()) == longest
 
 
-def test_long_multi_line_tool_strings_are_scanned_as_their_own_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_long_multi_line_tool_strings_are_scanned_in_bounded_runs_beside_their_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     scans: Final[list[str]] = []
     guardrail: Final = _guardrail()
     scan: Final = guardrail.scan_message_for_secrets
@@ -281,9 +283,15 @@ def test_long_multi_line_tool_strings_are_scanned_as_their_own_lines(monkeypatch
 
     monkeypatch.setattr(guardrail, "scan_message_for_secrets", recorded_scan)
     code: Final = "\n".join(f"const value{i} = compute({i}); // step {i}" for i in range(2000))
-    payload: Final = {"password": "hunter2brahms9x\nsecond", "content": f"AWS_ACCESS_KEY_ID={AWS_KEY}\n{code}"}
+    padding: Final = "a" * 5000
+    payload: Final = {
+        "password": "hunter2brahms9x\nsecond",
+        "secret": f"{padding}\nzq7Lm2Xv9Rt4Kp\nthird\n{padding}",
+        "content": f"AWS_ACCESS_KEY_ID={AWS_KEY}\n{code}",
+    }
     assert guardrail.redact_tool_payload(payload) == {
         "password": "[REDACTED]",
+        "secret": "[REDACTED]\n[REDACTED]",
         "content": f"AWS_ACCESS_KEY_ID=[REDACTED]\n{code}",
     }
     assert max(len(line) for line in scans[0].splitlines()) < len(code)

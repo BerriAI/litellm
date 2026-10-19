@@ -21,6 +21,7 @@ import tempfile
 from collections import OrderedDict
 from collections.abc import Generator, Iterator, Sequence
 from contextvars import ContextVar
+from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 
 from pydantic import JsonValue, TypeAdapter
@@ -458,8 +459,10 @@ _JSON_STRING: Final = TypeAdapter(str)
 
 _KEY_CONTEXT: Final = 64
 
-# Longest JSON line scanned for a multi-line tool string. Escaping puts the whole string on that one line, and
-# detect-secrets regexes backtrack across it, so a longer multi-line string is scanned as its own lines only.
+# Longest JSON line scanned for a multi-line tool string. Escaping puts the whole string on one line, and
+# detect-secrets regexes backtrack across it, so a longer multi-line string is cut into runs of whole lines,
+# each scanned as its own JSON line beside the key. Every run holds at least two lines, so the high-entropy
+# detectors, which match only a quoted string made wholly of their charset, never judge a lone line.
 _JSON_LINE_LIMIT: Final = 4096
 
 # A detector can stop a match inside an escape of a JSON-escaped line, as at the backslash of \".
@@ -570,9 +573,31 @@ def _json_line(context: str | None, text: str) -> str:
     return value if context is None else f'"{context}": {value}'
 
 
-def _scanned_json_line(context: str | None, text: str) -> str | None:
+def _json_lines(context: str | None, text: str) -> Iterator[str]:
+    """Yield ``text`` as one JSON line, or a long multi-line ``text`` as JSON lines of two or more whole lines."""
     line: Final = _json_line(context, text)
-    return line if len(line) <= _JSON_LINE_LIMIT or len(text.splitlines()) < 2 else None
+    lines: Final = text.splitlines(keepends=True)
+    if len(line) <= _JSON_LINE_LIMIT or len(lines) < 2:
+        yield line
+        return
+    budget: Final = _JSON_LINE_LIMIT - len(_json_line(context, ""))
+    sizes: Final = (len(json.dumps(part, ensure_ascii=False)) - 2 for part in lines)
+    states: Final = itertools.accumulate(sizes, partial(_next_run_state, budget), initial=(0, 0, 0))
+    run_ids: Final = (state[0] for state in itertools.islice(states, 1, None))
+    runs: Final = tuple(
+        tuple(part for part, _ in run) for _, run in itertools.groupby(zip(lines, run_ids), key=lambda pair: pair[1])
+    )
+    whole_runs: Final = (*runs[:-2], runs[-2] + runs[-1]) if len(runs[-1]) < 2 else runs
+    for run in whole_runs:
+        yield _json_line(context, "".join(run[:-1]) + run[-1].splitlines()[0])
+
+
+def _next_run_state(budget: int, state: tuple[int, int, int], size: int) -> tuple[int, int, int]:
+    """Advance ``(run id, lines in run, escaped size of run)`` by one line of escaped ``size``."""
+    run_id, count, total = state
+    if count >= 2 and total + size > budget:
+        return run_id + 1, 1, size
+    return run_id, count + 1, total + size
 
 
 def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:
@@ -639,13 +664,15 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         return pattern.sub("[REDACTED]", text)
 
     def redact_tool_payload(self, payload: JsonValue) -> JsonValue:
-        """Redact secrets in a tool payload's string values, scanning each value alone and, unless it is a long
-        multi-line string, as its JSON line."""
+        """Redact secrets in a tool payload's string values, scanning each value alone and as its JSON lines."""
         fields: Final = tuple(iter_tool_json_fields(payload))
         texts: Final = tuple(text for _, text in fields)
         contexts: Final = {key: _key_context(key) for key in {key for key, _ in fields if key is not None}}
-        json_lines: Final = (_scanned_json_line(None if key is None else contexts[key], text) for key, text in fields)
-        keyed: Final = tuple(line for line in json_lines if line is not None)
+        keyed: Final = tuple(
+            itertools.chain.from_iterable(
+                _json_lines(None if key is None else contexts[key], text) for key, text in fields
+            )
+        )
         detected: Final = tuple(
             {**secret, "value": value}
             for secret in self.scan_message_for_secrets("\n".join((*texts, *keyed)))
