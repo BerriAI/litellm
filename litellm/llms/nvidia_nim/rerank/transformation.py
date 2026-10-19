@@ -33,7 +33,6 @@ class NvidiaNimRerankRequest(TypedDict, total=False):
     query: Required[NvidiaNimQueryObject]
     passages: Required[list[NvidiaNimPassageObject]]
     truncate: Literal["NONE", "END"]
-    top_k: int
 
 
 class NvidiaNimRankingResult(TypedDict):
@@ -69,7 +68,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
     SUPPORTED_PASSAGE_FIELDS: tuple[str, ...] = ("text",)
 
     def __init__(self) -> None:
-        pass
+        # Provider configs are created per request; retain the Cohere result
+        # limit here rather than forwarding unsupported top_k to NVIDIA.
+        self._client_side_top_n: int | None = None
 
     def _get_clean_model_name(self, model: str) -> str:
         """Strip 'nvidia_nim/' prefix from model name if present."""
@@ -136,8 +137,8 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         """
         Map Cohere/OpenAI rerank params to Nvidia NIM format.
 
-        Parameter mapping:
-        - top_n (Cohere) -> top_k (Nvidia)
+        Cohere's top_n is applied client-side: the NVIDIA retrieval endpoint
+        rejects the top_k field.
 
         Nvidia NIM specific params (passed through as-is from non_default_params):
         - truncate: How to truncate input if too long (NONE, END)
@@ -147,9 +148,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             "documents": documents,
         }
 
-        # Map Cohere's top_n to Nvidia's top_k
+        # Keep top_n for client-side truncation after NVIDIA returns rankings.
         if top_n is not None:
-            optional_nvidia_nim_rerank_params["top_k"] = top_n
+            optional_nvidia_nim_rerank_params["top_n"] = top_n
 
         # Pass through Nvidia-specific params from non_default_params
         if non_default_params:
@@ -199,16 +200,21 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         Nvidia NIM expects:
         - query as {text: "..."}
         - documents as passages: [{text: "..."}, ...]
-        - Optional: truncate (NONE or END), top_k
+        - Optional: truncate (NONE or END)
 
-        Note: optional_rerank_params may contain provider-specific params like 'top_k' and 'truncate'
-        that aren't in the OptionalRerankParams TypedDict but are passed through at runtime.
-        The mapping from Cohere's 'top_n' to Nvidia's 'top_k' already happened in map_cohere_rerank_params.
+        top_n is applied locally after receiving the rankings. Both top_n and
+        top_k are excluded from the NVIDIA request body.
         """
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for Nvidia NIM rerank")
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Nvidia NIM rerank")
+
+        top_n: Final = optional_rerank_params.get("top_n")
+        if top_n is not None:
+            if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
+                raise ValueError(f"top_n must be a positive integer, got: {top_n!r}")
+            self._client_side_top_n = top_n
 
         query: Final = optional_rerank_params["query"]
         documents: Final = optional_rerank_params["documents"]
@@ -252,10 +258,6 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             "query": query_obj,
             "passages": passages,
         }
-
-        # Add optional top_k parameter if provided (already mapped from top_n in map_cohere_rerank_params)
-        if "top_k" in optional_rerank_params and optional_rerank_params.get("top_k") is not None:
-            request_data["top_k"] = optional_rerank_params.get("top_k")
 
         # Add Nvidia-specific truncate parameter if provided
         # This is passed through from non_default_params, not in base OptionalRerankParams
@@ -346,11 +348,22 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
         meta: Final[RerankResponseMeta] = {"billed_units": billed_units}
 
-        return RerankResponse(
+        response: Final = RerankResponse(
             id=_STR.validate_python(payload.get("id") or str(uuid.uuid4())),
             results=results,
             meta=meta,
         )
+
+        # The hosted /v1/retrieval/{model}/reranking API rejects top_k.
+        # Sort before limiting in case the provider returns unsorted rankings.
+        top_n: Final = optional_params.get("top_n") or self._client_side_top_n
+        if top_n is not None and response.results is not None and len(response.results) > top_n:
+            response.results = sorted(
+                response.results,
+                key=lambda result: result["relevance_score"],
+                reverse=True,
+            )[:top_n]
+        return response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BaseLLMException(
