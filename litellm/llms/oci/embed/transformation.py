@@ -22,9 +22,11 @@ Supported models:
 Reference: https://docs.oracle.com/en-us/iaas/api/#/en/generative-ai-inference/latest/EmbedTextResult/EmbedText
 """
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -52,11 +54,13 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
 # OCI sends up to 96 texts per embedText request (Cohere limit).
-OCI_EMBED_BATCH_LIMIT = 96
+OCI_EMBED_BATCH_LIMIT: Final = 96
 
 # Input type mapping from OpenAI conventions to OCI/Cohere conventions
-_INPUT_TYPE_MAP = {
+_INPUT_TYPE_MAP: Final = {
     "search_document": "SEARCH_DOCUMENT",
     "search_query": "SEARCH_QUERY",
     "classification": "CLASSIFICATION",
@@ -77,7 +81,11 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     Required call-time params (via optional_params or env vars):
     - ``oci_compartment_id`` / ``OCI_COMPARTMENT_ID``
-    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``)
+    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``). The realm comes from the realm
+      key in ``oci_compartment_id`` (``ocid1.compartment.oc2..`` is the Government realm), so
+      non-commercial realms need no extra setting. A realm unknown to litellm can be described in
+      ``OCI_REGION_METADATA`` or ``~/.oci/regions-config.json``, resolved through the OCI SDK when
+      it is installed, or given as ``api_base``.
 
     Optional call-time params:
     - ``oci_serving_mode``: ``"ON_DEMAND"`` (default) or ``"DEDICATED"``
@@ -114,8 +122,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         api_base: str | None = None,
     ) -> dict:
         if optional_params.get("oci_signer") is None:
-            creds = resolve_oci_credentials(optional_params)
-            missing = [
+            creds: Final = resolve_oci_credentials(optional_params)
+            missing: Final = [
                 k
                 for k in (
                     "oci_user",
@@ -147,7 +155,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        base = get_oci_base_url(optional_params, api_base or litellm.api_base)
+        base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
         return f"{base}/{OCI_API_VERSION}/actions/embedText"
 
     def sign_request(
@@ -179,8 +187,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        creds = resolve_oci_credentials(optional_params)
-        compartment_id = creds["oci_compartment_id"]
+        creds: Final = resolve_oci_credentials(optional_params)
+        compartment_id: Final = creds["oci_compartment_id"]
         if not compartment_id:
             raise OCIError(
                 status_code=400,
@@ -217,7 +225,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
                 ),
             )
 
-        serving_mode_type = optional_params.get("oci_serving_mode", "ON_DEMAND").upper()
+        serving_mode_type: Final = optional_params.get("oci_serving_mode", "ON_DEMAND").upper()
         if serving_mode_type not in {"ON_DEMAND", "DEDICATED"}:
             raise OCIError(
                 status_code=400,
@@ -225,7 +233,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             )
 
         if serving_mode_type == "DEDICATED":
-            endpoint_id = optional_params.get("oci_endpoint_id", model)
+            endpoint_id: Final = optional_params.get("oci_endpoint_id", model)
             serving_mode = OCIServingMode(servingType="DEDICATED", endpointId=endpoint_id)
         else:
             serving_mode = OCIServingMode(servingType="ON_DEMAND", modelId=model)
@@ -235,7 +243,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         if input_type:
             input_type = _INPUT_TYPE_MAP.get(input_type.lower(), input_type.upper())
 
-        request = OCIEmbedRequest(
+        request: Final = OCIEmbedRequest(
             compartmentId=compartment_id,
             servingMode=serving_mode,
             inputs=texts,
@@ -263,7 +271,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             )
 
         try:
-            json_response = raw_response.json()
+            json_response: Final = raw_response.json()
         except Exception as e:
             raise OCIError(
                 status_code=raw_response.status_code,
@@ -271,7 +279,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             )
 
         try:
-            parsed = OCIEmbedResponse(**json_response)
+            parsed: Final = OCIEmbedResponse.model_validate(_JSON_OBJECT.validate_python(json_response))
         except Exception as e:
             raise OCIError(
                 status_code=500,
@@ -290,7 +298,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
         if parsed.inputTextTokenCounts is not None:
             # Actual OCI API returns per-input token counts — sum for total usage
-            total = sum(parsed.inputTextTokenCounts)
+            total: Final = sum(parsed.inputTextTokenCounts)
             model_response.usage = Usage(prompt_tokens=total, total_tokens=total)
         elif parsed.usage is not None:
             # Some deployments may return a usage object directly
@@ -315,4 +323,4 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
 
 # Alias for backwards compatibility with any code that imports OCIEmbeddingConfig
-OCIEmbeddingConfig = OCIEmbedConfig
+OCIEmbeddingConfig: Final = OCIEmbedConfig

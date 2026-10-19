@@ -5,7 +5,7 @@ You.com API Reference: https://you.com/docs/api-reference/search/v1-search
 OpenAPI spec:          https://you.com/specs/openapi_search_v1.yaml
 """
 
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import httpx
 
@@ -99,7 +99,7 @@ class YouComSearchConfig(BaseSearchConfig):
             api_base = get_secret_str("YOUCOM_API_BASE")
 
         if api_base is None:
-            api_key = kwargs.get("api_key") or get_secret_str("YOUCOM_API_KEY")
+            api_key: Final = kwargs.get("api_key") or get_secret_str("YOUCOM_API_KEY")
             if api_key:
                 api_base = self.YOU_COM_API_BASE
             else:
@@ -132,7 +132,7 @@ class YouComSearchConfig(BaseSearchConfig):
         if isinstance(query, list):
             query = " ".join(query)
 
-        request_data: YouComSearchRequest = {
+        request_data: Final[YouComSearchRequest] = {
             "query": query,
         }
 
@@ -145,7 +145,7 @@ class YouComSearchConfig(BaseSearchConfig):
         if "country" in optional_params:
             request_data["country"] = optional_params["country"].lower()
 
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         for param, value in optional_params.items():
             if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
@@ -168,13 +168,13 @@ class YouComSearchConfig(BaseSearchConfig):
         - snippets[0] → SearchResult.snippet (falls back to `description`)
         - page_age    → SearchResult.date
         """
-        response_json = raw_response.json()
-        raw_results = response_json.get("results") or {}
+        response_json: Final = raw_response.json()
+        raw_results: Final = response_json.get("results") or {}
 
-        web_results = raw_results.get("web") or []
-        news_results = raw_results.get("news") or []
+        web_results: Final = raw_results.get("web") or []
+        news_results: Final = raw_results.get("news") or []
 
-        results: list[SearchResult] = []
+        results: Final[list[SearchResult]] = []
         for item in list(web_results) + list(news_results):
             snippets = item.get("snippets") or []
             snippet = snippets[0] if snippets else item.get("description", "")

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Select } from "antd";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { Policy } from "./types";
 import { getPoliciesList } from "../networking";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 
 /** Prefix for policy version IDs in request body; must match backend POLICY_VERSION_ID_PREFIX. */
 export const POLICY_VERSION_ID_PREFIX = "policy_";
@@ -51,12 +52,13 @@ const PolicySelector: React.FC<PolicySelectorProps> = ({
   disabled,
   onPoliciesLoaded,
 }) => {
+  const canViewPolicies = useCan("viewPolicies");
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const fetchPolicies = async () => {
-      if (!accessToken) return;
+      if (!accessToken || !canViewPolicies) return;
 
       setLoading(true);
       try {
@@ -73,29 +75,28 @@ const PolicySelector: React.FC<PolicySelectorProps> = ({
     };
 
     fetchPolicies();
-  }, [accessToken, onPoliciesLoaded]);
+  }, [accessToken, canViewPolicies, onPoliciesLoaded]);
 
   const handlePolicyChange = (selectedValues: string[]) => {
     onChange(selectedValues);
   };
 
+  if (!canViewPolicies) {
+    return null;
+  }
+
   return (
-    <div>
-      <Select
-        mode="multiple"
+    <div className="min-w-0">
+      <MultiSelect
         disabled={disabled}
         placeholder={
           disabled ? "Setting policies is a premium feature." : "Select policies (production or published versions)"
         }
-        onChange={handlePolicyChange}
+        onValueChange={handlePolicyChange}
         value={value}
         loading={loading}
         className={className}
-        allowClear
         options={getPolicyOptionEntries(policies)}
-        optionFilterProp="label"
-        showSearch
-        style={{ width: "100%" }}
       />
     </div>
   );

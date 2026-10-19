@@ -6,15 +6,17 @@ In the Huggingface TGI format.
 
 import json
 import time
-from typing import TYPE_CHECKING, Any
+import types
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
 
 import litellm
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
@@ -25,6 +27,7 @@ from ..common_utils import SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -50,7 +53,7 @@ class SagemakerConfig(BaseConfig):
         temperature: float | None = None,
         return_full_text: bool | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -119,20 +122,14 @@ class SagemakerConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details.get("roles", None),
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="sagemaker"
             )
         elif hf_model_name in custom_prompt_dict:
             # check if the base huggingface model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[hf_model_name]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details.get("roles", None),
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="sagemaker"
             )
         else:
             if hf_model_name is None:
@@ -144,7 +141,7 @@ class SagemakerConfig(BaseConfig):
             hf_model_name = (
                 hf_model_name or model
             )  # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
-            prompt: str = prompt_factory(model=hf_model_name, messages=messages)  # type: ignore
+            prompt: str = prompt_factory(model=hf_model_name, messages=messages)
 
         return prompt
 
@@ -156,17 +153,17 @@ class SagemakerConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        inference_params = optional_params.copy()
-        stream = inference_params.pop("stream", False)
-        data: dict = {"parameters": inference_params}
+        inference_params: Final = optional_params.copy()
+        stream: Final = inference_params.pop("stream", False)
+        data: Final[dict] = {"parameters": inference_params}
         if stream is True:
             data["stream"] = True
 
-        custom_prompt_dict = litellm_params.get("custom_prompt_dict", None) or litellm.custom_prompt_dict
+        custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict", None) or litellm.custom_prompt_dict
 
-        hf_model_name = litellm_params.get("hf_model_name", None)
+        hf_model_name: Final = litellm_params.get("hf_model_name", None)
 
-        prompt = self._transform_prompt(
+        prompt: Final = self._transform_prompt(
             model=model,
             messages=messages,
             custom_prompt_dict=custom_prompt_dict,
@@ -196,11 +193,11 @@ class SagemakerConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        completion_response = raw_response.json()
+        completion_response: Final = raw_response.json()
         ## LOGGING
         logging_obj.post_call(
             input=messages,
@@ -209,7 +206,7 @@ class SagemakerConfig(BaseConfig):
             additional_args={"complete_input_dict": request_data},
         )
 
-        prompt = request_data["inputs"]
+        prompt: Final = request_data["inputs"]
 
         ## RESPONSE OBJECT
         try:
@@ -227,7 +224,7 @@ class SagemakerConfig(BaseConfig):
             if completion_output.startswith(prompt) and "<s>" in prompt:
                 completion_output = completion_output.replace(prompt, "", 1)
 
-            model_response.choices[0].message.content = completion_output  # type: ignore
+            model_response.choices[0].message.content = completion_output
         except Exception:
             raise SagemakerError(
                 message=f"LiteLLM Error: Unable to parse sagemaker RAW RESPONSE {json.dumps(completion_response)}",
@@ -235,17 +232,18 @@ class SagemakerConfig(BaseConfig):
             )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens = token_counter(
+        prompt_tokens: Final = token_counter(
             text=prompt, count_response_tokens=True
         )  # doesn't apply any default token count from openai's chat template
-        completion_tokens = token_counter(
-            text=model_response["choices"][0]["message"].get("content", ""),
+        response_message: Final = model_response.choices[0].message
+        completion_tokens: Final = token_counter(
+            text=response_message.content,
             count_response_tokens=True,
         )
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,

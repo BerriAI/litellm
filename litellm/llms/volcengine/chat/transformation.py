@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
@@ -32,7 +34,7 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
         top_p: int | None = None,
         response_format: dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -88,7 +90,7 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             See the docs for details.
             Refrence: https://www.volcengine.com/docs/82379/1449737#0002
             """
-            thinking_value = optional_params.pop("thinking")
+            thinking_value: Final = optional_params.pop("thinking")
 
             # Handle using thinking params case - add to extra_body if value is legal
             if (

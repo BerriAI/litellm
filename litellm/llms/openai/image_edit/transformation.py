@@ -1,5 +1,5 @@
 from io import BufferedReader
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -17,6 +17,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ImageResponse
 
 from ..common_utils import OpenAIError
+from ..workload_identity import resolve_openai_bearer_token
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -66,11 +67,11 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
     def _add_image_to_files(
         self,
         files_list: list[tuple[str, Any]],
-        image: Any,
+        image: object,
         field_name: str,
     ) -> None:
         """Add an image to the files list with appropriate content type"""
-        image_content_type = ImageEditRequestUtils.get_image_content_type(image)
+        image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
 
         if isinstance(image, BufferedReader):
             files_list.append((field_name, (image.name, image, image_content_type)))
@@ -93,7 +94,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         to support multiple images (e.g., for gpt-image-1).
         """
         # Build request params, only including non-None values
-        request_params = {
+        request_params: Final = {
             "model": model,
             **image_edit_optional_request_params,
         }
@@ -102,20 +103,20 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         if prompt is not None:
             request_params["prompt"] = prompt
 
-        request = ImageEditRequestParams(**request_params)
-        request_dict = cast(dict, request)
+        request: Final = ImageEditRequestParams(**request_params)
+        request_dict: Final = cast(dict, request)
 
         #########################################################
         # Separate images and masks as `files` and send other parameters as `data`
         #########################################################
-        _image_list = request_dict.get("image")
+        _image_list: Final = request_dict.get("image")
         _mask = request_dict.get("mask")
-        data_without_files = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
-        files_list: list[tuple[str, Any]] = []
+        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
+        files_list: Final[list[tuple[str, Any]]] = []
 
         # Handle image parameter
         if _image_list is not None:
-            image_list = [_image_list] if not isinstance(_image_list, list) else _image_list
+            image_list: Final = [_image_list] if not isinstance(_image_list, list) else _image_list
 
             for _image in image_list:
                 if _image is not None:
@@ -131,7 +132,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                 _mask = _mask[0] if _mask else None
 
             if _mask is not None:
-                mask_content_type: str = ImageEditRequestUtils.get_image_content_type(_mask)
+                mask_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_mask)
                 if isinstance(_mask, BufferedReader):
                     files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
                 else:
@@ -147,7 +148,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
     ) -> ImageResponse:
         """No transform applied since outputs are in OpenAI spec already"""
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         return ImageResponse(**raw_response_json)
@@ -160,12 +161,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         litellm_params: dict | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=api_key, api_base=api_base, litellm_params=litellm_params
         )
+        headers.update({"Authorization": f"Bearer {bearer_token}"})
         return headers
 
     def get_complete_url(

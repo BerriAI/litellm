@@ -5,10 +5,12 @@ Base model class for domain models.
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class DomainModel(BaseModel):
+class DomainModel(LiteLLMBaseModel):
     """Base class for all domain models."""
 
     model_config = ConfigDict(
@@ -33,6 +35,6 @@ class DomainModel(BaseModel):
             return cls(**record.dict())
         return cls(**dict(record))
 
-    def to_db_dict(self, exclude_unset: bool = False) -> dict[str, Any]:
+    def to_db_dict(self, exclude_unset: bool = False) -> dict[str, object]:
         """Convert domain model to a dictionary for database operations."""
         return self.model_dump(exclude_none=True, exclude_unset=exclude_unset)

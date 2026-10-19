@@ -18,6 +18,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     key_name: str | None = None
     key_alias: str | None = None
     spend: float = 0.0
+    total_spend: float = 0.0
     max_budget: float | None = None
     expires: str | datetime | None = None
     models: list = []
@@ -31,6 +32,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     metadata: dict = {}
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    tpd_limit: int | None = None
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
     allowed_cache_controls: list | None = []
@@ -49,6 +51,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     created_by: str | None = None
     updated_at: datetime | None = None
     updated_by: str | None = None
+    settings_updated_at: datetime | None = None
     last_active: datetime | None = None
     object_permission_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionTable | None = None
@@ -67,6 +70,7 @@ class LiteLLM_DeletedVerificationToken(LiteLLM_VerificationToken):
     """Audit record for deleted keys; mirrors the token plus deletion metadata."""
 
     id: str | None = None
+    organization_id: str | None = None
     deleted_at: datetime | None = None
     deleted_by: str | None = None
     deleted_by_api_key: str | None = None

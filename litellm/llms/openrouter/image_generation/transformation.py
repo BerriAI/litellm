@@ -27,11 +27,14 @@ Response format:
 }
 """
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -51,8 +54,14 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
@@ -91,7 +100,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         - size -> image_config.aspect_ratio
         - quality -> image_config.image_size
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         for key, value in non_default_params.items():
             if key in supported_params:
@@ -142,7 +151,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         - 16:9 → 1344×768
         - 21:9 → 1536×672
         """
-        size_to_aspect_ratio = {
+        size_to_aspect_ratio: Final = {
             # Square formats
             "256x256": "1:1",
             "512x512": "1:1",
@@ -172,7 +181,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         - 2K → Higher resolution
         - 4K → Highest resolution
         """
-        quality_to_image_size = {
+        quality_to_image_size: Final = {
             # OpenAI quality mappings
             "low": "1K",
             "standard": "1K",
@@ -198,13 +207,13 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             response_json: Parsed JSON response from OpenRouter
             model: The model name
         """
-        usage_data = response_json.get("usage", {})
+        usage_data: Final = response_json.get("usage", {})
         if usage_data:
-            prompt_tokens = usage_data.get("prompt_tokens", 0)
-            total_tokens = usage_data.get("total_tokens", 0)
+            prompt_tokens: Final = usage_data.get("prompt_tokens", 0)
+            total_tokens: Final = usage_data.get("total_tokens", 0)
 
-            completion_tokens_details = usage_data.get("completion_tokens_details", {})
-            image_tokens = completion_tokens_details.get("image_tokens", 0)
+            completion_tokens_details: Final = usage_data.get("completion_tokens_details", {})
+            image_tokens: Final = completion_tokens_details.get("image_tokens", 0)
 
             model_response.usage = ImageUsage(
                 input_tokens=prompt_tokens,
@@ -216,23 +225,33 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                 total_tokens=total_tokens,
             )
 
-            cost = usage_data.get("cost")
+            cost: Final = usage_data.get("cost")
             if cost is not None:
-                if not hasattr(model_response, "_hidden_params"):
-                    model_response._hidden_params = {}
-                if "additional_headers" not in model_response._hidden_params:
-                    model_response._hidden_params["additional_headers"] = {}
-                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                    cost
+                if not hasattr(model_response, HIDDEN_PARAMS_ATTR):
+                    set_hidden_params(model_response, {})
+                hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                    dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
                 )
+                if "additional_headers" not in hidden_params:
+                    hidden_params["additional_headers"] = {}
+                additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+                    dict[str, object], hidden_params["additional_headers"]
+                )
+                additional_headers["llm_provider-x-litellm-response-cost"] = float(cost)
 
-            cost_details = usage_data.get("cost_details", {})
+            cost_details: Final = usage_data.get("cost_details", {})
             if cost_details:
-                if "response_cost_details" not in model_response._hidden_params:
-                    model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(cost_details)
+                cost_details_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+                    dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+                )
+                if "response_cost_details" not in cost_details_hidden_params:
+                    cost_details_hidden_params["response_cost_details"] = {}
+                response_cost_details: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+                    dict[str, object], cost_details_hidden_params["response_cost_details"]
+                )
+                response_cost_details.update(cost_details)
 
-        model_response._hidden_params["model"] = response_json.get("model", model)
+        model_response.hidden_params["model"] = response_json.get("model", model)
 
     def get_complete_url(
         self,
@@ -296,7 +315,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         Returns:
             dict: Request body in chat completion format with image_config
         """
-        request_body = {
+        request_body: Final = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
         }
@@ -317,7 +336,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -342,10 +361,10 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             ImageResponse: Populated image response
         """
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception as e:
             raise OpenRouterException(
-                message=f"Error parsing OpenRouter response: {e!s}",
+                message=f"Error parsing OpenRouter response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -354,15 +373,16 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         try:
-            choices = response_json.get("choices", [])
+            response_object: Final = _JSON_DICT.validate_python(response_json)
+            choices: Final = _JSON_OBJECTS.validate_python(response_object.get("choices", []))
 
             for choice in choices:
-                message = choice.get("message", {})
-                images = message.get("images", [])
+                message = _JSON_OBJECT.validate_python(choice.get("message", {}))
+                images = _JSON_OBJECTS.validate_python(message.get("images", []))
 
                 for image_data in images:
-                    image_url_obj = image_data.get("image_url", {})
-                    image_url = image_url_obj.get("url")
+                    image_url_obj = _JSON_OBJECT.validate_python(image_data.get("image_url", {}))
+                    image_url = _STR.validate_python(image_url_obj.get("url") or "")
 
                     if image_url:
                         if image_url.startswith("data:"):
@@ -388,13 +408,13 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                             )
 
             # Extract and set usage and cost information
-            self._set_usage_and_cost(model_response, response_json, model)
+            self._set_usage_and_cost(model_response, response_object, model)
 
             return model_response
 
         except Exception as e:
             raise OpenRouterException(
-                message=f"Error transforming OpenRouter image generation response: {e!s}",
+                message=f"Error transforming OpenRouter image generation response: {e}",
                 status_code=500,
                 headers={},
             )

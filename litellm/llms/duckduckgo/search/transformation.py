@@ -4,10 +4,12 @@ Calls DuckDuckGo's Instant Answer API to search the web.
 DuckDuckGo API Reference: https://duckduckgo.com/api
 """
 
-from typing import Literal, TypedDict
+from collections.abc import Iterable, Mapping
+from typing import Final, Literal, TypedDict
 from urllib.parse import urlencode
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -16,6 +18,9 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _DuckDuckGoSearchRequestRequired(TypedDict):
@@ -84,8 +89,8 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_duckduckgo_params" in data:
-            params = data["_duckduckgo_params"]
-            query_string = urlencode(params, doseq=True)
+            params: Final = data["_duckduckgo_params"]
+            query_string: Final = urlencode(params, doseq=True)
             return f"{api_base}/?{query_string}"
 
         return api_base
@@ -116,19 +121,19 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
             # DuckDuckGo only supports single string queries
             query = " ".join(query)
 
-        request_data: DuckDuckGoSearchRequest = {
+        request_data: Final[DuckDuckGoSearchRequest] = {
             "q": query,
             "format": "json",  # Always use JSON format
         }
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         if "max_results" in optional_params:
             result_data["_max_results"] = optional_params["max_results"]
 
         # Pass through DuckDuckGo-specific parameters
-        ddg_params = ["pretty", "no_redirect", "no_html", "skip_disambig"]
+        ddg_params: Final = ["pretty", "no_redirect", "no_html", "skip_disambig"]
         for param in ddg_params:
             if param in optional_params:
                 result_data[param] = optional_params[param]
@@ -159,10 +164,10 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Extract max_results from the request URL params
-        query_params = raw_response.request.url.params if raw_response.request else {}
+        query_params: Final = raw_response.request.url.params if raw_response.request else {}
         max_results = None
         if "_max_results" in query_params:
             try:
@@ -171,24 +176,26 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
                 pass
 
         # Transform results to SearchResult objects
-        results = []
+        results: Final = []
 
         # DuckDuckGo can return results in different fields
         # Priority: Abstract > Answer > RelatedTopics
 
         # Check if there's an Abstract with URL
         if response_json.get("AbstractURL") and response_json.get("AbstractText"):
-            abstract_result = SearchResult(
-                title=response_json.get("Heading", ""),
-                url=response_json.get("AbstractURL", ""),
-                snippet=response_json.get("AbstractText", ""),
-                date=None,
-                last_updated=None,
+            abstract_result: Final = SearchResult.model_validate(
+                {
+                    "title": response_json.get("Heading", ""),
+                    "url": response_json.get("AbstractURL", ""),
+                    "snippet": response_json.get("AbstractText", ""),
+                    "date": None,
+                    "last_updated": None,
+                }
             )
             results.append(abstract_result)
 
         # Process RelatedTopics
-        related_topics = response_json.get("RelatedTopics", [])
+        related_topics: Final = _JSON_VALUES.validate_python(response_json.get("RelatedTopics", []))
         for topic in related_topics:
             # Stop if we've reached max_results
             if max_results is not None and len(results) >= max_results:

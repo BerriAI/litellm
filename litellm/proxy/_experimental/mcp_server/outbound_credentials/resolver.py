@@ -1,7 +1,7 @@
 """The one credential resolver: dispatch on the declared mode, fail closed.
 
 `resolve_credentials` selects exactly one arm off the server's typed `config` and either
-produces an `httpx.Auth` or returns a typed `CredError`. The `match` is over the `AuthConfig`
+produces an `httpx2.Auth` or returns a typed `CredError`. The `match` is over the `AuthConfig`
 variant, so each arm receives its own fully-typed config with no field-presence inference and
 no precedence cascade. It is wildcard-free with an `assert_never` tail, so adding a mode without
 an arm fails the type gate (basedpyright `reportMatchNotExhaustive`); a bypassed gate fails loudly
@@ -20,10 +20,13 @@ v2: no imports from v1.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
+from typing import Final
 
 import httpx
+import httpx2
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -45,11 +48,16 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import (
+    default_sso_assertion_store,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     AssertionStoreUnavailable,
-    DbSSOAssertionStore,
     SSOAssertionStore,
     SSOIdentityAssertion,
+    assertion_expired,
+    exchanged_refresh_token_issued_for,
+    login_refresh_token_expired,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
     ExchangedToken,
@@ -62,6 +70,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
+    AuthResolution,
     AuthSpecKind,
     AwsSigV4Config,
     Byok,
@@ -70,18 +79,29 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientSecretAuth,
     CredError,
     IdJagConfig,
+    IdJagSubjectSource,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
+    ResolvedCredential,
     ServerSpec,
     SharedKey,
     Subject,
     TokenExchangeConfig,
 )
 
-_TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
-_JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer"
-_ID_JAG_REQUESTED_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:id-jag"
+_TOKEN_EXCHANGE_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:token-exchange"
+_JWT_BEARER_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+_ID_JAG_REQUESTED_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:id-jag"
+_REFRESH_TOKEN_SUBJECT_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:refresh_token"
+
+
+@dataclass(frozen=True, slots=True)
+class _IdJagSubjectToken:
+    """What ID-JAG leg 1 asserts and the RFC 8693 type it is declared as."""
+
+    value: str
+    token_type: str
 
 
 class _NullOAuthTokenStore:
@@ -128,12 +148,12 @@ class UpstreamCredentialProvider:
         self._token_endpoint: TokenEndpointClient = token_endpoint or TokenEndpointClient()
         self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
         self._client_credentials_source = client_credentials_source or ClientCredentialsTokenSource()
-        self._sso_assertion_store: SSOAssertionStore = sso_assertion_store or DbSSOAssertionStore()
+        self._sso_assertion_store: SSOAssertionStore = sso_assertion_store or default_sso_assertion_store()
 
-    async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
+    async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx2.Auth, CredError]:
         match server.config:
             case NoneConfig():
-                return Ok(NoOpAuth())
+                return self._none(server)
             case ApiKeyConfig() as config:
                 return self._api_key(config)
             case PassthroughConfig():
@@ -144,23 +164,32 @@ class UpstreamCredentialProvider:
                 return await self._token_exchange(subject, server, config)
             case IdJagConfig() as config:
                 return await self._id_jag(subject, server, config)
-            case AuthorizationCodeConfig():
-                return await self._authorization_code(subject, server)
+            case AuthorizationCodeConfig() as config:
+                return await self._authorization_code(subject, server, config)
             case AwsSigV4Config():
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
+
+    def _none(self, server: ServerSpec) -> Result[httpx2.Auth, CredError]:
+        try:
+            resource: Final = httpx.URL(server.resource)
+        except httpx.InvalidURL:
+            return Ok(NoOpAuth())
+        if resource.userinfo:
+            return Error(CredError.of_url_credentials_not_allowed())
+        return Ok(NoOpAuth())
 
     async def has_user_token(self, subject: Subject, server: ServerSpec) -> bool:
         """Whether a usable per-user token exists for this server (the preemptive 401's check).
 
         Reads from the same per-user store as the ``authorization_code`` arm, so the discovery
         challenge and the egress agree on whether the user is authorized. Returns a typed ``bool``
-        (no ``httpx.Auth``), unlike ``resolve_credentials``. A non-per-user mode has no token in the
+        (no ``httpx2.Auth``), unlike ``resolve_credentials``. A non-per-user mode has no token in the
         store, so it reads as False without a per-mode branch here.
         """
         return await self._authz_token(subject, server) is not None
 
-    def _passthrough(self, subject: Subject) -> Result[httpx.Auth, CredError]:
+    def _passthrough(self, subject: Subject) -> Result[httpx2.Auth, CredError]:
         """Forward the caller's own upstream credential verbatim; the gateway mints nothing.
 
         The inbound token is the caller's already-disambiguated ``Authorization`` (never the LiteLLM
@@ -172,7 +201,7 @@ class UpstreamCredentialProvider:
             return Ok(NoOpAuth())
         return Ok(StaticHeaderAuth(subject.inbound_token.get_secret_value(), header_name="Authorization"))
 
-    def _api_key(self, config: ApiKeyConfig) -> Result[httpx.Auth, CredError]:
+    def _api_key(self, config: ApiKeyConfig) -> Result[httpx2.Auth, CredError]:
         match config.key_source:
             case SharedKey() as source:
                 header_name, header_value = config.header(source.value.get_secret_value())
@@ -182,14 +211,18 @@ class UpstreamCredentialProvider:
                 return Error(CredError.of_not_implemented("api_key BYOK source not implemented yet"))
         assert_never(config.key_source)
 
-    async def _id_jag(self, subject: Subject, server: ServerSpec, config: IdJagConfig) -> Result[httpx.Auth, CredError]:
-        match await self._id_jag_subject_token(subject):
+    async def _id_jag(
+        self, subject: Subject, server: ServerSpec, config: IdJagConfig
+    ) -> Result[httpx2.Auth, CredError]:
+        match await self._id_jag_subject_token(subject, config):
             case Error(err):
                 return Error(err)
             case Ok(subject_token):
                 return await self._id_jag_exchange(subject, subject_token, server, config)
 
-    async def _id_jag_subject_token(self, subject: Subject) -> Result[str, CredError]:
+    async def _id_jag_subject_token(
+        self, subject: Subject, config: IdJagConfig
+    ) -> Result[_IdJagSubjectToken, CredError]:
         """The identity token ID-JAG leg 1 asserts, from the request or from the SSO login it was captured at.
 
         A caller that presents its own IdP identity token wins: that is the strongest available
@@ -206,7 +239,7 @@ class UpstreamCredentialProvider:
         a raised error so a DB blip cannot 500 the egress or the upstream-401 retry.
         """
         if subject.inbound_token is not None:
-            return Ok(subject.inbound_token.get_secret_value())
+            return Ok(_IdJagSubjectToken(subject.inbound_token.get_secret_value(), config.subject_token_type))
         if not subject.subject_id:
             return Error(
                 CredError.of_precondition_required(
@@ -215,7 +248,11 @@ class UpstreamCredentialProvider:
                 )
             )
         try:
-            assertion = await self._sso_assertion_store.fetch(subject.subject_id)
+            assertion: Final = await (
+                self._sso_assertion_store.fetch_stored(subject.subject_id)
+                if config.subject_source is IdJagSubjectSource.refresh_token
+                else self._sso_assertion_store.fetch(subject.subject_id)
+            )
         except AssertionStoreUnavailable as exc:
             # The driver's message can name hosts, schemas or connection details, and this summary
             # is returned to the caller verbatim as a 503 body. Operators get it from the log.
@@ -236,27 +273,33 @@ class UpstreamCredentialProvider:
                     "Sign in through LiteLLM SSO so the gateway captures one."
                 )
             )
-        if _assertion_expired(assertion, datetime.now(timezone.utc)):
+        if config.subject_source is IdJagSubjectSource.refresh_token:
+            return _login_refresh_token_subject(assertion, config, datetime.now(timezone.utc))
+        if assertion_expired(assertion, datetime.now(timezone.utc)):
             return Error(
                 CredError.of_precondition_required(
                     "The stored IdP identity assertion for this user has expired. Sign in through "
                     "LiteLLM SSO again to capture a current one."
                 )
             )
-        return Ok(assertion.id_token.get_secret_value())
+        return Ok(
+            _IdJagSubjectToken(
+                assertion.id_token.get_secret_value(), assertion.subject_token_type or config.subject_token_type
+            )
+        )
 
     async def _id_jag_exchange(
-        self, subject: Subject, token: str, server: ServerSpec, config: IdJagConfig
-    ) -> Result[httpx.Auth, CredError]:
-        slot = _id_jag_slot_key(subject, server)
-        fingerprint = _id_jag_fingerprint(token, server.server_id, config)
+        self, subject: Subject, token: _IdJagSubjectToken, server: ServerSpec, config: IdJagConfig
+    ) -> Result[httpx2.Auth, CredError]:
+        slot: Final = _id_jag_slot_key(subject, server)
+        fingerprint: Final = _id_jag_fingerprint(token.value, server.server_id, config)
 
         async def _exchange() -> Result[ExchangedToken, CredError]:
-            leg1_params = {
+            leg1_params: Final = {
                 "grant_type": _TOKEN_EXCHANGE_GRANT_TYPE,
                 "requested_token_type": _ID_JAG_REQUESTED_TOKEN_TYPE,
-                "subject_token": token,
-                "subject_token_type": config.subject_token_type,
+                "subject_token": token.value,
+                "subject_token_type": token.token_type,
                 **({"audience": config.audience} if config.audience else {}),
                 **({"resource": config.resource} if config.resource else {}),
                 **({"scope": " ".join(config.scopes)} if config.scopes else {}),
@@ -270,32 +313,36 @@ class UpstreamCredentialProvider:
                 case Error(err):
                     return Error(err)
                 case Ok(id_jag):
-                    leg2_params = {
+                    leg2_params: Final = {
                         "grant_type": _JWT_BEARER_GRANT_TYPE,
                         "assertion": id_jag.access_token,
                     }
                     return await self._token_endpoint.fetch(
                         config.resource_token_endpoint,
-                        config.client_id,
+                        config.resource_client.client_id,
                         leg2_params,
-                        config.client_auth,
+                        config.resource_client.client_auth,
                     )
 
         match await self._exchanged_tokens.get_or_compute(slot, _exchange, fingerprint=fingerprint):
             case Ok(access_token):
-                return Ok(StaticHeaderAuth(f"Bearer {access_token}"))
+                header_name, header_value = config.header(access_token)
+                return Ok(StaticHeaderAuth(header_value, header_name=header_name))
             case Error(err):
                 return Error(err)
 
-    async def _authorization_code(self, subject: Subject, server: ServerSpec) -> Result[StaticHeaderAuth, CredError]:
-        token = await self._authz_token(subject, server)
+    async def _authorization_code(
+        self, subject: Subject, server: ServerSpec, config: AuthorizationCodeConfig
+    ) -> Result[StaticHeaderAuth, CredError]:
+        token: Final = await self._authz_token(subject, server)
         if token is None:
             return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
-        return Ok(StaticHeaderAuth(f"Bearer {token.access_token}", header_name="Authorization"))
+        header_name, header_value = config.header(token.access_token)
+        return Ok(StaticHeaderAuth(header_value, header_name=header_name))
 
     async def _client_credentials(
         self, server_id: str, config: ClientCredentialsConfig
-    ) -> Result[httpx.Auth, CredError]:
+    ) -> Result[httpx2.Auth, CredError]:
         """The M2M arm: resolve a cached (or freshly minted) gateway token; no user context.
 
         The token is resolved here, before any upstream request, so a misconfigured grant or an
@@ -305,8 +352,8 @@ class UpstreamCredentialProvider:
         """
         match await self._client_credentials_source.get(server_id, config):
             case Ok(token):
-                refetch = partial(self._client_credentials_source.refetch, server_id, config)
-                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch))
+                refetch: Final = partial(self._client_credentials_source.refetch, server_id, config)
+                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch, config, granted_scopes=token.scopes))
             case Error(err):
                 return Error(err)
 
@@ -319,7 +366,7 @@ class UpstreamCredentialProvider:
         than falling through to a weaker source (§1.5); the exchanger handles the IdP round-trip and
         caching and returns the upstream token or a typed error.
         """
-        inbound = subject.inbound_token
+        inbound: Final = subject.inbound_token
         if inbound is None:
             return Error(
                 CredError.of_unauthorized(
@@ -331,7 +378,8 @@ class UpstreamCredentialProvider:
             inbound.get_secret_value(), server, config, tenant_id=subject.tenant_id
         ):
             case Ok(token):
-                return Ok(StaticHeaderAuth(f"Bearer {token.access_token}", header_name="Authorization"))
+                header_name, header_value = config.header(token.access_token)
+                return Ok(StaticHeaderAuth(header_value, header_name=header_name))
             case Error(err):
                 return Error(err)
 
@@ -377,6 +425,42 @@ class UpstreamCredentialProvider:
             return None
 
 
+def _login_refresh_token_subject(
+    assertion: SSOIdentityAssertion, config: IdJagConfig, now: datetime
+) -> Result[_IdJagSubjectToken, CredError]:
+    """The subject for a server configured with ``id_jag_subject_source: refresh_token``: the refresh
+    token the ID-JAG client holds from the user's sign-in, exchanged from the login assertion or, when
+    the SSO client is this server's IdP client, the one the OIDC login itself returned. The login-time
+    hook records which client and endpoint it is bound to, and a token bound elsewhere is never sent
+    here. The assertion's own expiry does not apply, a SAML assertion is spent minutes after login
+    while the refresh token it bought lives as long as the IdP said."""
+    if assertion.exchanged_refresh_token is None:
+        return Error(
+            CredError.of_precondition_required(
+                "This server mints its ID-JAG from a refresh token exchanged at SSO login and none is stored "
+                "for this user. Sign in through LiteLLM SSO again; if the login log shows the IdP refused the "
+                "exchange, the IdP client has to allow a refresh token for this requesting app."
+            )
+        )
+    if not exchanged_refresh_token_issued_for(assertion, config.org_token_endpoint, config.client_id):
+        return Error(
+            CredError.of_precondition_required(
+                "The refresh token exchanged at SSO login was minted for a different IdP client than this server "
+                "uses, so it cannot be presented here. Point every id_jag_subject_source: refresh_token server at "
+                "the same IdP client, then sign in through LiteLLM SSO again."
+            )
+        )
+    if login_refresh_token_expired(assertion, now):
+        return Error(
+            CredError.of_precondition_required(
+                "The refresh token exchanged at SSO login for this user has expired. Sign in through LiteLLM SSO again."
+            )
+        )
+    return Ok(
+        _IdJagSubjectToken(assertion.exchanged_refresh_token.get_secret_value(), _REFRESH_TOKEN_SUBJECT_TOKEN_TYPE)
+    )
+
+
 def _id_jag_slot_key(subject: Subject, server: ServerSpec) -> str:
     """Which cache slot this caller's bearer for this upstream lives in.
 
@@ -385,22 +469,9 @@ def _id_jag_slot_key(subject: Subject, server: ServerSpec) -> str:
     assertion, which is what lets invalidation compute this while the assertion store is down. The
     entry's fingerprint, not this key, is what guarantees a cached bearer matches current inputs.
     """
-    inbound = subject.inbound_token.get_secret_value() if subject.inbound_token is not None else ""
-    material = "\x00".join((subject.tenant_id, subject.subject_id, server.server_id, inbound))
+    inbound: Final = subject.inbound_token.get_secret_value() if subject.inbound_token is not None else ""
+    material: Final = "\x00".join((subject.tenant_id, subject.subject_id, server.server_id, inbound))
     return hashlib.sha256(material.encode()).hexdigest()
-
-
-def _assertion_expired(assertion: SSOIdentityAssertion, now: datetime) -> bool:
-    """Whether the stored assertion's ``exp`` has passed. An assertion carrying no expiry is
-    treated as usable and left for the IdP to reject, since the store records what the id_token
-    claimed rather than imposing a lifetime of its own. A naive ``expires_at`` is read as UTC so a
-    stored value that lost its offset compares instead of raising.
-    """
-    expires_at = assertion.expires_at
-    if expires_at is None:
-        return False
-    normalized = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=timezone.utc)
-    return normalized <= now
 
 
 def _id_jag_fingerprint(subject_token: str, server_id: str, config: IdJagConfig) -> str:
@@ -409,12 +480,12 @@ def _id_jag_fingerprint(subject_token: str, server_id: str, config: IdJagConfig)
     Stored beside the bearer and compared on every read, so a rotated assertion or an edited server
     config reads as a miss and re-mints instead of serving a bearer authorized under the old policy.
 
-    Every exchange parameter derives from the config (endpoints, audience, resource, scopes, client
-    auth), so a server update that changes any of them must change the key; otherwise the old bearer,
-    authorized under the old policy, keeps being served until its TTL. Everything is hashed, so no
-    secret is held in the key.
+    Every exchange parameter derives from the config (endpoints, audience, resource, scopes, and both
+    client identities and auth methods), so a server update that changes any of them must change the
+    key; otherwise the old bearer, authorized under the old policy, keeps being served until its TTL.
+    Everything is hashed, so no secret is held in the key.
     """
-    material = "\x00".join(
+    material: Final = "\x00".join(
         (
             subject_token,
             server_id,
@@ -422,6 +493,8 @@ def _id_jag_fingerprint(subject_token: str, server_id: str, config: IdJagConfig)
             config.resource_token_endpoint,
             config.client_id,
             _client_auth_fingerprint(config.client_auth),
+            config.resource_client.client_id,
+            _client_auth_fingerprint(config.resource_client.client_auth),
             config.subject_token_type,
             config.audience or "",
             config.resource or "",
@@ -442,5 +515,34 @@ def _client_auth_fingerprint(client_auth: ClientAuth) -> str:
     assert_never(client_auth)
 
 
-def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
+def _not_implemented(kind: AuthSpecKind) -> Result[httpx2.Auth, CredError]:
     return Error(CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet"))
+
+
+async def resolve_credentials_with_source(
+    provider: UpstreamCredentialProvider, subject: Subject, server: ServerSpec
+) -> Result[ResolvedCredential, CredError]:
+    match await provider.resolve_credentials(subject, server):
+        case Error(err):
+            return Error(err)
+        case Ok(auth):
+            if isinstance(auth, NoOpAuth):
+                return Ok(ResolvedCredential(auth, AuthResolution.no_auth))
+            match server.config:
+                case NoneConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.no_auth))
+                case ApiKeyConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.static_token))
+                case PassthroughConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.oauth2_passthrough))
+                case ClientCredentialsConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.client_credentials))
+                case TokenExchangeConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.token_exchange))
+                case IdJagConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.id_jag))
+                case AuthorizationCodeConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.stored_user_token))
+                case AwsSigV4Config():
+                    return Ok(ResolvedCredential(auth, AuthResolution.aws_sigv4))
+            assert_never(server.config)

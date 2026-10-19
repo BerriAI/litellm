@@ -5,7 +5,11 @@ Our unified API follows the OpenAI standard.
 More information on our website: https://endpoints.ai.cloud.ovh.net
 """
 
+from collections.abc import Mapping
+from typing import Final
+
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -21,6 +25,8 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ..utils import OVHCloudException
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -42,7 +48,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
@@ -58,7 +64,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         stream: bool | None = None,
     ) -> str:
         api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
-        complete_url = f"{api_base}/audio/transcriptions"
+        complete_url: Final = f"{api_base}/audio/transcriptions"
         return complete_url
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
@@ -81,7 +87,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if api_key is None:
             api_key = get_secret_str("OVHCLOUD_API_KEY")
 
-        default_headers = {
+        default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
         }
@@ -104,10 +110,10 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         - Build a multipart form-data body with `file`, `model`, and optional params
         - Let the shared HTTP handler set the proper content-type boundary
         """
-        processed_audio = process_audio_file(audio_file)
+        processed_audio: Final = process_audio_file(audio_file)
 
         # Base form fields: model + OpenAI-compatible optional params
-        form_fields: dict = {
+        form_fields: Final[dict] = {
             "model": model,
         }
 
@@ -117,7 +123,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             if value is not None:
                 form_fields[key] = value
 
-        files = {
+        files: Final = {
             "file": (
                 processed_audio.filename,
                 processed_audio.file_content,
@@ -135,7 +141,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transform OVHCloud audio transcription response to OpenAI-compatible TranscriptionResponse.
         """
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception:
             raise OVHCloudException(
                 message=raw_response.text,
@@ -143,20 +149,19 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        text = response_json.get("text") or response_json.get("transcript") or ""
-        response = TranscriptionResponse(text=text)
+        payload: Final = _JSON_OBJECT.validate_python(response_json)
+        text: Final = payload.get("text") or payload.get("transcript") or ""
+        response: Final = TranscriptionResponse(text=text)
 
         # OVHCloud field migration (deadline: 2026-05-11):
         # `duration` is replaced by `seconds` in STT responses.
         # Prefer `seconds`, fall back to `duration`, normalize to `duration`
         # so downstream consumers see a consistent key.
-        duration = (
-            response_json["seconds"]
-            if "seconds" in response_json and response_json["seconds"] is not None
-            else response_json.get("duration")
+        duration: Final = (
+            payload["seconds"] if "seconds" in payload and payload["seconds"] is not None else payload.get("duration")
         )
         if duration is not None:
             response_json["duration"] = duration
 
-        response._hidden_params = response_json
+        response.hidden_params = response_json
         return response

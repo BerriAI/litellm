@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CacheSettings from "./index";
 
@@ -79,7 +79,7 @@ describe("CacheSettings", () => {
 
       const port = await screen.findByLabelText("Port");
       await user.clear(port);
-      await user.type(port, "99999");
+      fireEvent.change(port, { target: { value: "99999" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       expect(await screen.findByText(/Port must be an integer between 1 and 65535/i)).toBeInTheDocument();
@@ -92,7 +92,7 @@ describe("CacheSettings", () => {
       renderSettings();
 
       const startupNodes = await screen.findByLabelText("Startup Nodes");
-      await user.type(startupNodes, "not json");
+      fireEvent.change(startupNodes, { target: { value: "not json" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       expect(await screen.findByText(/Must be a valid JSON array/i)).toBeInTheDocument();
@@ -104,7 +104,7 @@ describe("CacheSettings", () => {
       renderSettings();
 
       const db = await screen.findByLabelText("Database Index");
-      await user.type(db, "redis://host:6379/1");
+      fireEvent.change(db, { target: { value: "redis://host:6379/1" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       expect(await screen.findByText(/Must be a non-negative integer/i)).toBeInTheDocument();
@@ -118,7 +118,7 @@ describe("CacheSettings", () => {
       renderSettings();
 
       const host = await screen.findByLabelText("Host");
-      await user.type(host, "localhost");
+      fireEvent.change(host, { target: { value: "localhost" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() =>
@@ -136,8 +136,8 @@ describe("CacheSettings", () => {
       const user = userEvent.setup();
       renderSettings();
 
-      await user.type(await screen.findByLabelText("Redis URL"), "redis://host:6379/1");
-      await user.type(await screen.findByLabelText("Database Index"), "2");
+      fireEvent.change(await screen.findByLabelText("Redis URL"), { target: { value: "redis://host:6379/1" } });
+      fireEvent.change(await screen.findByLabelText("Database Index"), { target: { value: "2" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => expect(updateCacheSettingsCall).toHaveBeenCalled());

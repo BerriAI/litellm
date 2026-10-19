@@ -1,7 +1,9 @@
 import json
 import time
 import traceback
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -12,8 +14,8 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     version,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -24,6 +26,7 @@ from ..common_utils import API_BASE, BytezError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -31,7 +34,7 @@ else:
 
 
 # 5 minute timeout (models may need to load)
-STREAMING_TIMEOUT = 60 * 5
+STREAMING_TIMEOUT: Final = 60 * 5
 
 
 class BytezChatConfig(BaseConfig):
@@ -42,7 +45,7 @@ class BytezChatConfig(BaseConfig):
     def __init__(
         self,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -78,7 +81,7 @@ class BytezChatConfig(BaseConfig):
         }
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        supported_params = []
+        supported_params: Final = []
         for key, value in self.openai_to_bytez_param_map.items():
             if value:
                 supported_params.append(key)
@@ -92,9 +95,9 @@ class BytezChatConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        adapted_params = {}
+        adapted_params: Final = {}
 
-        all_params = {**non_default_params, **optional_params}
+        all_params: Final = {**non_default_params, **optional_params}
 
         for key, value in all_params.items():
             alias = self.openai_to_bytez_param_map.get(key)
@@ -148,7 +151,7 @@ class BytezChatConfig(BaseConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        encoded_model = encode_url_path_segments(model, field_name="model")
+        encoded_model: Final = encode_url_path_segments(model, field_name="model")
         return f"{API_BASE}/{encoded_model}"
 
     def transform_request(
@@ -159,15 +162,15 @@ class BytezChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        stream = optional_params.get("stream", False)
+        stream: Final = optional_params.get("stream", False)
 
         # we add stream not as an additional param, but as a primary prop on the request body, this is always defined if stream == True
         if optional_params.get("stream"):
             del optional_params["stream"]
 
-        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
+        messages = adapt_messages_to_bytez_standard(messages=messages)
 
-        data = {
+        data: Final = {
             "messages": messages,
             "stream": stream,
             "params": optional_params,
@@ -185,13 +188,13 @@ class BytezChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        json = raw_response.json()
+        json: Final = raw_response.json()
 
-        error = json.get("error")
+        error: Final = json.get("error")
 
         if error is not None:
             raise BytezError(
@@ -204,32 +207,32 @@ class BytezChatConfig(BaseConfig):
         model_response.model = model
 
         # Add the output
-        output = json.get("output")
+        output: Final = json.get("output")
 
-        message = model_response.choices[0].message  # type: ignore
+        message: Final = model_response.choices[0].message
 
         message.content = output["content"][0]["text"]
 
-        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
+        messages = adapt_messages_to_bytez_standard(messages=messages)
 
         # NOTE We are approximating tokens, to get the true values we will need to update our BE
-        prompt_tokens = get_tokens_from_messages(messages)  # type: ignore
+        prompt_tokens: Final = get_tokens_from_messages(messages)
 
-        output_messages = adapt_messages_to_bytez_standard(messages=[output])
+        output_messages: Final = adapt_messages_to_bytez_standard(messages=[output])
 
-        completion_tokens = get_tokens_from_messages(output_messages)
+        completion_tokens: Final = get_tokens_from_messages(output_messages)
 
-        total_tokens = prompt_tokens + completion_tokens
+        total_tokens: Final = prompt_tokens + completion_tokens
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
         )
 
-        model_response.usage = usage  # type: ignore
+        model_response.usage = usage
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         message.provider_specific_fields = {
             "ratelimit-limit": raw_response.headers.get("ratelimit-limit"),
             "ratelimit-remaining": raw_response.headers.get("ratelimit-remaining"),
@@ -257,12 +260,15 @@ class BytezChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         try:
-            response = client.post(
+            response: Final = client.post(
                 api_base,
                 headers=headers,
                 data=json.dumps(data),
@@ -276,9 +282,9 @@ class BytezChatConfig(BaseConfig):
         if response.status_code != 200:
             raise BytezError(status_code=response.status_code, message=response.text)
 
-        completion_stream = response.iter_text()
+        completion_stream: Final = response.iter_text()
 
-        streaming_response = BytezCustomStreamWrapper(
+        streaming_response: Final = BytezCustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -299,12 +305,15 @@ class BytezChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
 
         try:
-            response = await client.post(
+            response: Final = await client.post(
                 api_base,
                 headers=headers,
                 data=json.dumps(data),
@@ -318,9 +327,9 @@ class BytezChatConfig(BaseConfig):
         if response.status_code != 200:
             raise BytezError(status_code=response.status_code, message=response.text)
 
-        completion_stream = response.aiter_text()
+        completion_stream: Final = response.aiter_text()
 
-        streaming_response = BytezCustomStreamWrapper(
+        streaming_response: Final = BytezCustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -333,10 +342,10 @@ class BytezChatConfig(BaseConfig):
 
 
 class BytezCustomStreamWrapper(CustomStreamWrapper):
-    def chunk_creator(self, chunk: Any):
+    def chunk_creator(self, chunk: object):
         try:
-            model_response = self.model_response_creator()
-            response_obj: dict[str, Any] = {}
+            model_response: Final = self.model_response_creator()
+            response_obj: dict[str, object] = {}
 
             response_obj = {
                 "text": chunk,
@@ -344,11 +353,11 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
                 "finish_reason": "",
             }
 
-            completion_obj: dict[str, Any] = {"content": chunk}
+            completion_obj: Final[dict[str, object]] = {"content": chunk}
 
             return self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
-                model_response=model_response,  # type: ignore
+                model_response=model_response,
                 response_obj=response_obj,
             )
 
@@ -365,7 +374,7 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
 
 
 # litellm/types/llms/openai.py is a good reference for what is supported
-open_ai_to_bytez_content_item_map = {
+open_ai_to_bytez_content_item_map: Final = {
     "text": {"type": "text", "value_name": "text"},
     "image_url": {"type": "image", "value_name": "url"},
     "input_audio": {"type": "audio", "value_name": "url"},
@@ -378,7 +387,7 @@ open_ai_to_bytez_content_item_map = {
 def adapt_messages_to_bytez_standard(messages: list[dict]):
     messages = _adapt_string_only_content_to_lists(messages)
 
-    new_messages = []
+    new_messages: Final = []
 
     for message in messages:
         role = message["role"]
@@ -417,7 +426,7 @@ def adapt_messages_to_bytez_standard(messages: list[dict]):
 # becomes
 # "content": [{"type": "text", "text": "The cat ran so fast"}]
 def _adapt_string_only_content_to_lists(messages: list[dict]):
-    new_messages = []
+    new_messages: Final = []
 
     for message in messages:
         role = message.get("role")

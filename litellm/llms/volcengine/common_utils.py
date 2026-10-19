@@ -2,6 +2,8 @@
 Common utilities for Volcengine LLM provider
 """
 
+from typing import Final
+
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -30,7 +32,7 @@ def get_volcengine_base_url(api_base: str | None = None) -> str:
         The base URL to use for API calls
     """
     if api_base:
-        return api_base
+        return api_base.rstrip("/")
     return "https://ark.cn-beijing.volces.com"
 
 
@@ -45,7 +47,7 @@ def get_volcengine_headers(api_key: str, extra_headers: dict | None = None) -> d
     Returns:
         Dictionary of headers
     """
-    headers = {
+    headers: Final = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }

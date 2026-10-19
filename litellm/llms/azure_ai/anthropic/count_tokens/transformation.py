@@ -4,6 +4,8 @@ Azure AI Anthropic CountTokens API transformation logic.
 Extends the base Anthropic CountTokens transformation with Azure authentication.
 """
 
+from typing import Final
+
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
@@ -22,7 +24,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
 
     def get_required_headers(
         self,
-        api_key: str,
+        api_key: str | None,
         litellm_params: dict[str, object] | None = None,
     ) -> dict[str, str]:
         """
@@ -39,25 +41,26 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
             Dictionary of required headers with both x-api-key and Azure authentication
         """
         # Start with base headers including x-api-key for Anthropic API compatibility
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
             "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
-            "x-api-key": api_key,  # Azure AI Anthropic requires this header
+            **({"x-api-key": api_key} if api_key else {}),
         }
 
         # Also set up Azure auth headers for flexibility
         litellm_params = litellm_params or {}
-        if "api_key" not in litellm_params:
+        if api_key and "api_key" not in litellm_params:
             litellm_params["api_key"] = api_key
 
-        litellm_params_obj = GenericLiteLLMParams.model_validate(litellm_params)
+        litellm_params_obj: Final = GenericLiteLLMParams.model_validate(litellm_params)
 
         # Get Azure auth headers (api-key or Authorization)
-        azure_headers = BaseAzureLLM._base_validate_azure_environment(headers={}, litellm_params=litellm_params_obj)
+        azure_headers = BaseAzureLLM.base_validate_azure_environment(headers={}, litellm_params=litellm_params_obj)
 
-        # Merge Azure auth headers
         headers.update(azure_headers)
+        if "api-key" in azure_headers:
+            headers.setdefault("x-api-key", azure_headers["api-key"])
 
         return headers
 

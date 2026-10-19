@@ -3,7 +3,9 @@ Volcengine Embedding Transformation
 Transforms OpenAI embedding requests to Volcengine format
 """
 
-from typing import Any
+import types
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 
@@ -26,7 +28,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         self,
         encoding_format: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -74,7 +76,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         Returns:
             Complete URL for the embedding API endpoint
         """
-        base_url = get_volcengine_base_url(api_base)
+        base_url: Final = get_volcengine_base_url(api_base)
         # Construct the complete URL with /embeddings endpoint
         if base_url.endswith("/api/v3"):
             return f"{base_url}/embeddings"
@@ -83,11 +85,11 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, Any],
-        optional_params: dict[str, Any],
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Map OpenAI embedding parameters to Volcengine format.
 
@@ -129,19 +131,19 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
     ) -> dict:
         """Transform embedding request to Volcengine format"""
         # Prepare request data (only the JSON body, not the full request)
-        data = {
+        data: Final = {
             "model": model,
             "input": input if isinstance(input, list) else [input],
         }
 
         # Add optional parameters from optional_params
         if "encoding_format" in optional_params:
-            encoding_format = optional_params["encoding_format"]
+            encoding_format: Final = optional_params["encoding_format"]
             if encoding_format is not None:
                 data["encoding_format"] = encoding_format
 
         if "user" in optional_params:
-            user = optional_params["user"]
+            user: Final = optional_params["user"]
             if user is not None:
                 data["user"] = user
 
@@ -160,13 +162,13 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
     ) -> EmbeddingResponse:
         """Transform Volcengine response to EmbeddingResponse"""
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception as e:
-            raise ValueError(f"Failed to parse Volcengine response as JSON: {e!s}")
+            raise ValueError(f"Failed to parse Volcengine response as JSON: {e}")
 
         # Volcengine response format matches OpenAI format closely
         # Just need to ensure all required fields are present
-        transformed_response = {
+        transformed_response: Final = {
             "object": "list",
             "data": response_json.get("data", []),
             "model": response_json.get("model", model),
@@ -194,7 +196,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         # Get Volcengine headers
         if api_key is None:
             raise ValueError("api_key is required for Volcengine authentication")
-        volcengine_headers = get_volcengine_headers(api_key)
+        volcengine_headers: Final = get_volcengine_headers(api_key)
         return {**headers, **volcengine_headers}
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

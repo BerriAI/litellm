@@ -1,12 +1,12 @@
 import React from "react";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { OnboardingLoadingView } from "./OnboardingLoadingView";
 
 describe("OnboardingLoadingView", () => {
-  it("should render a spinner container", () => {
-    const { container } = render(<OnboardingLoadingView />);
-    expect(container.firstChild).toBeInTheDocument();
+  it("should expose the loading state to assistive technology", () => {
+    render(<OnboardingLoadingView />);
+    expect(screen.getByRole("status", { name: "Loading invitation" })).toBeInTheDocument();
   });
 
   it("should apply centering layout classes", () => {

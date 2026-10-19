@@ -4,9 +4,11 @@ Calls Serper's /search endpoint to search Google.
 Serper API Reference: https://serper.dev
 """
 
-from typing import TypedDict
+from collections.abc import Iterable, Mapping
+from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -15,6 +17,9 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _SerperSearchRequestRequired(TypedDict):
@@ -108,7 +113,7 @@ class SerperSearchConfig(BaseSearchConfig):
         if isinstance(query, list):
             query = " ".join(query)
 
-        request_data: SerperSearchRequest = {
+        request_data: Final[SerperSearchRequest] = {
             "q": query,
         }
 
@@ -119,13 +124,13 @@ class SerperSearchConfig(BaseSearchConfig):
             request_data["gl"] = optional_params["country"].lower()
 
         if "search_domain_filter" in optional_params:
-            domains = optional_params["search_domain_filter"]
+            domains: Final = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
-                domain_clauses = " OR ".join(f"site:{d}" for d in domains)
+                domain_clauses: Final = " OR ".join(f"site:{d}" for d in domains)
                 request_data["q"] = f"({request_data['q']}) ({domain_clauses})"
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -156,16 +161,19 @@ class SerperSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
-        results = []
-        for result in response_json.get("organic", []):
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("link", ""),
-                snippet=result.get("snippet", ""),
-                date=result.get("date"),
-                last_updated=None,
+        results: Final = []
+        for raw_result in _JSON_VALUES.validate_python(response_json.get("organic", [])):
+            result = _JSON_OBJECT.validate_python(raw_result)
+            search_result = SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("link", ""),
+                    "snippet": result.get("snippet", ""),
+                    "date": result.get("date"),
+                    "last_updated": None,
+                }
             )
             results.append(search_result)
 

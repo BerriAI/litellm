@@ -2,9 +2,10 @@
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
 
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Final
 
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -29,7 +30,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -50,7 +51,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Azure Anthropic uses x-api-key header (not api-key)
         # Convert api-key to x-api-key if present
@@ -68,6 +69,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
+            messages=messages,
         )
 
         return headers, api_base
@@ -104,7 +106,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             if "/anthropic" in api_base:
                 # /anthropic exists, ensure we end with /anthropic/v1/messages
                 # Extract the base URL up to and including /anthropic
-                parts = api_base.split("/anthropic", 1)
+                parts: Final = api_base.split("/anthropic", 1)
                 api_base = parts[0] + "/anthropic"
             else:
                 # /anthropic not in path, add it
@@ -134,7 +136,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                     _sanitize(item["cache_control"])
 
         if "system" in anthropic_messages_request:
-            system = anthropic_messages_request["system"]
+            system: Final = anthropic_messages_request["system"]
             if isinstance(system, list):
                 _process_content_list(system)
 
@@ -153,7 +155,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        anthropic_messages_request = super().transform_anthropic_messages_request(
+        anthropic_messages_request: Final = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,

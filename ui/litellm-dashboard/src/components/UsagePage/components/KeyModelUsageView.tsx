@@ -1,9 +1,9 @@
 import { BarChart } from "@/components/shared/charts";
+import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { Table } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import type { ColumnDef } from "@tanstack/react-table";
 import React, { useState } from "react";
 import { TopModelData } from "../types";
 
@@ -12,39 +12,38 @@ interface KeyModelUsageViewProps {
 }
 
 const VISIBLE_ROWS = 5;
-// antd Table with size="small" has a row height of ~39px
-const ANTD_SMALL_TABLE_ROW_HEIGHT = 39;
+const COMPACT_TABLE_HEADER_HEIGHT = 33;
+const COMPACT_TABLE_ROW_HEIGHT = 32;
 
-const columns: ColumnsType<TopModelData> = [
+const columns: ColumnDef<TopModelData>[] = [
   {
-    title: "Model",
-    dataIndex: "model",
-    key: "model",
-    render: (value) => value || "-",
+    header: "Model",
+    accessorKey: "model",
+    cell: ({ row }) => row.original.model || "-",
   },
   {
-    title: "Spend (USD)",
-    dataIndex: "spend",
-    key: "spend",
-    render: (value) => <MoneyCell value={value} decimals={2} />,
+    header: "Spend (USD)",
+    accessorKey: "spend",
+    meta: { numeric: true },
+    cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
   },
   {
-    title: "Successful",
-    dataIndex: "successful_requests",
-    key: "successful_requests",
-    render: (value) => <span className="text-green-600">{value?.toLocaleString() || 0}</span>,
+    header: "Successful",
+    accessorKey: "successful_requests",
+    meta: { numeric: true },
+    cell: ({ row }) => <span className="text-success">{row.original.successful_requests?.toLocaleString() || 0}</span>,
   },
   {
-    title: "Failed",
-    dataIndex: "failed_requests",
-    key: "failed_requests",
-    render: (value) => <span className="text-red-600">{value?.toLocaleString() || 0}</span>,
+    header: "Failed",
+    accessorKey: "failed_requests",
+    meta: { numeric: true },
+    cell: ({ row }) => <span className="text-destructive">{row.original.failed_requests?.toLocaleString() || 0}</span>,
   },
   {
-    title: "Tokens",
-    dataIndex: "tokens",
-    key: "tokens",
-    render: (value) => value?.toLocaleString() || 0,
+    header: "Tokens",
+    accessorKey: "tokens",
+    meta: { numeric: true },
+    cell: ({ row }) => row.original.tokens?.toLocaleString() || 0,
   },
 ];
 
@@ -63,13 +62,13 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
           <div className="flex space-x-2">
             <button
               onClick={() => setViewMode("table")}
-              className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+              className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
             >
               Table
             </button>
             <button
               onClick={() => setViewMode("chart")}
-              className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+              className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
             >
               Chart
             </button>
@@ -93,13 +92,12 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
             />
           </div>
         ) : (
-          <Table
+          <DataTable
             columns={columns}
-            dataSource={topModels}
-            rowKey="model"
-            size="small"
-            pagination={false}
-            scroll={topModels.length > VISIBLE_ROWS ? { y: VISIBLE_ROWS * ANTD_SMALL_TABLE_ROW_HEIGHT } : undefined}
+            data={topModels}
+            getRowId={(row) => row.model}
+            maxBodyHeight={COMPACT_TABLE_HEADER_HEIGHT + VISIBLE_ROWS * COMPACT_TABLE_ROW_HEIGHT}
+            size="compact"
           />
         )}
       </CardContent>

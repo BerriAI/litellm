@@ -3,11 +3,12 @@ Replace messages with compact stubs and extract human-readable keys.
 """
 
 import re
+from typing import Final
 
 from litellm.compression.content_detection import detect_content_type
 
 # Patterns for extracting file paths from content
-_FILE_PATH_PATTERNS = [
+_FILE_PATH_PATTERNS: Final = [
     re.compile(r"^#\s*(\S+\.\w+)", re.MULTILINE),  # # filename.py
     re.compile(r"^//\s*(\S+\.\w+)", re.MULTILINE),  # // filename.js
     re.compile(r"^File:\s*(\S+)", re.MULTILINE),  # File: path/to/file
@@ -40,7 +41,7 @@ def extract_key(message: dict, fallback_index: int, used_keys: set[str]) -> str:
         key = f"message_{fallback_index}"
 
     # Handle duplicates
-    base_key = key
+    base_key: Final = key
     counter = 2
     while key in used_keys:
         key = f"{base_key}_{counter}"
@@ -61,10 +62,10 @@ def stub_message(message: dict, key: str) -> dict:
     if isinstance(content, list):
         content = " ".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in content)
 
-    line_count = content.count("\n") + 1
-    content_type = detect_content_type(content)
+    line_count: Final = content.count("\n") + 1
+    content_type: Final = detect_content_type(content)
 
-    stub_content = (
+    stub_content: Final = (
         f"[Compressed: {key} — {line_count} lines, {content_type}. "
         f"Use litellm_content_retrieve tool to get full content.]"
     )
@@ -89,23 +90,23 @@ def truncate_message(message: dict, max_tokens: int) -> dict:
         content = " ".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in content)
 
     # Rough conversion: 1 token ≈ 3 characters
-    target_chars = max(100, max_tokens * 3)
+    target_chars: Final = max(100, max_tokens * 3)
 
     if len(content) <= target_chars:
         return {**message, "content": content}
 
-    lines = content.split("\n")
+    lines: Final = content.split("\n")
 
     # Estimate target line count from character budget
-    avg_line_len = max(1, len(content) // max(1, len(lines)))
-    target_lines = max(2, target_chars // avg_line_len)
+    avg_line_len: Final = max(1, len(content) // max(1, len(lines)))
+    target_lines: Final = max(2, target_chars // avg_line_len)
 
     if len(lines) <= target_lines:
         return {**message, "content": content}
 
-    first_count = (target_lines * 7) // 10
-    last_count = target_lines - first_count
-    truncated = (
+    first_count: Final = (target_lines * 7) // 10
+    last_count: Final = target_lines - first_count
+    truncated: Final = (
         "\n".join(lines[:first_count]) + "\n...[truncated for context window]...\n" + "\n".join(lines[-last_count:])
     )
     return {**message, "content": truncated}

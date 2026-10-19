@@ -334,7 +334,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
       {card && (
         <div className="mt-4 rounded-lg border border-border bg-background p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <CircleCheck className="size-4 text-green-600" />
+            <CircleCheck className="size-4 text-success" />
             <span className="text-sm font-medium text-foreground">Upstream card loaded</span>
             {card.version && <Badge variant="secondary">v{card.version}</Badge>}
             {card.provider?.organization && <Badge variant="secondary">{card.provider.organization}</Badge>}

@@ -2,9 +2,11 @@
 Calls Perplexity's /search endpoint to search the web.
 """
 
-from typing import TypedDict
+from collections.abc import Iterable, Mapping
+from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -13,6 +15,9 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _PerplexitySearchRequestRequired(TypedDict):
@@ -73,13 +78,11 @@ class PerplexitySearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or self.PERPLEXITY_API_BASE
-
-        # append "/search" to the api base if it's not already there
-        if not api_base.endswith("/search"):
-            api_base = f"{api_base}/search"
-
-        return api_base
+        resolved_api_base: Final = api_base or get_secret_str("PERPLEXITY_API_BASE") or self.PERPLEXITY_API_BASE
+        clean_api_base: Final = resolved_api_base.rstrip("/")
+        if clean_api_base.endswith("/search"):
+            return clean_api_base
+        return f"{clean_api_base}/search"
 
     def transform_search_request(
         self,
@@ -107,24 +110,24 @@ class PerplexitySearchConfig(BaseSearchConfig):
         Returns:
             Dict with typed request data following PerplexitySearchRequest spec
         """
-        request_data: PerplexitySearchRequest = {
+        request_data: Final[PerplexitySearchRequest] = {
             "query": query,
         }
 
         # Add optional parameters following Perplexity API spec (only if not None)
-        max_results = optional_params.get("max_results")
+        max_results: Final = optional_params.get("max_results")
         if max_results is not None:
             request_data["max_results"] = max_results
 
-        search_domain_filter = optional_params.get("search_domain_filter")
+        search_domain_filter: Final = optional_params.get("search_domain_filter")
         if search_domain_filter is not None:
             request_data["search_domain_filter"] = search_domain_filter
 
-        max_tokens_per_page = optional_params.get("max_tokens_per_page")
+        max_tokens_per_page: Final = optional_params.get("max_tokens_per_page")
         if max_tokens_per_page is not None:
             request_data["max_tokens_per_page"] = max_tokens_per_page
 
-        country = optional_params.get("country")
+        country: Final = optional_params.get("country")
         if country is not None:
             request_data["country"] = country
 
@@ -146,17 +149,20 @@ class PerplexitySearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
-        results = []
-        for result in response_json.get("results", []):
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=result.get("snippet", ""),
-                date=result.get("date"),
-                last_updated=result.get("last_updated"),
+        results: Final = []
+        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
+            result = _JSON_OBJECT.validate_python(raw_result)
+            search_result = SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "snippet": result.get("snippet", ""),
+                    "date": result.get("date"),
+                    "last_updated": result.get("last_updated"),
+                }
             )
             results.append(search_result)
 

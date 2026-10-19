@@ -1,4 +1,6 @@
 import types
+from collections.abc import Mapping
+from typing import Final
 
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
@@ -26,7 +28,7 @@ class AmazonCohereConfig(AmazonInvokeConfig, CohereChatConfig):
         temperature: float | None = None,
         return_likelihood: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -53,7 +55,7 @@ class AmazonCohereConfig(AmazonInvokeConfig, CohereChatConfig):
         }
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        supported_params = CohereChatConfig.get_supported_openai_params(self, model=model)
+        supported_params: Final = CohereChatConfig.get_supported_openai_params(self, model=model)
         return supported_params
 
     def map_openai_params(

@@ -4,6 +4,8 @@ Cerebras Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
+from typing import Final
+
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.utils import supports_reasoning
 
@@ -39,7 +41,7 @@ class CerebrasConfig(OpenAIGPTConfig):
         user: str | None = None,
         reasoning_effort: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -54,7 +56,7 @@ class CerebrasConfig(OpenAIGPTConfig):
 
         """
 
-        supported_params = [
+        supported_params: Final = [
             "max_tokens",
             "max_completion_tokens",
             "response_format",
@@ -66,6 +68,8 @@ class CerebrasConfig(OpenAIGPTConfig):
             "tool_choice",
             "tools",
             "user",
+            "max_retries",
+            "extra_headers",
         ]
 
         # Only add reasoning_effort for models that support it
@@ -81,7 +85,7 @@ class CerebrasConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value

@@ -1,5 +1,5 @@
-from collections.abc import Coroutine
-from typing import Any, cast
+from collections.abc import Coroutine, Mapping
+from typing import Final, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -8,7 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.fine_tuning.handler import (
     OpenAIFineTuningAPI,
-    _litellm_fine_tuning_job_from_response,
+    litellm_fine_tuning_job_from_response,
 )
 from litellm.types.utils import LiteLLMFineTuningJob
 
@@ -19,7 +19,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
     """
 
     @staticmethod
-    def _ensure_training_type(create_fine_tuning_job_data: dict[str, Any]) -> None:
+    def _ensure_training_type(create_fine_tuning_job_data: dict[str, object]) -> None:
         """
         Azure requires trainingType in extra_body. Default to 1 (supervised) if omitted.
         """
@@ -36,24 +36,24 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         create_fine_tuning_job_data: dict,
         openai_client: AsyncOpenAI | AsyncAzureOpenAI,
     ) -> LiteLLMFineTuningJob:
-        response = await openai_client.fine_tuning.jobs.create(**create_fine_tuning_job_data)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        response: Final = await openai_client.fine_tuning.jobs.create(**create_fine_tuning_job_data)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     async def acancel_fine_tuning_job(
         self,
         fine_tuning_job_id: str,
         openai_client: AsyncOpenAI | AsyncAzureOpenAI,
     ) -> LiteLLMFineTuningJob:
-        response = await openai_client.fine_tuning.jobs.cancel(fine_tuning_job_id=fine_tuning_job_id)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        response: Final = await openai_client.fine_tuning.jobs.cancel(fine_tuning_job_id=fine_tuning_job_id)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     async def aretrieve_fine_tuning_job(
         self,
         fine_tuning_job_id: str,
         openai_client: AsyncOpenAI | AsyncAzureOpenAI,
     ) -> LiteLLMFineTuningJob:
-        response = await openai_client.fine_tuning.jobs.retrieve(fine_tuning_job_id=fine_tuning_job_id)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        response: Final = await openai_client.fine_tuning.jobs.retrieve(fine_tuning_job_id=fine_tuning_job_id)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     def create_fine_tuning_job(
         self,
@@ -66,10 +66,11 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
-    ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         self._ensure_training_type(create_fine_tuning_job_data)
 
-        openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -78,6 +79,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -95,8 +97,8 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
             )
 
         verbose_logger.debug("creating fine tuning job, args= %s", create_fine_tuning_job_data)
-        response = cast(OpenAI, openai_client).fine_tuning.jobs.create(**create_fine_tuning_job_data)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        response: Final = cast(OpenAI, openai_client).fine_tuning.jobs.create(**create_fine_tuning_job_data)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     def cancel_fine_tuning_job(
         self,
@@ -109,8 +111,9 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
-    ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
-        openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = self.get_openai_client(
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
+        openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -119,6 +122,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -135,8 +139,8 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
                 openai_client=openai_client,
             )
 
-        response = cast(OpenAI, openai_client).fine_tuning.jobs.cancel(fine_tuning_job_id=fine_tuning_job_id)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        response: Final = cast(OpenAI, openai_client).fine_tuning.jobs.cancel(fine_tuning_job_id=fine_tuning_job_id)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     def retrieve_fine_tuning_job(
         self,
@@ -149,8 +153,9 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
-    ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
-        openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = self.get_openai_client(
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
+        openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -159,6 +164,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -175,8 +181,8 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
                 openai_client=openai_client,
             )
 
-        response = cast(OpenAI, openai_client).fine_tuning.jobs.retrieve(fine_tuning_job_id=fine_tuning_job_id)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        response: Final = cast(OpenAI, openai_client).fine_tuning.jobs.retrieve(fine_tuning_job_id=fine_tuning_job_id)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     def get_openai_client(
         self,
@@ -188,14 +194,14 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
         _is_async: bool = False,
         api_version: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None:
         # Override to use Azure-specific client initialization
         if isinstance(client, OpenAI) or isinstance(client, AsyncOpenAI):
             client = None
 
         return self.get_azure_openai_client(
-            litellm_params=litellm_params or {},
+            litellm_params=dict(litellm_params) if litellm_params is not None else None,
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,

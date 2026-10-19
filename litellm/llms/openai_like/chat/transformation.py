@@ -2,10 +2,11 @@
 OpenAI-like chat completion transformation
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
 from litellm.types.utils import ModelResponse
@@ -14,6 +15,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -26,9 +28,16 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")  # type: ignore
+        api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")
         dynamic_api_key = api_key or get_secret_str("OPENAI_LIKE_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     @staticmethod
     def _json_mode_convert_tool_response_to_message(
@@ -48,7 +57,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if not json_mode:
             return message
 
-        _tool_calls = message.get("tool_calls")
+        _tool_calls: Final = message.get("tool_calls")
 
         if _tool_calls is None or len(_tool_calls) != 1:
             return message
@@ -67,7 +76,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         This method is future-proof and sanitizes any key ending in '_tokens'.
         """
         if "usage" in response_json and isinstance(response_json.get("usage"), dict):
-            usage = response_json["usage"]
+            usage: Final = response_json["usage"]
             # Iterate through all keys in the usage dictionary
             for key, value in usage.items():
                 # Sanitize if the key ends with '_tokens' and its value is None
@@ -110,13 +119,14 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
                 )
                 choice["message"] = message
 
-        returned_response = ModelResponse(**response_json)
+        returned_response: Final = ModelResponse(**response_json)
+        set_provider_response_headers_in_hidden_params(returned_response, response.headers)
 
         if custom_llm_provider is not None:
             returned_response.model = custom_llm_provider + "/" + (returned_response.model or "")
 
         if base_model is not None:
-            returned_response._hidden_params["model"] = base_model
+            returned_response.hidden_params["model"] = base_model
         return returned_response
 
     def transform_response(
@@ -129,7 +139,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -158,7 +168,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        mapped_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
             mapped_params["max_tokens"] = non_default_params[
                 "max_completion_tokens"

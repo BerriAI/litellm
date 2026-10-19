@@ -36,21 +36,22 @@ cleared value so it can be restored, and the clear is recorded under this module
 runs at most once per row.
 """
 
-from typing import Protocol
+from typing import Final, Protocol
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import canonicalize_url_identity
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
 
 # The actor the removed discovery write-back stamped rows with.
-_DISCOVERY_ACTOR = "mcp_oauth_discovery"
+_DISCOVERY_ACTOR: Final = "mcp_oauth_discovery"
 
 # The actor recorded on a healed row, which also makes the heal idempotent: once a row is cleared it
 # no longer matches ``updated_by == _DISCOVERY_ACTOR`` and is never reconsidered.
-_BACKFILL_ACTOR = "mcp_oauth_issuer_stamp_backfill"
+_BACKFILL_ACTOR: Final = "mcp_oauth_issuer_stamp_backfill"
 
-_AUTH_TYPES_WITH_ISSUER_ANCHORING = ("oauth2", "true_passthrough", "oauth_delegate")
+_AUTH_TYPES_WITH_ISSUER_ANCHORING: Final = ("oauth2", "true_passthrough", "oauth_delegate")
 
 
 def _origin(url: str) -> str | None:
@@ -59,7 +60,7 @@ def _origin(url: str) -> str | None:
     Built on the shared URL canonicalizer so the lowercase-host and default-port rules match the
     RFC 8414 issuer comparison the resolution path uses, instead of being re-derived here.
     """
-    parsed = urlparse(canonicalize_url_identity(url))
+    parsed: Final = urlparse(canonicalize_url_identity(url))
     if not parsed.scheme or not parsed.netloc:
         return None
     return f"{parsed.scheme}://{parsed.netloc}"
@@ -92,36 +93,37 @@ def _is_stamped_issuer_row(row: _MCPServerRow) -> bool:
         return False
     if getattr(row, "auth_type", None) not in _AUTH_TYPES_WITH_ISSUER_ANCHORING:
         return False
-    configured = tuple(
+    configured: Final = tuple(
         value.strip()
         for value in (row.authorization_url, row.token_url, row.registration_url)
         if value and value.strip()
     )
     if not configured:
         return False
-    issuer_origin = _origin(row.issuer or "")
+    issuer_origin: Final = _origin(row.issuer or "")
     return issuer_origin is not None and all(_origin(endpoint) == issuer_origin for endpoint in configured)
 
 
 async def backfill_discovery_stamped_issuers(prisma_client: PrismaClient) -> int:
     """Clear gateway-written issuer stamps, returning the number of rows healed."""
-    candidate_rows: list[_MCPServerRow] = await prisma_client.db.litellm_mcpservertable.find_many(
+    candidate_rows: Final[list[_MCPServerRow]] = await prisma_client.db.litellm_mcpservertable.find_many(
         where={
             "updated_by": _DISCOVERY_ACTOR,
             "auth_type": {"in": list(_AUTH_TYPES_WITH_ISSUER_ANCHORING)},
         },
     )
-    stamped = tuple(row for row in candidate_rows if _is_stamped_issuer_row(row))
+    stamped: Final = tuple(row for row in candidate_rows if _is_stamped_issuer_row(row))
     if not stamped:
         return 0
 
     healed = 0
     for row in stamped:
         try:
-            await prisma_client.db.litellm_mcpservertable.update(
-                where={"server_id": row.server_id},
-                data={"issuer": None, "updated_by": _BACKFILL_ACTOR},
-            )
+            async with db_span("backfill_mcp_oauth_issuer", "LiteLLM_MCPServerTable"):
+                await prisma_client.db.litellm_mcpservertable.update(
+                    where={"server_id": row.server_id},
+                    data={"issuer": None, "updated_by": _BACKFILL_ACTOR},
+                )
         except Exception as exc:  # noqa: BLE001 - per-row best effort; the next boot retries
             verbose_proxy_logger.warning(
                 "MCP issuer stamp backfill: could not heal server_id=%s: %s", row.server_id, exc

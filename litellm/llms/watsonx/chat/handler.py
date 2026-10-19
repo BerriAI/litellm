@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from typing import Final
 
 import httpx
 
@@ -6,10 +7,10 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 
 from ...openai_like.chat.handler import OpenAILikeChatHandler
-from ..common_utils import _get_api_params
+from ..common_utils import get_api_params
 from .transformation import IBMWatsonXChatConfig
 
-watsonx_chat_transformation = IBMWatsonXChatConfig()
+watsonx_chat_transformation: Final = IBMWatsonXChatConfig()
 
 
 class WatsonXChatHandler(OpenAILikeChatHandler):
@@ -40,7 +41,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         streaming_decoder: CustomStreamingDecoder | None = None,
         fake_stream: bool = False,
     ):
-        api_params = _get_api_params(params=optional_params, model=model)
+        api_params: Final = get_api_params(params=optional_params, model=model)
 
         ## UPDATE HEADERS
         headers = watsonx_chat_transformation.validate_environment(
@@ -53,7 +54,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         )
 
         ## UPDATE PAYLOAD (optional params and special cases for models deployed in spaces)
-        watsonx_auth_payload = watsonx_chat_transformation._prepare_payload(
+        watsonx_auth_payload: Final = watsonx_chat_transformation.prepare_payload(
             model=model,
             api_params=api_params,
         )

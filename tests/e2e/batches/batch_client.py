@@ -13,9 +13,11 @@ co-located here because only this suite uses them.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from e2e_metadata import step
 from proxy_client import ProxyClient
 from e2e_http import (
     FileUploadForm,
@@ -27,6 +29,18 @@ from e2e_http import (
 from models import LiteLLMParamsBody
 
 UPLOAD_FILENAME = "batch_input.jsonl"
+AZURE_FILE_EXPIRY_SECONDS: Final = 14 * 24 * 60 * 60
+
+
+class ExpiringFileUploadForm(FileUploadForm):
+    expires_after_anchor: Literal["created_at"] = Field(default="created_at", alias="expires_after[anchor]")
+    expires_after_seconds: int = Field(default=AZURE_FILE_EXPIRY_SECONDS, alias="expires_after[seconds]")
+
+
+def batch_upload_form(provider: str, *, target_model_names: str | None = None) -> FileUploadForm:
+    if provider == "azure":
+        return ExpiringFileUploadForm(target_model_names=target_model_names)
+    return FileUploadForm(target_model_names=target_model_names)
 
 
 class FileObject(BaseModel):
@@ -37,11 +51,30 @@ class FileObject(BaseModel):
     bytes: int | None = None
     status: str | None = None
     created_at: int | None = None
+    expires_at: int | None = None
 
 
 class FileList(BaseModel):
+    """GET /v1/files page. The cursors are modelled because they are part of the
+    page's isolation contract: they must address rows in `data`, never rows the
+    caller was not allowed to see."""
+
     object: str | None = None
     data: list[FileObject] = []
+    first_id: str | None = None
+    last_id: str | None = None
+    has_more: bool | None = None
+
+
+class BatchErrorItem(BaseModel):
+    code: str | None = None
+    line: int | None = None
+    message: str | None = None
+
+
+class BatchErrorList(BaseModel):
+    object: str | None = None
+    data: list[BatchErrorItem] = []
 
 
 class BatchObject(BaseModel):
@@ -51,6 +84,9 @@ class BatchObject(BaseModel):
     endpoint: str | None = None
     input_file_id: str | None = None
     output_file_id: str | None = None
+    error_file_id: str | None = None
+    errors: BatchErrorList | None = None
+    metadata: dict[str, str] | None = None
     completion_window: str | None = None
     created_at: int | None = None
     model: str | None = None
@@ -64,7 +100,7 @@ class BatchList(BaseModel):
 class FileDeleteResponse(BaseModel):
     id: str
     object: str | None = None
-    deleted: bool
+    deleted: bool | None = None
 
 
 class BatchCreateBody(BaseModel):
@@ -72,10 +108,16 @@ class BatchCreateBody(BaseModel):
     endpoint: str = "/v1/chat/completions"
     completion_window: str = "24h"
     model: str | None = None
+    metadata: dict[str, str] | None = None
 
 
 class ModelQuery(BaseModel):
     model: str | None = None
+
+
+class BatchListQuery(BaseModel):
+    model: str | None = None
+    limit: int | None = None
 
 
 def is_model_access_denied(resp: StreamingResponse) -> bool:
@@ -95,12 +137,15 @@ def is_result_access_denied[R: BaseModel](result: Result[R]) -> bool:
 class BatchClient:
     proxy: ProxyClient
 
+    @step("Add a batch deployment named {model_name} that calls {litellm_params.model}")
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
         return self.proxy.create_model(model_name, litellm_params, mode="batch")
 
+    @step("Delete the batch deployment")
     def delete_model(self, model_id: str) -> None:
         self.proxy.delete_model(model_id)
 
+    @step("Upload a batch input file to /v1/files")
     def upload_file(
         self,
         *,
@@ -120,6 +165,7 @@ class BatchClient:
             response_type=FileObject,
         )
 
+    @step("Retrieve the uploaded file")
     def retrieve_file(
         self, file_id: str, *, key: str, provider: str | None = None
     ) -> Result[FileObject]:
@@ -130,6 +176,7 @@ class BatchClient:
             response_type=FileObject,
         )
 
+    @step("List the files the key can see from /v1/files")
     def list_files(self, *, key: str, provider: str | None = None) -> Result[FileList]:
         return self.proxy.transport.get(
             _files_path(provider),
@@ -138,6 +185,7 @@ class BatchClient:
             response_type=FileList,
         )
 
+    @step("Create a batch of {body.endpoint} requests from the uploaded file")
     def create_batch(
         self, *, body: BatchCreateBody, key: str, provider: str | None = None
     ) -> StreamingResponse:
@@ -147,6 +195,7 @@ class BatchClient:
             json=body,
         )
 
+    @step("Retrieve the batch")
     def retrieve_batch(
         self, batch_id: str, *, key: str, provider: str | None = None
     ) -> Result[BatchObject]:
@@ -157,6 +206,7 @@ class BatchClient:
             response_type=BatchObject,
         )
 
+    @step("Cancel the batch")
     def cancel_batch(
         self, batch_id: str, *, key: str, provider: str | None = None
     ) -> Result[BatchObject]:
@@ -167,22 +217,38 @@ class BatchClient:
             response_type=BatchObject,
         )
 
+    @step("List the batches the key can see from /v1/batches")
     def list_batches(
-        self, *, key: str, provider: str | None = None
+        self,
+        *,
+        key: str,
+        provider: str | None = None,
+        model: str | None = None,
+        limit: int | None = None,
     ) -> Result[BatchList]:
         return self.proxy.transport.get(
             _batches_path(provider),
             headers=self.proxy.transport.bearer(key),
-            params=NoBody(),
+            params=BatchListQuery(model=model, limit=limit),
             response_type=BatchList,
         )
 
+    @step("Delete the uploaded file")
     def delete_file(
         self, file_id: str, *, key: str, provider: str | None = None
     ) -> Result[FileDeleteResponse]:
         return self.proxy.transport.delete(
             f"{_files_path(provider)}/{file_id}",
             headers=self.proxy.transport.bearer(key),
+            json=NoBody(),
+            response_type=FileDeleteResponse,
+        )
+
+    @step("Delete the uploaded file as the proxy admin")
+    def delete_file_as_admin(self, file_id: str, *, provider: str | None = None) -> Result[FileDeleteResponse]:
+        return self.proxy.transport.delete(
+            f"{_files_path(provider)}/{file_id}",
+            headers=self.proxy.transport.master,
             json=NoBody(),
             response_type=FileDeleteResponse,
         )

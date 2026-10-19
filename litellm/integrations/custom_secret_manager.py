@@ -237,7 +237,7 @@ class CustomSecretManager(BaseSecretManager):
         Returns:
             True if the secret manager is healthy, False otherwise
         """
-        verbose_logger.debug(f"Health check not implemented for {self.secret_manager_name}")
+        verbose_logger.debug("Health check not implemented for %s", self.secret_manager_name)
         return True
 
     def __repr__(self) -> str:

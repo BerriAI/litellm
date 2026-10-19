@@ -10,15 +10,14 @@ implement the LiteLLM BaseConfig interface.  Heavy-lifting lives in:
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator
-from typing import (
-    TYPE_CHECKING,
-    Any,
-)
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -26,14 +25,14 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     version,
 )
 from litellm.llms.oci.chat.cohere import (
-    _extract_text_content,
     adapt_messages_to_cohere_standard,
     adapt_tool_definitions_to_cohere_standard,
+    extract_text_content,
     handle_cohere_response,
     handle_cohere_stream_chunk,
 )
@@ -52,6 +51,7 @@ from litellm.llms.oci.common_utils import (
     sign_oci_request,
     validate_oci_environment,
 )
+from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.types.llms.oci import (
     CohereChatRequest,
     OCIChatRequestPayload,
@@ -69,6 +69,7 @@ from litellm.utils import supports_reasoning
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -76,7 +77,7 @@ else:
 
 
 # Streaming timeout — generous because OCI models may need to warm up on first request
-STREAMING_TIMEOUT = 60 * 5
+STREAMING_TIMEOUT: Final = 60 * 5
 
 
 def _model_uses_max_completion_tokens(model: str) -> bool:
@@ -92,8 +93,8 @@ def _model_uses_max_completion_tokens(model: str) -> bool:
     """
     if not model:
         return False
-    name = model[4:] if model.lower().startswith("oci/") else model
-    lowered = name.lower()
+    name: Final = model[4:] if model.lower().startswith("oci/") else model
+    lowered: Final = name.lower()
     if lowered.startswith("openai."):
         return not lowered.startswith("openai.gpt-oss")
     return supports_reasoning(model=name, custom_llm_provider="oci")
@@ -138,11 +139,11 @@ async def _aiter_sse_events(stream: AsyncIterator[str]) -> AsyncIterator[str]:
 
 
 def _normalize_tool_choice(selected_params: dict) -> None:
-    tc = selected_params.get("toolChoice")
+    tc: Final = selected_params.get("toolChoice")
     if tc is None:
         return
     if isinstance(tc, str):
-        tc_map = {
+        tc_map: Final = {
             "auto": {"type": "AUTO"},
             "none": {"type": "NONE"},
             "required": {"type": "REQUIRED"},
@@ -151,16 +152,16 @@ def _normalize_tool_choice(selected_params: dict) -> None:
         selected_params["toolChoice"] = tc_map.get(tc.lower(), {"type": "FUNCTION", "name": tc})
         return
     if isinstance(tc, dict):
-        raw_type = tc.get("type")
+        raw_type: Final = tc.get("type")
         if not isinstance(raw_type, str):
             raise OCIError(
                 status_code=400,
                 message=f"Invalid tool_choice for OCI: missing or non-string 'type' in {tc!r}",
             )
-        upper = raw_type.upper()
+        upper: Final = raw_type.upper()
         if upper == "FUNCTION":
-            fn = tc.get("function")
-            name = fn.get("name") if isinstance(fn, dict) else tc.get("name")
+            fn: Final = tc.get("function")
+            name: Final = fn.get("name") if isinstance(fn, dict) else tc.get("name")
             if not (isinstance(name, str) and name):
                 raise OCIError(
                     status_code=400,
@@ -184,14 +185,83 @@ def _normalize_tool_choice(selected_params: dict) -> None:
     )
 
 
+_TOOL_CHOICE_MODES: Final = frozenset({"auto", "none", "required", "any"})
+_TOOLS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _as_json_object(value: object) -> Mapping[str, object] | None:
+    try:
+        return _JSON_OBJECT_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _forced_tool_name(tool_choice: object) -> str | None:
+    if isinstance(tool_choice, str):
+        return None if tool_choice.lower() in _TOOL_CHOICE_MODES else tool_choice
+    choice: Final = _as_json_object(tool_choice)
+    if choice is None:
+        return None
+    name: Final = (_as_json_object(choice.get("function")) or choice).get("name")
+    if isinstance(name, str):
+        return name
+    choice_type: Final = choice.get("type")
+    if isinstance(choice_type, str) and choice_type.lower() not in _TOOL_CHOICE_MODES:
+        return choice_type
+    return None
+
+
+def _tool_identifiers(tool: Mapping[str, object]) -> tuple[object, ...]:
+    nested: Final = _as_json_object(tool.get(str(tool.get("type")))) or {}
+    return (tool.get("type"), tool.get("name"), nested.get("name"))
+
+
+def _without_non_function_tools(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    if params.get("tools") is None:
+        return params
+    try:
+        tools: Final = _TOOLS_ADAPTER.validate_python(params["tools"])
+    except ValidationError:
+        return params
+    dropped: Final = tuple(tool for tool in tools if tool.get("type") != "function")
+    if not dropped:
+        return params
+    dropped_types: Final = sorted(str(tool.get("type")) for tool in dropped)
+    if not drop_params:
+        raise OCIError(
+            status_code=400,
+            message=f"OCI only supports function tools, got {dropped_types}; set drop_params=True to skip them",
+        )
+    kept: Final = [tool for tool in tools if tool.get("type") == "function"]
+    if not kept:
+        raise OCIError(
+            status_code=400,
+            message=f"OCI only supports function tools, and every tool in this request is one of {dropped_types}",
+        )
+    forced: Final = _forced_tool_name(params.get("tool_choice"))
+    forces_dropped_tool: Final = (
+        forced is not None
+        and any(forced in _tool_identifiers(tool) for tool in dropped)
+        and not any(forced in _tool_identifiers(tool) for tool in kept)
+    )
+    if forces_dropped_tool:
+        raise OCIError(
+            status_code=400,
+            message=f"OCI only supports function tools, and tool_choice forces `{forced}`, one of {dropped_types}",
+        )
+    verbose_logger.warning("OCI only supports function tools; dropping tools of type %s", dropped_types)
+    return {**params, "tools": kept}
+
+
 def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> None:
-    rf = selected_params.get("responseFormat")
+    rf: Final = selected_params.get("responseFormat")
     if not isinstance(rf, dict) or "type" not in rf:
         return
 
-    rf_type = str(rf["type"]).lower()
-    raw_schema = rf.get("json_schema")
-    json_schema = raw_schema if isinstance(raw_schema, dict) else None
+    rf_type: Final = str(rf["type"]).lower()
+    raw_schema: Final = rf.get("json_schema")
+    json_schema: Final = raw_schema if isinstance(raw_schema, dict) else None
 
     if rf_type == "text":
         selected_params["responseFormat"] = {"type": "TEXT"}
@@ -199,7 +269,7 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
 
     if vendor == OCIVendors.COHERE:
         # OCI Cohere has no JSON_SCHEMA type; a schema rides on JSON_OBJECT.
-        payload: dict[str, Any] = {"type": "JSON_OBJECT"}
+        payload: Final[dict[str, object]] = {"type": "JSON_OBJECT"}
         if json_schema is not None and json_schema.get("schema") is not None:
             payload["schema"] = json_schema["schema"]
         selected_params["responseFormat"] = payload
@@ -214,7 +284,7 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
         # OCI's ResponseJsonSchema accepts only name/description/schema/isStrict.
         # OpenAI sends `strict` instead of `isStrict`; forwarding it (or any
         # other extra key) makes OCI reject the whole request with HTTP 400.
-        oci_schema: dict[str, Any] = {"name": json_schema.get("name") or "response"}
+        oci_schema: Final[dict[str, object]] = {"name": json_schema.get("name") or "response"}
         if json_schema.get("description") is not None:
             oci_schema["description"] = json_schema["description"]
         if json_schema.get("schema") is not None:
@@ -227,8 +297,13 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
         }
         return
 
-    fmt = rf_type.upper()
+    fmt: Final = rf_type.upper()
     selected_params["responseFormat"] = {"type": "JSON_OBJECT" if fmt == "JSON" else fmt}
+
+
+def _model_supports_reasoning_effort(model: str) -> bool:
+    name: Final = model[4:] if model.lower().startswith("oci/") else model
+    return declared_reasoning_efforts_for_model(name, "oci") != ()
 
 
 def get_vendor_from_model(model: str) -> OCIVendors:
@@ -239,8 +314,8 @@ def get_vendor_from_model(model: str) -> OCIVendors:
     - ``"COHERE"`` for Cohere models (``cohere.*``)
     - ``"GENERIC"`` for all others (Meta Llama, xAI Grok, Google Gemini, …)
     """
-    name = model[4:] if model.lower().startswith("oci/") else model
-    vendor = name.split(".")[0].lower()
+    name: Final = model[4:] if model.lower().startswith("oci/") else model
+    vendor: Final = name.split(".")[0].lower()
     if vendor == "cohere":
         return OCIVendors.COHERE
     return OCIVendors.GENERIC
@@ -314,7 +389,7 @@ class OCIChatConfig(BaseConfig):
         self.openai_to_oci_cohere_param_map["logit_bias"] = False
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        param_map = (
+        param_map: Final = (
             self.openai_to_oci_cohere_param_map
             if get_vendor_from_model(model) == OCIVendors.COHERE
             else self.openai_to_oci_generic_param_map
@@ -324,7 +399,11 @@ class OCIChatConfig(BaseConfig):
         # honoured and advertising it would be misleading. Callers that gate on
         # this list strip n=1 (a no-op, matching what map_openai_params does);
         # callers that bypass it have n=1 dropped there. Both paths converge.
-        return [key for key, value in param_map.items() if value]
+        return [
+            key
+            for key, value in param_map.items()
+            if value and (key != "reasoning_effort" or _model_supports_reasoning_effort(model))
+        ]
 
     def map_openai_params(
         self,
@@ -333,14 +412,27 @@ class OCIChatConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        adapted_params = {}
-        vendor = get_vendor_from_model(model)
-        param_map = (
+        adapted_params: Final = {}
+        vendor: Final = get_vendor_from_model(model)
+        param_map: Final = (
             self.openai_to_oci_cohere_param_map if vendor == OCIVendors.COHERE else self.openai_to_oci_generic_param_map
         )
 
-        for key, value in {**non_default_params, **optional_params}.items():
+        request_params: Final = _without_non_function_tools(
+            {**non_default_params, **optional_params}, drop_params or litellm.drop_params
+        )
+        for key, value in request_params.items():
             alias = param_map.get(key)
+            if key == "reasoning_effort" and alias and not _model_supports_reasoning_effort(model):
+                if drop_params or litellm.drop_params:
+                    continue
+                raise OCIError(
+                    status_code=400,
+                    message=(
+                        f"param `reasoning_effort` is not supported on OCI model `{model}` "
+                        "(the model rejects reasoningEffort); set drop_params=True to omit it"
+                    ),
+                )
             if alias is False:
                 # max_retries is a litellm-level control param (litellm applies
                 # retries itself); it is never a generation param OCI accepts, so
@@ -412,8 +504,8 @@ class OCIChatConfig(BaseConfig):
                 message="kwarg `messages` must be an array of messages that follow the openai chat standard",
             )
         if optional_params.get("oci_signer") is None:
-            creds = resolve_oci_credentials(optional_params)
-            missing = [
+            creds: Final = resolve_oci_credentials(optional_params)
+            missing: Final = [
                 k
                 for k in (
                     "oci_user",
@@ -445,20 +537,20 @@ class OCIChatConfig(BaseConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        base = get_oci_base_url(optional_params, api_base or litellm.api_base)
+        base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
         return f"{base}/{OCI_API_VERSION}/actions/chat"
 
     def _get_optional_params(self, vendor: OCIVendors, optional_params: dict, model: str = "") -> dict:
-        param_map = (
+        param_map: Final = (
             self.openai_to_oci_cohere_param_map if vendor == OCIVendors.COHERE else self.openai_to_oci_generic_param_map
         )
-        selected_params: dict = {}
+        selected_params: Final[dict] = {}
 
         # OpenAI reasoning models on OCI (e.g. GPT-5 family) reject "maxTokens"
         # and require "maxCompletionTokens" per OCI's /20231130/Chat schema.
         # Driven by the supports_reasoning flag in the model catalog. Cohere's
         # endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
-        max_tokens_key = (
+        max_tokens_key: Final = (
             "maxCompletionTokens"
             if vendor != OCIVendors.COHERE and model and _model_uses_max_completion_tokens(model)
             else "maxTokens"
@@ -479,9 +571,9 @@ class OCIChatConfig(BaseConfig):
             if target in selected_params:
                 continue
             if openai_key in optional_params:
-                selected_params[target] = optional_params[openai_key]  # type: ignore[index]
+                selected_params[target] = optional_params[openai_key]
             elif oci_alias in optional_params:
-                selected_params[target] = optional_params[oci_alias]  # type: ignore[index]
+                selected_params[target] = optional_params[oci_alias]
 
         # OCI's server-side default token cap is tiny (~20 tokens), so an
         # omitted max_tokens silently truncates the response mid-string. Most
@@ -493,7 +585,7 @@ class OCIChatConfig(BaseConfig):
         # OCI expects uppercase reasoning levels (LOW/MEDIUM/HIGH/NONE); OpenAI
         # clients send lowercase. OpenAI's "disable" maps to OCI's "NONE".
         if "reasoningEffort" in selected_params:
-            effort = selected_params["reasoningEffort"]
+            effort: Final = selected_params["reasoningEffort"]
             if isinstance(effort, str):
                 normalized = effort.upper()
                 if normalized == "DISABLE":
@@ -502,13 +594,11 @@ class OCIChatConfig(BaseConfig):
 
         if "tools" in selected_params:
             if vendor == OCIVendors.COHERE:
-                selected_params["tools"] = adapt_tool_definitions_to_cohere_standard(  # type: ignore[assignment]
-                    selected_params["tools"]  # type: ignore[arg-type]
-                )
+                selected_params["tools"] = adapt_tool_definitions_to_cohere_standard(selected_params["tools"])
             else:
-                selected_params["tools"] = adapt_tool_definition_to_oci_standard(  # type: ignore[assignment]
+                selected_params["tools"] = adapt_tool_definition_to_oci_standard(
                     selected_params["tools"],
-                    vendor,  # type: ignore[arg-type]
+                    vendor,
                 )
 
         # Normalise tool_choice to OCI's flat uppercase dict form
@@ -528,8 +618,8 @@ class OCIChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        creds = resolve_oci_credentials(optional_params)
-        oci_compartment_id = creds["oci_compartment_id"]
+        creds: Final = resolve_oci_credentials(optional_params)
+        oci_compartment_id: Final = creds["oci_compartment_id"]
         if not oci_compartment_id:
             raise OCIError(
                 status_code=400,
@@ -539,9 +629,9 @@ class OCIChatConfig(BaseConfig):
                 ),
             )
 
-        vendor = get_vendor_from_model(model)
+        vendor: Final = get_vendor_from_model(model)
 
-        oci_serving_mode = optional_params.get("oci_serving_mode", "ON_DEMAND")
+        oci_serving_mode: Final = optional_params.get("oci_serving_mode", "ON_DEMAND")
         if oci_serving_mode not in ["ON_DEMAND", "DEDICATED"]:
             raise OCIError(
                 status_code=400,
@@ -557,23 +647,23 @@ class OCIChatConfig(BaseConfig):
             serving_mode = OCIServingMode(servingType="ON_DEMAND", modelId=model)
 
         if vendor == OCIVendors.COHERE:
-            user_messages = [m for m in messages if m.get("role") == "user"]
+            user_messages: Final = [m for m in messages if m.get("role") == "user"]
             if not user_messages:
                 raise OCIError(
                     status_code=400,
                     message="No user message found — Cohere models require at least one user message",
                 )
 
-            system_messages = [m for m in messages if m.get("role") == "system"]
+            system_messages: Final = [m for m in messages if m.get("role") == "system"]
             preamble_override = None
             if system_messages:
-                preamble = "\n".join(_extract_text_content(m["content"]) for m in system_messages)
+                preamble: Final = "\n".join(extract_text_content(m["content"]) for m in system_messages)
                 if preamble:
                     preamble_override = preamble
 
-            chat_request = CohereChatRequest(
+            chat_request: Final = CohereChatRequest(
                 apiFormat="COHERE",
-                message=_extract_text_content(user_messages[-1]["content"]),
+                message=extract_text_content(user_messages[-1]["content"]),
                 chatHistory=adapt_messages_to_cohere_standard([m for m in messages if m.get("role") != "system"]),
                 preambleOverride=preamble_override,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
@@ -606,11 +696,11 @@ class OCIChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         if not isinstance(response_json, dict):
             raise OCIError(
@@ -624,13 +714,13 @@ class OCIChatConfig(BaseConfig):
                 status_code=raw_response.status_code,
             )
 
-        vendor = get_vendor_from_model(model)
+        vendor: Final = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
             model_response = handle_cohere_response(response_json, model, model_response, raw_response)
         else:
             model_response = handle_generic_response(response_json, model, model_response, raw_response)
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         return model_response
 
     @track_llm_api_timing()
@@ -646,12 +736,15 @@ class OCIChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         try:
-            response = client.post(
+            response: Final = client.post(
                 api_base,
                 headers=headers,
                 data=(signed_json_body if signed_json_body is not None else json.dumps(data)),
@@ -685,12 +778,15 @@ class OCIChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.OCI, params={})
 
         try:
-            response = await client.post(
+            response: Final = await client.post(
                 api_base,
                 headers=headers,
                 data=(signed_json_body if signed_json_body is not None else json.dumps(data)),
@@ -718,8 +814,25 @@ class OCIChatConfig(BaseConfig):
 class OCIStreamWrapper(CustomStreamWrapper):
     """Custom stream wrapper that dispatches OCI SSE chunks to the correct handler."""
 
-    def __init__(self, **kwargs: Any):
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        completion_stream: object,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        stream_options: object = None,
+        make_call: Callable[..., object] | None = None,
+        _response_headers: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(
+            completion_stream=completion_stream,
+            model=model,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            stream_options=stream_options,
+            make_call=make_call,
+            _response_headers=_response_headers,
+        )
         # Tracks whether any prior Cohere chunk in this stream has emitted
         # tool calls. The Cohere handler uses this to decide whether the
         # terminal consolidation chunk's tool calls are duplicates (suppress)
@@ -731,21 +844,33 @@ class OCIStreamWrapper(CustomStreamWrapper):
         # single-event case (terminal chunk carries the only copy of the text).
         self._cohere_text_emitted = False
 
-    def chunk_creator(self, chunk: Any) -> ModelResponseStream:
+    def _emit_chunk(self, parsed: ModelResponseStream) -> ModelResponseStream:
+        for choice in parsed.choices:
+            if getattr(choice.delta, "tool_calls", None):
+                self.tool_call = True
+            if choice.finish_reason is not None:
+                self.received_finish_reason = choice.finish_reason
+                self.sent_last_chunk = True
+        return self.model_response_creator(chunk={"choices": parsed.choices})
+
+    def chunk_creator(self, chunk: object) -> ModelResponseStream | None:
         if not isinstance(chunk, str):
             raise ValueError(f"Chunk is not a string: {chunk}")
         if not chunk.startswith("data:"):
             raise ValueError(f"Chunk does not start with 'data:': {chunk}")
+        payload: Final = chunk[5:].strip()
+        if payload == "[DONE]":
+            return None
         try:
-            dict_chunk = json.loads(chunk[5:])
+            dict_chunk: Final = json.loads(payload)
         except json.JSONDecodeError as e:
             raise OCIError(
                 status_code=500,
-                message=f"Chunk cannot be parsed as JSON: {e!s}",
+                message=f"Chunk cannot be parsed as JSON: {e}",
             )
 
         if dict_chunk.get("apiFormat") == "COHERE":
-            result = handle_cohere_stream_chunk(
+            result: Final = handle_cohere_stream_chunk(
                 dict_chunk,
                 prior_tool_calls_emitted=self._cohere_tool_calls_emitted,
                 prior_text_emitted=self._cohere_text_emitted,
@@ -760,8 +885,8 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     if getattr(choice.delta, "content", None):
                         self._cohere_text_emitted = True
                         break
-            return result
-        return handle_generic_stream_chunk(dict_chunk)
+            return self._emit_chunk(result)
+        return self._emit_chunk(handle_generic_stream_chunk(dict_chunk))
 
 
 __all__ = [

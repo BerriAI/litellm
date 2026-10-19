@@ -1,9 +1,10 @@
 import json
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
 from litellm.utils import Choices, Message, ModelResponse, Usage
@@ -139,16 +140,17 @@ class AlephAlphaConfig:
         contextual_control_threshold: int | None = None,
         control_log_additive: bool | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -164,7 +166,7 @@ class AlephAlphaConfig:
 
 
 def validate_environment(api_key):
-    headers = {
+    headers: Final = {
         "accept": "application/json",
         "content-type": "application/json",
     }
@@ -187,17 +189,17 @@ def completion(
     logger_fn=None,
     default_max_tokens_to_sample=None,
 ):
-    headers = validate_environment(api_key)
+    headers: Final = validate_environment(api_key)
 
     ## Load Config
-    config = litellm.AlephAlphaConfig.get_config()
+    config: Final = litellm.AlephAlphaConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
         ):  # completion(top_k=3) > aleph_alpha_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    completion_url = api_base
+    completion_url: Final = api_base
     model = model
     prompt = ""
     if "control" in model:  # follow the ###Instruction / ###Response format
@@ -216,7 +218,7 @@ def completion(
                 prompt += f"{message['content']}"
     else:
         prompt = " ".join(message["content"] for message in messages)
-    data = {
+    data: Final = {
         "model": model,
         "prompt": prompt,
         **optional_params,
@@ -229,7 +231,7 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    response = litellm.module_level_client.post(
+    response: Final = litellm.module_level_client.post(
         completion_url,
         headers=headers,
         data=json.dumps(data),
@@ -247,7 +249,7 @@ def completion(
         )
         print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
-        completion_response = response.json()
+        completion_response: Final = response.json()
         if "error" in completion_response:
             raise AlephAlphaError(
                 message=completion_response["error"],
@@ -255,7 +257,7 @@ def completion(
             )
         else:
             try:
-                choices_list = []
+                choices_list: Final = []
                 for idx, item in enumerate(completion_response["completions"]):
                     if len(item["completion"]) > 0:
                         message_obj = Message(content=item["completion"])
@@ -267,7 +269,7 @@ def completion(
                         message=message_obj,
                     )
                     choices_list.append(choice_obj)
-                model_response.choices = choices_list  # type: ignore
+                model_response.choices = choices_list
             except Exception:
                 raise AlephAlphaError(
                     message=json.dumps(completion_response),
@@ -275,17 +277,12 @@ def completion(
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens = len(encoding.encode(prompt))
-        completion_tokens = len(
-            encoding.encode(
-                model_response["choices"][0]["message"]["content"],
-                disallowed_special=(),
-            )
-        )
+        prompt_tokens: Final = len(encoding.encode(prompt))
+        completion_tokens: Final = len(encoding.encode(model_response["choices"][0]["message"]["content"]))
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,

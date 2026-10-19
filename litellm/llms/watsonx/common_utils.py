@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Final, cast
 
 import httpx
 
@@ -22,7 +22,7 @@ class WatsonXAIError(BaseLLMException):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
-iam_token_cache = InMemoryCache()
+iam_token_cache: Final = InMemoryCache()
 
 
 def get_watsonx_iam_url():
@@ -30,10 +30,10 @@ def get_watsonx_iam_url():
 
 
 def generate_iam_token(api_key=None, **params) -> str:
-    result: str | None = iam_token_cache.get_cache(api_key)  # type: ignore
+    result: str | None = iam_token_cache.get_cache(api_key)
 
     if result is None:
-        headers = {}
+        headers: Final = {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         if api_key is None:
             api_key = (
@@ -45,20 +45,20 @@ def generate_iam_token(api_key=None, **params) -> str:
         if api_key is None:
             raise ValueError("API key is required")
         headers["Accept"] = "application/json"
-        data = {
+        data: Final = {
             "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
             "apikey": api_key,
         }
-        iam_token_url = get_watsonx_iam_url()
+        iam_token_url: Final = get_watsonx_iam_url()
         verbose_logger.debug(
             "calling ibm `/identity/token` to retrieve IAM token.\nURL=%s\nheaders=%s\ndata=%s",
             iam_token_url,
             headers,
             data,
         )
-        response = litellm.module_level_client.post(url=iam_token_url, data=data, headers=headers)
+        response: Final = litellm.module_level_client.post(url=iam_token_url, data=data, headers=headers)
         response.raise_for_status()
-        json_data = response.json()
+        json_data: Final = response.json()
 
         result = json_data["access_token"]
         iam_token_cache.set_cache(
@@ -70,14 +70,17 @@ def generate_iam_token(api_key=None, **params) -> str:
     return cast(str, result)
 
 
-def _generate_watsonx_token(api_key: str | None, token: str | None) -> str:
+def generate_watsonx_token(api_key: str | None, token: str | None) -> str:
     if token is not None:
         return token
     token = generate_iam_token(api_key)
     return token
 
 
-def _get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
+_generate_watsonx_token = generate_watsonx_token
+
+
+def get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
     """
     Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
     """
@@ -120,6 +123,9 @@ def _get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
     )
 
 
+_get_api_params = get_api_params
+
+
 async def _aconvert_watsonx_messages_core(
     model: str,
     messages: list[AllMessageValues],
@@ -132,10 +138,10 @@ async def _aconvert_watsonx_messages_core(
 
     # handle anthropic prompts and amazon titan prompts
     if model in custom_prompt_dict:
-        model_prompt_dict = custom_prompt_dict[model]
+        model_prompt_dict: Final = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles", {})),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -145,11 +151,11 @@ async def _aconvert_watsonx_messages_core(
         return ptf.mistral_instruct_pt(messages=messages)
     else:
         # Try applying specific template first
-        result = await apply_template_fn(model=model, messages=messages)
+        result: Final = await apply_template_fn(model=model, messages=messages)
         if result:
             return result
         # Fallback to default
-        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")  # type: ignore
+        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")
 
 
 def _convert_watsonx_messages_core(
@@ -164,10 +170,10 @@ def _convert_watsonx_messages_core(
 
     # handle anthropic prompts and amazon titan prompts
     if model in custom_prompt_dict:
-        model_prompt_dict = custom_prompt_dict[model]
+        model_prompt_dict: Final = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles", {})),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -177,11 +183,11 @@ def _convert_watsonx_messages_core(
         return ptf.mistral_instruct_pt(messages=messages)
     else:
         # Try applying specific template first
-        result = apply_template_fn(model=model, messages=messages)
+        result: Final = apply_template_fn(model=model, messages=messages)
         if result:
             return result
         # Fallback to default
-        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")  # type: ignore
+        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")
 
 
 async def aconvert_watsonx_messages_to_prompt(
@@ -232,7 +238,7 @@ class IBMWatsonXMixin:
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -243,7 +249,7 @@ class IBMWatsonXMixin:
             str | None,
             optional_params.get("token") or get_secret_str("WATSONX_TOKEN"),
         )
-        zen_api_key = cast(
+        zen_api_key: Final = cast(
             str | None,
             optional_params.pop("zen_api_key", None) or get_secret_str("WATSONX_ZENAPIKEY"),
         )
@@ -252,13 +258,13 @@ class IBMWatsonXMixin:
         elif zen_api_key:
             headers["Authorization"] = f"ZenApiKey {zen_api_key}"
         else:
-            token = _generate_watsonx_token(api_key=api_key, token=token)
+            token = generate_watsonx_token(api_key=api_key, token=token)
             # build auth headers
             headers["Authorization"] = f"Bearer {token}"
         return {**default_headers, **headers}
 
     def _get_base_url(self, api_base: str | None) -> str:
-        url = (
+        url: Final = (
             api_base
             or get_secret_str("WATSONX_API_BASE")  # consistent with 'AZURE_API_BASE'
             or get_secret_str("WATSONX_URL")
@@ -305,7 +311,7 @@ class IBMWatsonXMixin:
             or get_secret_str("WML_URL")
         )
 
-        wx_credentials = optional_params.pop(
+        wx_credentials: Final = optional_params.pop(
             "wx_credentials",
             optional_params.pop("watsonx_credentials", None),  # follow {provider}_credentials, same as vertex ai
         )
@@ -334,7 +340,7 @@ class IBMWatsonXMixin:
         return WatsonXCredentials(api_key=api_key, api_base=api_base, token=cast(str | None, token))
 
     def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
-        payload: dict = {}
+        payload: Final[dict] = {}
         if model.startswith("deployment/"):
             return {}  # Deployment models do not support 'space_id' or 'project_id' in their payload
         payload["model_id"] = model
@@ -343,3 +349,10 @@ class IBMWatsonXMixin:
         else:
             payload["space_id"] = api_params["space_id"]
         return payload
+
+    def prepare_payload(
+        self,
+        model: str,
+        api_params: WatsonXAPIParams,
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._prepare_payload(model, api_params)

@@ -5,10 +5,12 @@ Maps OpenAI-compatible audio transcription calls to Azure Speech REST
 recognition for short audio.
 """
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Final
 from urllib.parse import urlencode, urlparse
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -22,6 +24,8 @@ from litellm.types.llms.openai import (
     OpenAIAudioTranscriptionOptionalParams,
 )
 from litellm.types.utils import FileTypes, TranscriptionResponse
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class AzureSpeechAudioTranscriptionException(BaseLLMException):
@@ -51,7 +55,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model=model)
+        supported_params: Final = self.get_supported_openai_params(model=model)
         for key, value in non_default_params.items():
             if key in supported_params:
                 optional_params[key] = value
@@ -74,7 +78,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 status_code=401,
             )
 
-        validated_headers = headers.copy()
+        validated_headers: Final = headers.copy()
         validated_headers["Ocp-Apim-Subscription-Key"] = api_key
         validated_headers["Content-Type"] = validated_headers.get("Content-Type", "audio/wav")
         validated_headers["Accept"] = "application/json"
@@ -101,8 +105,8 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 status_code=400,
             )
 
-        base_url = self._resolve_stt_base_url(api_base=api_base)
-        query_params = {
+        base_url: Final = self._resolve_stt_base_url(api_base=api_base)
+        query_params: Final = {
             "language": optional_params.get("language", self.DEFAULT_LANGUAGE),
             "format": self._get_azure_response_format(optional_params.get("response_format")),
         }
@@ -115,7 +119,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> AudioTranscriptionRequestData:
-        processed_audio = process_audio_file(audio_file)
+        processed_audio: Final = process_audio_file(audio_file)
         return AudioTranscriptionRequestData(
             data=processed_audio.file_content,
             files=None,
@@ -126,8 +130,9 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         raw_response: httpx.Response,
     ) -> TranscriptionResponse:
-        response_json = raw_response.json()
-        recognition_status = response_json.get("RecognitionStatus")
+        response_json: Final = raw_response.json()
+        payload: Final = _JSON_OBJECT.validate_python(response_json)
+        recognition_status: Final = payload.get("RecognitionStatus")
         if recognition_status is not None and recognition_status != "Success":
             raise AzureSpeechAudioTranscriptionException(
                 message=(f"Azure AI Speech transcription failed with RecognitionStatus={recognition_status}."),
@@ -135,9 +140,9 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        text = self._extract_text(response_json)
-        response = TranscriptionResponse(text=text)
-        response._hidden_params = response_json
+        text: Final = self._extract_text(payload)
+        response: Final = TranscriptionResponse(text=text)
+        response.hidden_params = response_json
         return response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
@@ -149,11 +154,11 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def _resolve_stt_base_url(self, api_base: str) -> str:
         api_base = api_base.rstrip("/")
-        parsed_url = urlparse(api_base)
-        hostname = parsed_url.hostname or ""
+        parsed_url: Final = urlparse(api_base)
+        hostname: Final = parsed_url.hostname or ""
 
         if self._is_cognitive_services_endpoint(hostname=hostname):
-            region = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
+            region: Final = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
             return self._build_stt_base_url(region=region)
 
         if self._is_stt_endpoint(hostname=hostname):
@@ -194,13 +199,14 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return "detailed"
         return "simple"
 
-    def _extract_text(self, response_json: dict[str, Any]) -> str:
-        if isinstance(response_json.get("DisplayText"), str):
-            return response_json["DisplayText"]
+    def _extract_text(self, response_json: Mapping[str, object]) -> str:
+        display_text: Final = response_json.get("DisplayText")
+        if isinstance(display_text, str):
+            return display_text
 
-        nbest = response_json.get("NBest")
+        nbest: Final = response_json.get("NBest")
         if isinstance(nbest, list) and nbest:
-            best = nbest[0]
+            best: Final = nbest[0]
             if isinstance(best, dict):
                 return best.get("Display") or best.get("Lexical") or ""
 

@@ -81,7 +81,7 @@ describe("useOrganizations", () => {
       userRole: "Admin",
       token: "test-token",
       userEmail: "test@example.com",
-      premiumUser: false,
+      premiumUser: true,
       disabledPersonalKeyCreation: null,
       showSSOBanner: false,
     });
@@ -181,7 +181,7 @@ describe("useOrganizations", () => {
       userRole: "Admin",
       token: null,
       userEmail: "test@example.com",
-      premiumUser: false,
+      premiumUser: true,
       disabledPersonalKeyCreation: null,
       showSSOBanner: false,
     });
@@ -197,6 +197,26 @@ describe("useOrganizations", () => {
     expect(organizationListCall).not.toHaveBeenCalled();
   });
 
+  it("does not call the organization API when the session is not premium", async () => {
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+
+    const { result } = renderHook(() => useOrganizations(), { wrapper });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isFetched).toBe(false);
+    expect(organizationListCall).not.toHaveBeenCalled();
+  });
+
   it("should not execute query when userId is missing", async () => {
     // Mock missing userId
     mockUseAuthorized.mockReturnValue({
@@ -205,7 +225,7 @@ describe("useOrganizations", () => {
       userRole: "Admin",
       token: "test-token",
       userEmail: "test@example.com",
-      premiumUser: false,
+      premiumUser: true,
       disabledPersonalKeyCreation: null,
       showSSOBanner: false,
     });
@@ -229,7 +249,7 @@ describe("useOrganizations", () => {
       userRole: null,
       token: "test-token",
       userEmail: "test@example.com",
-      premiumUser: false,
+      premiumUser: true,
       disabledPersonalKeyCreation: null,
       showSSOBanner: false,
     });
@@ -253,7 +273,7 @@ describe("useOrganizations", () => {
       userRole: null,
       token: null,
       userEmail: "test@example.com",
-      premiumUser: false,
+      premiumUser: true,
       disabledPersonalKeyCreation: null,
       showSSOBanner: false,
     });
@@ -335,7 +355,7 @@ describe("useOrganization", () => {
       userRole: "Admin",
       token: "test-token",
       userEmail: "test@example.com",
-      premiumUser: false,
+      premiumUser: true,
       disabledPersonalKeyCreation: null,
       showSSOBanner: false,
     });
@@ -354,6 +374,26 @@ describe("useOrganization", () => {
     // initialData found org-2 in the filtered cache, so data is present on the first render.
     expect(result.current.data).toEqual(mockOrganizations[1]);
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it("does not call the organization info API when the session is not premium", () => {
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+
+    const { result } = renderHook(() => useOrganization("org-1"), { wrapper });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isFetched).toBe(false);
+    expect(organizationInfoCall).not.toHaveBeenCalled();
   });
 
   it("falls through to the detail API call when no cached list contains the organization", async () => {

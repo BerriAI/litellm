@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Final
 
 from .base import FocusDestination
 from .gcs_destination import FocusGCSDestination
@@ -23,7 +23,7 @@ class FocusDestinationFactory:
         config: dict[str, Any] | None = None,
     ) -> FocusDestination:
         """Return a destination implementation for the requested provider."""
-        provider_lower = provider.lower()
+        provider_lower: Final = provider.lower()
         normalized_config = FocusDestinationFactory._resolve_config(provider=provider_lower, overrides=config or {})
         if provider_lower == "s3":
             return FocusS3Destination(prefix=prefix, config=normalized_config)
@@ -39,7 +39,7 @@ class FocusDestinationFactory:
     def _resolve_config(
         *,
         provider: str,
-        overrides: dict[str, Any],
+        overrides: dict[str, object],
     ) -> dict[str, Any]:
         if provider == "s3":
             resolved = {

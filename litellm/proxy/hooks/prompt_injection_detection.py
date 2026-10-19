@@ -7,15 +7,20 @@
 ## Reject a call if it contains a prompt injection attack.
 
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
-from typing import Literal
+from typing import Final, Literal
 
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD
+from litellm.constants import (
+    DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD,
+    PROMPT_INJECTION_HEURISTICS_MAX_THREADS,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_injection_detection_default_pt,
@@ -24,8 +29,14 @@ from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
 from litellm.router import Router
 from litellm.utils import get_formatted_prompt
 
+HEURISTICS_EXECUTOR: Final = ThreadPoolExecutor(
+    max_workers=PROMPT_INJECTION_HEURISTICS_MAX_THREADS, thread_name_prefix="prompt-injection-heuristics"
+)
+
 
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):
+    enforces_request_content: bool = True
+
     # Class variables or attributes
     def __init__(
         self,
@@ -65,7 +76,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             "and start from scratch",
         ]
 
-    def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
+    def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG") -> None:
         if level == "INFO":
             verbose_proxy_logger.info(print_statement)
         elif level == "DEBUG":
@@ -74,7 +85,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         if litellm.set_verbose is True:
             print(print_statement)  # noqa: T201
 
-    def update_environment(self, router: Router | None = None):
+    def update_environment(self, router: Router | None = None) -> None:
         self.llm_router = router
 
         if self.prompt_injection_params is not None and self.prompt_injection_params.llm_api_check is True:
@@ -95,7 +106,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 )
 
     def generate_injection_keywords(self) -> list[str]:
-        combinations = []
+        combinations: Final = []
         for verb in self.verbs:
             for adj in self.adjectives:
                 for prep in self.prepositions:
@@ -104,13 +115,18 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                         combinations.append(phrase.lower())
         return combinations
 
+    async def check_user_input_similarity_off_loop(self, user_input: str) -> bool:
+        return await asyncio.get_running_loop().run_in_executor(
+            HEURISTICS_EXECUTOR, self.check_user_input_similarity, user_input
+        )
+
     def check_user_input_similarity(
         self,
         user_input: str,
         similarity_threshold: float = DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD,
     ) -> bool:
-        user_input_lower = user_input.lower()
-        keywords = self.generate_injection_keywords()
+        user_input_lower: Final = user_input.lower()
+        keywords: Final = self.generate_injection_keywords()
 
         for keyword in keywords:
             # Calculate the length of the keyword to extract substrings of the same length from user input
@@ -134,9 +150,9 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
-    ):
+    ) -> dict[str, object] | str | None:
         try:
             """
             - check if user id part of call
@@ -158,14 +174,14 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
                 )
                 return data
-            formatted_prompt = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
+            formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
 
             is_prompt_attack = False
 
             if self.prompt_injection_params is not None:
                 # 1. check if heuristics check turned on
                 if self.prompt_injection_params.heuristics_check is True:
-                    is_prompt_attack = self.check_user_input_similarity(user_input=formatted_prompt)
+                    is_prompt_attack = await self.check_user_input_similarity_off_loop(formatted_prompt)
                     if is_prompt_attack is True:
                         raise HTTPException(
                             status_code=400,
@@ -175,7 +191,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 if self.prompt_injection_params.vector_db_check is True:
                     pass
             else:
-                is_prompt_attack = self.check_user_input_similarity(user_input=formatted_prompt)
+                is_prompt_attack = await self.check_user_input_similarity_off_loop(formatted_prompt)
 
             if is_prompt_attack is True:
                 raise HTTPException(
@@ -189,7 +205,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             if (
                 e.status_code == 400
                 and isinstance(e.detail, dict)
-                and "error" in e.detail  # type: ignore
+                and "error" in e.detail
                 and self.prompt_injection_params is not None
                 and self.prompt_injection_params.reject_as_response
             ):
@@ -197,10 +213,10 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             raise e
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
-    async def async_moderation_hook(  # type: ignore
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -218,10 +234,12 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         if self.prompt_injection_params is None:
             return None
 
-        formatted_prompt = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
+        formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
+        if not formatted_prompt:
+            return None
         is_prompt_attack = False
 
-        prompt_injection_system_prompt = getattr(
+        prompt_injection_system_prompt: Final = getattr(
             self.prompt_injection_params,
             "llm_api_system_prompt",
             prompt_injection_detection_default_pt(),
@@ -234,7 +252,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             and self.llm_router is not None
         ):
             # make a call to the llm api
-            response = await self.llm_router.acompletion(
+            response: Final = await self.llm_router.acompletion(
                 model=self.prompt_injection_params.llm_api_name,
                 messages=[
                     {
@@ -248,8 +266,8 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             self.print_verbose(f"Received LLM Moderation response: {response}")
             self.print_verbose(f"llm_api_fail_call_string: {self.prompt_injection_params.llm_api_fail_call_string}")
             if isinstance(response, litellm.ModelResponse) and isinstance(response.choices[0], litellm.Choices):
-                fail_call_string = self.prompt_injection_params.llm_api_fail_call_string
-                content = response.choices[0].message.content
+                fail_call_string: Final = self.prompt_injection_params.llm_api_fail_call_string
+                content: Final = response.choices[0].message.content
                 if fail_call_string is not None and content is not None and fail_call_string in content:
                     is_prompt_attack = True
 
@@ -260,3 +278,6 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             )
 
         return is_prompt_attack
+
+
+OPTIONAL_PromptInjectionDetection = _OPTIONAL_PromptInjectionDetection

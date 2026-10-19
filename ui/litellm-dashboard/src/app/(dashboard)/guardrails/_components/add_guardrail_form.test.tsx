@@ -26,11 +26,11 @@ describe("AddGuardrailForm close behavior", () => {
     const { onClose } = renderForm();
     expect(screen.getByText("Create guardrail")).toBeInTheDocument();
 
-    const wrap = document.querySelector(".ant-modal-wrap") as HTMLElement;
-    expect(wrap).toBeTruthy();
-    fireEvent.mouseDown(wrap);
-    fireEvent.mouseUp(wrap);
-    fireEvent.click(wrap);
+    const backdrop = document.querySelector('[data-slot="dialog-overlay"]') as HTMLElement;
+    expect(backdrop).toBeTruthy();
+    fireEvent.mouseDown(backdrop);
+    fireEvent.mouseUp(backdrop);
+    fireEvent.click(backdrop);
 
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -52,6 +52,6 @@ describe("AddGuardrailForm provider options", () => {
     fireEvent.mouseDown(screen.getByLabelText("Guardrail Provider"));
 
     const logo = await screen.findByAltText("Presidio PII logo");
-    expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("microsoft_azure.svg"));
   });
 });

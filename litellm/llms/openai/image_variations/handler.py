@@ -2,7 +2,8 @@
 OpenAI Image Variations Handler
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import Final
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
@@ -14,34 +15,57 @@ from litellm.utils import ProviderConfigManager
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ...custom_httpx.llm_http_handler import LiteLLMLoggingObj
 from ..common_utils import OpenAIError
+from ..workload_identity import build_async_openai_client, build_openai_client
 
 
 class OpenAIImageVariationsHandler:
     def get_sync_client(
         self,
         client: OpenAI | None,
-        init_client_params: dict,
-    ):
-        if client is None:
-            openai_client = OpenAI(
-                **init_client_params,
-            )
-        else:
-            openai_client = client
-        return openai_client
+        api_key: str | None,
+        api_base: str,
+        timeout: float | httpx.Timeout | None,
+        max_retries: int,
+        organization: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> OpenAI:
+        if client is not None:
+            return client
+        return build_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            litellm_params=litellm_params,
+            static_key_http_client_factory=lambda: litellm.client_session,
+        )
 
-    def get_async_client(self, client: AsyncOpenAI | None, init_client_params: dict) -> AsyncOpenAI:
-        if client is None:
-            openai_client = AsyncOpenAI(
-                **init_client_params,
-            )
-        else:
-            openai_client = client
-        return openai_client
+    def get_async_client(
+        self,
+        client: AsyncOpenAI | None,
+        api_key: str | None,
+        api_base: str,
+        timeout: float | httpx.Timeout | None,
+        max_retries: int,
+        organization: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> AsyncOpenAI:
+        if client is not None:
+            return client
+        return build_async_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            litellm_params=litellm_params,
+            static_key_http_client_factory=lambda: litellm.aclient_session,
+        )
 
     async def async_image_variations(
         self,
-        api_key: str,
+        api_key: str | None,
         api_base: str,
         organization: str | None,
         client: AsyncOpenAI | None,
@@ -58,20 +82,19 @@ class OpenAIImageVariationsHandler:
         provider_config: BaseImageVariationConfig,
     ) -> ImageResponse:
         try:
-            init_client_params = {
-                "api_key": api_key,
-                "base_url": api_base,
-                "http_client": litellm.client_session,
-                "timeout": timeout,
-                "max_retries": max_retries,  # type: ignore
-                "organization": organization,
-            }
+            client = self.get_async_client(
+                client=client,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                litellm_params=litellm_params,
+            )
 
-            client = self.get_async_client(client=client, init_client_params=init_client_params)
-
-            raw_response = await client.images.with_raw_response.create_variation(**data)  # type: ignore
-            response = raw_response.parse()
-            response_json = response.model_dump()
+            raw_response: Final = await client.images.with_raw_response.create_variation(**data)
+            response: Final = raw_response.parse()
+            response_json: Final = response.model_dump()
 
             ## LOGGING
             logging_obj.post_call(
@@ -100,10 +123,10 @@ class OpenAIImageVariationsHandler:
                 api_key=api_key,
             )
         except Exception as e:
-            status_code = getattr(e, "status_code", 500)
+            status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_text = getattr(e, "text", str(e))
-            error_response = getattr(e, "response", None)
+            error_text: Final = getattr(e, "text", str(e))
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
@@ -111,7 +134,7 @@ class OpenAIImageVariationsHandler:
     def image_variations(
         self,
         model_response: ImageResponse,
-        api_key: str,
+        api_key: str | None,
         api_base: str,
         model: str | None,
         image: FileTypes,
@@ -127,7 +150,7 @@ class OpenAIImageVariationsHandler:
         headers: dict | None = None,
     ) -> ImageResponse:
         try:
-            provider_config = ProviderConfigManager.get_provider_image_variation_config(
+            provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
                 model=model or "",  # openai defaults to dall-e-2
                 provider=LlmProviders.OPENAI,
             )
@@ -135,15 +158,15 @@ class OpenAIImageVariationsHandler:
             if provider_config is None:
                 raise ValueError(f"image variation provider not found: {custom_llm_provider}.")
 
-            max_retries = optional_params.pop("max_retries", 2)
+            max_retries: Final = optional_params.pop("max_retries", 2)
 
-            data = provider_config.transform_request_image_variation(
+            data: Final = provider_config.transform_request_image_variation(
                 model=model,
                 image=image,
                 optional_params=optional_params,
                 headers=headers or {},
             )
-            json_data = data.get("data")
+            json_data: Final = data.get("data")
             if not json_data:
                 raise ValueError(f"data field is required, for openai image variations. Got={data}")
             ## LOGGING
@@ -173,22 +196,21 @@ class OpenAIImageVariationsHandler:
                     image=image,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
-                )  # type: ignore
+                )
 
-            init_client_params = {
-                "api_key": api_key,
-                "base_url": api_base,
-                "http_client": litellm.client_session,
-                "timeout": timeout,
-                "max_retries": max_retries,  # type: ignore
-                "organization": organization,
-            }
+            client = self.get_sync_client(
+                client=client,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                litellm_params=litellm_params,
+            )
 
-            client = self.get_sync_client(client=client, init_client_params=init_client_params)
-
-            raw_response = client.images.with_raw_response.create_variation(**json_data)  # type: ignore
-            response = raw_response.parse()
-            response_json = response.model_dump()
+            raw_response: Final = client.images.with_raw_response.create_variation(**json_data)
+            response: Final = raw_response.parse()
+            response_json: Final = response.model_dump()
 
             ## LOGGING
             logging_obj.post_call(
@@ -217,10 +239,10 @@ class OpenAIImageVariationsHandler:
                 api_key=api_key,
             )
         except Exception as e:
-            status_code = getattr(e, "status_code", 500)
+            status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_text = getattr(e, "text", str(e))
-            error_response = getattr(e, "response", None)
+            error_text: Final = getattr(e, "text", str(e))
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)

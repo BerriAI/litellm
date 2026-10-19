@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,6 +23,7 @@ from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
 from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
+    header_value,
     httpxSpecialProvider,
 )
 from litellm.rag.ingestion.file_parsers import extract_text_from_pdf
@@ -31,6 +32,10 @@ from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
 
 if TYPE_CHECKING:
     from litellm import Router
+
+
+class RAGIngestBadRequestError(ValueError):
+    status_code: Final = 400
 
 
 class BaseRAGIngestion(ABC):
@@ -55,10 +60,7 @@ class BaseRAGIngestion(ABC):
 
         # Extract configs from options
         self.ocr_config = ingest_options.get("ocr")
-        self.chunking_strategy: dict[str, Any] = cast(
-            dict[str, Any],
-            ingest_options.get("chunking_strategy") or {"type": "auto"},
-        )
+        self.chunking_strategy = ingest_options.get("chunking_strategy") or {"type": "auto"}
         self.embedding_config = ingest_options.get("embedding")
         self.vector_store_config: dict[str, Any] = cast(dict[str, Any], ingest_options.get("vector_store") or {})
         self.ingest_name = ingest_options.get("name")
@@ -78,9 +80,9 @@ class BaseRAGIngestion(ABC):
         """
         from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 
-        credential_name = self.vector_store_config.get("litellm_credential_name")
-        if credential_name and litellm.credential_list:
-            credential_values = CredentialAccessor.get_credential_values(credential_name)
+        credential_name: Final = self.vector_store_config.get("litellm_credential_name")
+        if isinstance(credential_name, str) and credential_name and litellm.credential_list:
+            credential_values: Final = CredentialAccessor.get_credential_values(credential_name)
             if not credential_values:
                 return
             for key, value in credential_values.items():
@@ -120,12 +122,13 @@ class BaseRAGIngestion(ABC):
             return filename, file_content, content_type, None
 
         if file_url:
-            http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.RAG)
-            response = await async_safe_get(http_client, file_url)
+            http_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.RAG)
+            response: Final = await async_safe_get(http_client, file_url)
             response.raise_for_status()
             file_content = response.content
             filename = file_url.split("/")[-1] or "document"
-            content_type = response.headers.get("content-type", "application/octet-stream")
+            content_type_header: Final = header_value(response.headers, "content-type")
+            content_type = "application/octet-stream" if content_type_header is None else content_type_header
             return filename, file_content, content_type, None
 
         if file_id:
@@ -151,7 +154,7 @@ class BaseRAGIngestion(ABC):
         if not self.ocr_config or not file_content:
             return None
 
-        ocr_model = self.ocr_config.get("model", "mistral/mistral-ocr-latest")
+        ocr_model: Final = self.ocr_config.get("model", "mistral/mistral-ocr-latest")
 
         # Determine document type
         if content_type and "image" in content_type:
@@ -160,8 +163,8 @@ class BaseRAGIngestion(ABC):
             doc_type, url_key = "document_url", "document_url"
 
         # Encode as base64 data URL
-        b64_content = base64.b64encode(file_content).decode("utf-8")
-        data_url = f"data:{content_type};base64,{b64_content}"
+        b64_content: Final = base64.b64encode(file_content).decode("utf-8")
+        data_url: Final = f"data:{content_type};base64,{b64_content}"
 
         # Use router if available
         if self.router is not None:
@@ -176,12 +179,8 @@ class BaseRAGIngestion(ABC):
             )
 
         # Extract text from pages
-        if hasattr(ocr_response, "pages") and ocr_response.pages:  # type: ignore
-            return "\n\n".join(
-                page.markdown
-                for page in ocr_response.pages
-                if hasattr(page, "markdown")  # type: ignore
-            )
+        if hasattr(ocr_response, "pages") and ocr_response.pages:
+            return "\n\n".join(page.markdown for page in ocr_response.pages if hasattr(page, "markdown"))
 
         return None
 
@@ -229,20 +228,20 @@ class BaseRAGIngestion(ABC):
             return []
 
         # Extract RecursiveCharacterTextSplitter args
-        splitter_args = self.chunking_strategy or {}
-        chunk_size = splitter_args.get("chunk_size", DEFAULT_CHUNK_SIZE)
-        chunk_overlap = splitter_args.get("chunk_overlap", DEFAULT_CHUNK_OVERLAP)
-        separators = splitter_args.get("separators", None)
+        splitter_args: Final = self.chunking_strategy or {}
+        chunk_size: Final = splitter_args.get("chunk_size", DEFAULT_CHUNK_SIZE)
+        chunk_overlap: Final = splitter_args.get("chunk_overlap", DEFAULT_CHUNK_OVERLAP)
+        separators: Final = splitter_args.get("separators", None)
 
         # Build splitter kwargs
-        splitter_kwargs: dict[str, Any] = {
+        splitter_kwargs: Final[dict[str, Any]] = {
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
         }
         if separators:
             splitter_kwargs["separators"] = separators
 
-        text_splitter = RecursiveCharacterTextSplitter(**splitter_kwargs)
+        text_splitter: Final = RecursiveCharacterTextSplitter(**splitter_kwargs)
         return text_splitter.split_text(text_to_chunk)
 
     async def embed(
@@ -261,7 +260,7 @@ class BaseRAGIngestion(ABC):
         if not self.embedding_config or not chunks:
             return None
 
-        embedding_model = self.embedding_config.get("model", "text-embedding-3-small")
+        embedding_model: Final = self.embedding_config.get("model", "text-embedding-3-small")
 
         if self.router is not None:
             response = await self.router.aembedding(model=embedding_model, input=chunks)
@@ -324,28 +323,33 @@ class BaseRAGIngestion(ABC):
             file_id=file_id,
         )
 
-        try:
-            if existing_file_id and not self.supports_existing_file_id:
-                raise ValueError(
-                    f"{self.__class__.__name__} does not support ingesting an existing file_id. "
-                    "Upload file data or provide file_url instead."
-                )
+        if existing_file_id and not self.supports_existing_file_id:
+            return RAGIngestResponse(
+                id=self.ingest_id,
+                status="failed",
+                vector_store_id="",
+                file_id=None,
+                error=f"{self.__class__.__name__} does not support ingesting an existing file_id. "
+                "Upload file data or provide file_url instead.",
+                error_status_code=400,
+            )
 
+        try:
             # Step 2: OCR (optional)
-            extracted_text = await self.ocr(
+            extracted_text: Final = await self.ocr(
                 file_content=file_content,
                 content_type=content_type,
             )
 
             # Step 3: Chunking
-            chunks = self.chunk(
+            chunks: Final = self.chunk(
                 text=extracted_text,
                 file_content=file_content,
                 ocr_was_used=self.ocr_config is not None,
             )
 
             # Step 4: Embedding (optional - some providers handle this internally)
-            embeddings = await self.embed(chunks=chunks)
+            embeddings: Final = await self.embed(chunks=chunks)
 
             # Step 5: Store in vector store
             vector_store_id, result_file_id = await self.store(
@@ -365,11 +369,13 @@ class BaseRAGIngestion(ABC):
             )
 
         except Exception as e:
-            verbose_logger.exception(f"RAG Pipeline failed: {e}")
+            verbose_logger.exception("RAG Pipeline failed: %s", e)
+            error_status_code: Final[object] = getattr(e, "status_code", None)
             return RAGIngestResponse(
                 id=self.ingest_id,
                 status="failed",
                 vector_store_id="",
                 file_id=None,
                 error=str(e),
+                error_status_code=error_status_code if isinstance(error_status_code, int) else None,
             )

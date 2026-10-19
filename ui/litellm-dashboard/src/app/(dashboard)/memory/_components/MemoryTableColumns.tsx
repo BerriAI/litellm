@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import { teamDetailHref, userDetailHref } from "@/utils/entityLinks";
 
 interface MemoryRowActionsProps {
   row: MemoryRow;
@@ -109,7 +110,10 @@ export const getMemoryTableColumns = ({
     header: "User ID",
     size: 160,
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.user_id} />,
+    cell: ({ row }) => {
+      const userId = row.original.user_id;
+      return <IdCell value={userId} href={userId ? userDetailHref(userId) : undefined} />;
+    },
   },
   {
     id: "team_id",
@@ -118,7 +122,10 @@ export const getMemoryTableColumns = ({
     header: "Team ID",
     size: 160,
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.team_id} />,
+    cell: ({ row }) => {
+      const teamId = row.original.team_id;
+      return <IdCell value={teamId} href={teamId ? teamDetailHref(teamId) : undefined} />;
+    },
   },
   {
     id: "updated_at",

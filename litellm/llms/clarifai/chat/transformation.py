@@ -1,6 +1,8 @@
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import OpenAIError
@@ -14,10 +16,13 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class ClarifaiConfig(OpenAIGPTConfig):
@@ -68,8 +73,15 @@ class ClarifaiConfig(OpenAIGPTConfig):
         Get API base and key for Clarifai provider.
         """
         api_base = api_base or "https://api.clarifai.com/v2/ext/openai/v1"
-        dynamic_api_key = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
+        dynamic_api_key: Final = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def transform_request(self, model, messages, optional_params, litellm_params, headers):
         model = self.get_base_model(model) or model
@@ -85,7 +97,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -102,15 +114,15 @@ class ClarifaiConfig(OpenAIGPTConfig):
         )
         ## Reponse
         try:
-            completion_response = raw_response.json()
+            completion_response: Final = raw_response.json()
         except Exception as e:
             raise OpenAIError(
                 status_code=raw_response.status_code,
-                message=f"Failed to parse Clarifai response: {e!s}",
+                message=f"Failed to parse Clarifai response: {e}",
                 headers=raw_response.headers,
             ) from e
 
-        response = ModelResponse(**completion_response)
+        response: Final = ModelResponse(**_JSON_OBJECT.validate_python(completion_response))
 
         if response.model is not None:
             response.model = "clarifai/" + model

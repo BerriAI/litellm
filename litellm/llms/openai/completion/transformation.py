@@ -2,12 +2,16 @@
 Support for gpt model family
 """
 
+from collections.abc import Mapping
+from typing import Final
+
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
 
 from ..chat.gpt_transformation import OpenAIGPTConfig
-from .utils import _transform_prompt
+from .utils import transform_prompt
 
 
 class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
@@ -67,7 +71,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         temperature: float | None = None,
         top_p: float | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -85,7 +89,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             ## RESPONSE OBJECT
             if response_object is None or model_response_object is None:
                 raise ValueError("Error in response object format")
-            choice_list: list[Choices] = []
+            choice_list: Final[list[Choices]] = []
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["text"],
@@ -98,7 +102,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
                     logprobs=choice.get("logprobs", None),
                 )
                 choice_list.append(choice)
-            model_response_object.choices = choice_list  # type: ignore
+            model_response_object.choices = choice_list
 
             if "usage" in response_object:
                 setattr(model_response_object, "usage", response_object["usage"])
@@ -109,8 +113,10 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
 
-            model_response_object._hidden_params["original_response"] = (
-                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            set_hidden_param(
+                model_response_object,
+                "original_response",
+                response_object,
             )
             return model_response_object
         except Exception as e:
@@ -148,7 +154,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        prompt = _transform_prompt(messages)
+        prompt: Final = transform_prompt(messages)
         return {
             "model": model,
             "prompt": prompt,

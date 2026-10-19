@@ -7,10 +7,12 @@ Vercel AI Gateway is OpenAI-compatible and supports embeddings via the /v1/embed
 Docs: https://vercel.com/docs/ai-gateway/openai-compat/embeddings
 """
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -50,7 +52,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         Vercel AI Gateway requires:
         - Authorization header with Bearer token (API key or OIDC token)
         """
-        vercel_headers = {
+        vercel_headers: Final = {
             "Content-Type": "application/json",
         }
 
@@ -59,7 +61,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
             vercel_headers["Authorization"] = f"Bearer {api_key}"
 
         # Merge with existing headers (user's extra_headers take priority)
-        merged_headers = {**vercel_headers, **headers}
+        merged_headers: Final = {**vercel_headers, **headers}
 
         return merged_headers
 
@@ -123,7 +125,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # Vercel AI Gateway returns standard OpenAI-compatible embedding response
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         return convert_to_model_response_object(
             response_object=response_json,
@@ -160,12 +162,14 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
+    ) -> BaseLLMException:
         """
         Get the error class for Vercel AI Gateway errors.
         """
         return VercelAIGatewayException(
             message=error_message,
             status_code=status_code,
-            headers=headers,
+            headers=headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers),
         )
