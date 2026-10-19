@@ -408,21 +408,25 @@ def _deployment_pdf_input_support(model: str, base_model: str, custom_llm_provid
 
 
 def _declared_pdf_input_support(
-    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None, base_model: str | None
 ) -> bool | None:
     match model_info:
         case {"supports_pdf_input": bool() as declared}:
             return declared
-        case {"base_model": str() as base_model} if base_model:
+        case _ if base_model:
             return _deployment_pdf_input_support(model, base_model, custom_llm_provider)
         case _:
             return _cost_map_pdf_input_support(model, custom_llm_provider)
 
 
 def _pdf_input_unreadable(
-    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None, drop_params: bool
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    base_model: str | None,
+    drop_params: bool,
 ) -> bool:
-    match _declared_pdf_input_support(model, custom_llm_provider, model_info):
+    match _declared_pdf_input_support(model, custom_llm_provider, model_info, base_model):
         case False:
             return True
         case None:
@@ -436,10 +440,11 @@ def _messages_without_unreadable_pdfs(
     model: str,
     custom_llm_provider: str,
     model_info: Mapping[str, object] | None,
+    base_model: str | None,
     drop_params: bool,
 ) -> tuple[AllMessageValues, ...] | None:
     if not messages_have_pdf_file_part(messages) or not _pdf_input_unreadable(
-        model, custom_llm_provider, model_info, drop_params
+        model, custom_llm_provider, model_info, base_model, drop_params
     ):
         return None
     if not drop_params:
@@ -5977,6 +5982,7 @@ def completion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             model_info=_MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
+            base_model=base_model if isinstance(base_model, str) else None,
             drop_params=litellm.drop_params is True
             or normalize_drop_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")) is True,
         )

@@ -68,19 +68,21 @@ _ENTRYPOINTS: Final = (
 )
 
 
-def _is_azure_ai_chat_model_without_pdf_input(entry: JsonValue) -> bool:
+def _azure_ai_chat_model_pdf_input(entry: JsonValue) -> bool | None:
     match entry:
-        case {"litellm_provider": "azure_ai", "mode": "chat", "supports_pdf_input": False}:
-            return True
+        case {"litellm_provider": "azure_ai", "mode": "chat", "supports_pdf_input": bool() as supports}:
+            return supports
         case _:
-            return False
+            return None
 
 
-def _azure_ai_model_marked_unable_to_read_pdfs() -> str:
+def _azure_ai_chat_model(reads_pdfs: bool) -> str:
     entries: Final = _JSON_OBJECT.validate_json(_COST_MAP_PATH.read_bytes())
-    marked: Final = sorted(name for name, entry in entries.items() if _is_azure_ai_chat_model_without_pdf_input(entry))
-    assert marked, "the cost map marks no azure_ai chat model unable to read PDFs"
-    return marked[0]
+    matching: Final = sorted(
+        name for name, entry in entries.items() if _azure_ai_chat_model_pdf_input(entry) is reads_pdfs
+    )
+    assert matching, f"the cost map marks no azure_ai chat model with supports_pdf_input {reads_pdfs}"
+    return matching[0]
 
 
 def _ollama_reply(backend: str) -> Reply:
@@ -198,13 +200,24 @@ def _base_model_deployment(scenario: Scenario, wire: Wire) -> tuple[str, str]:
         model=f"azure_ai/{backend}",
         api_base=wire.url,
         api_key=_API_KEY,
-        model_info={"base_model": _azure_ai_model_marked_unable_to_read_pdfs()},
+        model_info={"base_model": _azure_ai_chat_model(reads_pdfs=False)},
+    )
+    return model, backend
+
+
+def _litellm_params_base_model_deployment(scenario: Scenario, wire: Wire) -> tuple[str, str]:
+    backend: Final = _backend()
+    model: Final = scenario.model(
+        model=f"azure_ai/{backend}",
+        api_base=wire.url,
+        api_key=_API_KEY,
+        base_model=_azure_ai_chat_model(reads_pdfs=False),
     )
     return model, backend
 
 
 def _cost_map_deployment(scenario: Scenario, wire: Wire) -> tuple[str, str]:
-    marked: Final = _azure_ai_model_marked_unable_to_read_pdfs()
+    marked: Final = _azure_ai_chat_model(reads_pdfs=False)
     return scenario.model(model=marked, api_base=wire.url, api_key=_API_KEY), marked.removeprefix("azure_ai/")
 
 
@@ -217,6 +230,7 @@ def _ollama_deployment(scenario: Scenario, wire: Wire) -> tuple[str, str]:
     "deploy",
     [
         pytest.param(_base_model_deployment, id="model-info-base-model"),
+        pytest.param(_litellm_params_base_model_deployment, id="litellm-params-base-model"),
         pytest.param(_cost_map_deployment, id="cost-map"),
         pytest.param(_ollama_deployment, id="ollama"),
     ],
@@ -314,6 +328,12 @@ def _file_and_question(question: str) -> list[JsonValue]:
         pytest.param({}, {}, True, id="undeclared"),
         pytest.param({}, {"drop_params": True}, False, id="undeclared-drop-params"),
         pytest.param({"supports_pdf_input": True}, {"drop_params": True}, True, id="declared-drop-params"),
+        pytest.param(
+            {},
+            {"drop_params": True, "base_model": _azure_ai_chat_model(reads_pdfs=True)},
+            True,
+            id="base-model-reads-drop-params",
+        ),
     ],
 )
 def test_azure_ai_model_outside_the_cost_map_gets_the_pdf_unless_drop_params_finds_no_declaration(
