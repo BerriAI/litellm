@@ -74,6 +74,8 @@ CONNECTION_NAMES: Final = (
     "request_timeout",
     "force_timeout",
     "stream_timeout",
+    "timeout_by_service_tier",
+    "stream_timeout_by_service_tier",
     "max_retries",
     "tenant_id",
     "client_id",
