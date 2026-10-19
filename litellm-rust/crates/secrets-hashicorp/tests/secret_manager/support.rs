@@ -118,7 +118,7 @@ pub(super) struct ParityCase {
 pub(super) fn parity_cases() -> Vec<ParityCase> {
     serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../tests/test_litellm/secret_managers/hashicorp_vault_parity.json"
+        "/../../../tests/unit/secret_managers/hashicorp_vault_parity.json"
     )))
     .unwrap()
 }

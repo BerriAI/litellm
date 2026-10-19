@@ -9,7 +9,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
@@ -52,7 +55,7 @@ async def create_container(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/containers" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "name": "My Container",
@@ -66,7 +69,7 @@ async def create_container(
     Or specify provider via header:
     ```bash
     curl -X POST "http://localhost:4000/v1/containers" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "custom-llm-provider: azure" \
         -H "Content-Type: application/json" \
         -d '{
@@ -89,7 +92,7 @@ async def create_container(
     )
 
     # Read request body
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
 
     # Extract custom_llm_provider using priority chain
     # Priority: headers > query params > request body > default
@@ -125,7 +128,7 @@ async def create_container(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -187,13 +190,13 @@ async def list_containers(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Or specify provider via header or query param:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -245,7 +248,7 @@ async def list_containers(
                 version=version,
             )
         except Exception as e:
-            raise await processor._handle_llm_api_exception(
+            raise await processor.handle_llm_api_exception(
                 e=e,
                 user_api_key_dict=user_api_key_dict,
                 proxy_logging_obj=proxy_logging_obj,
@@ -290,13 +293,13 @@ async def retrieve_container(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Or specify provider via header:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "custom-llm-provider: azure"
     ```
     """
@@ -360,7 +363,7 @@ async def retrieve_container(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -396,13 +399,13 @@ async def delete_container(
     Example:
     ```bash
     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Or specify provider via header:
     ```bash
     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "custom-llm-provider: azure"
     ```
     """
@@ -466,7 +469,7 @@ async def delete_container(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

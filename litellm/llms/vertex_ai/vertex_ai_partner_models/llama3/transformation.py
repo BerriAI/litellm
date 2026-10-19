@@ -1,5 +1,5 @@
 import types
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -18,7 +18,11 @@ from litellm.types.utils import (
     Usage,
 )
 
-from ...common_utils import VertexAIError
+from ...common_utils import (
+    VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS,
+    VertexAIError,
+    is_vertex_self_deployed_openai_compatible_endpoint,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -41,7 +45,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         self,
         max_tokens: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key == "max_tokens" and value is None:
                 value = self.max_tokens
@@ -50,9 +54,10 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
     @classmethod
     def get_config(cls):
+        config_attrs: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in config_attrs.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -66,13 +71,13 @@ class VertexAILlama3Config(OpenAIGPTConfig):
             and v is not None
         }
 
-    def get_supported_openai_params(self, model: str):
-        supported_params: Final = super().get_supported_openai_params(model=model)
-        try:
-            supported_params.remove("max_retries")
-        except KeyError:
-            pass
-        return supported_params
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        unsupported_params: Final = (
+            VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
+            if is_vertex_self_deployed_openai_compatible_endpoint(model)
+            else frozenset({"max_retries"})
+        )
+        return [param for param in super().get_supported_openai_params(model=model) if param not in unsupported_params]
 
     def map_openai_params(
         self,

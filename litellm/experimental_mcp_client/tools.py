@@ -2,10 +2,10 @@ import json
 from typing import Final, Literal
 
 import anyio
-from mcp import ClientSession
+from mcp import ClientSession, MCPError
+from mcp.types import INTERNAL_ERROR, PaginatedRequestParams
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
-from mcp.types import PaginatedRequestParams
 from mcp.types import Tool as MCPTool
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
@@ -99,7 +99,7 @@ def transform_mcp_tool_to_anthropic_tool(mcp_tool: MCPTool) -> AnthropicMessages
 
 
 async def list_tools_with_pagination(
-    session: ClientSession, listing_deadline: float | None = None
+    session: ClientSession, listing_deadline: float | None = None, *, require_complete: bool = False
 ) -> list[MCPTool]:  # mutable-ok: list return contract
     """Collect tools from every tools/list page by following nextCursor.
 
@@ -129,7 +129,7 @@ async def list_tools_with_pagination(
             )
             tools.extend(result.tools)
 
-            next_cursor = getattr(result, "next_cursor", None)
+            next_cursor = result.next_cursor
             if not isinstance(next_cursor, str) or not next_cursor:
                 return tools
             if next_cursor in seen_cursors:
@@ -137,6 +137,10 @@ async def list_tools_with_pagination(
                     "MCP server repeated a tools/list cursor while listing tools; returning %s tools collected so far",
                     len(tools),
                 )
+                if require_complete:
+                    raise MCPError(
+                        code=INTERNAL_ERROR, message="Upstream tool discovery is incomplete: repeated cursor"
+                    )
                 return tools
             seen_cursors.add(next_cursor)
             cursor = next_cursor
@@ -146,6 +150,8 @@ async def list_tools_with_pagination(
             MCP_TOOL_LISTING_MAX_PAGES,
             len(tools),
         )
+        if require_complete:
+            raise MCPError(code=INTERNAL_ERROR, message="Upstream tool discovery is incomplete: pagination limit")
         return tools
 
     verbose_logger.warning(
@@ -153,6 +159,8 @@ async def list_tools_with_pagination(
         effective_deadline,
         len(tools),
     )
+    if require_complete:
+        raise MCPError(code=INTERNAL_ERROR, message="Upstream tool discovery is incomplete: listing deadline")
     return tools
 
 
@@ -171,9 +179,7 @@ async def load_mcp_tools(
     """
     tools: Final = await list_tools_with_pagination(session)
     if format == "openai":
-        return [  # mutable-ok: public API returns a list
-            transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools
-        ]
+        return [transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools]
     return tools
 
 

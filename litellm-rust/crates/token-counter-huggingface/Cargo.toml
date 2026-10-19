@@ -9,3 +9,6 @@ repository.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokenizers.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true

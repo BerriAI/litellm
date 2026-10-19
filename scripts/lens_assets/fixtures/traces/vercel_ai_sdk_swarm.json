@@ -1,0 +1,1471 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "host.name",
+            "value": {
+              "stringValue": "fixture-host"
+            }
+          },
+          {
+            "key": "host.arch",
+            "value": {
+              "stringValue": "arm64"
+            }
+          },
+          {
+            "key": "host.id",
+            "value": {
+              "stringValue": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          {
+            "key": "process.pid",
+            "value": {
+              "intValue": "84518"
+            }
+          },
+          {
+            "key": "process.executable.name",
+            "value": {
+              "stringValue": "node"
+            }
+          },
+          {
+            "key": "process.executable.path",
+            "value": {
+              "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
+            }
+          },
+          {
+            "key": "process.command_args",
+            "value": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
+                  },
+                  {
+                    "stringValue": "--env-file=.env"
+                  },
+                  {
+                    "stringValue": "/home/user/dev/litellm-lens-example/vercel-ai-sdk-js/swarm/main.ts"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "key": "process.runtime.version",
+            "value": {
+              "stringValue": "25.8.1"
+            }
+          },
+          {
+            "key": "process.runtime.name",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "process.runtime.description",
+            "value": {
+              "stringValue": "Node.js"
+            }
+          },
+          {
+            "key": "process.command",
+            "value": {
+              "stringValue": "/home/user/dev/litellm-lens-example/vercel-ai-sdk-js/swarm/main.ts"
+            }
+          },
+          {
+            "key": "process.owner",
+            "value": {
+              "stringValue": "user"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:node"
+            }
+          },
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "2.11.0"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "7afc6b81b300d8c8",
+              "parentSpanId": "17d5d788ad94f074",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061365992000000",
+              "endTimeUnixNano": "1791061368010971292",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "9befeb83-aae3-4b94-8c0b-014e28018d61"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "03fa7b824666f392",
+              "parentSpanId": "4e2cea808ca797c1",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061368014000000",
+              "endTimeUnixNano": "1791061371110142833",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "2efc4292-a2c7-4641-87e4-ffc75c1c95b8"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "f0202df658719970",
+              "parentSpanId": "1b7d237a100acf60",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061371112000000",
+              "endTimeUnixNano": "1791061372728883541",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "6d6412c0-64ed-4537-8bfd-6748a29a92c9"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "gen_ai"
+          },
+          "spans": [
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "17d5d788ad94f074",
+              "parentSpanId": "53af20ff80378f4d",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791061365990000000",
+              "endTimeUnixNano": "1791061368013033958",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Use search_agent to gather facts, then writer_agent to write the final answer.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"function\",\"name\":\"search_agent\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]},\"description\":\"Gather key facts about the topic.\"},{\"type\":\"function\",\"name\":\"writer_agent\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]},\"description\":\"Write a concise answer from the given facts.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.client.operation.duration",
+                  "value": {
+                    "doubleValue": 2.022679583
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "tool-calls"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "resp_05a2a1ce645f1bff006ac16d761c4887d09b0a0ce939f26e34"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "92"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "67"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_MpYdHLpYmJyQ3LRY3awitXtw\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Find concise definition of \u201cagent trace\u201d in AI/LLM systems: what it is, typical contents, purpose, and note possible ambiguity (trace of agent execution/actions vs telemetry). Provide reliable, general facts; no need for citations unless useful.\"}}],\"finish_reason\":\"tool_call\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "4e2cea808ca797c1",
+              "parentSpanId": "2c797a6b22574099",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791061368014000000",
+              "endTimeUnixNano": "1791061371110701042",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Gather key facts about the topic.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Find concise definition of \u201cagent trace\u201d in AI/LLM systems: what it is, typical contents, purpose, and note possible ambiguity (trace of agent execution/actions vs telemetry). Provide reliable, general facts; no need for citations unless useful.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.client.operation.duration",
+                  "value": {
+                    "doubleValue": 3.096615333
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-EV1AWKuzlGdmVOHrAsERRWO5aL9TO"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "67"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "260"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of how an AI agent carried out a particular run\u2014from its initial input through intermediate reasoning or state changes to its final output.\\n\\nTypical contents include model calls, tool or API invocations and their results, relevant state or handoffs, timestamps, errors, and sometimes token or cost data. Traces help developers inspect behavior, debug failures, evaluate runs, and monitor performance or usage.\\n\\nThe term is **ambiguous**: it can mean the agent\u2019s sequence of actions and responses, or a *distributed telemetry trace*\u2014spans and timing data showing how work passed through system components. In practice, a trace may include both.\"}],\"finish_reason\":\"stop\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "2c797a6b22574099",
+              "parentSpanId": "abf396ad93710337",
+              "name": "step 1",
+              "kind": 1,
+              "startTimeUnixNano": "1791061368014000000",
+              "endTimeUnixNano": "1791061371111040709",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "agent_step"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "abf396ad93710337",
+              "parentSpanId": "186a93a3b7d89639",
+              "name": "invoke_agent search_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061368014000000",
+              "endTimeUnixNano": "1791061371111402084",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "search_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Gather key facts about the topic.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Find concise definition of \u201cagent trace\u201d in AI/LLM systems: what it is, typical contents, purpose, and note possible ambiguity (trace of agent execution/actions vs telemetry). Provide reliable, general facts; no need for citations unless useful.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "67"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "260"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of how an AI agent carried out a particular run\u2014from its initial input through intermediate reasoning or state changes to its final output.\\n\\nTypical contents include model calls, tool or API invocations and their results, relevant state or handoffs, timestamps, errors, and sometimes token or cost data. Traces help developers inspect behavior, debug failures, evaluate runs, and monitor performance or usage.\\n\\nThe term is **ambiguous**: it can mean the agent\u2019s sequence of actions and responses, or a *distributed telemetry trace*\u2014spans and timing data showing how work passed through system components. In practice, a trace may include both.\"}],\"finish_reason\":\"stop\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "186a93a3b7d89639",
+              "parentSpanId": "53af20ff80378f4d",
+              "name": "execute_tool search_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061368013000000",
+              "endTimeUnixNano": "1791061371110991292",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "search_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "call_MpYdHLpYmJyQ3LRY3awitXtw"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.type",
+                  "value": {
+                    "stringValue": "function"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": {
+                    "stringValue": "{\"request\":\"Find concise definition of \u201cagent trace\u201d in AI/LLM systems: what it is, typical contents, purpose, and note possible ambiguity (trace of agent execution/actions vs telemetry). Provide reliable, general facts; no need for citations unless useful.\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.execute_tool.duration",
+                  "value": {
+                    "doubleValue": 3.0978456249999997
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.result",
+                  "value": {
+                    "stringValue": "\"An **agent trace** is a record of how an AI agent carried out a particular run\u2014from its initial input through intermediate reasoning or state changes to its final output.\\n\\nTypical contents include model calls, tool or API invocations and their results, relevant state or handoffs, timestamps, errors, and sometimes token or cost data. Traces help developers inspect behavior, debug failures, evaluate runs, and monitor performance or usage.\\n\\nThe term is **ambiguous**: it can mean the agent\u2019s sequence of actions and responses, or a *distributed telemetry trace*\u2014spans and timing data showing how work passed through system components. In practice, a trace may include both.\""
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "53af20ff80378f4d",
+              "parentSpanId": "cc0476b4876baae2",
+              "name": "step 1",
+              "kind": 1,
+              "startTimeUnixNano": "1791061365990000000",
+              "endTimeUnixNano": "1791061371111663709",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "agent_step"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "1b7d237a100acf60",
+              "parentSpanId": "1d7cf8b1bb7b59c0",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791061371112000000",
+              "endTimeUnixNano": "1791061372729497083",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Use search_agent to gather facts, then writer_agent to write the final answer.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_MpYdHLpYmJyQ3LRY3awitXtw\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Find concise definition of \u201cagent trace\u201d in AI/LLM systems: what it is, typical contents, purpose, and note possible ambiguity (trace of agent execution/actions vs telemetry). Provide reliable, general facts; no need for citations unless useful.\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_MpYdHLpYmJyQ3LRY3awitXtw\",\"response\":\"An **agent trace** is a record of how an AI agent carried out a particular run\u2014from its initial input through intermediate reasoning or state changes to its final output.\\n\\nTypical contents include model calls, tool or API invocations and their results, relevant state or handoffs, timestamps, errors, and sometimes token or cost data. Traces help developers inspect behavior, debug failures, evaluate runs, and monitor performance or usage.\\n\\nThe term is **ambiguous**: it can mean the agent\u2019s sequence of actions and responses, or a *distributed telemetry trace*\u2014spans and timing data showing how work passed through system components. In practice, a trace may include both.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"function\",\"name\":\"search_agent\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]},\"description\":\"Gather key facts about the topic.\"},{\"type\":\"function\",\"name\":\"writer_agent\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]},\"description\":\"Write a concise answer from the given facts.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.client.operation.duration",
+                  "value": {
+                    "doubleValue": 1.617490167
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "tool-calls"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "resp_04cd21c25bcf7f44006ac16d7b402c87d0a405dac2e64feea5"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "304"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "71"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_81Y9DfI50MhaJnrGIXFKBbZF\",\"name\":\"writer_agent\",\"arguments\":{\"request\":\"Answer the user\u2019s question \u201cWhat is an agent trace?\u201d in clear, concise language. Define it as a record of an AI agent run from input to final output, mention typical contents and why useful, and briefly note the term can also refer to distributed telemetry tracing.\"}}],\"finish_reason\":\"tool_call\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "host.name",
+            "value": {
+              "stringValue": "fixture-host"
+            }
+          },
+          {
+            "key": "host.arch",
+            "value": {
+              "stringValue": "arm64"
+            }
+          },
+          {
+            "key": "host.id",
+            "value": {
+              "stringValue": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          {
+            "key": "process.pid",
+            "value": {
+              "intValue": "84518"
+            }
+          },
+          {
+            "key": "process.executable.name",
+            "value": {
+              "stringValue": "node"
+            }
+          },
+          {
+            "key": "process.executable.path",
+            "value": {
+              "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
+            }
+          },
+          {
+            "key": "process.command_args",
+            "value": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
+                  },
+                  {
+                    "stringValue": "--env-file=.env"
+                  },
+                  {
+                    "stringValue": "/home/user/dev/litellm-lens-example/vercel-ai-sdk-js/swarm/main.ts"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "key": "process.runtime.version",
+            "value": {
+              "stringValue": "25.8.1"
+            }
+          },
+          {
+            "key": "process.runtime.name",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "process.runtime.description",
+            "value": {
+              "stringValue": "Node.js"
+            }
+          },
+          {
+            "key": "process.command",
+            "value": {
+              "stringValue": "/home/user/dev/litellm-lens-example/vercel-ai-sdk-js/swarm/main.ts"
+            }
+          },
+          {
+            "key": "process.owner",
+            "value": {
+              "stringValue": "user"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:node"
+            }
+          },
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "2.11.0"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "2bd9d6336a3e242c",
+              "parentSpanId": "65b925aa57b69613",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061372730000000",
+              "endTimeUnixNano": "1791061374787308708",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "bd7694ea-c90d-47ed-877c-8f7783737446"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "f34df1d1a2aacc45",
+              "parentSpanId": "68c52964736f3c41",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061374789000000",
+              "endTimeUnixNano": "1791061376589021000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "1553ee74-685c-4cb4-b949-cd478abf5988"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "gen_ai"
+          },
+          "spans": [
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "65b925aa57b69613",
+              "parentSpanId": "8b1565d73bf387ad",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791061372730000000",
+              "endTimeUnixNano": "1791061374787785959",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Write a concise answer from the given facts.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Answer the user\u2019s question \u201cWhat is an agent trace?\u201d in clear, concise language. Define it as a record of an AI agent run from input to final output, mention typical contents and why useful, and briefly note the term can also refer to distributed telemetry tracing.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.client.operation.duration",
+                  "value": {
+                    "doubleValue": 2.057654125
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-EV1AaIRVb7UCfSzDv0hsRXJg4xtU2"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "73"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "113"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s run, from the initial input to its final output. It may include the agent\u2019s steps, tool calls and results, intermediate decisions, and errors. Traces help people debug runs, evaluate behavior, and understand how the agent reached its answer.\\n\\nThe term can also mean distributed telemetry tracing: tracking a request as it moves across services.\"}],\"finish_reason\":\"stop\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "8b1565d73bf387ad",
+              "parentSpanId": "06efefd5666b3a34",
+              "name": "step 1",
+              "kind": 1,
+              "startTimeUnixNano": "1791061372730000000",
+              "endTimeUnixNano": "1791061374787888958",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "agent_step"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "06efefd5666b3a34",
+              "parentSpanId": "b3eeb237a94a3885",
+              "name": "invoke_agent writer_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061372730000000",
+              "endTimeUnixNano": "1791061374788042125",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "writer_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Write a concise answer from the given facts.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Answer the user\u2019s question \u201cWhat is an agent trace?\u201d in clear, concise language. Define it as a record of an AI agent run from input to final output, mention typical contents and why useful, and briefly note the term can also refer to distributed telemetry tracing.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "73"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "113"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s run, from the initial input to its final output. It may include the agent\u2019s steps, tool calls and results, intermediate decisions, and errors. Traces help people debug runs, evaluate behavior, and understand how the agent reached its answer.\\n\\nThe term can also mean distributed telemetry tracing: tracking a request as it moves across services.\"}],\"finish_reason\":\"stop\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "b3eeb237a94a3885",
+              "parentSpanId": "1d7cf8b1bb7b59c0",
+              "name": "execute_tool writer_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061372729000000",
+              "endTimeUnixNano": "1791061374787342125",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "writer_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "call_81Y9DfI50MhaJnrGIXFKBbZF"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.type",
+                  "value": {
+                    "stringValue": "function"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": {
+                    "stringValue": "{\"request\":\"Answer the user\u2019s question \u201cWhat is an agent trace?\u201d in clear, concise language. Define it as a record of an AI agent run from input to final output, mention typical contents and why useful, and briefly note the term can also refer to distributed telemetry tracing.\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.execute_tool.duration",
+                  "value": {
+                    "doubleValue": 2.0583023749999994
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.result",
+                  "value": {
+                    "stringValue": "\"An **agent trace** is a record of an AI agent\u2019s run, from the initial input to its final output. It may include the agent\u2019s steps, tool calls and results, intermediate decisions, and errors. Traces help people debug runs, evaluate behavior, and understand how the agent reached its answer.\\n\\nThe term can also mean distributed telemetry tracing: tracking a request as it moves across services.\""
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "1d7cf8b1bb7b59c0",
+              "parentSpanId": "cc0476b4876baae2",
+              "name": "step 2",
+              "kind": 1,
+              "startTimeUnixNano": "1791061371112000000",
+              "endTimeUnixNano": "1791061374788079625",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "agent_step"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "68c52964736f3c41",
+              "parentSpanId": "e1b84d403b310561",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791061374788000000",
+              "endTimeUnixNano": "1791061376588651625",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Use search_agent to gather facts, then writer_agent to write the final answer.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_MpYdHLpYmJyQ3LRY3awitXtw\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Find concise definition of \u201cagent trace\u201d in AI/LLM systems: what it is, typical contents, purpose, and note possible ambiguity (trace of agent execution/actions vs telemetry). Provide reliable, general facts; no need for citations unless useful.\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_MpYdHLpYmJyQ3LRY3awitXtw\",\"response\":\"An **agent trace** is a record of how an AI agent carried out a particular run\u2014from its initial input through intermediate reasoning or state changes to its final output.\\n\\nTypical contents include model calls, tool or API invocations and their results, relevant state or handoffs, timestamps, errors, and sometimes token or cost data. Traces help developers inspect behavior, debug failures, evaluate runs, and monitor performance or usage.\\n\\nThe term is **ambiguous**: it can mean the agent\u2019s sequence of actions and responses, or a *distributed telemetry trace*\u2014spans and timing data showing how work passed through system components. In practice, a trace may include both.\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_81Y9DfI50MhaJnrGIXFKBbZF\",\"name\":\"writer_agent\",\"arguments\":{\"request\":\"Answer the user\u2019s question \u201cWhat is an agent trace?\u201d in clear, concise language. Define it as a record of an AI agent run from input to final output, mention typical contents and why useful, and briefly note the term can also refer to distributed telemetry tracing.\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_81Y9DfI50MhaJnrGIXFKBbZF\",\"response\":\"An **agent trace** is a record of an AI agent\u2019s run, from the initial input to its final output. It may include the agent\u2019s steps, tool calls and results, intermediate decisions, and errors. Traces help people debug runs, evaluate behavior, and understand how the agent reached its answer.\\n\\nThe term can also mean distributed telemetry tracing: tracking a request as it moves across services.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"function\",\"name\":\"search_agent\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]},\"description\":\"Gather key facts about the topic.\"},{\"type\":\"function\",\"name\":\"writer_agent\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]},\"description\":\"Write a concise answer from the given facts.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.client.operation.duration",
+                  "value": {
+                    "doubleValue": 1.8006477080000005
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "resp_05b8a8419a7fdc09006ac16d7ee1f487d0a53181b1d0ece37f"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "466"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "79"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s run, from the initial input to its final output. It may include the agent\u2019s steps, tool calls and results, intermediate decisions, and errors. Traces help developers debug runs and understand how the agent reached its answer.\\n\\nThe term can also refer to telemetry that tracks a request as it moves across services.\"}],\"finish_reason\":\"stop\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "e1b84d403b310561",
+              "parentSpanId": "cc0476b4876baae2",
+              "name": "step 3",
+              "kind": 1,
+              "startTimeUnixNano": "1791061374788000000",
+              "endTimeUnixNano": "1791061376588811500",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "agent_step"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "c00015164f5b8c10593abdac757a38c6",
+              "spanId": "cc0476b4876baae2",
+              "name": "invoke_agent research_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061365987000000",
+              "endTimeUnixNano": "1791061376588556625",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"text\",\"content\":\"Use search_agent to gather facts, then writer_agent to write the final answer.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "862"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "217"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s run, from the initial input to its final output. It may include the agent\u2019s steps, tool calls and results, intermediate decisions, and errors. Traces help developers debug runs and understand how the agent reached its answer.\\n\\nThe term can also refer to telemetry that tracks a request as it moves across services.\"},{\"type\":\"tool_call\",\"id\":\"call_MpYdHLpYmJyQ3LRY3awitXtw\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Find concise definition of \u201cagent trace\u201d in AI/LLM systems: what it is, typical contents, purpose, and note possible ambiguity (trace of agent execution/actions vs telemetry). Provide reliable, general facts; no need for citations unless useful.\"}},{\"type\":\"tool_call\",\"id\":\"call_81Y9DfI50MhaJnrGIXFKBbZF\",\"name\":\"writer_agent\",\"arguments\":{\"request\":\"Answer the user\u2019s question \u201cWhat is an agent trace?\u201d in clear, concise language. Define it as a record of an AI agent run from input to final output, mention typical contents and why useful, and briefly note the term can also refer to distributed telemetry tracing.\"}},{\"type\":\"tool_call_response\",\"id\":\"call_MpYdHLpYmJyQ3LRY3awitXtw\",\"response\":\"An **agent trace** is a record of how an AI agent carried out a particular run\u2014from its initial input through intermediate reasoning or state changes to its final output.\\n\\nTypical contents include model calls, tool or API invocations and their results, relevant state or handoffs, timestamps, errors, and sometimes token or cost data. Traces help developers inspect behavior, debug failures, evaluate runs, and monitor performance or usage.\\n\\nThe term is **ambiguous**: it can mean the agent\u2019s sequence of actions and responses, or a *distributed telemetry trace*\u2014spans and timing data showing how work passed through system components. In practice, a trace may include both.\"},{\"type\":\"tool_call_response\",\"id\":\"call_81Y9DfI50MhaJnrGIXFKBbZF\",\"response\":\"An **agent trace** is a record of an AI agent\u2019s run, from the initial input to its final output. It may include the agent\u2019s steps, tool calls and results, intermediate decisions, and errors. Traces help people debug runs, evaluate behavior, and understand how the agent reached its answer.\\n\\nThe term can also mean distributed telemetry tracing: tracking a request as it moves across services.\"}],\"finish_reason\":\"stop\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
