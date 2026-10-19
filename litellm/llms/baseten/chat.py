@@ -116,7 +116,7 @@ class BasetenConfig(OpenAIGPTConfig):
                 "BASETEN_API_KEY is not set. Please set the environment variable, to query Baseten's `/models` endpoint."
             )
         resolved_api_base: Final = (self.get_api_base(api_base) or BASETEN_MODEL_API_BASE).rstrip("/")
-        response: Final = litellm.module_level_client.get(
+        response: Final = litellm.module_level_client.get(  # pyright: ignore[reportUnknownMemberType]  # untyped params
             url=f"{resolved_api_base.removesuffix('/v1')}/v1/models",
             headers={"Authorization": f"Bearer {resolved_api_key}"},
         )
