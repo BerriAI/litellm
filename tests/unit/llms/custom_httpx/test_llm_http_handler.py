@@ -24,6 +24,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -133,6 +134,48 @@ async def test_get_search_preserves_successful_results(is_async: bool, has_resul
                 assert response.results[0].title == "Example"
                 assert response.results[0].url == "https://example.com"
                 assert response.results[0].snippet == "Example snippet"
+
+
+@pytest.mark.asyncio
+async def test_async_search_mints_the_bing_grounding_token_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BING_GROUNDING_PROJECT_ENDPOINT", "https://acct.services.ai.azure.com/api/projects/proj")
+    monkeypatch.setenv("BING_GROUNDING_MODEL", "gpt-4.1")
+    monkeypatch.delenv("BING_GROUNDING_TOKEN", raising=False)
+    minting_threads: Final[list[int]] = []
+
+    def mint() -> str:
+        minting_threads.append(threading.get_ident())
+        return "minted-entra-token"
+
+    authorizations: Final[list[str | None]] = []
+
+    def foundry(request: httpx.Request) -> httpx.Response:
+        authorizations.append(request.headers.get("authorization"))
+        return httpx.Response(200, json={"output": []})
+
+    client: Final = AsyncHTTPHandler()
+    await client.close()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(foundry))
+
+    response: Final = await BaseLLMHTTPHandler().search(
+        query="test",
+        optional_params={},
+        timeout=5,
+        logging_obj=Mock(),
+        api_key=None,
+        api_base=None,
+        custom_llm_provider="bing_grounding",
+        client=client,
+        asearch=True,
+        provider_config=BingGroundingSearchConfig(entra_token_minter=mint),
+    )
+
+    assert response.object == "search"
+    assert authorizations == ["Bearer minted-entra-token"]
+    assert len(minting_threads) == 1
+    assert threading.get_ident() not in minting_threads
 
 
 @pytest.mark.asyncio

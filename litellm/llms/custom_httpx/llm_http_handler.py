@@ -2084,8 +2084,8 @@ class BaseLLMHTTPHandler:
         if provider_config is None:
             raise ValueError(f"No provider config found for provider: {custom_llm_provider}")
 
-        # Validate environment and get headers
-        headers = provider_config.validate_environment(
+        validated_headers: Final = await asyncio.to_thread(
+            provider_config.validate_environment,
             api_key=api_key,
             api_base=api_base,
             headers=headers or {},
@@ -2097,7 +2097,7 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             api_key=api_key,
             api_base=api_base,
-            headers=headers or {},
+            headers=validated_headers,
         )
 
         # Get complete URL (pass data for providers that need request body for URL construction)
@@ -2111,7 +2111,7 @@ class BaseLLMHTTPHandler:
         signed_headers, signed_json_body = await sign_request_off_loop_if_aws(
             provider_config,
             provider_config.sign_request,
-            headers=headers,
+            headers=validated_headers,
             optional_params=optional_params,
             request_data=data,
             api_base=complete_url,
@@ -2125,7 +2125,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": headers,
+                "headers": validated_headers,
             },
         )
 
