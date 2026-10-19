@@ -1,11 +1,12 @@
 import copy
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -46,6 +47,27 @@ else:
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
 _GUARDRAIL_CONFIG_VALIDATOR: Final["TypeAdapter[GuardrailConfigBlock]"] = TypeAdapter(GuardrailConfigBlock)
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CohereGeneration(TypedDict):
+    text: ReadOnly[str | None]
+    finish_reason: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CohereInvokeResponse(TypedDict):
+    text: NotRequired[ReadOnly[str | None]]
+    generations: NotRequired[ReadOnly[Sequence[_CohereGeneration]]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _LlamaInvokeResponse(TypedDict):
+    generation: ReadOnly[str | None]
+
+
+_COHERE_INVOKE_RESPONSE: Final = TypeAdapter(_CohereInvokeResponse)
+_LLAMA_INVOKE_RESPONSE: Final = TypeAdapter(_LlamaInvokeResponse)
 
 _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
@@ -316,12 +338,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         outputText: str | None = None
         try:
             if provider == "cohere":
-                if "text" in completion_response:
-                    outputText = completion_response["text"]
-                elif "generations" in completion_response:
-                    outputText = completion_response["generations"][0]["text"]
+                cohere_response: Final = _COHERE_INVOKE_RESPONSE.validate_python(completion_response)
+                if "text" in cohere_response:
+                    outputText = cohere_response["text"]
+                elif "generations" in cohere_response:
+                    outputText = cohere_response["generations"][0]["text"]
                     model_response.choices[0].finish_reason = map_finish_reason(
-                        completion_response["generations"][0]["finish_reason"]
+                        cohere_response["generations"][0]["finish_reason"]
                     )
             elif provider == "anthropic":
                 return litellm.AmazonAnthropicClaudeConfig().transform_response(
@@ -367,7 +390,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             elif provider == "ai21":
                 outputText = completion_response.get("completions")[0].get("data").get("text")
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
-                outputText = completion_response["generation"]
+                outputText = _LLAMA_INVOKE_RESPONSE.validate_python(completion_response)["generation"]
             elif provider == "mistral":
                 outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
             else:  # amazon titan

@@ -8,6 +8,7 @@ Docs: https://www.edenai.co/docs/v3/llms/embeddings
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -22,6 +23,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _SUPPORTED_PARAMS: Final = ("dimensions", "encoding_format", "user")
+
+_EMBEDDING_BODY: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
@@ -80,7 +83,7 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict[str, object],  # mutable-ok: inherited contract
         litellm_params: dict[str, object],  # mutable-ok: inherited contract
     ) -> EmbeddingResponse:
-        body: Final = raw_response.json()
+        body: Final = _EMBEDDING_BODY.validate_python(raw_response.json())
         logging_obj.post_call(original_response=body)
         response: Final[EmbeddingResponse] = convert_to_model_response_object(
             response_object=body, model_response_object=model_response, response_type="embedding"

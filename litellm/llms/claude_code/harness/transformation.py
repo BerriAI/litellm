@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -231,12 +231,16 @@ def _system_events(event: Mapping[str, object], state: ClaudeCodeStreamState) ->
     return event_list()
 
 
-def _record_result(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
+def _record_result(event: Mapping[str, object], state: ClaudeCodeStreamState) -> Sequence[Event]:
     state.result_seen = True
     state.is_error = bool(event.get("is_error", False))
     result = event.get("result")
     state.result_text = result if isinstance(result, str) else None
-    state.errors = [str(e) for e in event.get("errors") or ()]  # mutable-ok: mirrors the JSON errors array
+    errors: Final = event.get("errors") or ()
+    if not isinstance(errors, Iterable):
+        raise TypeError(f"'{type(errors).__name__}' object is not iterable")
+    error_items: Final[Iterable[object]] = errors
+    state.errors = [str(e) for e in error_items]  # mutable-ok: mirrors the JSON errors array
     state.structured_output = event.get("structured_output")
     if event.get("session_id"):
         state.session_id = str(event["session_id"])
@@ -301,7 +305,7 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
         options: ClaudeCodeOptions = self.get_options(ctx)
         model = ctx.model
         # Background calls (titles, summaries) use the same model group, like OpenCode.
-        model_env: Final = (
+        model_env: Final[Mapping[str, str]] = (
             MappingProxyType({"ANTHROPIC_MODEL": model, "ANTHROPIC_SMALL_FAST_MODEL": model})
             if model
             else MappingProxyType({})

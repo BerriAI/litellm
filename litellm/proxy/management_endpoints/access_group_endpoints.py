@@ -647,8 +647,22 @@ async def update_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client: Final = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    update_fields: Final = data.model_dump(exclude_unset=True)
-    update_data: Final[dict] = {"updated_by": user_api_key_dict.user_id}
+    update_fields: Final = {
+        field: value
+        for field, value in {
+            "access_group_name": data.access_group_name,
+            "description": data.description,
+            "access_model_names": data.access_model_names,
+            "access_mcp_server_ids": data.access_mcp_server_ids,
+            "mcp_tool_permissions": data.mcp_tool_permissions,
+            "access_agent_ids": data.access_agent_ids,
+            "access_skill_names": data.access_skill_names,
+            "assigned_team_ids": data.assigned_team_ids,
+            "assigned_key_ids": data.assigned_key_ids,
+        }.items()
+        if field in data.model_fields_set
+    }
+    update_data: Final[dict[str, object]] = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
         if field in (
             "assigned_team_ids",
@@ -687,10 +701,10 @@ async def update_access_group(
             old_team_ids: Final[set[str]] = set(attached[access_group_id])
             old_key_ids: Final[set[str]] = set(existing.assigned_key_ids or [])
             new_team_ids: Final[set[str]] = (
-                set(update_fields["assigned_team_ids"] or []) if "assigned_team_ids" in update_fields else old_team_ids
+                set(data.assigned_team_ids or []) if "assigned_team_ids" in update_fields else old_team_ids
             )
             new_key_ids: Final[set[str]] = (
-                set(update_fields["assigned_key_ids"] or []) if "assigned_key_ids" in update_fields else old_key_ids
+                set(data.assigned_key_ids or []) if "assigned_key_ids" in update_fields else old_key_ids
             )
 
             teams_to_add = list(new_team_ids - old_team_ids)

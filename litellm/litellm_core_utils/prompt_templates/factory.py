@@ -3084,10 +3084,8 @@ def anthropic_messages_pt(
 
 
 def extract_between_tags(tag: str, string: str, strip: bool = False) -> list[str]:
-    ext_list = re.findall(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL)
-    if strip:
-        ext_list = [e.strip() for e in ext_list]
-    return ext_list
+    matches: Final = re.finditer(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL)
+    return [match.group(1).strip() if strip else match.group(1) for match in matches]
 
 
 def contains_tag(tag: str, string: str) -> bool:
@@ -5932,7 +5930,7 @@ def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str)
         return ({},)
     normalized_raw: Final = "{}" if raw == REDACTED_BY_LITELLM else raw
     try:
-        parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
+        parsed: Final[object] = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
     except ValueError as e:
         salvaged: Final = salvage_concatenated_tool_arguments(normalized_raw)
         if salvaged:

@@ -553,7 +553,7 @@ def _normalized_metadata_slot(
 
 
 def _strip_untrusted_request_header_controls(
-    headers: Any,
+    headers: object,
     *,
     allow_client_message_redaction_opt_out: bool = False,
 ) -> None:
@@ -1455,7 +1455,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def add_internal_user_from_user_mapping(
-        general_settings: dict | None,
+        general_settings: Mapping[str, object] | None,
         user_api_key_dict: UserAPIKeyAuth,
         headers: dict,
     ) -> UserAPIKeyAuth:
@@ -1474,7 +1474,7 @@ class LiteLLMProxyRequestSetup:
         return user_api_key_dict
 
     @staticmethod
-    def get_user_from_headers(headers: dict, general_settings: dict | None = None) -> str | None:
+    def get_user_from_headers(headers: dict, general_settings: Mapping[str, object] | None = None) -> str | None:
         """
         Get the user from the specified header if `general_settings.user_header_name` is set.
         """
@@ -1495,7 +1495,9 @@ class LiteLLMProxyRequestSetup:
         return user
 
     @staticmethod
-    def get_openai_org_id_from_headers(headers: dict, general_settings: dict | None = None) -> str | None:
+    def get_openai_org_id_from_headers(
+        headers: dict, general_settings: Mapping[str, object] | None = None
+    ) -> str | None:
         """
         Get the OpenAI Org ID from the headers.
         """
@@ -1586,7 +1588,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        general_settings: dict[str, object] | None = None,
+        general_settings: Mapping[str, object] | None = None,
     ) -> LitellmDataForBackendLLMCall:
         """
         - Adds user from headers

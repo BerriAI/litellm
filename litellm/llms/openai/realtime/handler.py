@@ -5,7 +5,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
 import ssl
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from litellm._logging import redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -22,6 +22,9 @@ from ....litellm_core_utils.realtime_streaming import (
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..common_utils import is_openai_backed_api_base
 from ..openai import OpenAIChatCompletion
+
+if TYPE_CHECKING:
+    from fastapi import WebSocket
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
@@ -131,7 +134,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
     async def async_realtime(
         self,
         model: str,
-        websocket: Any,
+        websocket: "WebSocket",
         logging_obj: LiteLLMLogging,
         api_base: str | None = None,
         api_key: str | None = None,

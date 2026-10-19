@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.gigachat.authenticator import get_access_token
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import CostResponseTypes
+
+_STREAM_CHUNK: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class GigaChatPassthroughConfig(BasePassthroughConfig):
@@ -161,7 +164,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
                 continue
             chunk = chunk.removeprefix("data: ")
             try:
-                message = json.loads(chunk)
+                message = _STREAM_CHUNK.validate_python(json.loads(chunk))
             except json.JSONDecodeError:
                 continue
 

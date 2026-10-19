@@ -28,6 +28,8 @@ except ImportError:
     HTTPX_AVAILABLE = False
 
 from fastapi import HTTPException
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly
 
 import litellm
 from litellm import DualCache
@@ -51,13 +53,17 @@ from litellm.proxy.guardrails._content_utils import (
 from litellm.types.guardrails import GuardrailEventHooks
 
 
-class LassoResponse(TypedDict):
+@with_config(ConfigDict(extra="allow", strict=True))
+class LassoResponse(TypedDict, total=False):
     """Type definition for Lasso API response."""
 
-    violations_detected: bool
-    deputies: dict[str, bool]
-    findings: dict[str, list[dict[str, object]]]
-    messages: list[dict[str, str]] | None
+    violations_detected: NotRequired[ReadOnly[object]]
+    deputies: NotRequired[ReadOnly[dict[str, object]]]
+    findings: NotRequired[ReadOnly[dict[str, object]]]
+    messages: NotRequired[ReadOnly[list[dict[str, object]] | None]]
+
+
+_LASSO_RESPONSE: Final = TypeAdapter(LassoResponse)
 
 
 if TYPE_CHECKING:
@@ -467,7 +473,9 @@ class LassoGuardrail(CustomGuardrail):
                 # Also update data["input"] for Responses-API payloads so the
                 # unredacted text doesn't leak through that field.
                 if isinstance(data.get("input"), str):
-                    text_parts = [msg["content"] for msg in masked_for_input if isinstance(msg.get("content"), str)]
+                    text_parts: Final = [
+                        content for msg in masked_for_input if isinstance(content := msg.get("content"), str)
+                    ]
                     if text_parts:
                         data["input"] = "\n".join(text_parts)
                 self._log_masking_applied(message_type, dict(response))
@@ -820,7 +828,7 @@ class LassoGuardrail(CustomGuardrail):
             timeout=self.timeout if self.timeout is not None else 10.0,
         )
         response.raise_for_status()
-        return response.json()
+        return _LASSO_RESPONSE.validate_python(response.json())
 
     def _process_lasso_response(self, response: LassoResponse) -> None:
         """

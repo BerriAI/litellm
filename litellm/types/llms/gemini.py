@@ -1,5 +1,6 @@
+from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
 from typing_extensions import Required, TypedDict
 
@@ -235,7 +236,7 @@ class GeminiVideoGenerationInstance(TypedDict, total=False):
     """Instance data for Gemini video generation request"""
 
     prompt: Required[str]
-    image: dict[str, Any]
+    image: Mapping[str, object]
 
 
 class GeminiVideoGenerationParameters(LiteLLMBaseModel):
@@ -263,7 +264,7 @@ class GeminiVideoGenerationParameters(LiteLLMBaseModel):
     negativePrompt: str | None = None
     """Text describing what not to include in the video."""
 
-    lastFrame: Any | None = None
+    lastFrame: object | None = None
     """
     The final image for interpolation video to transition.
     Should be used with the 'image' parameter.
@@ -275,7 +276,7 @@ class GeminiVideoGenerationParameters(LiteLLMBaseModel):
     Only supported in Veo 3.1 (list of VideoGenerationReferenceImage objects).
     """
 
-    video: Any | None = None
+    video: object | None = None
     """
     Video to be used for video extension (Video object).
     Only supported in Veo 3.1 & Veo 3 Fast.
@@ -354,5 +355,5 @@ class GeminiLongRunningOperationResponse(LiteLLMBaseModel):
     response: GeminiOperationResponse | None = None
     """Response object when operation is complete"""
 
-    error: dict[str, Any] | None = None
+    error: dict[str, object] | None = None
     """Error details if operation failed"""

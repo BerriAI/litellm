@@ -12,7 +12,8 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -128,6 +129,16 @@ from ..common_utils import (
     is_bedrock_application_inference_profile_arn,
     normalize_bedrock_opus_output_config_effort,
 )
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _JsonContentToolCall(TypedDict):
+    type: ReadOnly[NotRequired[object]]
+    name: ReadOnly[NotRequired[str]]
+    arguments: ReadOnly[NotRequired[str | dict[str, object] | None]]
+
+
+_JSON_CONTENT_TOOL_CALL: Final = TypeAdapter(_JsonContentToolCall)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -2451,7 +2462,7 @@ class AmazonConverseConfig(BaseConfig):
         if message.content is not None:
             try:
                 tool_call_names: Final = self.get_tool_call_names(tools)
-                json_content: Final = json.loads(message.content)
+                json_content: Final = _JSON_CONTENT_TOOL_CALL.validate_python(json.loads(message.content))
                 if json_content.get("type") == "function" and json_content.get("name") in tool_call_names:
                     tool_calls: Final = [ChatCompletionMessageToolCall(function=Function(**json_content))]
 

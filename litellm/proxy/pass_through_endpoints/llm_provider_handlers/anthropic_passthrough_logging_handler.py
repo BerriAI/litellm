@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -53,6 +54,14 @@ else:
     EndpointType = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AnthropicBatchCreated(TypedDict):
+    id: ReadOnly[NotRequired[str]]
+
+
+_ANTHROPIC_BATCH_CREATED: Final = TypeAdapter(_AnthropicBatchCreated)
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -574,6 +583,7 @@ class AnthropicPassthroughLoggingHandler:
 
             # Only handle successful batch job creation (POST requests with 201 status)
             if httpx_response.status_code == 200 and "id" in _json_response:
+                batch_created: Final = _ANTHROPIC_BATCH_CREATED.validate_python(_json_response)
                 # Transform Anthropic response to LiteLLM batch format
                 anthropic_batches_config: Final = AnthropicBatchesConfig()
                 litellm_batch_response: Final = anthropic_batches_config.transform_retrieve_batch_response(
@@ -587,7 +597,7 @@ class AnthropicPassthroughLoggingHandler:
                 litellm_batch_response.status = "validating"
 
                 # Extract batch ID from the response
-                batch_id: Final = _json_response.get("id", "")
+                batch_id: Final = batch_created.get("id", "")
 
                 # Get model from request body (batch response doesn't include model)
                 request_body = request_body or {}

@@ -1,6 +1,9 @@
+from collections.abc import Sequence
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.base_llm.chat.transformation import AllMessageValues, BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import (
@@ -12,6 +15,21 @@ from litellm.types.utils import EmbeddingResponse, Usage
 from litellm.utils import token_counter
 
 from ..common_utils import TritonError
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _TritonEmbeddingOutput(TypedDict):
+    shape: ReadOnly[Sequence[int]]
+    data: ReadOnly[Sequence[int | float]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _TritonEmbeddingResponse(TypedDict):
+    outputs: ReadOnly[Sequence[_TritonEmbeddingOutput]]
+    model_name: ReadOnly[NotRequired[str | None]]
+
+
+_TRITON_EMBEDDING_RESPONSE: Final = TypeAdapter(_TritonEmbeddingResponse)
 
 
 class TritonEmbeddingConfig(BaseEmbeddingConfig):
@@ -83,9 +101,10 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
 
+        parsed_response: Final = _TRITON_EMBEDDING_RESPONSE.validate_python(raw_response_json)
         _embedding_output: Final = []
 
-        _outputs: Final = raw_response_json["outputs"]
+        _outputs: Final = parsed_response["outputs"]
         for output in _outputs:
             _shape = output["shape"]
             _data = output["data"]
@@ -100,7 +119,7 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
                     }
                 )
 
-        model_response.model = raw_response_json.get("model_name", "None")
+        model_response.model = parsed_response.get("model_name", "None")
         model_response.data = _embedding_output
         model_response.usage = self._build_embedding_usage(model=model, request_data=request_data)
         return model_response
@@ -134,7 +153,7 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
         return TritonError(message=error_message, status_code=status_code, headers=headers)
 
     @staticmethod
-    def split_embedding_by_shape(data: list[float], shape: list[int]) -> list[list[float]]:
+    def split_embedding_by_shape(data: Sequence[int | float], shape: Sequence[int]) -> Sequence[Sequence[int | float]]:
         if len(shape) != 2:
             raise ValueError("Shape must be of length 2.")
         embedding_size: Final = shape[1]

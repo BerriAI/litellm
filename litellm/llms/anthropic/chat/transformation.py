@@ -162,6 +162,7 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+_COMPLETION_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -3118,7 +3119,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 tool_name_reverse_map = _candidate
 
         model_response = self.transform_parsed_response(
-            completion_response=completion_response,
+            completion_response=_COMPLETION_RESPONSE.validate_python(completion_response),
             raw_response=raw_response,
             model_response=model_response,
             json_mode=json_mode,

@@ -41,6 +41,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
+from litellm.repositories.team_repository import TeamRepository
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -145,7 +146,7 @@ def _changes_nothing(plan: RosterPlan) -> bool:
 
 
 async def _unchanged_roster(prisma_client: PrismaClient, team_id: str) -> RosterSync | TeamGone:
-    team_row: Final = await prisma_client.writer_db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    team_row: Final = await TeamRepository(prisma_client, use_writer=True).table.find_unique(where={"team_id": team_id})
     if team_row is None:
         return TeamGone(team_id=team_id)
     team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
