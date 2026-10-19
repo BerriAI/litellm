@@ -47,6 +47,8 @@ fn request() -> ChatCompletionsRequest<'static> {
         custom_llm_provider: None,
         extra_headers: None,
         timeout: Some(Duration::from_secs(10)),
+        drop_params: Some(false),
+        model_info: None,
     }
 }
 
@@ -163,7 +165,7 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
 #[case::missing_usage(
     r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#
 )]
-#[case::tool_use_block(r#"{"model":"m","content":[{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#)]
+#[case::malformed_token_count(r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":"1","output_tokens":1}}"#)]
 #[case::not_json("not json")]
 #[tokio::test]
 async fn a_response_it_cannot_normalize_is_reported_as_already_sent(
@@ -294,6 +296,8 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
                     custom_llm_provider: call.custom_llm_provider.as_deref(),
                     extra_headers: call.extra_headers,
                     timeout: call.timeout,
+                    drop_params: Some(false),
+                    model_info: None,
                 },
                 &host,
                 Some(host.events.0.sender.clone()),

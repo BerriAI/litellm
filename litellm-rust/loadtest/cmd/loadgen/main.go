@@ -67,6 +67,11 @@ func main() {
 	key := flag.String("key", "", "use this one key for every request instead of the keys file")
 	messagesAuth := flag.String("messages-auth", "bearer", "how /v1/messages sends the key: bearer or x-api-key")
 	seed := flag.Uint64("seed", 1, "random seed (combined with the shard index)")
+	keysFile := flag.String("keys", "", "keys file to use instead of the workload's keys.file")
+	chatPath := flag.String("chat-path", "/v1/chat/completions", "path of the chat endpoint under -target")
+	messagesPath := flag.String("messages-path", "/v1/messages", "path of the messages endpoint under -target (Bifrost serves it at /anthropic/v1/messages)")
+	var headers headerFlags
+	flag.Var(&headers, "header", "extra request header as 'Name: value' (repeatable)")
 	flag.Parse()
 
 	w, err := loadWorkload(*workloadPath)
@@ -75,7 +80,11 @@ func main() {
 	}
 	keys := []string{*key}
 	if *key == "" {
-		keys, err = readLines(w.Keys.File)
+		file := w.Keys.File
+		if *keysFile != "" {
+			file = *keysFile
+		}
+		keys, err = readLines(file)
 		if err != nil {
 			log.Fatalf("keys: %v (or pass -key)", err)
 		}
@@ -221,7 +230,7 @@ schedule:
 		go func() {
 			defer wg.Done()
 			defer c.inflight.Add(-1)
-			do(reqCtx, transport, *target, keys[keyIdx], *messagesAuth, body, &res)
+			do(reqCtx, transport, *target, paths{*chatPath, *messagesPath}, keys[keyIdx], *messagesAuth, headers, body, &res)
 			if res.OK {
 				c.ok.Add(1)
 			} else {
@@ -252,17 +261,37 @@ schedule:
 
 func seconds(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
 
-func do(ctx context.Context, transport *http.Transport, target, key, messagesAuth string, body []byte, res *result) {
+// headerFlags collects repeated -header 'Name: value' flags.
+type headerFlags [][2]string
+
+func (h *headerFlags) String() string { return fmt.Sprint(*h) }
+
+func (h *headerFlags) Set(value string) error {
+	name, v, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(name) == "" {
+		return fmt.Errorf("want 'Name: value', got %q", value)
+	}
+	*h = append(*h, [2]string{strings.TrimSpace(name), strings.TrimSpace(v)})
+	return nil
+}
+
+// paths are the chat and messages endpoints under the target.
+type paths struct{ chat, messages string }
+
+func do(ctx context.Context, transport *http.Transport, target string, p paths, key, messagesAuth string, headers headerFlags, body []byte, res *result) {
 	limit := time.Duration(res.DurPlanMs)*time.Millisecond + 3*time.Minute
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 
-	path := "/v1/chat/completions"
+	path := p.chat
 	if res.Endpoint == "messages" {
-		path = "/v1/messages"
+		path = p.messages
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, target+path, bytes.NewReader(body))
 	req.Header.Set("content-type", "application/json")
+	for _, h := range headers {
+		req.Header.Add(h[0], h[1])
+	}
 	if res.Endpoint == "messages" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 		if messagesAuth == "x-api-key" {

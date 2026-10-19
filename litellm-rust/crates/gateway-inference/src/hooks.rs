@@ -10,7 +10,7 @@ use std::{
 
 use axum::{
     body::{Body, BodyDataStream, Bytes, HttpBody},
-    http::{HeaderMap, header::CONTENT_TYPE},
+    http::{HeaderMap, HeaderName, HeaderValue, header::CONTENT_TYPE},
     response::Response,
 };
 use futures_util::Stream;
@@ -83,7 +83,7 @@ pub(crate) async fn admit(
         .then(|| key_facts(hooks, identity))
         .flatten();
     let client_headers = match pipeline.reads(Facts::CLIENT_HEADERS) {
-        true => Arc::new(headers.clone()),
+        true => Arc::new(owned_headers(headers)),
         false => Arc::default(),
     };
     let request = RequestFacts::new(
@@ -107,6 +107,21 @@ pub(crate) async fn admit(
         deployment: Mutex::new(None),
         started: Instant::now(),
     }))
+}
+
+/// A copy of the client's headers that owns its bytes. Hyper parses header values, and names it
+/// does not know, as slices of the connection's read buffer, so a plain clone kept in the facts
+/// would keep that whole buffer for as long as the response streams.
+fn owned_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut owned = HeaderMap::with_capacity(headers.len());
+    for (name, value) in headers {
+        let name =
+            HeaderName::from_bytes(name.as_str().as_bytes()).unwrap_or_else(|_| name.clone());
+        let mut copy = HeaderValue::from_bytes(value.as_bytes()).unwrap_or_else(|_| value.clone());
+        copy.set_sensitive(value.is_sensitive());
+        owned.append(name, copy);
+    }
+    owned
 }
 
 fn key_facts(hooks: &Hooks, identity: &AuthenticatedRequest) -> Option<Arc<KeyFacts>> {
@@ -299,7 +314,7 @@ enum Meter {
     Off,
     Stream(StreamUsage),
     /// A JSON body, read for its `usage` once complete.
-    Body(Vec<Bytes>),
+    Body(Vec<u8>),
 }
 
 impl Drop for Tracking {
@@ -320,7 +335,10 @@ struct Finish {
     meter: Meter,
     /// The usage a translated chat stream ended with, sent to the client or not.
     reported: Option<ReportedUsage>,
-    body: Option<Vec<Bytes>>,
+    /// The response text for observers that read it. Copied, not kept as chunks: each chunk is a
+    /// slice of the upstream connection's read buffer, and holding it would hold that buffer for
+    /// the rest of the stream.
+    body: Option<Vec<u8>>,
     started: Instant,
     first_byte: Option<Duration>,
     ended: bool,
@@ -333,10 +351,10 @@ impl Finish {
         match &mut self.meter {
             Meter::Off => {}
             Meter::Stream(meter) => meter.feed(chunk),
-            Meter::Body(chunks) => chunks.push(chunk.clone()),
+            Meter::Body(body) => body.extend_from_slice(chunk),
         }
         if let Some(body) = &mut self.body {
-            body.push(chunk.clone());
+            body.extend_from_slice(chunk);
         }
     }
 
@@ -351,10 +369,9 @@ impl Finish {
                 Some(usage) => (Some(usage), None),
                 None => (meter.usage(), meter.model().map(str::to_owned)),
             },
-            Meter::Body(chunks) => {
-                let body = chunks.concat();
-                let model = by_model.then(|| body_model(&body)).flatten();
-                (body_usage(self.route, &body), model)
+            Meter::Body(body) => {
+                let model = by_model.then(|| body_model(body)).flatten();
+                (body_usage(self.route, body), model)
             }
         };
         let cost = by_model
@@ -385,7 +402,7 @@ impl Drop for Finish {
             ended_at: SystemTime::now(),
             interrupted: !self.ended,
         };
-        let body = self.body.take().map(|chunks| Bytes::from(chunks.concat()));
+        let body = self.body.take().map(Bytes::from);
         self.pipeline.finish(admission, outcome, body);
     }
 }

@@ -1,6 +1,6 @@
 use std::{
     ops::{BitOr, BitOrAssign},
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, SystemTime},
 };
 
@@ -34,7 +34,8 @@ impl Facts {
     pub const TIMINGS: Self = Self(1 << 7);
     /// Values earlier hooks attached for observers.
     pub const ANNOTATIONS: Self = Self(1 << 8);
-    /// The raw request bytes, already held for retries.
+    /// The raw request bytes, already held for retries. Hooks read them while the request is
+    /// admitted; only an observer that asks for them keeps a copy for the rest of the request.
     pub const REQUEST_BODY: Self = Self(1 << 9);
     /// The response text. The only fact that makes the gateway keep a stream's bytes.
     pub const RESPONSE_BODY: Self = Self(1 << 10);
@@ -121,7 +122,11 @@ pub struct RequestFacts {
     /// The output budget the request set, if any.
     pub max_tokens: Option<u64>,
     pub started_at: SystemTime,
-    body: Bytes,
+    /// The request bytes while hooks run. Afterwards a compact copy when an observer reads them,
+    /// else empty: the raw bytes are a slice of the connection's read buffer, and holding them
+    /// would hold the whole buffer for as long as the response streams.
+    body: Mutex<Bytes>,
+    body_len: usize,
     input_tokens: OnceLock<u64>,
 }
 
@@ -148,21 +153,38 @@ impl RequestFacts {
             stream,
             max_tokens,
             started_at: SystemTime::now(),
-            body,
+            body_len: body.len(),
+            body: Mutex::new(body),
             input_tokens: OnceLock::new(),
         }
     }
 
-    /// The raw request bytes. Shared, never copied.
-    pub fn body(&self) -> &Bytes {
-        &self.body
+    /// The request bytes: in full while hooks run, afterwards only for observers that read
+    /// [`Facts::REQUEST_BODY`], empty for everyone else.
+    pub fn body(&self) -> Bytes {
+        self.body
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// Lets go of the raw bytes once hooks have run, keeping an owned copy when `keep`.
+    pub(crate) fn release_body(&self, keep: bool) {
+        let mut body = self
+            .body
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *body = match keep {
+            true => Bytes::copy_from_slice(&body),
+            false => Bytes::new(),
+        };
     }
 
     /// The proxy's cheap input estimate, a token per four bytes of request, made once.
     pub fn input_tokens(&self) -> u64 {
         *self
             .input_tokens
-            .get_or_init(|| (self.body.len() as u64).div_ceil(4).max(1))
+            .get_or_init(|| (self.body_len as u64).div_ceil(4).max(1))
     }
 }
 

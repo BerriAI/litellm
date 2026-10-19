@@ -15,7 +15,10 @@ mod request;
 use std::sync::{Arc, OnceLock};
 
 use axum::{Router, routing::post};
-use litellm_http::{ClientVariant, HttpClientConfig};
+use litellm_http::{
+    ClientVariant, HttpClientConfig,
+    media::{MediaFetcher, UrlPolicy},
+};
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::ChatCompletionsRoute;
 use litellm_inference_messages::MessagesRoute;
@@ -121,7 +124,12 @@ impl Gateway {
                 provider.clone(),
                 auth.clone(),
                 secrets.clone(),
-            ),
+            )
+            .with_media(MediaFetcher::new(
+                &resources.pool,
+                &http,
+                UrlPolicy::default(),
+            )?),
             messages: MessagesRoute::new(provider, auth, secrets.clone()),
             models,
             secrets,

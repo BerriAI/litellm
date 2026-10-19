@@ -4052,6 +4052,7 @@ dependencies = [
 name = "litellm-inference-chat"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "futures-util",
  "litellm-auth",
@@ -4067,6 +4068,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
+ "litellm-token-counter",
  "litellm-tracing",
  "reqwest 0.12.28",
  "rstest",
@@ -4232,11 +4234,13 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_with",
+ "sha2 0.10.9",
  "strum",
  "thiserror 2.0.19",
  "time",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]

@@ -4,8 +4,9 @@
 //! Each event becomes one provider chunk, empty ones included; the host's stream wrapper
 //! (Python's `CustomStreamWrapper`) decides which of them the client sees.
 //!
-//! DIVERGENCE: not built here, since the chat route never asks for what produces them:
-//! `json_mode` / `response_format` tool conversion, `web_search_calls` and
+//! DIVERGENCE: a `response_format` tool's answer is held until its block ends and sent as
+//! one piece of content, where Python streams it as it decides the envelope; an answer
+//! spread over several blocks is sent per block. Not built: `web_search_calls` and
 //! `code_interpreter_results` summaries, and a tool call's `caller`. The reasoning token
 //! estimate Python makes from streamed thinking text (with its tokenizer) is not made, so
 //! such a stream reports `completion_tokens_details` without counts unless Anthropic sends
@@ -28,7 +29,14 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     Error,
-    base_llm::{base_model_iterator::StreamTransformer, chat::streaming::StreamShape},
+    base_llm::{
+        base_model_iterator::StreamTransformer,
+        chat::{
+            params::{RESPONSE_FORMAT_TOOL_NAME, python_dumps},
+            response_format::{envelope_contents, json_tool_answer},
+            streaming::StreamShape,
+        },
+    },
 };
 
 /// Anthropic sends no status with an `error` event; Python raises it as a 500.
@@ -51,6 +59,10 @@ pub struct ModelResponseIterator {
     web_search_results: Vec<Value>,
     tool_results: Vec<Value>,
     compaction_blocks: Vec<Value>,
+    /// Whether the tool block in progress is the `response_format` tool.
+    is_response_format_tool: bool,
+    converted_response_format_tool: bool,
+    response_format_buffer: String,
 }
 
 /// What one event contributes to its chunk.
@@ -79,7 +91,56 @@ impl ModelResponseIterator {
             web_search_results: Vec::new(),
             tool_results: Vec::new(),
             compaction_blocks: Vec::new(),
+            is_response_format_tool: false,
+            converted_response_format_tool: false,
+            response_format_buffer: String::new(),
         }
+    }
+
+    /// `_handle_json_mode_chunk`: the `response_format` tool's arguments become content.
+    fn handle_json_mode(&mut self, parsed: &mut Parsed) {
+        if !self.shape.json_mode {
+            return;
+        }
+        let Some(tool_use) = parsed.tool_use.take() else {
+            return;
+        };
+        if tool_use.id.is_some() {
+            self.is_response_format_tool =
+                tool_use.function.name.as_deref() == Some(RESPONSE_FORMAT_TOOL_NAME);
+            if self.is_response_format_tool {
+                self.tool_index -= 1;
+            }
+        }
+        if !self.is_response_format_tool {
+            parsed.tool_use = Some(tool_use);
+            return;
+        }
+        self.converted_response_format_tool = true;
+        if self.shape.response_format_schema.is_some() {
+            match tool_use.id {
+                Some(_) => self.response_format_buffer.clear(),
+                None => self
+                    .response_format_buffer
+                    .push_str(&tool_use.function.arguments),
+            }
+            parsed.text = String::new();
+            return;
+        }
+        parsed.text = json_tool_answer(&[tool_use.function.arguments], None);
+    }
+
+    /// `_held_answer`: the held arguments, or what their envelope wraps.
+    fn flush_response_format_buffer(&mut self) -> String {
+        let held = std::mem::take(&mut self.response_format_buffer);
+        let Some(schema) = &self.shape.response_format_schema else {
+            return String::new();
+        };
+        serde_json::from_str::<Value>(&held)
+            .ok()
+            .and_then(|payload| envelope_contents(&payload, schema, RESPONSE_FORMAT_TOOL_NAME))
+            .map(|contents| python_dumps(&contents))
+            .unwrap_or(held)
     }
 
     /// Whether the tool block so far streamed only empty argument fragments.
@@ -125,6 +186,7 @@ impl ModelResponseIterator {
                 provider_specific_fields: None,
             },
             index: self.tool_index,
+            provider_specific_fields: None,
         }
     }
 
@@ -273,6 +335,10 @@ impl ModelResponseIterator {
         if in_tool && self.check_empty_tool_call_args() {
             parsed.tool_use = Some(self.tool_call(None, None, "{}".into()));
         }
+        if self.is_response_format_tool {
+            parsed.text = self.flush_response_format_buffer();
+        }
+        self.is_response_format_tool = false;
         self.current_content_block_type = None;
         parsed
     }
@@ -282,10 +348,16 @@ impl ModelResponseIterator {
         delta: MessagesDelta,
         usage: Option<MessagesStreamUsage>,
     ) -> Parsed {
+        let provider_finish_reason =
+            finish_reason_for(delta.stop_reason.as_deref().unwrap_or("stop")).to_string();
+        let called_only_the_response_format_tool = provider_finish_reason == "tool_calls"
+            && self.converted_response_format_tool
+            && self.tool_index < 0;
         let mut parsed = Parsed {
-            finish_reason: Some(
-                finish_reason_for(delta.stop_reason.as_deref().unwrap_or("stop")).to_string(),
-            ),
+            finish_reason: Some(match called_only_the_response_format_tool {
+                true => "stop".to_owned(),
+                false => provider_finish_reason,
+            }),
             usage: usage.map(|usage| self.handle_usage(&usage)),
             ..Parsed::default()
         };
@@ -314,7 +386,7 @@ impl ModelResponseIterator {
         &mut self,
         event: MessagesStreamEvent,
     ) -> Result<ChatCompletionChunk, Error> {
-        let parsed = match event {
+        let mut parsed = match event {
             MessagesStreamEvent::ContentBlockDelta { delta, .. } => self.content_block_delta(delta),
             MessagesStreamEvent::ContentBlockStart { content_block, .. } => {
                 self.content_block_start(content_block)
@@ -341,6 +413,7 @@ impl ModelResponseIterator {
                 });
             }
         };
+        self.handle_json_mode(&mut parsed);
         Ok(self.chunk(parsed))
     }
 

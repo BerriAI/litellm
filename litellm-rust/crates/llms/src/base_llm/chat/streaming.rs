@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::base_llm::chat::response_format::ResponseFormatSchema;
+
 use bytes::Bytes;
 use futures_util::{StreamExt, stream::BoxStream};
 use litellm_llms_types::formats::chat_completions::ChatCompletionChunk;
@@ -35,6 +37,12 @@ pub struct StreamShape {
     pub json_mode: bool,
     pub speed: Option<String>,
     pub tool_name_reverse_map: HashMap<String, String>,
+    /// The schema of the `json_tool_call` tool a `response_format` added, which tells its
+    /// answer apart from an envelope around it.
+    pub response_format_schema: Option<ResponseFormatSchema>,
+    /// The text of a trailing assistant message sent with `prefix: true`, which Anthropic
+    /// continues and Python puts back in front of the answer.
+    pub prefix_prompt: Option<String>,
 }
 
 /// A wire decoder paired with the iterator that turns its events into chat chunks.

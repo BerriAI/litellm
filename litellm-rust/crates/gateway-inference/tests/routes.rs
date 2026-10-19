@@ -105,6 +105,8 @@ async fn chat_errors_come_from_core(
             custom_llm_provider: None,
             extra_headers: None,
             timeout: None,
+            drop_params: Some(false),
+            model_info: None,
         },
         &(),
         None,

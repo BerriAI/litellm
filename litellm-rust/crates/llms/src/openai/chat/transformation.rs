@@ -12,9 +12,12 @@ use crate::{
 
 pub const OPENAI_CHAT_COMPLETIONS_PATH: &str = "/chat/completions";
 
-/// The keys of Python's `all_litellm_params` a proxy caller can put in a chat request body.
-/// Python consumes them before the OpenAI call, so they never reach the provider.
+/// The keys of Python's `all_litellm_params`, and the `completion()` arguments that decide which
+/// params are sent, that a proxy caller can put in a chat request body. Python consumes them
+/// before the OpenAI call, so they never reach the provider.
 const LITELLM_OWNED_PARAMS: &[&str] = &[
+    "additional_drop_params",
+    "allowed_openai_params",
     "api_base",
     "api_key",
     "api_version",
@@ -23,6 +26,7 @@ const LITELLM_OWNED_PARAMS: &[&str] = &[
     "caching",
     "context_window_fallback_dict",
     "custom_llm_provider",
+    "drop_params",
     "extra_headers",
     "fallbacks",
     "guardrails",
@@ -166,6 +170,9 @@ mod tests {
     #[case::metadata("metadata")]
     #[case::mock_response("mock_response")]
     #[case::fallbacks("fallbacks")]
+    #[case::drop_params("drop_params")]
+    #[case::additional_drop_params("additional_drop_params")]
+    #[case::allowed_openai_params("allowed_openai_params")]
     #[case::credentials("api_key")]
     #[case::timeout("timeout")]
     #[case::no_log("no-log")]

@@ -29,7 +29,7 @@ pub(super) async fn execute(
         config,
         url,
         body,
-        stream_shape: _,
+        stream_shape,
         optional_params,
         environment,
         secrets,
@@ -122,12 +122,27 @@ pub(super) async fn execute(
                 ))
             })?;
             config
-                .transform_response(&model, ProviderChatResponseData { body })
+                .transform_response(&model, ProviderChatResponseData { body }, &stream_shape)
+                .map(named)
                 .map_err(Error::from)
                 .map_err(as_response_error)
         },
     )
     .await
+}
+
+/// The answer named as Python's `ModelResponse` names it: by the id the config kept (Gemini's
+/// `responseId`), else a minted `chatcmpl-` id, with `object: chat.completion`. Named before it
+/// is cached, so a cache hit replays the id the answer was first sent with.
+fn named(mut response: ChatCompletionsResponse) -> ChatCompletionsResponse {
+    response
+        .extra
+        .entry("id")
+        .or_insert_with(|| format!("chatcmpl-{}", uuid::Uuid::new_v4()).into());
+    response
+        .extra
+        .insert("object".into(), "chat.completion".into());
+    response
 }
 
 /// Re-tag an error raised while normalizing a response the provider already
@@ -229,6 +244,8 @@ mod tests {
                 custom_llm_provider: None,
                 extra_headers: None,
                 timeout: None,
+                drop_params: Some(false),
+                model_info: None,
             })
             .unwrap(),
             std::sync::Arc::new(|_: &str| None),
