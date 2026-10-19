@@ -994,6 +994,30 @@ def test_dated_ga_api_version_sends_response_lifecycle_calls_to_the_unset_api_ve
     assert sent_url.params["api-version"] == unset_url.params["api-version"]
 
 
+@pytest.mark.parametrize("api_version", ["2025-04-01-preview", "2024-10-21", "v1", "preview"])
+def test_compact_reaches_the_v1_route_whatever_the_api_version(
+    respx_mock: respx.MockRouter, api_version: str
+) -> None:
+    route: Final = respx_mock.post(f"{_AZURE_RESOURCE}/openai/v1/responses/compact", params=None).mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "resp_compacted", "object": "response.compaction", "created_at": 0, "output": []},
+        )
+    )
+
+    compacted: Final = litellm.compact_responses(
+        model="azure/gpt-5.4-nano",
+        input=[{"role": "user", "content": "Say hi"}, {"role": "assistant", "content": "hi"}],
+        api_base=_AZURE_RESOURCE,
+        api_key="azure-test-key",
+        api_version=api_version,
+    )
+
+    assert compacted.object == "response.compaction"
+    assert route.call_count == 1
+    assert route.calls[0].request.url == httpx.URL(f"{_AZURE_RESOURCE}/openai/v1/responses/compact")
+
+
 def test_chat_completion_keeps_the_dated_ga_api_version(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
         f"{_AZURE_RESOURCE}/openai/deployments/gpt-5.4-nano/chat/completions", params={"api-version": "2024-10-21"}
