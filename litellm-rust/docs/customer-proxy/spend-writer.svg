@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1000" height="560" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Spend writer: gateway requests land in the proxy's own tables</text>
+
+  <!-- record -->
+  <rect x="24" y="60" width="290" height="122" rx="8" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="38" y="84" font-weight="600" fill="#5b21b6">Request record (observer queue)</text>
+  <text x="38" y="106" fill="#1e293b" font-size="13">key, user, team, end user, deployment,</text>
+  <text x="38" y="124" fill="#1e293b" font-size="13">usage, cost, timings, user agent,</text>
+  <text x="38" y="142" fill="#1e293b" font-size="13">spend_logs_metadata (team, key, hooks)</text>
+  <text x="38" y="164" fill="#64748b" font-size="13">off the request path; never blocks it</text>
+
+  <!-- memory -->
+  <rect x="356" y="60" width="290" height="122" rx="8" fill="#f8fafc" stroke="#64748b"/>
+  <text x="370" y="84" font-weight="600" fill="#0f172a">Added up in memory</text>
+  <text x="370" y="106" fill="#334155" font-size="13">spend per key, user, team, member,</text>
+  <text x="370" y="124" fill="#334155" font-size="13">end user; daily rows per entity, day,</text>
+  <text x="370" y="142" fill="#334155" font-size="13">key, model, provider, endpoint;</text>
+  <text x="370" y="160" fill="#334155" font-size="13">spend log rows queued (cap 10k)</text>
+  <line x1="314" y1="120" x2="352" y2="120" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- timers -->
+  <rect x="688" y="60" width="288" height="122" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="702" y="84" font-weight="600" fill="#92400e">Timers (as the proxy)</text>
+  <text x="702" y="106" fill="#1e293b" font-size="13">spend logs: every 2 s</text>
+  <text x="702" y="124" fill="#1e293b" font-size="13">everything else: proxy_batch_write_at</text>
+  <text x="702" y="142" fill="#1e293b" font-size="13">(default 10 s) plus 0-5 s jitter</text>
+  <text x="702" y="164" fill="#1e293b" font-size="13">shutdown: drain the queue, then flush</text>
+  <line x1="646" y1="120" x2="684" y2="120" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- postgres -->
+  <rect x="24" y="222" width="952" height="196" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="38" y="246" font-weight="600" fill="#1e3a8a">Proxy Postgres, same statements and order as the Python writer</text>
+  <text x="38" y="272" fill="#1e293b" font-size="13">LiteLLM_SpendLogs: batches of 100, INSERT ... ON CONFLICT DO NOTHING; columns and 49-key metadata as the proxy writes them</text>
+  <text x="38" y="292" fill="#1e293b" font-size="13">user, end user, key (spend, total_spend, last_active), team, team membership: spend += cost, ids sorted, lock_timeout 5 s</text>
+  <text x="38" y="312" fill="#1e293b" font-size="13">update-only for users, keys and teams; end users created unblocked; membership only for users on the team roster</text>
+  <text x="38" y="332" fill="#1e293b" font-size="13">LiteLLM_DailyUserSpend / DailyTeamSpend / DailyEndUserSpend: upsert that adds tokens, requests, spend; model_group kept from first insert</text>
+  <text x="38" y="358" fill="#1e293b" font-size="13">every write adds to what is stored, so gateway replicas and Python proxies can write side by side</text>
+  <text x="38" y="384" fill="#64748b" font-size="13">deadlock, lock timeout, lost connection: 3 retries with backoff; then daily rows and spend logs are kept for the next flush,</text>
+  <text x="38" y="402" fill="#64748b" font-size="13">entity spend is dropped (as the proxy drops it)</text>
+  <line x1="832" y1="182" x2="832" y2="218" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- readers -->
+  <rect x="24" y="456" width="952" height="80" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="38" y="480" font-weight="600" fill="#065f46">Read by what already reads these tables</text>
+  <text x="38" y="502" fill="#1e293b" font-size="13">proxy UI usage pages, /spend and /global/activity endpoints, key and team spend shown in the admin UI,</text>
+  <text x="38" y="520" fill="#1e293b" font-size="13">and the proxy's own budget checks on its next key lookup</text>
+  <line x1="500" y1="418" x2="500" y2="452" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+</svg>
