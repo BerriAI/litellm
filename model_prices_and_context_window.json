@@ -32524,6 +32524,7 @@
     "github_copilot/claude-opus-4.8": {
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_read_input_token_cost": 5e-07,
+        "deprecation_date": "2026-11-16",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
