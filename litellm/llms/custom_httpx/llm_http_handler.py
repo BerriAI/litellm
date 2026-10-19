@@ -2314,6 +2314,7 @@ class BaseLLMHTTPHandler:
         provider_specific_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
             provider_specific_header=provider_specific_header,
             custom_llm_provider=custom_llm_provider,
+            native_anthropic_messages=anthropic_messages_provider_config.is_native_messages_route(),
         )
         forwarded_headers: Final = kwargs.get("headers", None)
         # Also check for extra_headers in kwargs (from config or direct calls)
@@ -6910,6 +6911,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        turn_admission: Callable[[], Awaitable[None]] | None = None,
         frame_guard: "ResponsesWsFrameGuard | None" = None,
         **kwargs: object,
     ) -> Exception | None:
@@ -6972,12 +6974,12 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                turn_admission=turn_admission,
                 guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
                 frame_guard=frame_guard,
                 **kwargs,
             )
-            await handler.run()
-            return None
+            return await handler.run()
 
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -7068,6 +7070,7 @@ class BaseLLMHTTPHandler:
                     authorized_model=model,
                     custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
+                    turn_admission=turn_admission,
                     frame_guard=frame_guard,
                 )
                 return await streaming.bidirectional_forward()

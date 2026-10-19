@@ -458,6 +458,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     request_litellm_call_id,
     resolve_litellm_call_id,
     should_return_raw_model_name,
+    sse_error_payload,
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -949,6 +950,7 @@ from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -1241,6 +1243,19 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         )
     except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
+
+
+async def _flush_spend_on_shutdown() -> None:
+    await flush_spend_counters_on_shutdown()
+    await _flush_spend_logs_queue_on_shutdown()
+
+
+async def _flush_spend_around_logging_drain_on_shutdown(
+    flush_spend: Callable[[], Awaitable[None]] = _flush_spend_on_shutdown,
+) -> None:
+    await flush_spend()
+    await drain_logging_tasks()
+    await flush_spend()
 
 
 async def _drain_audit_tasks_on_shutdown() -> None:
@@ -1847,9 +1862,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-            await flush_spend_counters_on_shutdown()
-
-            await _flush_spend_logs_queue_on_shutdown()
+            await _flush_spend_around_logging_drain_on_shutdown()
 
             await proxy_config.stop_config_sync_subscriber()
 
@@ -7052,7 +7065,11 @@ class ProxyConfig:
             MappingProxyType(
                 {
                     name: typed_general_settings[name]
-                    for name in ("vector_store_deny_by_default", "search_tool_deny_by_default")
+                    for name in (
+                        "vector_store_deny_by_default",
+                        "search_tool_deny_by_default",
+                        "vertex_ai_pass_through_drop_anthropic_betas",
+                    )
                     if name in typed_general_settings
                 }
             )
@@ -10477,6 +10494,7 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
+    ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -10488,6 +10506,7 @@ async def async_data_generator(
         else response
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
+    stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -10544,6 +10563,7 @@ async def async_data_generator(
                 await asyncio.sleep(0)
                 loop_released_at = time.monotonic()
             if item is _STREAM_KEEPALIVE:
+                stream_started = True
                 yield ": ping\n\n"
                 continue
             chunk = item
@@ -10555,6 +10575,7 @@ async def async_data_generator(
                     request_data=request_data,
                     str_so_far=_str_so_far,
                 )
+            stream_started = True
 
             # Mid-stream fallbacks surface metadata on individual chunks rather than
             # the response wrapper. Keep scanning chunks until a fallback model is
@@ -10660,7 +10681,7 @@ async def async_data_generator(
         if error_message is not None:
             yield error_message
         # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
-        if not request_data.get("_litellm_skip_openai_stream_done"):
+        if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
@@ -10677,13 +10698,14 @@ async def async_data_generator(
             if guarded_layer is not response:
                 await close_guarded_stream(guarded_layer)
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
-        await proxy_logging_obj.post_call_failure_hook(
+        replacement: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=request_data,
         )
+        client_error: Final[Exception] = e if replacement is None else replacement
         verbose_proxy_logger.debug(
             "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
             e,
@@ -10691,31 +10713,31 @@ async def async_data_generator(
 
         if error_state is not None:
             stream_completed = True
-            error_frame: Final = error_state.format_failure(e)
+            error_frame: Final = error_state.format_failure(client_error)
             if error_frame is not None:
                 yield error_frame
-            if not request_data.get("_litellm_skip_openai_stream_done"):
+            if ends_with_openai_done:
                 yield _OPENAI_STREAM_DONE_FRAME
             return
-        if isinstance(e, HTTPException):
-            raise e
-        elif isinstance(e, StreamingCallbackError):
-            error_msg = str(e)
-        else:
-            # Only include the error message, not the traceback.
-            # The traceback is already logged above via verbose_proxy_logger.exception().
-            # Including it in the SSE response leaks internal details to clients.
-            error_msg = str(e)
-
-        proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+        if isinstance(e, HTTPException) and (not stream_started or not ends_with_openai_done):
+            raise client_error
+        error_returned: Final = json.dumps(
+            {
+                "error": sse_error_payload(client_error)[1]
+                if isinstance(client_error, HTTPException)
+                else ProxyException(
+                    message=getattr(client_error, "message", str(client_error)),
+                    type=getattr(client_error, "type", "None"),
+                    param=getattr(client_error, "param", "None"),
+                    code=getattr(client_error, "status_code", 500),
+                ).to_dict()
+            },
+            default=str,
         )
-        error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
         yield f"data: {error_returned}\n\n"
+        if ends_with_openai_done:
+            yield _OPENAI_STREAM_DONE_FRAME
     finally:
         await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=request,
