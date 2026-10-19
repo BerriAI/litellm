@@ -163,3 +163,44 @@ async def test_unreadable_logging_input_cannot_create_a_success_or_failure_charg
     )
     assert isinstance(await failure.capture_failure({"litellm_params": object()}, 0.25, STAMP, STAMP), FailedCharge)
     assert not await success.wait() and not await failure.wait() and not query.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("committed_before_failure", (False, True))
+async def test_optional_accounting_failure_cannot_drop_or_repeat_a_known_charge(committed_before_failure: bool) -> None:
+    from litellm.proxy.spend_tracking.charge_receipt_capture import ChargeCapture
+    from litellm.proxy.spend_tracking.spend_event import SpendEvent
+
+    async def finalize(details: Mapping[str, object], event: SpendEvent, capture: ChargeCapture) -> None:
+        if committed_before_failure:
+            await capture.persist()
+        raise ConnectionError("accounting dependency unavailable")
+
+    query: Final = ScriptedQuery()
+    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query), finalize=finalize)
+    capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash))
+    query.replies = (acknowledged(RECEIPT.model_copy(update={"event_id": capture.event_id})),)
+    result: Final = await capture.capture_event(priced_event(), {})
+    assert isinstance(result, CommittedCharge) and result.amount_usd == RECEIPT.amount_usd
+    assert await capture.wait() and len(query.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_committed_response_does_not_wait_for_optional_accounting_to_finish() -> None:
+    from litellm.proxy.spend_tracking.charge_receipt_capture import ChargeCapture
+    from litellm.proxy.spend_tracking.spend_event import SpendEvent
+
+    release: Final = asyncio.Event()
+
+    async def finalize(details: Mapping[str, object], event: SpendEvent, capture: ChargeCapture) -> None:
+        await capture.persist()
+        await release.wait()
+
+    query: Final = ScriptedQuery()
+    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query), finalize=finalize)
+    capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash))
+    query.replies = (acknowledged(RECEIPT.model_copy(update={"event_id": capture.event_id})),)
+    settling: Final = asyncio.create_task(capture.capture_event(priced_event(), {}))
+    assert await capture.wait() and not settling.done()
+    release.set()
+    assert isinstance(await settling, CommittedCharge) and len(query.calls) == 1
