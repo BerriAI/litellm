@@ -51,7 +51,7 @@ def test_cortecs_is_available_in_add_model_form():
 
     assert cortecs["provider"] == "CORTECS"
     assert cortecs["provider_display_name"] == "Cortecs"
-    assert cortecs["default_model_placeholder"] == "cortecs/gpt-6-sol"
+    assert cortecs["default_model_placeholder"] == "cortecs/gpt-6.1-sol"
     assert {field["key"]: field["required"] for field in cortecs["credential_fields"]} == {
         "api_base": False,
         "api_key": True,
@@ -66,15 +66,16 @@ def test_cortecs_supported_endpoints():
         "chat_completions": True,
         "messages": True,
         "responses": True,
-        "embeddings": False,
-        "image_generations": False,
-        "audio_transcriptions": False,
-        "audio_speech": False,
+        "embeddings": True,
+        "image_generations": True,
+        "audio_transcriptions": True,
+        "audio_speech": True,
         "moderations": False,
         "batches": False,
         "rerank": False,
         "a2a": False,
         "interactions": False,
+        "systemone": True,
     }
 
 
@@ -185,3 +186,132 @@ async def test_cortecs_anthropic_messages_request(monkeypatch: pytest.MonkeyPatc
     assert body["model"] == "gpt-6-sol"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response["content"][0]["text"] == "Hello from Cortecs"
+
+
+def test_cortecs_decisions_request():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.cortecs.ai/v1/systemone").respond(
+            200,
+            json={
+                "model": "gpt-6-sol",
+                "answers": {"is_complaint": {"type": "noul", "noul": 0.9}},
+                "usage": {"input_tokens": 4, "output_tokens": 2},
+            },
+        )
+        response: Final = litellm.decisions(
+            model="cortecs/gpt-6-sol",
+            input="My order arrived broken.",
+            questions=[
+                {"type": "predicate", "name": "is_complaint", "instructions": "Is this a complaint?"},
+            ],
+            api_key="cortecs-test-key",
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert str(request.url) == "https://api.cortecs.ai/v1/systemone"
+    assert request.headers["authorization"] == "Bearer cortecs-test-key"
+    assert body["model"] == "gpt-6-sol"
+    assert body["state"] == "My order arrived broken."
+    assert body["questions"] == {"is_complaint": {"type": "noul", "instructions": "Is this a complaint?"}}
+    assert response.answers[0].type == "predicate"
+    assert response.answers[0].name == "is_complaint"
+    assert response.answers[0].probability == 0.9
+
+
+def test_cortecs_embedding_request():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.cortecs.ai/v1/embeddings").respond(
+            200,
+            json={
+                "object": "list",
+                "model": "cortecs-embed-v1",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+        response: Final = litellm.embedding(
+            model="cortecs/cortecs-embed-v1",
+            input=["Say hello"],
+            api_key="cortecs-test-key",
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert str(request.url) == "https://api.cortecs.ai/v1/embeddings"
+    assert request.headers["authorization"] == "Bearer cortecs-test-key"
+    assert body["model"] == "cortecs-embed-v1"
+    assert body["input"] == ["Say hello"]
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_cortecs_image_generation_request():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.cortecs.ai/v1/images/generations").respond(
+            200,
+            json={
+                "created": 1_789_550_000,
+                "data": [{"url": "https://cdn.cortecs.ai/image.png"}],
+            },
+        )
+        response: Final = litellm.image_generation(
+            model="cortecs/cortecs-image",
+            prompt="A red panda",
+            api_key="cortecs-test-key",
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert str(request.url) == "https://api.cortecs.ai/v1/images/generations"
+    assert request.headers["authorization"] == "Bearer cortecs-test-key"
+    assert body["model"] == "cortecs-image"
+    assert body["prompt"] == "A red panda"
+    assert response.data[0]["url"] == "https://cdn.cortecs.ai/image.png"
+
+
+def test_cortecs_transcription_request():
+    audio_file: Final = Path(__file__).parents[3] / "gettysburg.wav"
+    with audio_file.open("rb") as audio:
+        with respx.mock() as upstream:
+            route: Final = upstream.post("https://api.cortecs.ai/v1/audio/transcriptions").respond(
+                200,
+                json={"text": "Four score and seven years ago"},
+            )
+            response: Final = litellm.transcription(
+                model="cortecs/whisper-1",
+                file=audio,
+                api_key="cortecs-test-key",
+            )
+
+    request: Final = route.calls.last.request
+    assert route.call_count == 1
+    assert str(request.url) == "https://api.cortecs.ai/v1/audio/transcriptions"
+    assert request.headers["authorization"] == "Bearer cortecs-test-key"
+    assert response.text == "Four score and seven years ago"
+
+
+def test_cortecs_speech_request():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.cortecs.ai/v1/audio/speech").respond(
+            200,
+            content=b"fake-audio-bytes",
+        )
+        response: Final = litellm.speech(
+            model="cortecs/tts-1",
+            input="Say hello",
+            voice="alloy",
+            api_key="cortecs-test-key",
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert str(request.url) == "https://api.cortecs.ai/v1/audio/speech"
+    assert request.headers["authorization"] == "Bearer cortecs-test-key"
+    assert body["model"] == "tts-1"
+    assert body["input"] == "Say hello"
+    assert body["voice"] == "alloy"
+    assert response.response.content == b"fake-audio-bytes"

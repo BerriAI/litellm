@@ -1714,6 +1714,9 @@ if TYPE_CHECKING:
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
     )
+    from .llms.cortecs.decisions.transformation import (
+        CortecsDecisionsConfig as CortecsDecisionsConfig,
+    )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,
     )

@@ -173,6 +173,7 @@ LLM_CONFIG_NAMES: Final = (
     "BespokeDecisionsConfig",
     "OpenAIDecisionsConfig",
     "AzureAIDecisionsConfig",
+    "CortecsDecisionsConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
     "VertexAIRerankConfig",
@@ -748,6 +749,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
     "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
+    "CortecsDecisionsConfig": (".llms.cortecs.decisions.transformation", "CortecsDecisionsConfig"),
     "NvidiaNimRerankConfig": (
         ".llms.nvidia_nim.rerank.transformation",
         "NvidiaNimRerankConfig",

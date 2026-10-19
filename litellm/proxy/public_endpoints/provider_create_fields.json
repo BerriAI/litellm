@@ -1115,7 +1115,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "cortecs/gpt-6-sol"
+    "default_model_placeholder": "cortecs/gpt-6.1-sol"
   },
   {
     "provider": "CUSTOM",

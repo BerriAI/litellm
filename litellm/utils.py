@@ -9322,6 +9322,8 @@ class ProviderConfigManager:
             return litellm.OpenAIDecisionsConfig()
         if provider == LlmProviders.AZURE_AI:
             return litellm.AzureAIDecisionsConfig()
+        if provider == LlmProviders.CORTECS:
+            return litellm.CortecsDecisionsConfig()
         return None
 
     @staticmethod
