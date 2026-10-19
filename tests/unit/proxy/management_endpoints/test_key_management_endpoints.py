@@ -2513,6 +2513,51 @@ async def test_prepare_key_update_data_budget_limits_serializes_windows():
     assert windows[0]["reset_at"] is not None
 
 
+def _key_with_weekly_window(reset_at: datetime) -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="test-user",
+        metadata={},
+        budget_limits=[{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}],
+    )
+
+
+async def _updated_windows_by_duration(
+    existing_key: LiteLLM_VerificationToken, budget_limits: list[dict[str, object]]
+) -> dict[str, dict[str, object]]:
+    result: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest.model_validate({"key": "test-token", "budget_limits": budget_limits}),
+        existing_key_row=existing_key,
+    )
+    return {window["budget_duration"]: window for window in json.loads(result["budget_limits"])}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("weekly_cap", [50.0, 40.0, 60.0])
+async def test_prepare_key_update_data_keeps_a_resubmitted_window_mid_period(weekly_cap: float) -> None:
+    open_reset_at: Final = datetime.now(timezone.utc) + timedelta(days=3)
+
+    windows: Final = await _updated_windows_by_duration(
+        _key_with_weekly_window(open_reset_at),
+        [{"budget_duration": "7d", "max_budget": weekly_cap}, {"budget_duration": "1d", "max_budget": 5.0}],
+    )
+
+    assert datetime.fromisoformat(windows["7d"]["reset_at"]) == open_reset_at
+    assert windows["7d"]["max_budget"] == weekly_cap
+    assert datetime.fromisoformat(windows["1d"]["reset_at"]) > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_restarts_a_resubmitted_window_whose_period_ended() -> None:
+    stale_reset_at: Final = datetime.now(timezone.utc) - timedelta(days=1)
+
+    windows: Final = await _updated_windows_by_duration(
+        _key_with_weekly_window(stale_reset_at), [{"budget_duration": "7d", "max_budget": 50.0}]
+    )
+
+    assert datetime.fromisoformat(windows["7d"]["reset_at"]) > datetime.now(timezone.utc)
+
+
 @pytest.mark.asyncio
 async def test_prepare_key_update_data_disable_global_guardrails_false_no_premium(
     monkeypatch,
