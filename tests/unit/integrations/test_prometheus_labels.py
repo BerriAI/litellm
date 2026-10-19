@@ -4,6 +4,7 @@ Unit tests for prometheus metric labels configuration
 
 import pytest
 
+import litellm
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
@@ -924,6 +925,117 @@ def test_deployment_failure_metrics_emit_model_group_from_standard_logging_paylo
             assert values == {"example-model-group"}, (
                 f"expected model_group=example-model-group on {metric._name}, got {values}"
             )
+    finally:
+        _clear_prometheus_registry()
+
+
+def _routed(deployment: object) -> dict[str, object]:
+    return {"deployment": deployment, "model_info": {"id": "model-123"}}
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "logged_provider", "expected"),
+    [
+        pytest.param(
+            {"custom_llm_provider": "bedrock", "metadata": _routed("azure/gpt-4o")},
+            "vertex_ai",
+            "bedrock",
+            id="resolved-provider-wins",
+        ),
+        pytest.param(
+            {"custom_llm_provider": None, "metadata": _routed("anthropic/claude-haiku-4-5")},
+            "openai",
+            "openai",
+            id="provider-on-the-payload-wins",
+        ),
+        pytest.param({"metadata": _routed("azure/limited-azure")}, None, "azure", id="deployment-prefix"),
+        pytest.param(
+            {"litellm_metadata": _routed("anthropic/claude-haiku-4-5"), "metadata": {}},
+            None,
+            "anthropic",
+            id="litellm-metadata-deployment",
+        ),
+        pytest.param(
+            {"litellm_metadata": _routed("anthropic/claude-haiku-4-5"), "metadata": _routed("bedrock/converse/model")},
+            None,
+            "anthropic",
+            id="litellm-metadata-deployment-wins",
+        ),
+        pytest.param(
+            {"litellm_metadata": {"deployment": "bedrock/forged"}, "metadata": _routed("anthropic/claude-haiku-4-5")},
+            None,
+            "anthropic",
+            id="routed-bucket-wins-over-a-bare-deployment",
+        ),
+        pytest.param({"metadata": _routed("abliteration/model")}, None, "abliteration", id="json-configured-provider"),
+        pytest.param({"metadata": _routed("langfuse/my-prompt")}, None, "", id="prompt-management-deployment"),
+        pytest.param({"metadata": _routed("gpt-4o")}, None, "", id="unprefixed-deployment"),
+        pytest.param({"metadata": _routed("meta-llama/Llama-3")}, None, "", id="prefix-is-not-a-provider"),
+        pytest.param({"metadata": _routed(5)}, None, "", id="non-string-deployment"),
+        pytest.param({"metadata": {}}, None, "", id="nothing-known"),
+    ],
+)
+def test_deployment_failure_metrics_label_the_selected_deployment_provider(litellm_params, logged_provider, expected):
+    """
+    A failure on a selected deployment labels api_provider with that
+    deployment's provider, never the string "None" and never a guess from the
+    requested model name (gpt-4o-mini here would read openai).
+    """
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        logger.set_llm_deployment_failure_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": litellm_params,
+                "standard_logging_object": {
+                    "model_group": "gpt-4o-mini",
+                    "model_id": "model-123",
+                    "api_base": "https://example.openai.azure.com",
+                    "custom_llm_provider": logged_provider,
+                    "request_tags": [],
+                },
+                "exception": Exception("boom"),
+            }
+        )
+
+        for metric in (
+            logger.litellm_deployment_failure_responses,
+            logger.litellm_deployment_total_requests,
+        ):
+            index = metric._labelnames.index("api_provider")
+            values = {sample_key[index] for sample_key in metric._metrics}
+            assert values == {expected}, f"expected api_provider={expected!r} on {metric._name}, got {values}"
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_deployment_failure_metrics_label_a_custom_provider_deployment(monkeypatch):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "in-house", "custom_handler": object()}])
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        logger.set_llm_deployment_failure_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": {"metadata": _routed("in-house/model")},
+                "standard_logging_object": {
+                    "model_group": "gpt-4o-mini",
+                    "model_id": "model-123",
+                    "api_base": "https://in-house.example",
+                    "request_tags": [],
+                },
+                "exception": Exception("boom"),
+            }
+        )
+
+        index = logger.litellm_deployment_failure_responses._labelnames.index("api_provider")
+        values = {sample_key[index] for sample_key in logger.litellm_deployment_failure_responses._metrics}
+        assert values == {"in-house"}
     finally:
         _clear_prometheus_registry()
 
