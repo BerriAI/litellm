@@ -1031,6 +1031,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
+    "https://aistupidlevel.info/v1",
 ]
 
 
@@ -1099,6 +1100,7 @@ openai_compatible_providers: Final[list] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "aistupidlevel",  # AI Stupid Level - JSON-configured provider
     "openinfer",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
