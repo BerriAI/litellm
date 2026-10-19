@@ -31,7 +31,7 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _CLAUDE: Final = cc.OPUS
