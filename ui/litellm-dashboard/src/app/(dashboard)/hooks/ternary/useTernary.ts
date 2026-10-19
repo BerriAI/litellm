@@ -37,9 +37,7 @@ export const useTernarySettings = () => {
   });
 };
 
-const useSettingsMutation = <TInput>(
-  send: (accessToken: string, input: TInput) => Promise<TernaryMessageResponse>,
-) => {
+const useSettingsMutation = <TInput>(send: (accessToken: string, input: TInput) => Promise<TernaryMessageResponse>) => {
   const { accessToken } = useAuthorized();
   const queryClient = useQueryClient();
   return useMutation<TernaryMessageResponse, Error, TInput>({
