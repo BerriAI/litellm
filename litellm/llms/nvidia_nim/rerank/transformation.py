@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final, Literal, cast
+from typing import Final, Literal
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -210,7 +210,11 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Nvidia NIM rerank")
 
-        top_n: Final[object] = cast(object, optional_rerank_params.get("top_n"))  # cast-ok: value validated below
+        # Validate the boundary as Mapping[str, object] to avoid leaking an
+        # Unknown type from the provider's untyped optional params.
+        top_n: Final[object] = _JSON_OBJECT.validate_python(
+            {"top_n": optional_rerank_params.get("top_n")}
+        )["top_n"]
         if top_n is not None:
             if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
                 raise ValueError(f"top_n must be a positive integer, got: {top_n!r}")
