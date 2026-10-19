@@ -775,11 +775,13 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
 
         self.json_mode = json_mode
         self._last_function_name: str | None = None  # Track the last seen function name
+        self._called_user_tool = False
 
     def _json_tool_arguments(self, function: Mapping[str, object]) -> str | None:
         name: Final = function.get("name")
         if isinstance(name, str):
             self._last_function_name = name
+            self._called_user_tool = self._called_user_tool or name != RESPONSE_FORMAT_TOOL_NAME
         if self._last_function_name != RESPONSE_FORMAT_TOOL_NAME:
             return None
         arguments: Final = function.get("arguments")
@@ -827,6 +829,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                 )
                 if (
                     self._last_function_name == RESPONSE_FORMAT_TOOL_NAME
+                    and not self._called_user_tool
                     and choice.get("finish_reason") == "tool_calls"
                 ):
                     choice["finish_reason"] = "stop"
