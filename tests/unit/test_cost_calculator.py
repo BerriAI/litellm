@@ -9720,3 +9720,166 @@ def test_responses_ws_logging_object_carries_the_completed_responses_id_tier_and
     assert (logged.id, logged.service_tier) == ("resp_a", "priority")
     assert (logged.usage.prompt_tokens, logged.usage.completion_tokens, logged.usage.total_tokens) == (10, 5, 15)
     assert ResponsesWebSocketTokenUsageProcessor.create_logging_object([{"type": "error", "error": {}}]).id is None
+
+
+@pytest.mark.parametrize("profile_prefix", ("us", "global"))
+@pytest.mark.parametrize(
+    "model_name",
+    ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "gpt-6.1-sol"),
+)
+@pytest.mark.parametrize("arn", (False, True))
+def test_bedrock_converse_cost_uses_invoked_profile(
+    _local_model_cost_map: None, model_name: str, profile_prefix: str, arn: bool
+) -> None:
+    model: Final = f"openai.{model_name}"
+    profile: Final = f"{profile_prefix}.{model}"
+    invoked: Final = f"arn:aws:bedrock:us-east-1:123456789012:inference-profile/{profile}" if arn else profile
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    prices: Final = litellm.get_model_info(profile, custom_llm_provider="bedrock")
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=f"bedrock/converse/{model}",
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": invoked},
+    )
+
+    assert cost == pytest.approx(10 * prices["input_cost_per_token"] + 5 * prices["output_cost_per_token"])
+    assert response.model == model
+
+
+@pytest.mark.parametrize("custom_pricing", (False, True))
+def test_bedrock_converse_profile_preserves_explicit_base_and_custom_pricing(
+    _local_model_cost_map: None, custom_pricing: bool
+) -> None:
+    model: Final = "openai.gpt-6-sol"
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    prices: Final = litellm.get_model_info(model, custom_llm_provider="bedrock")
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": f"us.{model}"},
+        custom_pricing=custom_pricing,
+        base_model=None if custom_pricing else model,
+    )
+
+    assert cost == pytest.approx(10 * prices["input_cost_per_token"] + 5 * prices["output_cost_per_token"])
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_bedrock_converse_cost_retains_profile_after_dispatch_consumes_optional_params(
+    _local_model_cost_map: None, stream: bool
+) -> None:
+    from litellm.cost_calculator import pricing_entry_for_cost_calc
+
+    model: Final = "openai.gpt-5.6-sol"
+    profile: Final = f"us.{model}"
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="bedrock-profile-cost",
+        function_id="bedrock-profile-cost",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={"model_id": profile}, custom_llm_provider="bedrock"
+    )
+    logging_obj.optional_params.pop("model_id")
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    prices: Final = litellm.get_model_info(profile, custom_llm_provider="bedrock")
+
+    assert logging_obj.response_cost_calculator(response) == pytest.approx(
+        10 * prices["input_cost_per_token"] + 5 * prices["output_cost_per_token"]
+    )
+    entry: Final = pricing_entry_for_cost_calc(model, response, "bedrock", False, None, None, None, logging_obj)
+    assert entry is not None
+    assert entry[0] == prices["key"]
+
+
+@pytest.mark.parametrize(
+    "invoked_model_id",
+    (None, "", 123, "unmapped-profile", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opaque"),
+)
+def test_bedrock_converse_cost_keeps_configured_rates_when_target_has_no_prices(
+    _local_model_cost_map: None, invoked_model_id: object
+) -> None:
+    model: Final = "openai.gpt-6-sol"
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    expected: Final = completion_cost(completion_response=response, model=model, custom_llm_provider="bedrock")
+
+    assert (
+        completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="bedrock",
+            optional_params={"model_id": invoked_model_id},
+        )
+        == expected
+    )
+
+
+def test_non_bedrock_cost_ignores_bedrock_model_id(_local_model_cost_map: None) -> None:
+    response: Final = ModelResponse(
+        model="gpt-6-sol", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+    expected: Final = completion_cost(completion_response=response, custom_llm_provider="openai")
+
+    assert (
+        completion_cost(
+            completion_response=response,
+            custom_llm_provider="openai",
+            optional_params={"model_id": "us.openai.gpt-6-sol"},
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize("rate", (0.0, 0.001))
+def test_bedrock_converse_profile_preserves_registered_price_override(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, rate: float
+) -> None:
+    import litellm.utils as model_utils
+
+    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
+    model: Final = "openai.gpt-5.6-sol"
+    litellm.register_model(
+        {
+            model: {
+                "input_cost_per_token": rate,
+                "output_cost_per_token": rate,
+                "litellm_provider": "bedrock_converse",
+                "mode": "chat",
+            }
+        }
+    )
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+
+    assert completion_cost(
+        completion_response=response,
+        model=f"bedrock/converse/{model}",
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": f"us.{model}"},
+    ) == pytest.approx(15 * rate)
+
+
+def test_bedrock_converse_profile_ignores_registered_capabilities_without_prices(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm.utils as model_utils
+
+    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
+    model: Final = "openai.gpt-6-sol"
+    litellm.register_model({model: {"supports_function_calling": True}})
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    prices: Final = litellm.get_model_info(f"us.{model}", custom_llm_provider="bedrock")
+
+    assert completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": f"us.{model}"},
+    ) == pytest.approx(10 * prices["input_cost_per_token"] + 5 * prices["output_cost_per_token"])

@@ -10094,3 +10094,16 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
         prefixed_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
         assert litellm.get_model_info(model=short_name, custom_llm_provider="vertex_ai") == prefixed_info, model
         assert prefixed_info["key"] == f"vertex_ai/{model}", model
+
+
+@pytest.mark.parametrize(
+    "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
+)
+def test_runtime_model_cost_registration_resolves_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from litellm import utils as model_utils
+
+    rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {key: rates})
+
+    assert model_utils.runtime_model_cost_registration("bedrock/converse/openai.test-converse", "bedrock") == rates
+    assert model_utils.runtime_model_cost_registration("bedrock/converse/openai.other-converse", "bedrock") is None

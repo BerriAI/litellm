@@ -149,6 +149,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     cached_get_model_info_helper,
+    runtime_model_cost_registration,
     token_counter,
     unmapped_model_generalization,
 )
@@ -886,6 +887,16 @@ def _pricing_provider_for_cost_candidate(
     return current_provider if isinstance(current_provider, str) else None
 
 
+def _invoked_model_id_for_cost(
+    optional_params: object,
+    logging_obj: LitellmLoggingObject | None,
+) -> str | None:
+    recorded: Final[object] = getattr(logging_obj, "model_call_details", None)
+    return _get_hidden_str_for_cost_calc(optional_params, "model_id") or _get_hidden_str_for_cost_calc(
+        recorded, "model_id"
+    )
+
+
 def select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -894,6 +905,7 @@ def select_model_name_for_cost_calc(
     custom_llm_provider: str | None = None,
     router_model_id: str | None = None,
     region_name: str | None = None,
+    invoked_model_id: str | None = None,
 ) -> str | None:
     """
     1. If custom pricing is true, return received model name
@@ -914,6 +926,26 @@ def select_model_name_for_cost_calc(
     hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
     provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
     explicit_pricing: Final = custom_pricing is True or base_model is not None
+    invoked_model_info: Final = (
+        _cost_map_model_info(invoked_model_id, "bedrock")
+        if invoked_model_id and custom_llm_provider == "bedrock" and not explicit_pricing
+        else None
+    )
+    configured_model: Final = model or (
+        completion_response_model if isinstance(completion_response_model, str) else None
+    )
+    registered_pricing: Final = (
+        runtime_model_cost_registration(configured_model, "bedrock")
+        if invoked_model_info is not None and isinstance(configured_model, str)
+        else None
+    )
+    invoked_pricing_model: Final = (
+        invoked_model_info["key"]
+        if invoked_model_info is not None
+        and _declares_rates(invoked_model_info)
+        and not (registered_pricing is not None and _cost_map_entry_prices_anything(registered_pricing))
+        else None
+    )
     priced_from_response: Final = provider_response_model is not None or completion_response_model is not None
     priced_region: Final = (
         _get_hidden_str_for_cost_calc(hidden_params, "region_name") or region_name
@@ -931,8 +963,8 @@ def select_model_name_for_cost_calc(
         else:
             return_model = model
 
-    elif base_model is not None or provider_response_model is not None:
-        return_model = base_model if base_model is not None else provider_response_model
+    elif base_model is not None or invoked_pricing_model is not None or provider_response_model is not None:
+        return_model = base_model if base_model is not None else invoked_pricing_model or provider_response_model
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
@@ -1552,6 +1584,10 @@ def completion_cost(
             base_model=base_model,
             router_model_id=router_model_id,
             region_name=region_name,
+            invoked_model_id=_invoked_model_id_for_cost(
+                _LOGGED_LITELLM_PARAMS.validate_python(optional_params) if optional_params is not None else None,
+                litellm_logging_obj,
+            ),
         )
 
         requested_model: Final = model
@@ -2335,6 +2371,7 @@ def pricing_entry_for_cost_calc(
         custom_llm_provider=custom_llm_provider,
         router_model_id=router_model_id,
         region_name=region_name,
+        invoked_model_id=_invoked_model_id_for_cost(None, litellm_logging_obj),
     )
     candidates: Final = (selected_model, _get_response_model(completion_response), model)
     resolved: Final = next(

@@ -3613,6 +3613,21 @@ def _register_on_current_map(
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
 
 
+def runtime_model_cost_registration(model: str, custom_llm_provider: str) -> Mapping[str, object] | None:
+    names: Final = get_potential_model_names(model, custom_llm_provider)
+    candidates: Final = (
+        model,
+        names["combined_model_name"],
+        f"{custom_llm_provider}/{names['split_model']}",
+        names["split_model"],
+        names["stripped_model_name"],
+    )
+    registered: Final = next(
+        (_runtime_registered_model_cost[key] for key in candidates if key in _runtime_registered_model_cost), None
+    )
+    return MappingProxyType(registered) if registered is not None else None
+
+
 class _LiveDeploymentReplay:
     """Single-slot holder for the callback that rebuilds live router deployments.
 
