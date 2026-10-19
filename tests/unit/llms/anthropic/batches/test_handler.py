@@ -15,12 +15,13 @@ asyncio.run) is exercised directly.
 
 import asyncio
 import threading
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-
+import litellm
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.types.utils import LiteLLMBatch
 
@@ -354,3 +355,41 @@ async def test_aretrieve_batch_wif_exchange_does_not_block_event_loop(handler, p
     assert poster.thread_ids[0] != threading.get_ident()
     sent_headers = fake_client.get.call_args.kwargs["headers"]
     assert sent_headers["authorization"] == "Bearer sk-ant-oat01-batches-seam"
+
+
+ANTHROPIC_BATCH_URL = "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
+SEVEN_SECONDS = {"connect": 7.0, "read": 7.0, "write": 7.0, "pool": 7.0}
+
+
+@pytest.fixture
+def anthropic_batch_route(respx_mock, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    # In progress, so the success logger has no results file to download.
+    in_progress: Final = {
+        "id": "msgbatch_abc",
+        "processing_status": "in_progress",
+        "created_at": "2024-09-24T10:00:00Z",
+        "request_counts": {"processing": 2},
+    }
+    return respx_mock.get(ANTHROPIC_BATCH_URL).mock(return_value=httpx.Response(200, json=in_progress))
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_retrieve_batch_sends_the_callers_timeout(anthropic_batch_route):
+    batch = litellm.retrieve_batch(
+        batch_id="msgbatch_abc", custom_llm_provider="anthropic", api_key="sk-ant-test", timeout=7.0
+    )
+
+    assert (batch.id, batch.status) == ("msgbatch_abc", "in_progress")
+    assert anthropic_batch_route.calls[0].request.extensions["timeout"] == SEVEN_SECONDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_aretrieve_batch_sends_the_callers_timeout(anthropic_batch_route):
+    batch = await litellm.aretrieve_batch(
+        batch_id="msgbatch_abc", custom_llm_provider="anthropic", api_key="sk-ant-test", timeout=7.0
+    )
+
+    assert (batch.id, batch.status) == ("msgbatch_abc", "in_progress")
+    assert anthropic_batch_route.calls[0].request.extensions["timeout"] == SEVEN_SECONDS
