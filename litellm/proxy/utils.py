@@ -1089,7 +1089,7 @@ def _estimated_input_cost(model_call_details: Mapping[str, object], prompt_token
             prompt_tokens=prompt_tokens,
             custom_cost_per_token=_deployment_cost_per_token(model_call_details),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
         verbose_proxy_logger.debug(
             "failure spend estimate: could not price %s: %s", model_call_details.get("model"), exc
         )
