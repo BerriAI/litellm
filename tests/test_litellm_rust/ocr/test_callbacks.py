@@ -194,6 +194,7 @@ def test_native_ocr_callback_retained_body_observes_later_callback_mutation(serv
     server.expect(ocr_reply())
     call_ocr(server, callbacks=[QueuePayload(), Edit()])
 
+    assert_served_natively(server)
     assert queued[0]["queued-edit"] is True
 
 
@@ -213,6 +214,7 @@ def test_native_ocr_success_callback_receives_state_added_by_pre_call_callback(s
     server.expect(ocr_reply())
     call_ocr(server, callbacks=[Stash()])
 
+    assert_served_natively(server)
     assert finished.wait(10)
     assert terminal_tokens.get_nowait() is token
 
@@ -232,6 +234,7 @@ async def test_native_aocr_success_callback_receives_call_id_metadata_and_respon
     )
     events: Final = await recorder.wait_for_async("async_log_success_event")
 
+    assert_served_natively(server)
     assert len(events) == 1
     assert events[0].call_type == "aocr"
     assert events[0].kwargs["litellm_call_id"] == "ocr-success"

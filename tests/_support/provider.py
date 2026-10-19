@@ -47,15 +47,19 @@ class SharedProvider:
         )
         try:
             yield
-        finally:
-            self.last_test = test_id
+        except BaseException:
+            self.received()
+            raise
+        else:
             unused: Final = len(self.replies)
             unread: Final = self.received()
-            self.replies.clear()
             assert unused == 0 and unread == (), (
                 f"{unused} queued provider replies were never requested; "
                 f"the test never read the provider requests {[item.target for item in unread]}"
             )
+        finally:
+            self.last_test = test_id
+            self.replies.clear()
 
 
 @contextmanager

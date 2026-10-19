@@ -31,6 +31,21 @@ def test_checked_rejects_unread_requests() -> None:
         send_unread_request()
 
 
+def test_checked_preserves_call_failure_and_cleans_up() -> None:
+    with shared_provider() as server:
+        def reject_call() -> None:
+            with server.checked("rejected"):
+                server.expect(Reply())
+                raise RuntimeError("native route rejected the call")
+
+        with pytest.raises(RuntimeError, match="native route rejected the call"):
+            reject_call()
+        with server.checked("next"):
+            server.expect(Reply(body=b"next"))
+            assert _get(f"{server.wire.url}/next") == b"next"
+            assert tuple(request.target for request in server.received()) == ("/next",)
+
+
 def test_port_zero_providers_serve_concurrently() -> None:
     with ExitStack() as stack:
         first: Final[SharedProvider] = stack.enter_context(shared_provider())

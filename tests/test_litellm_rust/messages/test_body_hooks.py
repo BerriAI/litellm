@@ -56,11 +56,13 @@ async def test_body_websearch_short_circuit_answers_without_the_provider(server:
             return {**MESSAGES_RESPONSE, "id": "short-circuited"}
 
     with rebound(litellm, "callbacks", [ShortCircuit()]):
-        response: Final = await call(server)
+        try:
+            response: Final = await call(server)
+        finally:
+            requests: Final = server.received()
+            assert requests == ()
 
     assert response_id(response) == "short-circuited"
-    requests: Final = server.received()
-    assert requests == ()
 
 
 @pytest.mark.asyncio
@@ -74,11 +76,13 @@ async def test_body_interceptor_replaces_the_provider_call(server: SharedProvide
             return {**MESSAGES_RESPONSE, "id": "intercepted"}
 
     with rebound(interceptors, "_interceptors", [Replace()]):
-        response: Final = await call(server)
+        try:
+            response: Final = await call(server)
+        finally:
+            requests: Final = server.received()
+            assert requests == ()
 
     assert response_id(response) == "intercepted"
-    requests: Final = server.received()
-    assert requests == ()
 
 
 @pytest.mark.asyncio
