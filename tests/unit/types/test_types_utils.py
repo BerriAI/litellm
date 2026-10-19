@@ -209,6 +209,26 @@ def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
     assert not hasattr(non_int, "cache_write_tokens")
 
 
+def test_prompt_tokens_details_wrapper_declares_created_cache_tokens():
+    """vLLM (>= v0.26.0) reports APC prefix-cache writes as
+    prompt_tokens_details.created_cache_tokens. It must survive wrapper
+    construction as a real declared field, so the cost-side getattr chain
+    reads a declared field instead of relying on extra="allow"."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    assert "created_cache_tokens" in PromptTokensDetailsWrapper.model_fields
+
+    vllm: Final = PromptTokensDetailsWrapper(cached_tokens=500, created_cache_tokens=450)
+    assert vllm.created_cache_tokens == 450
+    assert vllm.model_dump(exclude_none=True)["created_cache_tokens"] == 450
+    # not mirrored to the canonical write pair
+    assert not hasattr(vllm, "cache_write_tokens")
+
+    unset: Final = PromptTokensDetailsWrapper(cached_tokens=500)
+    assert not hasattr(unset, "created_cache_tokens")
+    assert "created_cache_tokens" not in unset.model_dump()
+
+
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
     from litellm.types.utils import ServerToolUse, Usage
 

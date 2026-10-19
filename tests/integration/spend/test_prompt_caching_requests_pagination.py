@@ -29,6 +29,7 @@ _EXPECTED: Final = {
         "nested-write",
         "nested-read",
         "nested-creation",
+        "nested-created-cache",
         "legacy-read",
         "injected-empty",
         "injected-deployment",
@@ -54,6 +55,7 @@ _CASES: Final = (
     _Case("write", {"usage_object": {"cache_creation_input_tokens": 100}}),
     _Case("nested-write", {"usage_object": {"prompt_tokens_details": {"cache_write_tokens": 100}}}),
     _Case("nested-creation", {"usage_object": {"prompt_tokens_details": {"cache_creation_tokens": 100}}}),
+    _Case("nested-created-cache", {"usage_object": {"prompt_tokens_details": {"created_cache_tokens": 100}}}),
     _Case(
         "top-precedence",
         {"usage_object": {"cache_read_input_tokens": -2, "prompt_tokens_details": {"cached_tokens": 100}}},
@@ -198,6 +200,7 @@ def _run_filter_checks(
         assert by_id["legacy-read"].gateway_injected is False
         assert by_id["legacy-read"].net_savings is not None and by_id["legacy-read"].net_savings > 0
         assert by_id["write"].net_savings is not None and by_id["write"].net_savings < 0
+        assert by_id["nested-created-cache"].cache_creation_tokens == 100
 
 
 @pytest.mark.asyncio
