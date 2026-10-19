@@ -2207,3 +2207,42 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         mock_get_credentials.assert_called_once()
         credentials_args = mock_get_credentials.call_args.kwargs
         assert credentials_args.get("aws_region_name") == test_region
+
+
+def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(monkeypatch):
+    """LIT-9880 on /v1/messages: the hook wrote the tool_config point back into kwargs and the
+    native path dropped it silently, so the tools went out without any cache breakpoint."""
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    captured = {}
+
+    def fake_native(**kwargs):
+        captured["params"] = kwargs["anthropic_messages_optional_request_params"]
+        captured["kwargs"] = kwargs["kwargs"]
+        captured["messages"] = kwargs["messages"]
+        return "native-passthrough"
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
+    tools = [{"name": f"tool_{i}", "description": f"Tool {i}", "input_schema": {"type": "object"}} for i in range(2)]
+    tools_before = copy.deepcopy(tools)
+
+    result = handler.anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="anthropic/claude-opus-4-6",
+        api_key="sk-test",
+        tools=tools,
+        litellm_metadata={},
+        cache_control_injection_points=[
+            {"location": "message", "role": "user"},
+            {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+    )
+
+    assert result == "native-passthrough"
+    assert "cache_control_injection_points" not in captured["params"]
+    assert "cache_control_injection_points" not in captured["kwargs"]
+    assert captured["params"]["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in captured["params"]["tools"][0]
+    assert captured["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert tools == tools_before
