@@ -1,11 +1,16 @@
-from collections.abc import Generator
-from contextlib import ExitStack, contextmanager
+import asyncio
+from collections.abc import AsyncGenerator, Generator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from types import ModuleType
 from typing import Final, cast
 
 import litellm
 from litellm import utils
-from litellm.litellm_core_utils import litellm_logging
+from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.rust_bridge.configuration import _CONFIGURATION
+from tests.test_litellm_rust.support.callback_recorder import drain_logging
 
 CALLBACK_ATTRIBUTES: Final = (
     "callbacks",
@@ -56,3 +61,23 @@ def isolated_callback_registries() -> Generator[None]:
         stack.enter_context(_isolated_list(litellm_logging, "_in_memory_loggers"))
         stack.enter_context(rebound(utils, "callback_list", []))
         yield
+
+
+@asynccontextmanager
+async def isolated_test_state() -> AsyncGenerator[None]:
+    with ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(rebound(litellm, "cache", None))  # test-quality-ok: isolate process-global cache
+        stack.enter_context(rebound(_CONFIGURATION, "override", None))
+        executor: Final = ThreadPoolExecutor(thread_name_prefix="rust-test-logging")
+        stack.enter_context(rebound(litellm_logging, "executor", executor))
+        stack.enter_context(rebound(utils, "executor", executor))
+        stack.enter_context(rebound(thread_pool_executor, "executor", executor))
+        try:
+            yield
+        finally:
+            try:
+                await drain_logging()
+            finally:
+                await asyncio.to_thread(executor.shutdown, wait=True)
+                await GLOBAL_LOGGING_WORKER.stop()
