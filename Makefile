@@ -22,7 +22,7 @@ help:
 	@echo "  make install-proxy-dev-ci - Install proxy dev dependencies (CI-compatible)"
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
-	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
+	@echo "  make install-hooks      - Install git hooks (Conventional Commits)"
 	@echo "  make check              - Run CI-equivalent lint on staged files, or on the diff vs the base branch when nothing is staged"
 	@echo "  make pre-commit         - Legacy alias for make check"
 	@echo "  make format             - Apply ruff format code formatting"
