@@ -1066,11 +1066,12 @@ def _deployment_cost_per_token(model_call_details: Mapping[str, object]) -> Cost
     """The deployment's own rates from ``litellm_params`` (``input_cost_per_token`` and
     ``output_cost_per_token`` in the model_list entry), so a billed failure is priced like
     a success on the same deployment instead of from the public cost map."""
-    litellm_params: Final = model_call_details.get("litellm_params")
-    if not isinstance(litellm_params, dict):
+    raw_params: Final = model_call_details.get("litellm_params")
+    if not isinstance(raw_params, dict):
         return None
-    input_rate: Final = litellm_params.get("input_cost_per_token")  # pyright: ignore[reportUnknownMemberType]  # untyped litellm_params dict
-    output_rate: Final = litellm_params.get("output_cost_per_token")  # pyright: ignore[reportUnknownMemberType]  # untyped litellm_params dict
+    litellm_params: Final = cast("Mapping[str, object]", raw_params)  # cast-ok: litellm_params is an untyped dict from the router; the two rates are isinstance-checked below
+    input_rate: Final = litellm_params.get("input_cost_per_token")
+    output_rate: Final = litellm_params.get("output_cost_per_token")
     if not isinstance(input_rate, (int, float)):
         return None
     return CostPerToken(
