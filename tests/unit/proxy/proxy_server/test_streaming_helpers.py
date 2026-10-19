@@ -1239,8 +1239,7 @@ _UPSTREAM_BODY: Final = {
             litellm.AuthenticationError(
                 message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra"
             ),
-            "authentication_error",
-            id="authentication_error",
+            "authentication_error", id="authentication_error",
         ),
         pytest.param(
             "upstream_failure",
@@ -1249,35 +1248,26 @@ _UPSTREAM_BODY: Final = {
                 request=httpx.Request("POST", "https://streaming.example/v1/responses"),
                 body={"code": {"reason": "overloaded"}, "type": {"unexpected": "object"}},
             ),
-            "server_error",
-            id="structured_provider_error_fields",
+            "server_error", id="structured_provider_error_fields",
         ),
         pytest.param(
             "upstream_failure",
             litellm.InternalServerError(
                 message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra", body=_UPSTREAM_BODY
             ),
-            "cyber_policy",
-            id="upstream_body_code_and_message",
+            "cyber_policy", id="upstream_body_code_and_message",
         ),
         pytest.param(
             "upstream_failure", RuntimeError("Upstream rejected request"), "server_error", id="builtin_exception"
         ),
         *(
             pytest.param(
-                "upstream_failure",
-                HTTPException(status_code=status, detail="Upstream rejected request"),
-                code,
-                id=f"http_{status}",
+                "upstream_failure", HTTPException(status_code=status, detail="Upstream rejected request"),
+                code, id=f"http_{status}",
             )
             for status, code in (
-                (400, "invalid_request_error"),
-                (403, "permission_error"),
-                (404, "not_found_error"),
-                (408, "request_timeout"),
-                (422, "invalid_request_error"),
-                (500, "server_error"),
-                (503, "server_error"),
+                (400, "invalid_request_error"), (403, "permission_error"), (404, "not_found_error"),
+                (408, "request_timeout"), (422, "invalid_request_error"), (500, "server_error"), (503, "server_error"),
             )
         ),
     ],
@@ -1308,11 +1298,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         {"type": "response.completed", "sequence_number": 2, "response": response}
     )
     tool_delta: Final = ToolDelta(
-        type="response.function_call_arguments.delta",
-        sequence_number=1,
-        item_id="fc_stream_error",
-        output_index=0,
-        delta='{"path":"partial',
+        type="response.function_call_arguments.delta", sequence_number=1, item_id="fc_stream_error",
+        output_index=0, delta='{"path":"partial',
     )
     original_status: Final = (
         upstream_error.status_code if isinstance(upstream_error, (HTTPException, litellm.AuthenticationError)) else None
@@ -1325,8 +1312,7 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
             raise upstream_error
         yield (
             UnserializableTerminal(type="response.completed", sequence_number=2, response=response, invalid=object())
-            if terminal == "serialization_failure"
-            else completed
+            if terminal == "serialization_failure" else completed
         )
         if terminal == "failure_after_completed":
             raise litellm.APIError(
@@ -1345,7 +1331,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
     decoded: Final = tuple(frame.decode() if isinstance(frame, bytes) else frame for frame in frames)
     event_frames: Final = tuple(frame for frame in decoded if frame != "data: [DONE]\n\n")
     payloads: Final = tuple(
-        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: "))) for frame in event_frames
+        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
+        for frame in event_frames
     )
 
     assert decoded[-1] == "data: [DONE]\n\n"

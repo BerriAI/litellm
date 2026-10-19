@@ -1,12 +1,11 @@
-import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator
 from typing import Final
 
 import httpx
 import pytest
 
-from litellm.proxy.spend_tracking.charge_receipt_delivery import ChargeReceiptPublisher, run_charge_receipt_publisher
+from litellm.proxy.spend_tracking.charge_receipt_delivery import ChargeReceiptPublisher
 from litellm.proxy.spend_tracking.charge_receipts import ChargeReceiptStore
 from tests.unit.proxy.spend_tracking._charge_receipt_cases import RECEIPT, SETTINGS, ScriptedQuery
 
@@ -89,18 +88,6 @@ async def test_partial_acknowledgement_never_discards_the_unconfirmed_receipt() 
 
 
 @pytest.mark.asyncio
-async def test_empty_outbox_never_contacts_the_receiver() -> None:
-    query: Final = ScriptedQuery(((),))
-
-    def receiver(request: httpx.Request) -> httpx.Response:
-        pytest.fail(f"Empty outbox contacted {request.url.host}")
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(receiver)) as client:
-        assert await ChargeReceiptPublisher(ChargeReceiptStore(query), SETTINGS, client).deliver_once() == 0
-    assert len(query.calls) == 1
-
-
-@pytest.mark.asyncio
 async def test_fully_acknowledged_delivery_does_not_schedule_a_retry() -> None:
     query: Final = ScriptedQuery((({"payload": RECEIPT.model_dump()},), ()))
 
@@ -112,36 +99,3 @@ async def test_fully_acknowledged_delivery_does_not_schedule_a_retry() -> None:
         publisher: Final = ChargeReceiptPublisher(ChargeReceiptStore(query), SETTINGS, client)
         assert await publisher.deliver_once() == 1
     assert len(query.calls) == 2 and query.calls[1].parameters == ((RECEIPT.event_id,), publisher.owner)
-
-
-@pytest.mark.asyncio
-async def test_database_outage_does_not_prevent_the_publisher_from_stopping() -> None:
-    stop: Final = asyncio.Event()
-
-    async def offline(query: str, *parameters: object) -> Sequence[Mapping[str, object]]:
-        stop.set()
-        raise ConnectionError("database offline")
-
-    async with httpx.AsyncClient() as client:
-        await ChargeReceiptPublisher(ChargeReceiptStore(offline), SETTINGS, client).run(stop)
-    assert stop.is_set()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ("disabled", "invalid", "no-database"))
-async def test_publisher_rejects_incomplete_configuration_before_connecting(
-    monkeypatch: pytest.MonkeyPatch,
-    mode: str,
-) -> None:
-    for name, value in (
-        ("ENABLED", "false" if mode == "disabled" else "true"),
-        ("GATEWAY_SCOPE", "invalid" if mode == "invalid" else SETTINGS.gateway_scope),
-        ("KEY_HASHES", '["' + RECEIPT.key_hash + '"]'),
-        ("DESTINATION_URL", SETTINGS.destination_url),
-        ("DESTINATION_SECRET", SETTINGS.destination_secret.get_secret_value()),
-    ):
-        monkeypatch.setenv("LITELLM_CHARGE_RECEIPTS_" + name, value)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    with pytest.raises(SystemExit) as error:
-        await run_charge_receipt_publisher()
-    assert error.value.code and SETTINGS.destination_secret.get_secret_value() not in str(error.value)

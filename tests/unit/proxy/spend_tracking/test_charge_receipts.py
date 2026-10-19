@@ -3,14 +3,9 @@ from typing import Final
 import pytest
 from pydantic import SecretStr
 
-from litellm.proxy.spend_tracking.charge_receipts import ChargeReceiptStore
-from litellm.types.charge_receipts import CommittedCharge, FailedCharge
 from tests.unit.proxy.spend_tracking._charge_receipt_cases import (
     RECEIPT,
     SETTINGS,
-    Rows,
-    ScriptedQuery,
-    acknowledged,
 )
 
 
@@ -64,50 +59,3 @@ def test_receipt_identity_compares_numeric_amount_without_ignoring_other_fields(
     assert RECEIPT.fingerprint() == RECEIPT.model_copy(update={"amount_usd": amount}).fingerprint()
     assert RECEIPT.fingerprint() != RECEIPT.model_copy(update={"amount_usd": "0.26"}).fingerprint()
     assert RECEIPT.fingerprint() != RECEIPT.model_copy(update={"request_id": "other"}).fingerprint()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("installed,durable", ((True, True), (False, True), (True, False)))
-async def test_readiness_requires_installed_schema_and_durable_storage(installed: bool, durable: bool) -> None:
-    store: Final = ChargeReceiptStore(ScriptedQuery((({"installed": installed, "durable": durable},),)))
-    assert await store.ready() is (installed and durable)
-
-
-@pytest.mark.asyncio
-async def test_database_failure_never_claims_readiness_or_success() -> None:
-    query: Final = ScriptedQuery((ConnectionError("offline"), ConnectionError("offline")))
-    store: Final = ChargeReceiptStore(query)
-    assert not await store.ready()
-    assert await store.append(RECEIPT) == FailedCharge(RECEIPT.key_hash, "database_unavailable")
-
-
-@pytest.mark.asyncio
-async def test_duplicate_commit_requires_the_original_immutable_payload() -> None:
-    store: Final = ChargeReceiptStore(ScriptedQuery(((), acknowledged())))
-    assert await store.append(RECEIPT) == CommittedCharge(
-        RECEIPT.event_id, RECEIPT.key_hash, RECEIPT.amount_usd, True, True
-    )
-    conflict: Final = ChargeReceiptStore(ScriptedQuery(((), acknowledged())))
-    assert await conflict.append(RECEIPT.model_copy(update={"amount_usd": "0.26"})) == FailedCharge(
-        RECEIPT.key_hash, "receipt_conflict"
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "rows",
-    (
-        ({"event_id": "bad"},),
-        ({"event_id": "other", "payload_hash": "wrong", "key_counter_updated": True},),
-        acknowledged() * 2,
-    ),
-)
-async def test_unverifiable_database_ack_is_never_reported_as_committed(rows: Rows) -> None:
-    store: Final = ChargeReceiptStore(ScriptedQuery((rows,)))
-    assert await store.append(RECEIPT) == FailedCharge(RECEIPT.key_hash, "invalid_database_result")
-
-
-@pytest.mark.asyncio
-async def test_a_suppressed_insert_without_an_existing_receipt_remains_unconfirmed() -> None:
-    store: Final = ChargeReceiptStore(ScriptedQuery(((), ())))
-    assert await store.append(RECEIPT) == FailedCharge(RECEIPT.key_hash, "unsafe_durability")

@@ -57,8 +57,6 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_metadata_variable_name,
     move_guardrails_to_metadata,
 )
-
-
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.utils import CredentialItem
 
@@ -3332,7 +3330,9 @@ def test_x_litellm_trace_id_keeps_the_body_session_beside_it_whatever_the_log_se
     assert data["litellm_trace_id"] == "req-trace-1"
 
 
-@pytest.mark.parametrize("session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"])
+@pytest.mark.parametrize(
+    "session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"]
+)
 @pytest.mark.parametrize("with_trace_header", [False, True], ids=["session-header-only", "beside-trace-header"])
 def test_session_headers_still_beat_the_body_session_with_correlation_logging(
     monkeypatch: pytest.MonkeyPatch, session_header: str, with_trace_header: bool
