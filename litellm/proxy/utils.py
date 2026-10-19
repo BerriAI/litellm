@@ -157,7 +157,11 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import Logging, deployment_model_info
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging,
+    deployment_model_info,
+    deployment_pricing_model_info,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -1063,24 +1067,20 @@ def _failure_usage_to_lift(
     return estimated_usage, _estimated_input_cost(model_call_details, estimated_usage.prompt_tokens, litellm_params)
 
 
-def _deployment_cost_per_token(raw_params: Mapping[str, object] | None) -> CostPerToken | None:
-    """The deployment's own rates (``input_cost_per_token`` and ``output_cost_per_token``),
-    read from the top level of the logging object's ``litellm_params`` first and then from
-    the router-stamped ``model_info`` the way the success path does, so a billed failure is
-    priced like a success on the same deployment instead of from the public cost map. The
-    source is ``Logging.litellm_params`` (deployment config), never the flattened
-    ``model_call_details`` copy that a request body key can overwrite."""
-    if not isinstance(raw_params, dict):
-        return None
-    params: Final = cast("Mapping[str, object]", raw_params)  # cast-ok: untyped router dict, rates checked below
-    model_info: Final = deployment_model_info(params)
-    input_rate: Final = params.get("input_cost_per_token") or model_info.get("input_cost_per_token")
-    output_rate: Final = params.get("output_cost_per_token") or model_info.get("output_cost_per_token")
-    if not isinstance(input_rate, (int, float)):
+def _deployment_cost_per_token(litellm_params: Mapping[str, object] | None, model: str) -> CostPerToken | None:
+    """The pricing the router registered for this deployment under its ``model_info.id``, read
+    through ``deployment_pricing_model_info`` exactly as the success path does; None means the
+    public cost map. The id comes from ``Logging.litellm_params`` (deployment config), never from
+    the flattened ``model_call_details`` copy that a request body key can overwrite."""
+    model_id: Final = deployment_model_info(litellm_params).get("id")
+    model_info: Final = deployment_pricing_model_info(
+        model_id=str(model_id) if model_id is not None else None, deployment_model=model
+    )
+    if model_info is None:
         return None
     return CostPerToken(
-        input_cost_per_token=float(input_rate),
-        output_cost_per_token=float(output_rate) if isinstance(output_rate, (int, float)) else 0.0,
+        input_cost_per_token=model_info["input_cost_per_token"] or 0.0,
+        output_cost_per_token=model_info["output_cost_per_token"] or 0.0,
     )
 
 
@@ -1092,11 +1092,12 @@ def _estimated_input_cost(
     """Input price for the estimated prompt; an unpriceable model (not in the cost map and no
     deployment rate) keeps the row at $0 rather than dropping the failure row."""
     try:
+        model: Final = str(model_call_details.get("model") or "")
         estimated_input_cost, _ = litellm.cost_per_token(
-            model=str(model_call_details.get("model") or ""),
+            model=model,
             custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
             prompt_tokens=prompt_tokens,
-            custom_cost_per_token=_deployment_cost_per_token(litellm_params),
+            custom_cost_per_token=_deployment_cost_per_token(litellm_params, model),
         )
     except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
         verbose_proxy_logger.debug(

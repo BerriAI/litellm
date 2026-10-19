@@ -2021,30 +2021,18 @@ def test_a_timed_out_request_on_an_unmapped_model_keeps_its_row_at_zero_cost():
     assert response_cost == 0.0
 
 
-def test_a_timed_out_request_is_priced_at_the_deployment_rate_when_litellm_params_set_one():
+def test_a_timed_out_request_is_priced_at_the_rate_the_router_registered_for_the_deployment(monkeypatch):
+    """Router._create_deployment registers a deployment's own ``input_cost_per_token`` under its
+    ``model_info.id``; the failure row prices with that entry through the same
+    ``deployment_pricing_model_info`` the success path uses."""
     from litellm.proxy.utils import _failure_usage_to_lift
 
-    lifted = _failure_usage_to_lift(
-        model_call_details={
-            "call_type": "acompletion",
-            "model": FAILURE_USAGE_MODEL,
-            "messages": ONE_USER_MESSAGE,
-        },
-        request_body={},
-        dispatched=True,
-        provider_billed=True,
-        litellm_params={"input_cost_per_token": 0.5, "output_cost_per_token": 1.0},
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "dep-lit145",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.25, "output_cost_per_token": 1.0},
     )
 
-    assert lifted is not None
-    usage, response_cost = lifted
-    assert usage.prompt_tokens > 0
-    assert response_cost == pytest.approx(usage.prompt_tokens * 0.5)
-
-
-def test_a_timed_out_request_is_priced_at_the_deployment_rate_when_model_info_sets_one():
-    from litellm.proxy.utils import _failure_usage_to_lift
-
     lifted = _failure_usage_to_lift(
         model_call_details={
             "call_type": "acompletion",
@@ -2054,7 +2042,7 @@ def test_a_timed_out_request_is_priced_at_the_deployment_rate_when_model_info_se
         request_body={},
         dispatched=True,
         provider_billed=True,
-        litellm_params={"metadata": {"model_info": {"id": "dep-1", "input_cost_per_token": 0.25}}},
+        litellm_params={"model": f"openai/{FAILURE_USAGE_MODEL}", "metadata": {"model_info": {"id": "dep-lit145"}}},
     )
 
     assert lifted is not None
