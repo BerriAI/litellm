@@ -741,7 +741,7 @@ def convert_to_model_response_object(
                     # Preserve provider_specific_fields if already present
                     # in the response (e.g. from proxy passthrough)
                     provider_specific_fields = dict(choice["message"].get("provider_specific_fields", None) or {})
-                    for f in choice["message"].keys() - _MESSAGE_FIELDS:
+                    for f in choice["message"].keys() - _MESSAGE_FIELDS - {"reasoning"}:
                         provider_specific_fields[f] = choice["message"][f]
 
                     # Handle reasoning models that display `reasoning_content` within `content`
