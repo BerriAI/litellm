@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -175,6 +175,46 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _ToolCallFunction(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str | None = None
+    arguments: str | None = None
+
+
+class _StreamedToolCall(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    index: int = 0
+    function: _ToolCallFunction | None = None
+
+    @property
+    def function_name(self) -> str | None:
+        return None if self.function is None else self.function.name
+
+    @property
+    def arguments(self) -> str:
+        return "" if self.function is None or self.function.arguments is None else self.function.arguments
+
+
+_RAW_TOOL_CALLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_STREAMED_TOOL_CALLS: Final = TypeAdapter(tuple[_StreamedToolCall, ...])
+
+
+def _json_answer_next_to_user_tools(
+    tool_calls: Sequence[DatabricksTool] | None, json_mode: bool | None
+) -> tuple[str, DatabricksTool] | None:
+    if not json_mode or not tool_calls or len(tool_calls) == 1:
+        return None
+    json_tool_calls: Final = tuple(
+        tool_call for tool_call in tool_calls if tool_call["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
+    )
+    if len(json_tool_calls) != 1:
+        return None
+    arguments: Final = _ToolCallFunction.model_validate(json_tool_calls[0]["function"]).arguments
+    return None if arguments is None else (arguments, json_tool_calls[0])
 
 
 class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
@@ -658,13 +698,19 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 )
 
                 citations = DatabricksConfig.extract_citations(choice["message"].get("content"))
+                message_tool_calls = choice["message"].get("tool_calls")
+                json_answer = _json_answer_next_to_user_tools(message_tool_calls, json_mode)
 
                 translated_message = Message(
                     role="assistant",
-                    content=content_str,
+                    content=content_str if json_answer is None else json_answer[0],
                     reasoning_content=reasoning_content,
                     thinking_blocks=thinking_blocks,
-                    tool_calls=choice["message"].get("tool_calls"),
+                    tool_calls=(
+                        message_tool_calls
+                        if json_answer is None or message_tool_calls is None
+                        else [tool_call for tool_call in message_tool_calls if tool_call is not json_answer[1]]
+                    ),
                     provider_specific_fields=({"citations": citations} if citations is not None else None),
                 )
 
@@ -774,28 +820,59 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
         super().__init__(streaming_response, sync_stream)
 
         self.json_mode = json_mode
-        self._last_function_name: str | None = None  # Track the last seen function name
+        self._json_tool_indexes: frozenset[int] = frozenset()
         self._called_user_tool = False
+        self._held_text = ""
 
-    def _json_tool_arguments(self, function: Mapping[str, object]) -> str | None:
-        name: Final = function.get("name")
-        if isinstance(name, str):
-            self._last_function_name = name
-            self._called_user_tool = self._called_user_tool or name != RESPONSE_FORMAT_TOOL_NAME
-        if self._last_function_name != RESPONSE_FORMAT_TOOL_NAME:
-            return None
-        arguments: Final = function.get("arguments")
-        return arguments if isinstance(arguments, str) else ""
+    def _record_tool_call_names(self, tool_calls: Sequence[_StreamedToolCall]) -> None:
+        named: Final = tuple((tool_call.index, tool_call.function_name) for tool_call in tool_calls)
+        self._json_tool_indexes = self._json_tool_indexes | frozenset(
+            index for index, name in named if name == RESPONSE_FORMAT_TOOL_NAME
+        )
+        self._called_user_tool = self._called_user_tool or any(
+            name is not None and name != RESPONSE_FORMAT_TOOL_NAME for _, name in named
+        )
+
+    def _renumbered_user_tool_delta(
+        self, raw_tool_call: Mapping[str, object], tool_call: _StreamedToolCall
+    ) -> Mapping[str, object]:
+        json_tools_before: Final = sum(1 for json_index in self._json_tool_indexes if json_index < tool_call.index)
+        return {**raw_tool_call, "index": tool_call.index - json_tools_before}
+
+    def _split_json_mode_tool_calls(
+        self, raw_tool_calls: Sequence[Mapping[str, object]]
+    ) -> tuple[str | None, tuple[Mapping[str, object], ...] | None]:
+        tool_calls: Final = _STREAMED_TOOL_CALLS.validate_python(raw_tool_calls)
+        self._record_tool_call_names(tool_calls)
+        json_deltas: Final = tuple(tool_call for tool_call in tool_calls if tool_call.index in self._json_tool_indexes)
+        user_deltas: Final = tuple(
+            self._renumbered_user_tool_delta(raw_tool_call, tool_call)
+            for raw_tool_call, tool_call in zip(raw_tool_calls, tool_calls, strict=True)
+            if tool_call.index not in self._json_tool_indexes
+        )
+        json_arguments: Final = "".join(tool_call.arguments for tool_call in json_deltas) if json_deltas else None
+        return json_arguments, user_deltas or None
+
+    def _json_mode_content(self, text: str | None, json_arguments: str | None, finished: bool) -> str | None:
+        self._held_text += text or ""
+        if not finished or self._json_tool_indexes:
+            return json_arguments
+        held_text: Final = self._held_text
+        self._held_text = ""
+        return held_text
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             translated_choices: Final = []
             for choice in chunk["choices"]:
                 tool_calls = choice["delta"].get("tool_calls")
+                json_arguments, json_mode_tool_calls = (
+                    self._split_json_mode_tool_calls(_RAW_TOOL_CALLS.validate_python(tool_calls))
+                    if tool_calls and self.json_mode
+                    else (None, None)
+                )
                 if tool_calls and self.json_mode:
-                    if (json_arguments := self._json_tool_arguments(tool_calls[0].get("function", {}))) is not None:
-                        choice["delta"]["content"] = json_arguments
-                        choice["delta"]["tool_calls"] = None
+                    choice["delta"]["tool_calls"] = json_mode_tool_calls
                 elif tool_calls:
                     for _tc in tool_calls:
                         if _tc.get("function", {}).get("arguments") == "{}":
@@ -816,7 +893,11 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     thinking_blocks,
                 ) = DatabricksConfig.extract_reasoning_content(choice["delta"].get("content"))
 
-                choice["delta"]["content"] = content_str
+                choice["delta"]["content"] = (
+                    self._json_mode_content(content_str, json_arguments, choice.get("finish_reason") is not None)
+                    if self.json_mode
+                    else content_str
+                )
                 choice["delta"]["reasoning_content"] = (
                     block_reasoning_content
                     if block_reasoning_content is not None
@@ -828,7 +909,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     else thinking_blocks
                 )
                 if (
-                    self._last_function_name == RESPONSE_FORMAT_TOOL_NAME
+                    self._json_tool_indexes
                     and not self._called_user_tool
                     and choice.get("finish_reason") == "tool_calls"
                 ):
