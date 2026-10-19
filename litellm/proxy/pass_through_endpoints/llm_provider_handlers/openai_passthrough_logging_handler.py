@@ -30,7 +30,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
+from litellm.proxy.spend_tracking.spend_tracking_utils import SETTLES_BACKGROUND_RESPONSE_KWARG
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
@@ -336,7 +336,6 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
-        response_id_suffix: str = "",
     ) -> tuple[ResponsesAPIResponse, float]:
         """Transform a Responses API raw response into a ResponsesAPIResponse
         and compute its cost.
@@ -365,12 +364,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             custom_llm_provider=custom_llm_provider,
             call_type="responses",
         )
-        logged_response: Final = (
-            litellm_model_response.model_copy(update={"id": f"{litellm_model_response.id}{response_id_suffix}"})
-            if response_id_suffix
-            else litellm_model_response
-        )
-        return logged_response, response_cost
+        return litellm_model_response, response_cost
 
     @staticmethod
     def openai_passthrough_handler(
@@ -519,11 +513,6 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     httpx_response=httpx_response,
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
-                    response_id_suffix=(
-                        BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
-                        if responses_billing == "background_settlement"
-                        else ""
-                    ),
                 )
 
             # Update kwargs with cost information
@@ -559,6 +548,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             logging_obj.model_call_details["model"] = model
             logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
             logging_obj.model_call_details["response_cost"] = response_cost
+            logging_obj.model_call_details[SETTLES_BACKGROUND_RESPONSE_KWARG] = (  # rebind-ok: spend rows read it here
+                responses_billing == "background_settlement"
+            )
 
             endpoint_type: Final = (
                 "chat_completions"

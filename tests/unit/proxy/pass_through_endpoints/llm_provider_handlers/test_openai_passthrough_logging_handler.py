@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import asyncio
 import json
 import logging
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 
 import litellm
@@ -1842,10 +1844,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
 
     def _expected_spend(self) -> float:
         rates = litellm.model_cost[self.MODEL_MAP_KEY]
-        return (
-            self.INPUT_TOKENS * rates["input_cost_per_token"]
-            + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
-        )
+        return self.INPUT_TOKENS * rates["input_cost_per_token"] + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
 
     def _responses_stream_chunks(self) -> List[str]:
         """Usage arrives only on the terminal `response.completed` event, nested under
@@ -2120,16 +2119,33 @@ def _stored_response(status: str, background: bool, usage: Mapping[str, object] 
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _LoggedCall:
+    spend_row: SpendLogsPayload
+    callback_response_id: str
+
+
+class _CallbackPayloadId(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
 class _SpendRowRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.row: Final[asyncio.Future[SpendLogsPayload]] = asyncio.get_running_loop().create_future()
+        self.call: Final[asyncio.Future[_LoggedCall]] = asyncio.get_running_loop().create_future()
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.row.set_result(
-            get_logging_payload(kwargs=kwargs, response_obj=response_obj, start_time=start_time, end_time=end_time)
+        self.call.set_result(
+            _LoggedCall(
+                spend_row=get_logging_payload(
+                    kwargs=kwargs, response_obj=response_obj, start_time=start_time, end_time=end_time
+                ),
+                callback_response_id=_CallbackPayloadId.model_validate(kwargs.get("standard_logging_object")).id,
+            )
         )
 
 
@@ -2280,14 +2296,14 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert not dispatched["kwargs"].get("response_cost")
         assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
-    async def _spend_row(
+    async def _logged_call(
         self,
         method: str,
         sub_route: str,
         request_body: dict[str, object],
         response_body: dict[str, object],
         litellm_call_id: str,
-    ) -> SpendLogsPayload:
+    ) -> _LoggedCall:
         url_route: Final = f"{RESPONSES_URL}{sub_route}"
         recorder: Final = _SpendRowRecorder()
         logging_obj: Final = LiteLLMLoggingObj(
@@ -2319,15 +2335,17 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             ),
             custom_llm_provider="openai",
         )
-        return await asyncio.wait_for(recorder.row, timeout=5)
+        return await asyncio.wait_for(recorder.call, timeout=5)
 
     @pytest.mark.asyncio
     async def test_unbilled_retrieve_spend_log_keeps_the_response_model(self, local_model_cost_map):
         response_body: Final = _stored_response("completed", False, RESPONSES_USAGE)
 
-        spend_log_row: Final = await self._spend_row(
-            "GET", f"/{STORED_RESPONSE_ID}", {}, response_body, "0f6f3d2e-6a51-4c4e-9a43-6f1b0d1e9c21"
-        )
+        spend_log_row: Final = (
+            await self._logged_call(
+                "GET", f"/{STORED_RESPONSE_ID}", {}, response_body, "0f6f3d2e-6a51-4c4e-9a43-6f1b0d1e9c21"
+            )
+        ).spend_row
 
         assert spend_log_row["model"] == response_body["model"]
         assert not spend_log_row["spend"]
@@ -2353,28 +2371,29 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
     async def test_billed_background_read_spend_log_survives_next_to_its_create_and_poll_rows(
         self, local_model_cost_map, method: str, sub_route: str, response_body: dict[str, object]
     ):
-        create_row: Final = await self._spend_row(
+        create: Final = await self._logged_call(
             "POST",
             "",
             {**CREATE_REQUEST, "background": True},
             _stored_response("queued", True, None),
             "3a4f0c1e-2b7d-4c55-8e0e-0d7a51d9f6a1",
         )
-        poll_row: Final = await self._spend_row(
+        poll: Final = await self._logged_call(
             "GET",
             f"/{STORED_RESPONSE_ID}",
             {},
             _stored_response("in_progress", True, None),
             "5d8c2f71-0e4b-4a9d-b3c6-7f1e2a9d0c44",
         )
-        read_row: Final = await self._spend_row(
+        read: Final = await self._logged_call(
             method, sub_route, {}, response_body, "9b2e6d40-71c3-4f8a-a5d2-4e3c8f0b7d12"
         )
 
-        assert read_row["request_id"] not in {create_row["request_id"], poll_row["request_id"]}
-        assert read_row["request_id"].startswith(STORED_RESPONSE_ID)
-        assert read_row["spend"] > 0
-        assert not poll_row["spend"]
+        assert read.spend_row["request_id"] not in {create.spend_row["request_id"], poll.spend_row["request_id"]}
+        assert read.spend_row["request_id"].startswith(STORED_RESPONSE_ID)
+        assert read.spend_row["spend"] > 0
+        assert not poll.spend_row["spend"]
+        assert read.callback_response_id == STORED_RESPONSE_ID
 
     @pytest.mark.parametrize(
         "base_url",
