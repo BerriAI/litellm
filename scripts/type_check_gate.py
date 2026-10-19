@@ -118,6 +118,17 @@ def count_basedpyright(payload: str, root: Path = REPO_ROOT) -> dict[str, int]:
             f"{payload[:500]}\n"
         )
         raise SystemExit(1) from exc
+    # TEMPORARY PR #47306 diagnostics (remove after identifying the location).
+    for diag in data.get("generalDiagnostics", []):
+        if diag.get("rule") == "reportUnknownVariableType" and "nvidia_nim" in str(diag.get("file", "")):
+            sys.stderr.write(
+                "PR47306 basedpyright diagnostic: "
+                + json.dumps(
+                    {"file": diag.get("file"), "range": diag.get("range"), "message": diag.get("message")},
+                    ensure_ascii=False,
+                )
+                + "\\n"
+            )
     counts: Counter[str] = Counter()
     for diag in data.get("generalDiagnostics", []):
         if diag.get("severity") != "error":
