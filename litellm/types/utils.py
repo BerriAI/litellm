@@ -1909,6 +1909,8 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
     server_tool_use: ServerToolUse | None = None
     cost: float | None = None
+    is_estimated: bool | None = None
+    """True when LiteLLM counted the tokens locally because the provider's usage never arrived."""
 
     completion_tokens_details: CompletionTokensDetailsWrapper | None = None
     """Breakdown of tokens used in a completion."""
@@ -2027,6 +2029,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
         ## DEEPSEEK MAPPING ##
         if "prompt_cache_hit_tokens" in params and isinstance(params["prompt_cache_hit_tokens"], int):
             self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
+
+        if "is_estimated" not in params:
+            del self.is_estimated
 
         for k, v in params.items():
             setattr(self, k, v)

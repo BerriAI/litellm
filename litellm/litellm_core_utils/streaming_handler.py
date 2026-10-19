@@ -267,6 +267,8 @@ class CustomStreamWrapper:
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
+        self.transport_error_after_finish_reason = False
+        self.estimated_usage_warned = False
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
@@ -2176,6 +2178,7 @@ class CustomStreamWrapper:
             if self.received_finish_reason is None:
                 await self.aclose()
                 self._log_stream_failure_and_raise(e)
+            self.transport_error_after_finish_reason = True
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
             await self.aclose()
@@ -2208,6 +2211,7 @@ class CustomStreamWrapper:
 
             response: Final = self.model_response_creator()
             if complete_streaming_response is not None:
+                self._mark_usage_estimated_after_transport_error(complete_streaming_response)
                 self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
                 setattr(
@@ -2294,6 +2298,26 @@ class CustomStreamWrapper:
             # cleaned up on the next __anext__() call; one that stops here
             # relies on aclose() or the best-effort __del__ guard.
             return processed_chunk
+
+    def _mark_usage_estimated_after_transport_error(self, complete_streaming_response: object) -> None:
+        if not self.transport_error_after_finish_reason:
+            return
+        received_chunks: Final = cast("Sequence[object]", self.chunks)  # cast-ok: untyped legacy list
+        if any(getattr(chunk, "usage", None) is not None for chunk in received_chunks):
+            return
+        usage: Final = getattr(complete_streaming_response, "usage", None)
+        if not isinstance(usage, Usage):
+            return
+        usage.is_estimated = True
+        if self.estimated_usage_warned:
+            return
+        self.estimated_usage_warned = True
+        verbose_logger.warning(
+            "Connection to %s dropped after finish_reason and before the usage chunk for request %s. "
+            "Usage was counted locally and is marked is_estimated=True; cached_tokens may be undercounted.",
+            self._hidden_params.get("api_base"),
+            self.logging_obj.litellm_call_id,
+        )
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
         traceback_exception: Final = traceback.format_exc()

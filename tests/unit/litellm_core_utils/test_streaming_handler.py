@@ -1,8 +1,9 @@
 import asyncio
 import json
+import logging
 import threading
 import time
-from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional
+from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, Sequence
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -4304,6 +4305,85 @@ async def test_transport_read_error_after_finish_reason_ends_stream_gracefully(
     ]
     assert finish_reasons == ["stop"]
     assert contents == ["Hello"]
+
+
+def _usage_test_chunk(prompt_tokens: int, cached_tokens: int) -> ModelResponseStream:
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    return ModelResponseStream(
+        id="chatcmpl-reset-test",
+        created=1783458104,
+        model="stub-model",
+        object="chat.completion.chunk",
+        choices=[],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=1,
+            total_tokens=prompt_tokens + 1,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
+
+
+async def _collect_usage_after_cut(logging_obj: Logging, model_responses: Sequence[ModelResponseStream]) -> Usage:
+    import httpx
+
+    response = CustomStreamWrapper(
+        completion_stream=TransportErrorAfterChunksIterator(
+            model_responses=model_responses,
+            exception=httpx.ReadError("Response payload is not completed"),
+        ),
+        model="hosted_vllm/stub-model",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+    usages = [chunk.usage for chunk in [c async for c in response] if getattr(chunk, "usage", None) is not None]
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()), return_exceptions=True)
+    assert len(usages) == 1
+    return usages[0]
+
+
+def _logged_usage(logging_obj: Logging) -> dict[str, object]:
+    logged: Final = logging_obj.model_call_details["standard_logging_object"]
+    return logged["response"]["usage"]
+
+
+@pytest.mark.asyncio
+async def test_stream_cut_before_usage_chunk_marks_usage_estimated(
+    logging_obj: Logging, caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        usage = await _collect_usage_after_cut(
+            logging_obj,
+            [_reset_test_chunk(content="Hello"), _reset_test_chunk(finish_reason="stop")],
+        )
+
+    assert usage.is_estimated is True
+    assert usage.prompt_tokens_details is None
+    assert _logged_usage(logging_obj)["is_estimated"] is True
+    assert sum("before the usage chunk" in record.getMessage() for record in caplog.records) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_cut_after_usage_chunk_keeps_provider_usage(
+    logging_obj: Logging, caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        usage = await _collect_usage_after_cut(
+            logging_obj,
+            [
+                _reset_test_chunk(content="Hello"),
+                _reset_test_chunk(finish_reason="stop"),
+                _usage_test_chunk(prompt_tokens=100, cached_tokens=90),
+            ],
+        )
+
+    assert getattr(usage, "is_estimated", None) is None
+    assert "is_estimated" not in _logged_usage(logging_obj)
+    assert usage.prompt_tokens == 100
+    assert usage.prompt_tokens_details is not None and usage.prompt_tokens_details.cached_tokens == 90
+    assert not any("before the usage chunk" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
