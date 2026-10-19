@@ -63,6 +63,21 @@ impl Pipeline {
     /// Runs every hook in order. When one refuses, the hooks before it are told the request
     /// ended with that refusal, and so are the observers.
     pub async fn admit(&self, request: Arc<RequestFacts>) -> Result<Admission, Refusal> {
+        let admitted = self.run_hooks(request).await;
+        // Refused or not, the request's facts outlive this call (in observer records, or for
+        // the whole response), and should not keep the connection's read buffer with them.
+        let request = match &admitted {
+            Ok(admission) => &admission.request,
+            Err((request, _)) => request,
+        };
+        request.release_body(self.observers.reads().contains(Facts::REQUEST_BODY));
+        admitted.map_err(|(_, refusal)| refusal)
+    }
+
+    async fn run_hooks(
+        &self,
+        request: Arc<RequestFacts>,
+    ) -> Result<Admission, (Arc<RequestFacts>, Refusal)> {
         let mut admission = Admission {
             request,
             edit: RequestEdit::default(),
@@ -84,8 +99,9 @@ impl Pipeline {
                         ended_at: SystemTime::now(),
                         interrupted: false,
                     };
+                    let request = Arc::clone(&admission.request);
                     self.finish(admission, outcome, None);
-                    return Err(refusal);
+                    return Err((request, refusal));
                 }
             }
         }
@@ -302,6 +318,55 @@ mod tests {
             *costs.0.lock().unwrap(),
             [(Some(20.0), Some(Value::from("b")))]
         );
+    }
+
+    struct Bodies;
+
+    impl Observer for Bodies {
+        fn name(&self) -> &'static str {
+            "bodies"
+        }
+
+        fn reads(&self) -> Facts {
+            Facts::REQUEST_BODY
+        }
+
+        fn observe<'a>(&'a self, _record: &'a Record) -> BoxFuture<'a, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    /// Hooks see the request as sent; afterwards the facts hold no slice of the read buffer,
+    /// only a copy when an observer reads the body.
+    #[rstest::rstest]
+    #[case::no_observer_reads_it(Vec::new(), b"")]
+    #[case::an_observer_reads_it(vec![Arc::new(Bodies) as Arc<dyn Observer>], b"{\"model\":\"m\"}")]
+    #[tokio::test]
+    async fn the_raw_body_is_released_after_the_hooks(
+        #[case] observers: Vec<Arc<dyn Observer>>,
+        #[case] kept: &[u8],
+    ) {
+        let buffer = Bytes::from_static(b"{\"model\":\"m\"} and the rest of the read buffer");
+        let raw = buffer.slice(..13);
+        let request = Arc::new(RequestFacts::new(
+            "r".into(),
+            Route::Messages,
+            None,
+            None,
+            "m".into(),
+            Arc::new(HeaderMap::new()),
+            false,
+            None,
+            raw.clone(),
+        ));
+        assert_eq!(request.body().as_ptr(), raw.as_ptr());
+        let pipeline = Pipeline::new(Vec::new(), Observers::start(observers, 8), Arc::default());
+        let admission = pipeline.admit(request).await.unwrap();
+
+        let body = admission.request().body();
+        assert_eq!(&body[..], kept);
+        assert!(body.is_empty() || body.as_ptr() != raw.as_ptr());
+        assert_eq!(admission.request().input_tokens(), 4);
     }
 
     #[tokio::test]
