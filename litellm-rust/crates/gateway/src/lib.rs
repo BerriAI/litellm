@@ -9,6 +9,7 @@ pub mod hooks;
 mod key_status;
 mod keys;
 pub mod metrics;
+pub mod model_capacity;
 pub mod rate_limits;
 pub mod request_hooks;
 mod secrets;

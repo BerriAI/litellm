@@ -128,6 +128,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ),
         ));
     }
+    if let Some(capacity) =
+        litellm_gateway::model_capacity::ModelCapacity::for_gateway(&config, coordination.clone())
+    {
+        hooks.push(Arc::new(capacity));
+    }
     hooks.extend(litellm_gateway::request_hooks::from_config(&config)?);
     let mut observers: Vec<Arc<dyn litellm_gateway_hooks::Observer>> = Vec::new();
     let spend = database.zip(litellm_gateway::spend::SpendSettings::from_config(&config));
