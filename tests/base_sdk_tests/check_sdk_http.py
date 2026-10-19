@@ -89,7 +89,6 @@ def payload(response: object) -> Mapping[str, JsonValue]:
     return JSON_OBJECT.validate_json(response.model_dump_json(exclude_none=True))
 
 
-@skipIf(importlib.util.find_spec("mcp") is None, "BUG: LIT-9333 completion(tools=...) imports optional mcp")
 def check_tools(base: str, asynchronous: bool = False) -> None:
     tools: Final = [
         {
@@ -122,7 +121,6 @@ def check_tools(base: str, asynchronous: bool = False) -> None:
     assert json.loads(body) == {"model": "gpt-6", "messages": MESSAGES, "tools": tools}
 
 
-@skipIf(importlib.util.find_spec("mcp") is None, "BUG: LIT-9333 responses() imports optional mcp")
 def check_responses(base: str, asynchronous: bool = False) -> None:
     output: Final[Sequence[JsonValue]] = [
         {
@@ -144,14 +142,15 @@ def check_responses(base: str, asynchronous: bool = False) -> None:
             "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
         }
     )
-    arguments: Final = dict(model="openai/gpt-6", input="ping", api_key="test-key", api_base=base + "/v1")
+    tools: Final = [{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}]
+    arguments: Final = dict(model="openai/gpt-6", input="ping", tools=tools, api_key="test-key", api_base=base + "/v1")
     response: Final = asyncio.run(litellm.aresponses(**arguments)) if asynchronous else litellm.responses(**arguments)
     assert payload(response)["output"] == output
     assert payload(response)["usage"] == {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
     path, headers, body = REQUESTS.get(timeout=10)
     assert path == "/v1/responses"
     assert headers["authorization"] == "Bearer test-key"
-    assert json.loads(body) == {"model": "gpt-6", "input": "ping"}
+    assert json.loads(body) == {"model": "gpt-6", "input": "ping", "tools": tools}
 
 
 @skipIf(importlib.util.find_spec("fastapi") is None, "BUG: LIT-9333 cache hits import proxy-only fastapi")

@@ -105,7 +105,7 @@ def check_completion() -> str:
 def check_completion_with_function_tool() -> str:
     import litellm
 
-    response = litellm.completion(
+    response: Final = litellm.completion(
         model="gpt-4o",
         messages=[{"role": "user", "content": "ping"}],
         tools=[
@@ -120,7 +120,7 @@ def check_completion_with_function_tool() -> str:
         ],
         mock_response="pong",
     )
-    content = response.choices[0].message.content
+    content: Final = response.choices[0].message.content
     _require(content == "pong", f"mock completion with a function tool returned {content!r}")
     return "mock completion with a function tool round-trips"
 

@@ -606,34 +606,30 @@ def anthropic_messages_handler(
         from litellm.llms.anthropic.pass_through.messages.mcp_handler import (
             anthropic_messages_with_mcp,
         )
-        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-            LiteLLM_Proxy_MCP_Handler,
-        )
 
-        if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
-            return anthropic_messages_with_mcp(
-                max_tokens=max_tokens,
-                messages=messages,
-                model=model,
-                metadata=metadata,
-                stop_sequences=stop_sequences,
-                stream=stream,
-                system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
-                    "str | None", system
-                ),
-                temperature=temperature,
-                thinking=thinking,
-                tool_choice=tool_choice,
-                tools=tools,
-                top_k=top_k,
-                top_p=top_p,
-                container=container,
-                api_key=api_key,
-                api_base=api_base,
-                client=client,
-                custom_llm_provider=custom_llm_provider,
-                **kwargs,
-            )
+        return anthropic_messages_with_mcp(
+            max_tokens=max_tokens,
+            messages=messages,
+            model=model,
+            metadata=metadata,
+            stop_sequences=stop_sequences,
+            stream=stream,
+            system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                "str | None", system
+            ),
+            temperature=temperature,
+            thinking=thinking,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_k=top_k,
+            top_p=top_p,
+            container=container,
+            api_key=api_key,
+            api_base=api_base,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
 
     anthropic_messages_provider_config: Final = _native_messages_config(
         model, custom_llm_provider, kwargs.get("model_info"), api_base

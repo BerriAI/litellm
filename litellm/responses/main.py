@@ -1223,13 +1223,6 @@ def _responses_try_dispatch_mcp_gateway(
     """Return a response when MCP gateway handles the call; otherwise None."""
     if skip_mcp_handler or not may_name_litellm_mcp_gateway(tools):
         return None
-
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-        LiteLLM_Proxy_MCP_Handler,
-    )
-
-    if not LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
-        return None
     mcp_call_kwargs: Final = {
         "model": model,
         "include": include,
