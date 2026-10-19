@@ -276,6 +276,13 @@ async fn harness() -> Harness {
       model: bedrock/{BEDROCK_MODEL}
       api_base: {upstream}
       api_key: bedrock-token
+  - model_name: bedrock-keys
+    litellm_params:
+      model: bedrock/{BEDROCK_MODEL}
+      aws_access_key_id: AKIACONFIGKEY
+      aws_secret_access_key: config-secret
+      aws_region_name: us-west-2
+      aws_bedrock_runtime_endpoint: {upstream}
   - model_name: claude-dropping
     litellm_params:
       model: anthropic/{ANTHROPIC_MODEL}
@@ -446,6 +453,24 @@ async fn anthropic_tool_round_trip() {
             {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}]},
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "sunny, 21C"}]}
         ])
+    );
+}
+
+#[tokio::test]
+async fn bedrock_signs_with_the_keys_region_and_endpoint_in_the_config() {
+    let harness = harness().await;
+    harness
+        .json(json!({"model": "bedrock-keys", "messages": answered("tooluse_1"), "max_tokens": 16}))
+        .await;
+
+    let sent = harness.sent();
+    assert_eq!(sent.len(), 1, "the configured endpoint gets the call");
+    assert!(sent[0].path.ends_with("/converse"), "{}", sent[0].path);
+    let authorization = sent[0].header("authorization").unwrap();
+    assert!(
+        authorization.starts_with("AWS4-HMAC-SHA256 Credential=AKIACONFIGKEY/")
+            && authorization.contains("/us-west-2/bedrock/aws4_request"),
+        "{authorization}"
     );
 }
 

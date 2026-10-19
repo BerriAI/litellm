@@ -187,23 +187,30 @@ fn split(mut body: Map<String, Value>) -> (Value, Map<String, Value>) {
 
 /// A deployment's connection for a provider chat translates. Python's router reads each
 /// `os.environ/` setting from the environment when it loads the deployment, and `completion`
-/// hands the Vertex AI settings to the call, where a request body cannot name them.
+/// hands the Vertex AI and AWS settings to the call, where a request body cannot name them.
 async fn connection(
     gateway: &Gateway,
     deployment: &Deployment,
     optional_params: &mut Map<String, Value>,
 ) -> Result<(Option<String>, Option<String>), Error> {
-    let vertex = match serde_json::to_value(&deployment.litellm_params.vertex) {
-        Ok(Value::Object(fields)) => fields,
-        _ => Map::new(),
-    };
+    // The Vertex AI and AWS settings both live in their own groups of `litellm_params`, not in
+    // `extra`, so each is copied into the call's params, where the provider config reads it.
+    let mut settings = Map::new();
+    for group in [
+        serde_json::to_value(&deployment.litellm_params.vertex),
+        serde_json::to_value(&deployment.litellm_params.aws),
+    ] {
+        if let Ok(Value::Object(fields)) = group {
+            settings.extend(fields);
+        }
+    }
     let references: Vec<&str> = [
         deployment.api_key.as_deref(),
         deployment.api_base.as_deref(),
     ]
     .into_iter()
     .flatten()
-    .chain(vertex.values().filter_map(Value::as_str))
+    .chain(settings.values().filter_map(Value::as_str))
     .filter_map(|value| value.strip_prefix(ENV_REFERENCE))
     .collect();
     let secrets = match references.is_empty() {
@@ -221,7 +228,7 @@ async fn connection(
         Some(name) => secrets.as_ref().and_then(|secrets| secrets.get(name)),
         None => Some(value.to_owned()),
     };
-    for (name, value) in vertex {
+    for (name, value) in settings {
         let value = match value {
             Value::String(text) => resolve(&text).map(Value::String),
             Value::Null => None,
