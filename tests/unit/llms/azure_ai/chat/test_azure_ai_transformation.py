@@ -1091,3 +1091,23 @@ def test_azure_ai_passes_dict_message_content_through_for_the_provider_to_judge(
     )
 
     assert request["messages"] == [{"role": "user", "content": content}]
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        {"filename": "notes.txt", "file_data": "data:text/plain;base64,aGVsbG8="},
+        {"file_id": "file-abc"},
+    ],
+    ids=["text_data_url", "file_id_only"],
+)
+def test_azure_ai_flattens_a_non_pdf_file_part_to_its_text_as_before(file: dict[str, str]):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Llama-3.3-70B-Instruct",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": file}]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "summarize"}]

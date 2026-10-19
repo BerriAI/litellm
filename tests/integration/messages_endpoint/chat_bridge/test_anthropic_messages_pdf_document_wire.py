@@ -2,12 +2,14 @@ import json
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 import anthropic
 import pytest
 from integration._support.client import Gateway, Scenario, string_value
 from integration._support.pdf_document import LETTER, Page, document, encoded, pdf_bytes
+from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -366,3 +368,54 @@ def test_prompt_security_still_sanitizes_a_messages_pdf_and_blocks_it_before_the
         )
         assert len(uploads) == 1, uploads
         assert pdf in uploads[0].body
+
+
+def _gigachat_reply(file_id: str) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.target.endswith("/files"):
+            return Reply(body=json.dumps({"id": file_id, "object": "file", "purpose": "general"}).encode())
+        return _chat_completion(f"chatcmpl-{file_id}", "GigaChat-Pro")
+
+    return respond
+
+
+def test_anthropic_sdk_pdf_document_reaches_gigachat_as_an_uploaded_attachment(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    file_id: Final = f"file-{marker}"
+    pdf: Final = pdf_bytes((Page(text=f"PELICAN-42 {marker}"), LETTER))
+    with (
+        wire_server(_gigachat_reply(file_id)) as wire,
+        owned_proxy_process(gateway, tmp_path, {"GIGACHAT_ACCESS_TOKEN": _API_KEY}) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="gigachat/GigaChat-Pro", api_base=f"{wire.url}/v1", api_key=_API_KEY)
+        client: Final = anthropic.Anthropic(
+            base_url=str(owned.gateway.client.base_url), api_key=owned.gateway.key, max_retries=0
+        )
+        message: Final = client.messages.create(
+            model=model,
+            max_tokens=64,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": encoded(pdf)},
+                        },
+                        {"type": "text", "text": f"What is the codeword? {marker}"},
+                    ],
+                }
+            ],
+        )
+        assert [(block.type, getattr(block, "text", None)) for block in message.content] == [("text", _ANSWER)]
+    upload, chat = (request for request in wire.drain() if request.method == "POST")
+    assert upload.target == "/v1/files", upload.target
+    assert upload.headers["authorization"] == f"Bearer {_API_KEY}", sorted(upload.headers)
+    assert pdf in upload.body
+    assert b"application/pdf" in upload.body
+    assert chat.target == "/v1/chat/completions", chat.target
+    turns: Final = _PARTS.validate_python(_JSON_OBJECT.validate_json(chat.body)["messages"])
+    assert turns[-1]["attachments"] == [file_id], chat.body

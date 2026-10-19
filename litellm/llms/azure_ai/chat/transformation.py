@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     content_parts,
     convert_content_list_to_str,
     filter_value_from_dict,
+    is_pdf_file_part,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
@@ -45,15 +46,15 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "cache_control",
 )
 
-LIST_ONLY_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_audio", "file"})
+LIST_ONLY_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_audio"})
 
 
 def _is_list_only_content_part(part: object) -> bool:
     match part:
-        case {"type": str() as part_type}:
-            return part_type in LIST_ONLY_CONTENT_PART_TYPES
+        case {"type": str() as part_type} if part_type in LIST_ONLY_CONTENT_PART_TYPES:
+            return True
         case _:
-            return False
+            return is_pdf_file_part(part)
 
 
 def _has_list_only_content_part(message: Mapping[str, object]) -> bool:
@@ -256,7 +257,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
             2. Transforms list content to a string.
-            3. If message contains an image, audio, or file part, send as is (user-intended)
+            3. If message contains an image, audio, or PDF file part, send as is (user-intended)
 
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
