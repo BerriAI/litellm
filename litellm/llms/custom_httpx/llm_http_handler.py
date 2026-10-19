@@ -2953,14 +2953,15 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers = responses_api_provider_config.validate_environment(
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
-            model=model,
-            litellm_params=litellm_params,
-        )
-
-        if extra_headers:
-            headers.update(extra_headers)
+        validated_headers: Final = {
+            **await asyncio.to_thread(
+                responses_api_provider_config.validate_environment,
+                headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+                model=model,
+                litellm_params=litellm_params,
+            ),
+            **(extra_headers or {}),
+        }
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
@@ -2976,7 +2977,7 @@ class BaseLLMHTTPHandler:
             input=input,
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,
-            headers=headers,
+            headers=validated_headers,
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
@@ -3011,7 +3012,7 @@ class BaseLLMHTTPHandler:
         headers, signed_body = await sign_request_off_loop_if_aws(
             responses_api_provider_config,
             responses_api_provider_config.sign_request,
-            headers=headers,
+            headers=validated_headers,
             optional_params=dict(litellm_params),
             request_data=data,
             api_base=api_base,
@@ -3145,8 +3146,11 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            responses_api_provider_config.validate_environment,
+            headers=extra_headers or {},
+            model="None",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -3399,8 +3403,11 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            responses_api_provider_config.validate_environment,
+            headers=extra_headers or {},
+            model="None",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -3563,8 +3570,11 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            responses_api_provider_config.validate_environment,
+            headers=extra_headers or {},
+            model="None",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -4620,8 +4630,11 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            responses_api_provider_config.validate_environment,
+            headers=extra_headers or {},
+            model="None",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -4795,12 +4808,15 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model=model, litellm_params=litellm_params
-        )
-
-        if extra_headers:
-            headers.update(extra_headers)
+        validated_headers: Final = {
+            **await asyncio.to_thread(
+                responses_api_provider_config.validate_environment,
+                headers=extra_headers or {},
+                model=model,
+                litellm_params=litellm_params,
+            ),
+            **(extra_headers or {}),
+        }
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -4816,14 +4832,14 @@ class BaseLLMHTTPHandler:
             response_api_optional_request_params=response_api_optional_request_params,
             api_base=api_base,
             litellm_params=litellm_params,
-            headers=headers,
+            headers=validated_headers,
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         headers, signed_body = await sign_request_off_loop_if_aws(
             responses_api_provider_config,
             responses_api_provider_config.sign_request,
-            headers=headers,
+            headers=validated_headers,
             optional_params=dict(litellm_params),
             request_data=data,
             api_base=url,
@@ -6991,7 +7007,8 @@ class BaseLLMHTTPHandler:
                 **kwargs,
             }
         )
-        headers: Final = responses_api_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            responses_api_provider_config.validate_environment,
             headers={},
             model=model,
             litellm_params=litellm_params,
