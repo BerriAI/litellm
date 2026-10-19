@@ -348,22 +348,19 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
         meta: Final[RerankResponseMeta] = {"billed_units": billed_units}
 
-        response: Final = RerankResponse(
+        # The hosted /v1/retrieval/{model}/reranking API rejects top_k.
+        # Sort before limiting in case the provider returns unsorted rankings.
+        # Work with the typed local results, not the Pydantic response attribute.
+        top_n: Final[int | None] = self._client_side_top_n
+        if top_n is not None and len(results) > top_n:
+            results.sort(key=lambda result: result["relevance_score"], reverse=True)
+            del results[top_n:]
+
+        return RerankResponse(
             id=_STR.validate_python(payload.get("id") or str(uuid.uuid4())),
             results=results,
             meta=meta,
         )
-
-        # The hosted /v1/retrieval/{model}/reranking API rejects top_k.
-        # Sort before limiting in case the provider returns unsorted rankings.
-        top_n: Final[int | None] = self._client_side_top_n
-        if top_n is not None and response.results is not None and len(response.results) > top_n:
-            response.results = sorted(
-                response.results,
-                key=lambda result: result["relevance_score"],
-                reverse=True,
-            )[:top_n]
-        return response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BaseLLMException(
