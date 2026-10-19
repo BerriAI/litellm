@@ -47779,6 +47779,34 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0
     },
+    "tsubasa/tsubasa-fast": {
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 2.0000000000000002e-07,
+        "output_cost_per_token": 1e-06,
+        "litellm_provider": "tsubasa",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_response_schema": false,
+        "supports_vision": false,
+        "supports_reasoning": false
+    },
+    "tsubasa/tsubasa-pro": {
+        "max_input_tokens": 32768,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "tsubasa",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_response_schema": false,
+        "supports_vision": false,
+        "supports_reasoning": false
+    },
     "together_ai/BAAI/bge-base-en-v1.5": {
         "input_cost_per_token": 8e-09,
         "litellm_provider": "together_ai",
@@ -76083,32 +76111,22 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "tsubasa/tsubasa-fast": {
-        "max_input_tokens": 32768,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 2.0000000000000002e-07,
-        "output_cost_per_token": 1e-06,
-        "litellm_provider": "tsubasa",
-        "mode": "chat",
-        "supports_system_messages": true,
-        "supports_function_calling": false,
-        "supports_parallel_function_calling": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_reasoning": false
-    },
-    "tsubasa/tsubasa-pro": {
-        "max_input_tokens": 32768,
-        "max_output_tokens": 16384,
-        "input_cost_per_token": 5e-07,
-        "output_cost_per_token": 4e-06,
-        "litellm_provider": "tsubasa",
-        "mode": "chat",
-        "supports_system_messages": true,
-        "supports_function_calling": false,
-        "supports_parallel_function_calling": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_reasoning": false
+    "meta/muse-image-1.0": {
+        "litellm_provider": "meta",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
     }
 }
