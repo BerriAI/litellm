@@ -68,6 +68,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    KUBERNETES_POD_ROUTING_KEY,
     MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
@@ -4606,6 +4607,7 @@ class Router:
         deployment_that_just_failed: Final = _deployment_that_just_failed(
             _FALLBACK_HOP_ADAPTER.validate_python(kwargs).get(metadata_variable_name)
         )
+        routing: Final = deployment.get(KUBERNETES_POD_ROUTING_KEY)
 
         kwargs.setdefault(metadata_variable_name, {}).update(
             {
@@ -4613,8 +4615,16 @@ class Router:
                 "model_info": model_info,
                 "api_base": deployment_api_base,
                 "deployment_model_name": deployment_model_name,
+                KUBERNETES_POD_ROUTING_KEY: routing,
             }
         )
+        other_bucket: Final = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
+        other_bucket_metadata: Final = kwargs.get(other_bucket)
+        if isinstance(other_bucket_metadata, Mapping) and KUBERNETES_POD_ROUTING_KEY in other_bucket_metadata:
+            kwargs[other_bucket] = {  # rebind-ok: this method updates the router's request kwargs in place
+                **other_bucket_metadata,
+                KUBERNETES_POD_ROUTING_KEY: routing,
+            }
 
         # A retry/fallback reuses this same kwargs dict for the next deployment.
         # Refund and clear any reservation the previous deployment attempt left

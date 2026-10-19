@@ -10,6 +10,13 @@ export const LOGS_SORT_FIELD_MAP = {
 
 export type LogsSortField = keyof typeof LOGS_SORT_FIELD_MAP;
 
+export type KubernetesPodRouting = {
+  service_host: string;
+  pod_ip: string;
+  pod_count: number;
+  selection: "round_robin" | "session_affinity" | "session_affinity_retry";
+};
+
 export type LogEntry = {
   request_id: string;
   litellm_call_id?: string | null;
@@ -29,7 +36,9 @@ export type LogEntry = {
   user?: string;
   end_user?: string;
   custom_llm_provider?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, any> & {
+    kubernetes_pod_routing?: KubernetesPodRouting | null;
+  };
   cache_hit: string;
   cache_key?: string;
   request_tags?: Record<string, any>;

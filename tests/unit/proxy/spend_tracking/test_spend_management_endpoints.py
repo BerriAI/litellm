@@ -3748,7 +3748,18 @@ class TestSpendLogsPayload:
                 }
             )
 
-            differences = _compare_nested_dicts(payload, expected_payload, ignore_keys=ignored_keys)
+            expected_payload_with_pod_routing: Final[SpendLogsPayload] = {
+                **expected_payload,
+                "metadata": expected_payload["metadata"].replace(
+                    '"routing_decision": null, ',
+                    '"routing_decision": null, "kubernetes_pod_routing": null, ',
+                ),
+            }
+            differences = _compare_nested_dicts(
+                payload,
+                expected_payload_with_pod_routing,
+                ignore_keys=ignored_keys,
+            )
             if differences:
                 pytest.fail(f"Dictionary mismatch: {differences}")
 

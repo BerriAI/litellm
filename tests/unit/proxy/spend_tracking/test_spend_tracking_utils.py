@@ -14,7 +14,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 import litellm.constants as litellm_constants
 import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
-from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_GENERATED_METADATA_KEY, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_GENERATED_METADATA_KEY, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
@@ -74,6 +74,89 @@ def _get_additional_usage_values_for_usage(usage: litellm.Usage) -> dict:
     )
     metadata = json.loads(payload["metadata"])
     return metadata["additional_usage_values"]
+
+
+@pytest.mark.parametrize(
+    ("metadata", "litellm_metadata", "expected"),
+    [
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {},
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.1",
+                "pod_count": 3,
+                "selection": "round_robin",
+            },
+        ),
+        (
+            {},
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.2",
+                    "pod_count": 3,
+                    "selection": "session_affinity",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.2",
+                "pod_count": 3,
+                "selection": "session_affinity",
+            },
+        ),
+        (
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.1",
+                    "pod_count": 3,
+                    "selection": "round_robin",
+                }
+            },
+            {
+                "kubernetes_pod_routing": {
+                    "service_host": "vllm-headless.ns.svc.cluster.local",
+                    "pod_ip": "10.0.0.3",
+                    "pod_count": 3,
+                    "selection": "session_affinity_retry",
+                }
+            },
+            {
+                "service_host": "vllm-headless.ns.svc.cluster.local",
+                "pod_ip": "10.0.0.3",
+                "pod_count": 3,
+                "selection": "session_affinity_retry",
+            },
+        ),
+    ],
+)
+def test_get_logging_payload_includes_kubernetes_pod_routing(
+    metadata: dict[str, object],
+    litellm_metadata: dict[str, object],
+    expected: dict[str, object],
+) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert json.loads(payload["metadata"])[KUBERNETES_POD_ROUTING_KEY] == expected
+    assert _get_spend_logs_metadata(None)["kubernetes_pod_routing"] is None
 
 
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
