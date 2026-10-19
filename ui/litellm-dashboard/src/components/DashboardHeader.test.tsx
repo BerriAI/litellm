@@ -35,7 +35,7 @@ vi.mock("@/components/liteadmin/LiteAdmin", () => ({ default: () => <button>Lite
 const renderDashboardHeader = () =>
   render(
     <CommandPaletteProvider>
-      <DashboardHeader />
+      <DashboardHeader accessToken={null} />
     </CommandPaletteProvider>,
   );
 
@@ -133,7 +133,7 @@ describe("DashboardHeader breadcrumb", () => {
     state.isDesktop = true;
     rerender(
       <CommandPaletteProvider>
-        <DashboardHeader />
+        <DashboardHeader accessToken={null} />
       </CommandPaletteProvider>,
     );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
@@ -141,7 +141,7 @@ describe("DashboardHeader breadcrumb", () => {
     state.isDesktop = false;
     rerender(
       <CommandPaletteProvider>
-        <DashboardHeader />
+        <DashboardHeader accessToken={null} />
       </CommandPaletteProvider>,
     );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();

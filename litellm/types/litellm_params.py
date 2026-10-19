@@ -67,6 +67,7 @@ class ProviderConnection:
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    responses_api_version: str | None = None
     region_name: str | None = None
     headers: Mapping[str, str] | None = None
     provider_specific_header: "ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None" = None
@@ -182,6 +183,7 @@ class DeploymentOptions:
     tpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    kubernetes_pod_discovery: bool | None = None
     default_api_key_rpm_limit: int | None = None
     default_api_key_tpm_limit: int | None = None
     max_parallel_requests: int | None = None
@@ -260,6 +262,7 @@ class PromptOptions:
     prompt_label: str | None = None
     litellm_system_prompt: str | None = None
     custom_prompt_dict: Mapping[str, object] | None = None
+    initial_prompt_value: str | None = None
     roles: Mapping[str, object] | None = None
     final_prompt_value: str | None = None
     bos_token: str | None = None

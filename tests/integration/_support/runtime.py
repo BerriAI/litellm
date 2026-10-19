@@ -26,7 +26,15 @@ async def worker_readiness() -> JSONResponse:
     )
 
 
+async def worker_deployment_ids(model_name: str) -> JSONResponse:
+    from litellm.proxy.proxy_server import llm_router
+
+    model_ids: Final = [] if llm_router is None else llm_router.get_model_ids(model_name=model_name)
+    return JSONResponse(content={"model_ids": model_ids}, headers={"x-integration-worker-pid": str(os.getpid())})
+
+
 def configure_readiness() -> None:
     from litellm.proxy.proxy_server import app
 
     app.add_api_route("/health/integration-readiness", worker_readiness, include_in_schema=False)
+    app.add_api_route("/health/integration-deployment-ids", worker_deployment_ids, include_in_schema=False)
