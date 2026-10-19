@@ -3,12 +3,15 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
 from .models import CaseDisposition, Coverage, HarnessCase, HarnessRun, SdkFunction, Surface
 from .rendering import StrategyRenderer
+
+if TYPE_CHECKING:
+    from click import Command
 
 UpdateCallback: TypeAlias = Callable[[HarnessRun], None]
 NonBlankString: TypeAlias = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -90,3 +93,13 @@ class StrategyDefinition:
     render: StrategyRenderer
     surfaces: tuple[Surface, ...] = ()
     runner_argument: RunnerArgumentDefinition | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryStrategyDefinition:
+    id: str
+    order: int
+    label: str
+    description: str
+    directory: Path
+    command: Callable[[Path], Command]

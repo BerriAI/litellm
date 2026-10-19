@@ -5,13 +5,16 @@ import importlib
 import importlib.util
 import pkgutil
 import sys
+from itertools import product
 from pathlib import Path
 from types import ModuleType
-from typing import Final
+from typing import Final, TypeAlias
 
 from .. import strategies as _strategies_package
 from ..shared.reporting.models import SDK_FUNCTIONS, SURFACES, CaseDisposition, HarnessCase, Strategy
-from ..shared.reporting.strategy import StrategyDefinition
+from ..shared.reporting.strategy import RepositoryStrategyDefinition, StrategyDefinition
+
+CatalogStrategy: TypeAlias = Strategy | RepositoryStrategyDefinition
 
 _STRATEGIES_PACKAGE: Final = _strategies_package
 STRATEGIES_ROOT: Final = Path(_STRATEGIES_PACKAGE.__path__[0])
@@ -39,15 +42,19 @@ def _synthetic_module_name(folder: Path) -> str:
     return f"_harness_strategy_{folder.name}_{digest}"
 
 
-def _load_strategy(name: str, folder: Path, prefix: str | None) -> Strategy:
+def _load_strategy(name: str, folder: Path, prefix: str | None) -> CatalogStrategy:
     module: Final = _load_strategy_module(name, folder, prefix)
     definition: Final = getattr(module, "STRATEGY", None)
-    if not isinstance(definition, StrategyDefinition):
-        raise ValueError(f"{folder}: __init__.py must export STRATEGY: StrategyDefinition")
+    if not isinstance(definition, (StrategyDefinition, RepositoryStrategyDefinition)):
+        raise ValueError(
+            f"{folder}: __init__.py must export STRATEGY: StrategyDefinition or RepositoryStrategyDefinition"
+        )
     if definition.id != name:
         raise ValueError(f"{folder}: strategy id {definition.id!r} must match folder name {name!r}")
     if definition.directory.resolve() != folder.resolve():
         raise ValueError(f"{folder}: strategy directory must be {folder}")
+    if isinstance(definition, RepositoryStrategyDefinition):
+        return definition
     if len(set(definition.surfaces)) != len(definition.surfaces) or any(
         surface not in SURFACES for surface in definition.surfaces
     ):
@@ -56,9 +63,7 @@ def _load_strategy(name: str, folder: Path, prefix: str | None) -> Strategy:
     duplicates: Final = tuple(sorted(key for key in set(keys) if keys.count(key) > 1))
     if duplicates:
         raise ValueError(f"{folder}: duplicate strategy cases: {duplicates}")
-    expected: Final = frozenset(
-        (surface, function) for surface in (definition.surfaces or (None,)) for function in SDK_FUNCTIONS
-    )
+    expected: Final = frozenset(product(definition.surfaces or (None,), SDK_FUNCTIONS))
     actual: Final = frozenset(keys)
     if actual != expected:
         missing: Final = tuple(sorted(expected - actual))
@@ -94,7 +99,7 @@ def _load_strategy(name: str, folder: Path, prefix: str | None) -> Strategy:
     )
 
 
-def load_catalog(root: Path | None = None) -> tuple[Strategy, ...]:
+def load_catalog(root: Path | None = None) -> tuple[CatalogStrategy, ...]:
     resolved: Final = STRATEGIES_ROOT if root is None else root
     prefix: Final = _STRATEGIES_PACKAGE.__name__ if resolved == STRATEGIES_ROOT else None
     folders: Final = tuple(info.name for info in pkgutil.iter_modules([str(resolved)]) if info.ispkg)

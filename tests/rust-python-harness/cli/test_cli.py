@@ -22,8 +22,12 @@ from ..shared.reporting.ui import PlainDashboard, final_report, make_dashboard
 from ..strategies.unit_tests_parity import UNIT_PARITY_SUITES
 from ..strategies.unit_tests_rust import RUST_SUITES
 from . import main
-from .catalog import STRATEGIES_ROOT, load_catalog
+from .catalog import STRATEGIES_ROOT, CatalogStrategy, load_catalog
 from .commands import REPO_ROOT, select_cases
+
+
+def _sdk_strategies(strategies: Sequence[CatalogStrategy]) -> tuple[Strategy, ...]:
+    return tuple(strategy for strategy in strategies if isinstance(strategy, Strategy))
 
 
 def _strategy_source(
@@ -84,16 +88,17 @@ def _write_strategy_folder(
     return folder
 
 
-def test_should_load_surface_aware_and_function_only_strategies() -> None:
+def test_should_load_test_and_repository_strategies() -> None:
     strategies: Final = load_catalog()
 
     assert [strategy.id for strategy in strategies] == [
+        "drift",
         "e2e_parity",
         "trace_parity",
         "unit_tests_parity",
         "unit_tests_rust",
     ]
-    for strategy in strategies:
+    for strategy in _sdk_strategies(strategies):
         expected: Final = tuple(
             (surface, function) for surface in (strategy.definition.surfaces or (None,)) for function in SDK_FUNCTIONS
         )
@@ -102,7 +107,9 @@ def test_should_load_surface_aware_and_function_only_strategies() -> None:
 
 def test_unit_strategies_use_function_only_cases() -> None:
     strategies: Final = {
-        strategy.id: strategy for strategy in load_catalog() if strategy.id in {"unit_tests_parity", "unit_tests_rust"}
+        strategy.id: strategy
+        for strategy in _sdk_strategies(load_catalog())
+        if strategy.id in {"unit_tests_parity", "unit_tests_rust"}
     }
 
     for sdk_function in SDK_FUNCTIONS:
@@ -122,7 +129,7 @@ def test_unit_strategies_use_function_only_cases() -> None:
 
 
 def test_raw_dashboard_is_always_the_default() -> None:
-    assert isinstance(make_dashboard(load_catalog()), PlainDashboard)
+    assert isinstance(make_dashboard(_sdk_strategies(load_catalog())), PlainDashboard)
 
 
 def test_every_strategy_folder_complies() -> None:
@@ -132,7 +139,7 @@ def test_every_strategy_folder_complies() -> None:
     }
 
     assert folders == {strategy.id for strategy in strategies}
-    for strategy in strategies:
+    for strategy in _sdk_strategies(strategies):
         definition: Final = strategy.definition
         assert isinstance(definition, StrategyDefinition)
         assert definition.directory == strategy.directory
@@ -201,7 +208,7 @@ def test_should_reject_an_unavailable_case_with_a_blank_reason(
 
 
 def test_should_select_functions_and_surfaces() -> None:
-    strategy: Final = next(strategy for strategy in load_catalog() if strategy.id == "e2e_parity")
+    strategy: Final = next(strategy for strategy in _sdk_strategies(load_catalog()) if strategy.id == "e2e_parity")
 
     assert tuple(case.key for case in select_cases((strategy,), {"messages"})) == (
         "e2e_parity:messages",
@@ -240,7 +247,7 @@ def test_every_unavailable_case_finishes_and_explains_itself() -> None:
     }
     unavailable: Final = tuple(
         (strategy, case)
-        for strategy in load_catalog()
+        for strategy in _sdk_strategies(load_catalog())
         for case in strategy.cases
         if case.spec.disposition is not CaseDisposition.RUNNABLE
     )
@@ -283,6 +290,7 @@ def test_run_help_lists_all_and_every_strategy(capsys: pytest.CaptureFixture[str
         "trace_parity",
         "unit_tests_parity",
         "unit_tests_rust",
+        "drift",
     ):
         assert command in captured.out
 
@@ -292,6 +300,8 @@ def test_run_help_lists_all_and_every_strategy(capsys: pytest.CaptureFixture[str
     (
         ("list",),
         ("check",),
+        ("drift",),
+        ("run", "drift", "--function", "messages"),
         ("run", "--strategy", "unit_tests_parity"),
         ("run", "unit_tests_parity", "--surface", "sdk"),
         ("run", "unit_tests_parity", "--plain"),
@@ -473,3 +483,11 @@ def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixtu
     assert exit_code == 0
     assert "- messages: not_implemented" in captured.out
     assert "unit_tests_rust:messages: not_implemented" not in captured.out
+
+
+def test_drift_help_exposes_inventory_options(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code: Final = main(("run", "drift", "--help"))
+    captured: Final = capsys.readouterr()
+
+    assert exit_code == 0
+    assert all(option in captured.out for option in ("--target", "--manifest", "--since", "--output"))
