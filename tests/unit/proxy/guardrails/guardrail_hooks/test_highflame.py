@@ -7,6 +7,7 @@ path under test — notably that it raises on every non-2xx status, which is how
 (401) and defer (425) verdicts arrive.
 """
 
+import datetime
 import json
 from collections.abc import Callable, Mapping, Sequence
 
@@ -18,6 +19,8 @@ import pytest
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import GuardrailRaisedException
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.llms.pass_through.guardrail_translation.handler import PassThroughEndpointHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.highflame.highflame import (
@@ -31,7 +34,7 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import ChatCompletionMessageToolCall, Function
+from litellm.types.utils import CallTypes, ChatCompletionMessageToolCall, Function
 from litellm.types.utils import (
     Choices,
     Delta,
@@ -629,6 +632,61 @@ class TestThroughTheProxyHooks:
         assert exc.value.message == "Highflame blocked this response: secret in output"
         assert fake.guard_requests[0]["content"] == "sk-live-123"
         assert fake.guard_requests[0]["action"] == "process_response"
+
+
+def _logging_obj(call_type: str) -> LiteLLMLogging:
+    return LiteLLMLogging(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+
+
+class TestPassThrough:
+    """The pass-through handler forwards the original payload, so a redaction there must block."""
+
+    @pytest.mark.asyncio
+    async def test_redaction_of_a_pass_through_request_blocks(self):
+        fake = FakeHighflame({"decision": "modify", "redacted_content": "ssn [SSN]"})
+
+        with pytest.raises(GuardrailRaisedException) as exc:
+            await PassThroughEndpointHandler().process_input_messages(
+                data={"prompt": "ssn 123-45-6789"},
+                guardrail_to_apply=_guardrail(fake),
+                litellm_logging_obj=_logging_obj(CallTypes.pass_through.value),
+            )
+
+        assert exc.value.blocked_content is True
+
+    @pytest.mark.asyncio
+    async def test_redaction_of_a_pass_through_response_blocks(self):
+        fake = FakeHighflame({"decision": "modify", "redacted_content": "ssn [SSN]"})
+
+        with pytest.raises(GuardrailRaisedException) as exc:
+            await PassThroughEndpointHandler().process_output_response(
+                response={"output": "ssn 123-45-6789"},
+                guardrail_to_apply=_guardrail(fake),
+                litellm_logging_obj=_logging_obj(CallTypes.pass_through.value),
+            )
+
+        assert exc.value.blocked_content is True
+
+    @pytest.mark.asyncio
+    async def test_redaction_still_applies_outside_pass_through(self):
+        fake = FakeHighflame({"decision": "modify", "redacted_content": "ssn [SSN]"})
+
+        result = await _guardrail(fake).apply_guardrail(
+            inputs={"texts": ["ssn 123-45-6789"]},
+            request_data={},
+            input_type="request",
+            logging_obj=_logging_obj(CallTypes.completion.value),
+        )
+
+        assert result["texts"] == ["ssn [SSN]"]
 
 
 class TestStreaming:
