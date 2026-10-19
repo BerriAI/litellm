@@ -1,4 +1,4 @@
-# One image with every load-test tool: mockllm, loadgen, genconfig, summarize, procmon.
+# One image with every load-test tool: mockllm, loadgen, genconfig, summarize, procmon, verify, s3stub.
 #   docker build -t litellm-loadtest litellm-rust/loadtest
 #   docker run litellm-loadtest mockllm -addr :9000
 FROM golang:1.24.7-bookworm@sha256:b8bae5bd9ba9b1f89b635c91c24cc75cea335a16fb5076310f38566fc674b1ec AS build

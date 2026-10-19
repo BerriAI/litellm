@@ -84,6 +84,8 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
                     custom_llm_provider: None,
                     extra_headers: None,
                     timeout: None,
+                    drop_params: Some(false),
+                    model_info: None,
                 },
                 &(),
                 Some(observer.clone()),
@@ -254,6 +256,8 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
                 custom_llm_provider: None,
                 extra_headers: None,
                 timeout: None,
+                drop_params: Some(false),
+                model_info: None,
             },
             &hooks,
             None,
@@ -319,6 +323,8 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
             messages:json!([{"role":"user","content":"hello"}]),
             optional_params:json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap().clone(),
             api_key:None,api_base:Some(&upstream.uri()),custom_llm_provider:None,extra_headers:None,timeout:None,
+            drop_params: Some(false),
+            model_info: None,
         }, &hooks, None).await.unwrap();
         assert_eq!(
             serde_json::to_value(response).unwrap()["usage"]["total_tokens"],

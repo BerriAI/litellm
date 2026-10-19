@@ -82,7 +82,7 @@ pub(super) fn standard_logging_payload(
     let outcome = &record.outcome;
     let deployment = outcome.deployment.as_ref();
     let succeeded = record.succeeded();
-    let body: Map<String, Value> = serde_json::from_slice(request.body()).unwrap_or_default();
+    let body: Map<String, Value> = serde_json::from_slice(&request.body()).unwrap_or_default();
     let response = match succeeded {
         true => response(record),
         false => Value::Object(Map::new()),

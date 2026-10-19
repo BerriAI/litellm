@@ -6,11 +6,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-cache-response.workspace = true
 litellm-core-utils.workspace = true
+litellm-framer.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true
@@ -20,17 +22,16 @@ litellm-secrets.workspace = true
 reqwest.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true, features = ["time"] }
+tokio-util = { version = "0.7", features = ["codec"] }
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 litellm-cache-memory.workspace = true
-litellm-framer.workspace = true
 litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-inference-testing.workspace = true
 litellm-tracing.workspace = true
 rstest.workspace = true
-tokio-util = { version = "0.7", features = ["codec"] }
 tokio = { workspace = true, features = ["io-util", "sync"] }
 wiremock.workspace = true

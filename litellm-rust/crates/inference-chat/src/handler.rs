@@ -29,7 +29,7 @@ pub(super) async fn execute(
         config,
         url,
         body,
-        stream_shape: _,
+        stream_shape,
         optional_params,
         environment,
         secrets,
@@ -122,7 +122,7 @@ pub(super) async fn execute(
                 ))
             })?;
             config
-                .transform_response(&model, ProviderChatResponseData { body })
+                .transform_response(&model, ProviderChatResponseData { body }, &stream_shape)
                 .map_err(Error::from)
                 .map_err(as_response_error)
         },
@@ -229,6 +229,8 @@ mod tests {
                 custom_llm_provider: None,
                 extra_headers: None,
                 timeout: None,
+                drop_params: Some(false),
+                model_info: None,
             })
             .unwrap(),
             std::sync::Arc::new(|_: &str| None),

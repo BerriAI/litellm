@@ -1,20 +1,20 @@
 use litellm_secrets::source::Secrets;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use litellm_auth::SecretValue;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment,
     chat::{streaming::StreamShape, transformation::BaseConfig},
+    model_info::ModelInfo,
 };
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
 /// A `/chat/completions` call as it crosses into the core.
 ///
-/// `optional_params` arrives already mapped to the provider's own parameter
-/// names by the host, exactly as the messages route receives an already
-/// Anthropic-shaped body. The core owns the conversation translation, the
-/// provider call, and the response normalization.
+/// `optional_params` are the OpenAI request's own params; the provider config maps them,
+/// refusing what the provider cannot take unless `drop_params` says to drop it. The core
+/// owns the conversation translation, the provider call, and the response normalization.
 pub struct ChatCompletionsRequest<'a> {
     pub model: &'a str,
     pub messages: Value,
@@ -24,6 +24,11 @@ pub struct ChatCompletionsRequest<'a> {
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    /// `drop_params` from the deployment or the proxy settings, `None` when neither says. A
+    /// request's own `drop_params` rides in `optional_params`.
+    pub drop_params: Option<bool>,
+    /// The model cost map, for the param rules that read model capabilities.
+    pub model_info: Option<Arc<dyn ModelInfo>>,
 }
 
 pub struct ChatCompletionsCall {
@@ -35,6 +40,11 @@ pub struct ChatCompletionsCall {
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    /// `drop_params` from the deployment or the proxy settings, `None` when neither says. A
+    /// request's own `drop_params` rides in `optional_params`.
+    pub drop_params: Option<bool>,
+    /// The model cost map, for the param rules that read model capabilities.
+    pub model_info: Option<Arc<dyn ModelInfo>>,
 }
 
 impl From<ChatCompletionsRequest<'_>> for ChatCompletionsCall {
@@ -48,6 +58,8 @@ impl From<ChatCompletionsRequest<'_>> for ChatCompletionsCall {
             custom_llm_provider: request.custom_llm_provider.map(str::to_owned),
             extra_headers: request.extra_headers,
             timeout: request.timeout,
+            drop_params: request.drop_params,
+            model_info: request.model_info,
         }
     }
 }
@@ -62,6 +74,11 @@ pub struct ResolvedChatCompletionsRequest<'a> {
     pub api_base: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    /// `drop_params` from the deployment or the proxy settings, `None` when neither says. A
+    /// request's own `drop_params` rides in `optional_params`.
+    pub drop_params: Option<bool>,
+    /// The model cost map, for the param rules that read model capabilities.
+    pub model_info: Option<Arc<dyn ModelInfo>>,
 }
 
 pub struct ProviderChatCompletionsRequest {

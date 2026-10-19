@@ -21,28 +21,48 @@ pub enum LlmProviders {
     Bedrock,
     #[strum(serialize = "bedrock_mantle")]
     BedrockMantle,
+    #[strum(serialize = "cerebras")]
+    Cerebras,
     #[strum(serialize = "cohere")]
     Cohere,
     #[strum(serialize = "deepseek")]
     Deepseek,
     #[strum(serialize = "edenai")]
     Edenai,
+    #[strum(serialize = "fireworks_ai")]
+    FireworksAi,
+    /// Google AI Studio (`gemini/<model>`), the Gemini API addressed with an API key.
+    #[strum(serialize = "gemini")]
+    Gemini,
+    #[strum(serialize = "groq")]
+    Groq,
+    /// A vLLM server (`hosted_vllm/<model>`) at the deployment's `api_base`.
+    #[strum(serialize = "hosted_vllm")]
+    HostedVllm,
     #[strum(serialize = "minimax")]
     Minimax,
     #[strum(serialize = "mistral")]
     Mistral,
+    #[strum(serialize = "nvidia_nim")]
+    NvidiaNim,
     #[strum(serialize = "openai")]
     Openai,
     #[strum(serialize = "openai_like")]
     OpenaiLike,
     #[strum(serialize = "openrouter")]
     Openrouter,
+    #[strum(serialize = "perplexity")]
+    Perplexity,
     #[strum(serialize = "reducto")]
     Reducto,
     #[strum(serialize = "tencent")]
     Tencent,
+    #[strum(serialize = "together_ai")]
+    TogetherAi,
     #[strum(serialize = "vertex_ai")]
     VertexAi,
+    #[strum(serialize = "xai")]
+    Xai,
 }
 
 pub fn get_custom_llm_provider<'a>(
