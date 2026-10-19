@@ -754,6 +754,40 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         assert request_data["response_cost"] == pytest.approx(expected_input_cost)
 
     @pytest.mark.asyncio
+    async def test_client_disconnect_after_dispatch_is_priced_at_input_rate(self):
+        from datetime import datetime
+
+        from fastapi import HTTPException
+
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True,
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(
+            request_data,
+            original_exception=HTTPException(
+                status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail="Client disconnected the request"
+            ),
+        )
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected_input_cost, _ = litellm.cost_per_token(model="gpt-3.5-turbo", prompt_tokens=estimated.prompt_tokens)
+        assert expected_input_cost > 0
+        assert request_data["response_cost"] == pytest.approx(expected_input_cost)
+
+    @pytest.mark.asyncio
     async def test_connect_timeout_never_reached_the_provider_stays_zero_cost(self):
         from datetime import datetime
 
