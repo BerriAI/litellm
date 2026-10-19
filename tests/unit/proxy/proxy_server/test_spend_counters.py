@@ -1378,7 +1378,6 @@ async def test_ensure_spend_counter_initialized_concurrent_cold_seeds_do_not_dou
     assert fake_cache.redis_cache.async_increment.call_count == 0
 
 
-
 # ---------------------------------------------------------------------------
 # _get_source_cache_base_spend
 # ---------------------------------------------------------------------------

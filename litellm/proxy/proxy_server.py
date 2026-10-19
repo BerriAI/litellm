@@ -3941,33 +3941,32 @@ async def ensure_spend_counter_initialized(
         )
         if db_spend is None:
             # DB unavailable - fall back to in-process cache (may be stale).
-            async with await SpendCounterReseed._get_lock(counter_key):
+            async with await SpendCounterReseed._get_lock(counter_key):  # pyright: ignore[reportPrivateUsage]  # per-counter lock shared with SpendCounterReseed
                 if await _is_spend_counter_cache_warm(counter_key=counter_key):
                     return
                 base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
                 if base_spend > 0:
                     if spend_counter_cache.redis_cache is not None:
-                        seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(
+                        seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(  # pyright: ignore[reportUnknownMemberType]  # async_set_cache is partially unknown
                             key=counter_key,
                             value=base_spend,
                             nx=True,
                         )
-                        if seeded:
-                            current_value = float(base_spend)
-                        else:
-                            cached: Final = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-                            current_value = float(cached) if cached is not None else float(base_spend)
-                        spend_counter_cache.in_memory_cache.set_cache(
+                        cached: Final = (
+                            None if seeded else await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)  # pyright: ignore[reportUnknownMemberType]  # async_get_cache is partially unknown
+                        )
+                        current_value: Final = float(cached) if cached is not None else float(base_spend)
+                        spend_counter_cache.in_memory_cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # set_cache is partially unknown
                             key=counter_key,
                             value=current_value,
                         )
                         record_spend_counter_value(counter_key, current_value)
                     else:
-                        cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                        cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # get_cache is partially unknown
                         seeded_spend: Final = (
-                            max(base_spend, float(cached_spend)) if cached_spend is not None else base_spend
+                            max(base_spend, float(cached_spend)) if cached_spend is not None else base_spend  # pyright: ignore[reportUnknownArgumentType]  # cached_spend is partially unknown
                         )
-                        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded_spend)
+                        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded_spend)  # pyright: ignore[reportUnknownMemberType]  # set_cache is partially unknown
                         record_spend_counter_value(counter_key, seeded_spend)
 
 
