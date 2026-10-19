@@ -224,9 +224,12 @@ class _OriginalToolNames:
 
 
 def _restorable_names(names: Iterable[str]) -> Mapping[str, str]:
-    return MappingProxyType(
-        {truncate_tool_name(name): name for name in names if len(name) > OPENAI_MAX_TOOL_NAME_LENGTH}
+    listed: Final = tuple(names)
+    taken: Final = frozenset(listed)
+    shortened: Final = tuple(
+        (truncate_tool_name(name), name) for name in listed if len(name) > OPENAI_MAX_TOOL_NAME_LENGTH
     )
+    return MappingProxyType({alias: name for alias, name in shortened if alias not in taken})
 
 
 def _original_tool_names(request: Mapping[str, object]) -> _OriginalToolNames:

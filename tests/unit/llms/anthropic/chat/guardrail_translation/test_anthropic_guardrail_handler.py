@@ -2799,6 +2799,12 @@ class TestLongToolNamesSurviveTheWriteBack:
 
         assert [tool["name"] for tool in data["tools"]] == ["ToolSearch", self._LONG_NAMES["searched"], alias]
         assert data["tool_choice"] == {"type": "tool", "name": alias}
+        assert data["messages"][1]["content"][2] == {
+            "type": "tool_use",
+            "id": "toolu_02",
+            "name": alias,
+            "input": {"page": 2},
+        }
 
     async def test_history_tool_with_the_same_shortened_name_cannot_rename_a_declared_tool(self):
         declared, historical = (
