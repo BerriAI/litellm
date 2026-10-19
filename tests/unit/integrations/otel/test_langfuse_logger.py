@@ -474,7 +474,9 @@ def test_a_callers_trace_user_id_still_wins_over_the_proxy_end_user():
     ],
     ids=["end-user-stays-off", "caller-trace-user-as-before"],
 )
-def test_a_root_another_v2_logger_started_gets_only_the_callers_trace_user(metadata, expected_root_user):
+def test_a_root_another_v2_logger_started_gets_only_the_callers_trace_user(
+    metadata: dict[str, str], expected_root_user: str | None
+) -> None:
     first, first_exporter = _logger(mappers=("genai",))
     langfuse, _ = _logger()
     root: Final = _start_root(first)
