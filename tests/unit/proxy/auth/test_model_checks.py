@@ -1323,7 +1323,8 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
             "*", "openai/*", "openai/gpt-partial-route-9*", set(), id="provider-prefixed-key-filter-over-catch-all"
         ),
         pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
-        pytest.param("*", "gemini/gemini-partial-route-9*", None, {_ROUTE_GEMINI_ID}, id="catch-all-over-partial-id"),
+        pytest.param("*", "gemini/gemini-partial-route-9*", None, set(), id="catch-all-over-mid-word-deployment"),
+        pytest.param("*", "openai/responses/gpt-partial-route-9*", None, set(), id="catch-all-over-mid-word-route"),
         pytest.param(
             "*", "gemini/gemini-partial-route-9-flash*", None, set(), id="catch-all-whose-only-match-is-its-fixed-text"
         ),
@@ -1390,6 +1391,8 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
     ]
     assert unrouted_ids == []
     assert all(v1_models) and all(model_info_names)
+    if model_name == "*":
+        assert [listed_id for listed_id in v1_models if not routed_model(listed_id).endswith(f"/{listed_id}")] == []
     assert listed_v1_models == sorted(reachable)
     if key_model is None:
         assert listed_model_info_names == sorted(reachable)

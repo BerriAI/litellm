@@ -296,10 +296,16 @@ def _without_routing_segments(
     return "/".join(segments[len(routing_segments) :])
 
 
+def _lists_name_fragments(name_pattern: str, deployment_pattern: str) -> bool:
+    return name_pattern == "*" and not deployment_pattern.partition("*")[0].endswith("/")
+
+
 def _ids_routing_to_catalog_models(
     name_pattern: str, deployment_pattern: str, provider: str, catalog_ids: Sequence[str]
 ) -> tuple[str, ...]:
-    if name_pattern.count("*") != deployment_pattern.count("*"):
+    if name_pattern.count("*") != deployment_pattern.count("*") or _lists_name_fragments(
+        name_pattern, deployment_pattern
+    ):
         return ()
     provider_id_prefix: Final = f"{provider}/"
     provider_model_ids: Final = tuple(catalog_id.removeprefix(provider_id_prefix) for catalog_id in catalog_ids)
