@@ -43,6 +43,6 @@ dependencies:
     version: 0.1.0-dev.0
     repository: oci://ghcr.io/berriai/charts
   - name: k8s-aibom
-    version: "1.5.1"
+    version: "1.6.0"
     repository: oci://ghcr.io/googlecloudplatform/charts
     condition: k8s-aibom.enabled
