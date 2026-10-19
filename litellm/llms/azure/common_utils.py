@@ -46,7 +46,6 @@ class _AsyncAzureClientParams(TypedDict, total=False, extra_items=object):
 
 
 _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AsyncAzureClientParams)
-_AZURE_TOKEN_PROVIDER_ADAPTER: Final = TypeAdapter(Callable[[], str])
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -136,10 +135,11 @@ def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
 
 
 def _async_azure_ad_token_provider(
-    sync_provider: Callable[[], str],
+    provider: Callable[[], str | Awaitable[str]],
 ) -> Callable[[], Awaitable[str]]:
     async def async_provider() -> str:
-        return await asyncio.to_thread(sync_provider)
+        token: Final = await asyncio.to_thread(provider)
+        return token if isinstance(token, str) else await token
 
     return async_provider
 
@@ -607,7 +607,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 or v1_client_params.get("azure_ad_token")
             )
             v1_api_key: Final[str | Callable[[], str | Awaitable[str]] | None] = (
-                _async_azure_ad_token_provider(_AZURE_TOKEN_PROVIDER_ADAPTER.validate_python(v1_token_provider))
+                _async_azure_ad_token_provider(v1_token_provider)
                 if _is_async is True and callable(v1_token_provider)
                 else v1_token_provider
             )
@@ -639,11 +639,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 async_azure_client_params_with_threaded_provider: Final[_AsyncAzureClientParams] = (
                     {
                         **async_azure_client_params,
-                        "azure_ad_token_provider": _async_azure_ad_token_provider(
-                            _AZURE_TOKEN_PROVIDER_ADAPTER.validate_python(async_token_provider_candidate)
-                        ),
+                        "azure_ad_token_provider": _async_azure_ad_token_provider(async_token_provider_candidate),
                     }
-                    if callable(async_token_provider_candidate)
+                    if async_token_provider_candidate is not None
                     else async_azure_client_params
                 )
                 openai_client = AsyncAzureOpenAI(**async_azure_client_params_with_threaded_provider)

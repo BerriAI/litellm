@@ -2217,6 +2217,48 @@ async def test_non_v1_azure_token_refresh_does_not_block_the_event_loop():
         await client.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(monkeypatch, api_version):
+    import httpx
+
+    def echo_authorization(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": request.headers["authorization"]},
+                    }
+                ],
+            },
+        )
+
+    async def async_token_provider() -> str:
+        return "async-token"
+
+    monkeypatch.setattr(
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(echo_authorization))
+    )
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=None,
+        api_base=f"https://async-token-provider-{api_version}.openai.azure.com",
+        api_version=api_version,
+        litellm_params={"azure_ad_token_provider": async_token_provider},
+        _is_async=True,
+    )
+
+    response: Final = await client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "Bearer async-token"
+
+
 def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):
     """`initialize_azure_sdk_client` puts `litellm.aclient_session` on the SDK client.
 
