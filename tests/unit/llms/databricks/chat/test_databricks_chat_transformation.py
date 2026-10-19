@@ -27,6 +27,7 @@ from litellm.llms.databricks.chat.transformation import (
     _sanitize_empty_content,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponseStream
 import asyncio
 from unittest.mock import Mock
 from litellm._version import version
@@ -2462,3 +2463,114 @@ def test_databricks_claude_drops_the_openai_tool_search_tool_under_drop_params(m
     assert mapped["tools"] == [
         {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}}
     ]
+
+
+_JSON_TOOL_ARGUMENT_FRAGMENTS: Final = ("", "", '{"name": ', '"Ada"', ', "met', 'a": ', "{}", ', "tags": []}')
+_RECORD_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "Record",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "meta": {"type": "object"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["name", "meta", "tags"],
+        },
+    },
+}
+
+
+def _json_tool_call_frame(delta: dict[str, object], finish_reason: str | None = None) -> bytes:
+    chunk: Final = {
+        "id": "msg_1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "databricks-claude-haiku-5-5",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(chunk)}\n\n".encode()
+
+
+def _json_tool_call_stream() -> bytes:
+    opening: Final = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "index": 0,
+                "id": "toolu_1",
+                "type": "function",
+                "function": {"name": "json_tool_call", "arguments": _JSON_TOOL_ARGUMENT_FRAGMENTS[0]},
+            }
+        ],
+    }
+    fragments: Final = tuple(
+        _json_tool_call_frame({"tool_calls": [{"index": 0, "type": "function", "function": {"arguments": fragment}}]})
+        for fragment in _JSON_TOOL_ARGUMENT_FRAGMENTS[1:]
+    )
+    return b"".join(
+        (
+            _json_tool_call_frame(opening),
+            *fragments,
+            _json_tool_call_frame({}, finish_reason="tool_calls"),
+            b"data: [DONE]\n\n",
+        )
+    )
+
+
+def _json_tool_call_completion() -> dict[str, object]:
+    tool_call: Final = {
+        "id": "toolu_1",
+        "type": "function",
+        "function": {"name": "json_tool_call", "arguments": "".join(_JSON_TOOL_ARGUMENT_FRAGMENTS)},
+    }
+    return {
+        "id": "msg_1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "databricks-claude-haiku-5-5",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+    }
+
+
+async def _collect_async_stream(request: dict[str, object]) -> list[ModelResponseStream]:
+    return [chunk async for chunk in await litellm.acompletion(**request, stream=True)]
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+def test_claude_json_schema_stream_returns_the_non_stream_answer(respx_mock: respx.MockRouter, call: str) -> None:
+    respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_json_tool_call_completion()),
+            httpx.Response(200, content=_json_tool_call_stream(), headers={"content-type": "text/event-stream"}),
+        ]
+    )
+    request: Final[dict[str, object]] = {
+        "model": "databricks/databricks-claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Return name Ada, an empty meta object, and empty tags."}],
+        "response_format": _RECORD_RESPONSE_FORMAT,
+        "api_base": DATABRICKS_API_BASE,
+        "api_key": DATABRICKS_API_KEY,
+    }
+
+    answer: Final = litellm.completion(**request).choices[0]
+    chunks: Final = (
+        list(litellm.completion(**request, stream=True))
+        if call == "completion"
+        else asyncio.run(_collect_async_stream(request))
+    )
+    choices: Final = tuple(chunk.choices[0] for chunk in chunks if chunk.choices)
+
+    assert "".join(choice.delta.content or "" for choice in choices) == answer.message.content
+    assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
+    assert not any(choice.delta.tool_calls for choice in choices)

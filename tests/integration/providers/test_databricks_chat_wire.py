@@ -757,8 +757,6 @@ class _OutputItem(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     type: str
     content: tuple[_OutputPart, ...] = ()
-    name: str | None = None
-    arguments: str | None = None
 
 
 class _ResponsesBody(BaseModel):
@@ -787,7 +785,6 @@ class _MessagesDelta(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     type: str | None = None
     text: str | None = None
-    partial_json: str | None = None
 
 
 class _MessagesEvent(BaseModel):
@@ -796,20 +793,9 @@ class _MessagesEvent(BaseModel):
     delta: _MessagesDelta | None = None
 
 
-class _FunctionDelta(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-    arguments: str | None = None
-
-
-class _ToolCallDelta(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-    function: _FunctionDelta | None = None
-
-
 class _StreamDelta(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     content: str | None = None
-    tool_calls: tuple[_ToolCallDelta, ...] | None = None
 
 
 class _StreamChoice(BaseModel):
@@ -910,32 +896,15 @@ def _outage_or_reply(request: Request) -> Reply:
 
 
 def _item_text(item: _OutputItem) -> str:
-    match item.type:
-        case "message":
-            return "".join(part.text or "" for part in item.content)
-        case "function_call" if item.name == "json_tool_call":
-            return item.arguments or ""
-        case _:
-            return ""
+    return "".join(part.text or "" for part in item.content) if item.type == "message" else ""
 
 
 def _responses_text(body: _ResponsesBody) -> str:
     return "".join(_item_text(item) for item in body.output)
 
 
-def _chat_delta_text(delta: _StreamDelta) -> str:
-    calls: Final = delta.tool_calls or ()
-    return (delta.content or "") + "".join(call.function.arguments or "" for call in calls if call.function is not None)
-
-
 def _messages_delta_text(delta: _MessagesDelta) -> str:
-    match delta.type:
-        case "text_delta":
-            return delta.text or ""
-        case "input_json_delta":
-            return delta.partial_json or ""
-        case _:
-            return ""
+    return delta.text or "" if delta.type == "text_delta" else ""
 
 
 def _final_text(endpoint: _Endpoint, content: bytes) -> str:
@@ -954,7 +923,7 @@ def _streamed_text(endpoint: _Endpoint, data: tuple[str, ...]) -> str:
             assert data[-1] == "[DONE]", data
             chunks: Final = tuple(_StreamChunk.model_validate_json(line) for line in data[:-1])
             choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
-            return "".join(_chat_delta_text(choice.delta) for choice in choices)
+            return "".join(choice.delta.content or "" for choice in choices)
         case "responses":
             events: Final = tuple(_ResponsesEvent.model_validate_json(line) for line in data if line != "[DONE]")
             completed: Final = tuple(event.response for event in events if event.type == "response.completed")
