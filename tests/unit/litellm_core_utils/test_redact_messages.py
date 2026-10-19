@@ -51,6 +51,7 @@ SIGNATURE: Final = "opaque-thought-signature"
 def _provider_fields() -> dict[str, object]:
     return {
         "reasoning_content": SECRET,
+        "reasoning": SECRET,
         "thinking_blocks": [{"type": "thinking", "thinking": SECRET}],
         "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
         "citations": [{"cited_text": SECRET}],
