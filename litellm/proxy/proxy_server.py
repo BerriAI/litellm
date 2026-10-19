@@ -368,6 +368,11 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    deployment_drops_params,
+    drop_non_string_tool_result_texts,
+    malformed_tool_result_count_error,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
@@ -4189,7 +4194,6 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
 def update_cache_read_keys(
     user_id: str | None,
     end_user_id: str | None,
-    team_id: str | None,
     tags: Sequence[object] | None,
     response_cost: float | None,
 ) -> tuple[str, ...]:
@@ -4197,9 +4201,8 @@ def update_cache_read_keys(
         return ()
     user_keys: tuple[str, ...] = (user_id, GLOBAL_PROXY_SPEND_CACHE_KEY) if user_id is not None else ()
     end_user_keys: tuple[str, ...] = (end_user_cache_key(end_user_id),) if end_user_id is not None else ()
-    team_keys: tuple[str, ...] = (f"team_id:{team_id}",) if team_id is not None else ()
     tag_keys: tuple[str, ...] = tuple(tag_cache_key(tag) for tag in tags or () if isinstance(tag, str) and tag)
-    return user_keys + end_user_keys + team_keys + tag_keys
+    return user_keys + end_user_keys + tag_keys
 
 
 _UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
@@ -4276,7 +4279,7 @@ async def update_cache(
     with service_target(AUTH_OBJECTS_TARGET):
         cached_values: Final = await _read_update_cache_values(
             keys=update_cache_read_keys(
-                user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
+                user_id=user_id, end_user_id=end_user_id, tags=tags, response_cost=response_cost
             ),
             parent_otel_span=parent_otel_span,
         )
@@ -4426,35 +4429,28 @@ async def update_cache(
             )
 
     ### UPDATE TEAM SPEND ###
-    async def _update_team_cache():
+    def _update_team_cache():
         if team_id is None or response_cost is None:
             return
 
         _id: Final = f"team_id:{team_id}"
         try:
-            cached_team: Final = cached_values.get(_id)
-            if cached_team is None:
-                # do nothing if team not in api key cache
-                return
-            existing_spend_obj: Final[LiteLLM_TeamTableCachedObj | None] = CacheCodec.deserialize(
-                cached_team, LiteLLM_TeamTableCachedObj
+            current_team: Final = CacheCodec.deserialize(
+                user_api_key_cache.get_cache(key=_id, local_only=True), LiteLLM_TeamTableCachedObj
             )
-            if existing_spend_obj is None:
+            if current_team is None:
                 return
             verbose_proxy_logger.debug(
-                "_update_team_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
+                "_update_team_db: existing spend: %s; response_cost: %s", current_team, response_cost
             )
-
-            existing_spend: Final[float] = existing_spend_obj.spend or 0.0
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend: Final = existing_spend + response_cost
-
-            existing_spend_obj.spend = new_spend
-            values_to_update_in_cache.append(
-                (
-                    _id,
-                    CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_TeamTableCachedObj),
-                )
+            user_api_key_cache.set_cache(
+                key=_id,
+                value=CacheCodec.serialize(
+                    current_team.model_copy(update={"spend": (current_team.spend or 0.0) + response_cost}),
+                    model_type=LiteLLM_TeamTableCachedObj,
+                ),
+                local_only=True,
+                ttl=get_management_object_ttl(user_api_key_cache),
             )
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -4531,7 +4527,7 @@ async def update_cache(
             await _update_end_user_cache()
 
         if team_id is not None:
-            await _update_team_cache()
+            _update_team_cache()
 
         if tags is not None:
             await _update_tag_cache()
@@ -14716,6 +14712,32 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+_DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _deployment_with_request_drop_params(
+    deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
+    drop_params: object,
+) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
+    if drop_params is None:
+        return deployment
+    resolved_deployment: Final = deployment or {}
+    litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
+    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+
+
+def _counted_request_messages(
+    messages: Sequence[dict[str, object]] | None,  # mutable-ok: TokenCountRequest.messages is typed list[dict]
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> list[dict[str, object]] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes list messages
+    if messages is None:
+        return None
+    if messages_format != "anthropic":
+        return list(messages)
+    return list(drop_non_string_tool_result_texts(messages, deployment_drops_params(deployment)))
+
+
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
@@ -15082,11 +15104,6 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 )
 
 
-def _drops_params(deployment: Mapping[str, object] | None) -> bool:
-    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
-    return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
-
-
 _ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
 
 
@@ -15095,7 +15112,7 @@ def _estimable_contents(contents: Sequence[Mapping[str, object]]) -> bool:
     return all(set(as_str_mapping(part) or ()) <= _ESTIMABLE_GOOGLE_PART_KEYS for part in parts)
 
 
-def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
+def _router_default_litellm_params(router: Router | None) -> Mapping[str, object]:
     defaults: Final[Mapping[str, object] | None] = getattr(router, "default_litellm_params", None)
     if defaults is None:
         return {}
@@ -15216,8 +15233,10 @@ async def count_request_tokens(
         if _model is not None:
             model_to_use = _model
 
+    sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
+    count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
     conversation_empty: Final = not messages and not contents
-    if prompt and not conversation_empty and not _drops_params(deployment):
+    if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(
             message="prompt cannot be sent with messages or contents. Set drop_params to count them without the prompt",
             type="invalid_request_error",
@@ -15225,6 +15244,7 @@ async def count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     ladder: Final = (
@@ -15235,9 +15255,9 @@ async def count_request_tokens(
                 _try_provider_token_count,
                 provider_counter,
                 custom_llm_provider,
-                messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
+                messages=[{"role": "user", "content": prompt}] if prompt_as_message else request_messages,
                 contents=None if prompt_as_message else contents,
-                deployment=deployment,
+                deployment=count_deployment,
                 request_model=request.model,
                 tools=tools,
                 system=system,
@@ -15252,6 +15272,10 @@ async def count_request_tokens(
     )
     if isinstance(ladder, TokenCountResponse):
         return ladder
+
+    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
+    if local_count_error is not None:
+        raise ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
@@ -15273,7 +15297,7 @@ async def count_request_tokens(
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else messages),
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
@@ -19999,9 +20023,9 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
     "personal_key_model_access_from_teams": {
         "type": "Boolean",
         "description": (
-            "Caps each personal key (a key with no team) to the models its owner's current teams can call, "
-            "re-evaluated on every request. A user in no team gets no model access. A user in several teams "
-            "can call any model one of those teams can call. Team keys are unaffected."
+            "Caps each personal key (a key with no team) to the models, MCP servers, MCP tools and agents its "
+            "owner's current teams can reach, re-evaluated on every request. A user in no team gets none of them. "
+            "A user in several teams gets the union of what those teams grant. Team keys are unaffected."
         ),
     },
     "max_ui_session_budget": {

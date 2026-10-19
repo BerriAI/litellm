@@ -74,6 +74,10 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     compaction_summary,
     summary_only_compaction_content,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -320,10 +324,12 @@ BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
 
 
-def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object]) -> str:
+def _cost_row_request_id_suffix(
+    call_type: str, metadata: Mapping[str, object], settles_background_response: bool
+) -> str:
     if call_type == CallTypes.aretrieve_batch.value:
         return BATCH_COST_REQUEST_ID_SUFFIX
-    if (
+    if settles_background_response or (
         call_type in NON_INFERENCE_CALL_TYPES
         and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
     ):
@@ -332,7 +338,7 @@ def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object]) 
 
 
 def get_spend_logs_id(
-    call_type: str, response_obj: dict, kwargs: dict, metadata: Mapping[str, object] = EMPTY_MAPPING
+    call_type: str, response_obj: dict, kwargs: Mapping[str, object], metadata: Mapping[str, object] = EMPTY_MAPPING
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
@@ -345,7 +351,10 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
-    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata)}"
+    settles_background_response: Final = (
+        kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES
+    )
+    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, settles_background_response)}"
 
 
 _MISSING_ATTRIBUTE: Final = object()
