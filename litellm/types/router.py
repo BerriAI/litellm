@@ -502,7 +502,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     itpm: int | None = None
     otpm: int | None = None
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
-    stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
+    stream_timeout: float | str | None = None
     max_retries: int | None = None
     drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
@@ -719,6 +720,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     use_chat_completions_api: bool | None
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
+    kubernetes_pod_discovery: ReadOnly[bool | None]
     litellm_credential_name: str | None
     ## UNIFIED PROJECT/REGION ##
     region_name: str | None

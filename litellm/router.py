@@ -68,6 +68,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    KUBERNETES_POD_ROUTING_KEY,
     MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
@@ -81,6 +82,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
@@ -139,6 +141,7 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
+from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.complexity_router.context_compaction import (
@@ -264,6 +267,13 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.router_utils.kubernetes_pod_discovery import (
+    KubernetesPodDiscovery,
+    async_resolve_pods_after,
+    async_resolve_pods_after_bound,
+    resolve_pods_after,
+    resolve_pods_after_bound,
+)
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
@@ -287,6 +297,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     deployment_has_io_token_limits,
     refund_stale_reservation_before_retry,
     set_io_token_rate_limit_request_kwargs,
+    without_io_token_limits,
 )
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
@@ -346,6 +357,7 @@ from litellm.types.router import (
     DiscoveredDeploymentModelInfo,
     FallbackAccessCheck,
     FallbackBudgetCheck,
+    GenericLiteLLMParams,
     GuardrailTypedDict,
     LiteLLM_Params,
     LiteLLMParamsTypedDict,
@@ -510,6 +522,7 @@ _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
 CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_binding"
 
 _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
+_STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -548,6 +561,10 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DEPLOYMENT_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | GenericLiteLLMParams]] = TypeAdapter(
+    Mapping[str, object] | GenericLiteLLMParams
+)
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
@@ -1280,6 +1297,7 @@ class Router:
         cache_config: Final[dict[str, Any]] = {}
 
         self.client_ttl = client_ttl
+        self.kubernetes_pod_discovery: Final = KubernetesPodDiscovery()
         if redis_url is not None or (redis_host is not None and redis_port is not None):
             cache_type = "redis"
 
@@ -2945,7 +2963,7 @@ class Router:
                 ).start()
 
             kwargs.setdefault("messages", messages)
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
             model_name = litellm_params["model"]
             potential_model_client: Final = self._get_client(deployment=deployment, kwargs=kwargs)
@@ -4288,7 +4306,7 @@ class Router:
                 )
 
             kwargs.setdefault("messages", messages)
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
 
             model_name = litellm_params["model"]
@@ -4369,12 +4387,15 @@ class Router:
 
                 return response
         except litellm.Timeout as e:
-            deployment_request_timeout_param: Final = _timeout_debug_deployment_dict.get("litellm_params", {}).get(
-                "request_timeout", None
+            deployment_litellm_params: Final[Mapping[str, object]] = _timeout_debug_deployment_dict.get(
+                "litellm_params", {}
             )
-            deployment_timeout_param = _timeout_debug_deployment_dict.get("litellm_params", {}).get("timeout", None)
             if litellm.expose_router_debug_in_errors:
-                e.message += f"\n\nDeployment Info: request_timeout: {deployment_request_timeout_param}\ntimeout: {deployment_timeout_param}"
+                e.message += (
+                    f"\n\nDeployment Info: request_timeout: {deployment_litellm_params.get('request_timeout')}"
+                    f"\ntimeout: {deployment_litellm_params.get('timeout')}"
+                    f"\nstream_timeout: {deployment_litellm_params.get('stream_timeout')}"
+                )
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
@@ -4553,6 +4574,7 @@ class Router:
         deployment: dict,
         kwargs: dict,
         function_name: str | None = None,
+        splits_stream_timeout: bool = False,
     ) -> None:
         """
         4 jobs:
@@ -4585,6 +4607,7 @@ class Router:
         deployment_that_just_failed: Final = _deployment_that_just_failed(
             _FALLBACK_HOP_ADAPTER.validate_python(kwargs).get(metadata_variable_name)
         )
+        routing: Final = deployment.get(KUBERNETES_POD_ROUTING_KEY)
 
         kwargs.setdefault(metadata_variable_name, {}).update(
             {
@@ -4592,8 +4615,16 @@ class Router:
                 "model_info": model_info,
                 "api_base": deployment_api_base,
                 "deployment_model_name": deployment_model_name,
+                KUBERNETES_POD_ROUTING_KEY: routing,
             }
         )
+        other_bucket: Final = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
+        other_bucket_metadata: Final = kwargs.get(other_bucket)
+        if isinstance(other_bucket_metadata, Mapping) and KUBERNETES_POD_ROUTING_KEY in other_bucket_metadata:
+            kwargs[other_bucket] = {  # rebind-ok: this method updates the router's request kwargs in place
+                **other_bucket_metadata,
+                KUBERNETES_POD_ROUTING_KEY: routing,
+            }
 
         # A retry/fallback reuses this same kwargs dict for the next deployment.
         # Refund and clear any reservation the previous deployment attempt left
@@ -4670,14 +4701,35 @@ class Router:
                 if self.request_timeout is not None
                 else self.default_litellm_params.get("stream_timeout")
             )
-            kwargs["timeout"] = resolve_llm_passthrough_timeout(
-                kwargs=kwargs,
+            passthrough_timeout: Final = partial(
+                resolve_llm_passthrough_timeout,
                 litellm_params=deployment["litellm_params"],
                 router_timeout=_router_timeout,
                 router_stream_timeout=_router_stream_timeout,
             )
+            kwargs.update(
+                CompletionTimeout.stream_request_kwargs(
+                    passthrough_timeout(kwargs={**kwargs, "stream": False}), passthrough_timeout(kwargs=kwargs)
+                )
+                if splits_stream_timeout and kwargs.get("stream")
+                else {"timeout": passthrough_timeout(kwargs=kwargs)}
+            )
+        elif splits_stream_timeout:
+            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+            deployment_params: Final = _DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+            kwargs.update(
+                CompletionTimeout.stream_request_kwargs(
+                    self._get_non_stream_timeout(kwargs=request_kwargs, data=deployment_params),
+                    self._get_stream_timeout(kwargs=request_kwargs, data=deployment_params)
+                    if request_kwargs.get("stream")
+                    else None,
+                )
+            )
         else:
-            kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
+            kwargs["timeout"] = self._get_timeout(
+                kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                data=_DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]),
+            )
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
@@ -4714,7 +4766,9 @@ class Router:
 
         return model_client
 
-    def _get_stream_timeout(self, kwargs: dict, data: dict) -> float | int | None:
+    def _get_stream_timeout(
+        self, kwargs: Mapping[str, object], data: Mapping[str, object] | GenericLiteLLMParams
+    ) -> object:
         """Helper to get stream timeout from kwargs or deployment params"""
         return (
             kwargs.get("stream_timeout", None)  # the params dynamically set by user
@@ -4724,9 +4778,11 @@ class Router:
             or self.default_litellm_params.get("stream_timeout", None)
         )
 
-    def _get_non_stream_timeout(self, kwargs: dict, data: dict) -> float | int | None:
+    def _get_non_stream_timeout(
+        self, kwargs: Mapping[str, object], data: Mapping[str, object] | GenericLiteLLMParams
+    ) -> object:
         """Helper to get non-stream timeout from kwargs or deployment params"""
-        timeout: Final = (
+        return (
             kwargs.get("timeout", None)  # the params dynamically set by user
             or kwargs.get("request_timeout", None)  # the params dynamically set by user
             or data.get("timeout", None)  # timeout set on litellm_params for this deployment
@@ -4735,18 +4791,11 @@ class Router:
             or self.timeout  # timeout set on router (router_settings.timeout)
             or self.default_litellm_params.get("timeout", None)
         )
-        return timeout
 
-    def _get_timeout(self, kwargs: dict, data: dict) -> float | int | None:
+    def _get_timeout(self, kwargs: Mapping[str, object], data: Mapping[str, object] | GenericLiteLLMParams) -> object:
         """Helper to get timeout from kwargs or deployment params"""
-        timeout: float | int | None = None
-        if kwargs.get("stream", False):
-            timeout = self._get_stream_timeout(kwargs=kwargs, data=data)
-        if timeout is None:
-            timeout = self._get_non_stream_timeout(
-                kwargs=kwargs, data=data
-            )  # default to this if no stream specific timeout set
-        return timeout
+        stream_timeout: Final = self._get_stream_timeout(kwargs=kwargs, data=data) if kwargs.get("stream") else None
+        return stream_timeout if stream_timeout is not None else self._get_non_stream_timeout(kwargs=kwargs, data=data)
 
     async def abatch_completion(
         self,
@@ -5088,6 +5137,8 @@ class Router:
                 }
             )
         litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
+        caller_timeout: Final = kwargs.get("timeout") or kwargs.get("request_timeout")
+        caller_stream_timeout: Final = kwargs.get("stream_timeout")
         specific_deployment: Final = kwargs.pop("specific_deployment", None)
         prompt_management_deployment: Final = await self.async_get_available_deployment(
             model=model,
@@ -5096,7 +5147,9 @@ class Router:
             request_kwargs=kwargs,
         )
 
-        self._update_kwargs_with_deployment(deployment=prompt_management_deployment, kwargs=kwargs)
+        self._update_kwargs_with_deployment(
+            deployment=prompt_management_deployment, kwargs=kwargs, splits_stream_timeout=True
+        )
         data: Final = prompt_management_deployment["litellm_params"].copy()
 
         litellm_model: Final = data.get("model", None)
@@ -5158,7 +5211,21 @@ class Router:
             kwargs.pop("original_function")
             return await litellm.acompletion(**kwargs)
 
-        return await self.async_function_with_fallbacks(**kwargs)
+        target_group_timeouts: Final = {
+            key: value
+            for key, value in (
+                ("timeout", caller_timeout if caller_timeout is not None else filtered_data.get("timeout")),
+                (
+                    "stream_timeout",
+                    caller_stream_timeout if caller_stream_timeout is not None else filtered_data.get("stream_timeout"),
+                ),
+            )
+            if value is not None
+        }
+        return await self.async_function_with_fallbacks(
+            **{key: value for key, value in kwargs.items() if key not in ("timeout", "stream_timeout")},
+            **target_group_timeouts,
+        )
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
@@ -5595,7 +5662,7 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -5665,7 +5732,7 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -5900,7 +5967,13 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
+            self._update_kwargs_with_deployment(
+                deployment=deployment,
+                kwargs=kwargs,
+                function_name=function_name,
+                splits_stream_timeout=getattr(original_generic_function, "__name__", None)
+                in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+            )
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -5911,6 +5984,7 @@ class Router:
             )
 
             custom_llm_provider: Final = provider_for_generic_call(data)
+            generic_function_name: Final[str] = getattr(original_generic_function, "__name__", "")
 
             response_kwargs: Final = {
                 **data,
@@ -5918,6 +5992,11 @@ class Router:
                 **kwargs,
                 "model": model_name,
                 **_with_router_resolved_session_model(kwargs.get("session"), model_name),
+                **(
+                    {"turn_admission": partial(self.async_admit_deployment_turn, model, deployment, kwargs)}
+                    if generic_function_name == "_aresponses_websocket"
+                    else {}
+                ),
             }
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
@@ -5927,7 +6006,7 @@ class Router:
                 self,
                 deployment,
                 response_kwargs,
-                surface_for_call(getattr(original_generic_function, "__name__", "")),
+                surface_for_call(generic_function_name),
             )
             async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
                 response = await original_generic_function(**compacted_input)
@@ -6612,7 +6691,12 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="generic_api_call")
+            self._update_kwargs_with_deployment(
+                deployment=deployment,
+                kwargs=kwargs,
+                function_name="generic_api_call",
+                splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+            )
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -8877,8 +8961,7 @@ class Router:
         Track remaining tpm/rpm quota for model in model_list
         """
         try:
-            # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
-            if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
+            if kwargs.get("call_type") == "_arealtime":
                 return
             if is_batch_retrieve_call_type(kwargs.get("call_type")):
                 return
@@ -9545,6 +9628,71 @@ class Router:
                             )
                         )
                     raise e
+
+    def _deployment_as_configured_now(self, deployment: Mapping[str, object]) -> Mapping[str, object]:
+        model_info: Final = deployment.get("model_info")
+        model_id: Final = (
+            _MODEL_INFO_ADAPTER.validate_python(model_info).get("id") if isinstance(model_info, dict) else None
+        )
+        current: Final = self.get_deployment(model_id) if isinstance(model_id, str) else None
+        return deployment if current is None else current.model_dump(exclude_none=True)
+
+    async def async_admit_deployment_turn(
+        self, model_group: str, opened_on: Mapping[str, object], request_kwargs: Mapping[str, object]
+    ) -> None:
+        deployment: Final = self._deployment_as_configured_now(opened_on)
+        budget_limiter: Final = self.get_router_deployment_budget_limiter()
+        if budget_limiter is not None:
+            try:
+                await budget_limiter.async_filter_deployments(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes untyped deployment dicts
+                    model=model_group,
+                    healthy_deployments=[dict(deployment)],
+                    messages=None,
+                    request_kwargs=dict(request_kwargs),
+                )
+            except ValueError as e:
+                raise litellm.RateLimitError(
+                    message=str(e),
+                    llm_provider="",
+                    model=model_group,
+                    category=litellm.RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                ) from e
+        await self._admit_turn_through_routing_strategy(model_group, deployment, request_kwargs)
+        await self.async_routing_strategy_pre_call_checks(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
+            deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
+        )
+
+    async def _admit_turn_through_routing_strategy(
+        self, model_group: str, deployment: Mapping[str, object], request_kwargs: Mapping[str, object]
+    ) -> None:
+        routing_kwargs: Final = {key: value for key, value in request_kwargs.items() if key != "litellm_logging_obj"}
+        strategy, selector = self._get_routing_context(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped request dict
+            model=model_group, request_kwargs=routing_kwargs
+        )
+        if strategy == "simple-shuffle" or selector is None:
+            return
+        selected: Final = await self._select_deployment_async(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes untyped deployment dicts
+            strategy=strategy,
+            selector=selector,
+            model=model_group,
+            healthy_deployments=[dict(deployment)],
+            messages=None,
+            input=None,
+            request_kwargs=routing_kwargs,
+        )
+        if selected is None:
+            no_deployment: Final = await async_raise_no_deployment_exception(
+                litellm_router_instance=self, model=model_group, parent_otel_span=None
+            )
+            raise litellm.RateLimitError(
+                message=str(no_deployment),
+                llm_provider="",
+                model=model_group,
+                category=litellm.RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+            ) from no_deployment
+        await self._async_override_selector_pre_call_check(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
+            strategy, selector, dict(deployment), None
+        )
 
     @contextlib.asynccontextmanager
     async def _deployment_slot(
@@ -11010,7 +11158,6 @@ class Router:
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
         backend_keys: Final = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
-        backend_key: Final = backend_keys[0]
 
         # For the shared backend key, keep only cost-map schema fields
         # (minus custom pricing) so that one deployment's pricing overrides
@@ -11019,34 +11166,8 @@ class Router:
         # name. Each deployment's full model_info is already stored under
         # its unique model_id above.
         shared_model_info: Final = shared_backend_model_info(model_info)
-        existing_shared_mode: Final = (cast(dict | None, litellm.model_cost.get(backend_key, {})) or {}).get("mode")
-        deployment_mode: Final = shared_model_info.get("mode")
-        # Keep the built-in bridge mode stable for shared backend keys.
-        # Multiple aliases can point at the same provider/model backend,
-        # but their deployment-level overrides should not downgrade the
-        # backend from responses -> chat via last-write-wins registration.
-        # Only preserve in that specific direction so legitimate upgrades
-        # (e.g. chat -> responses) and unrelated mode changes still apply,
-        # and so a missing deployment mode does not silently clear the
-        # existing shared backend mode.
-        is_responses_to_chat_downgrade: Final = existing_shared_mode == "responses" and deployment_mode == "chat"
-        would_clear_existing_mode: Final = existing_shared_mode is not None and deployment_mode is None
-        if is_responses_to_chat_downgrade or would_clear_existing_mode:
-            if deployment_mode is not None:
-                verbose_router_logger.warning(
-                    "Router: preserving existing mode=%s for shared backend "
-                    "key %s instead of the deployment-specified mode=%s "
-                    "(prevents alias registration from downgrading the "
-                    "shared backend mode).",
-                    existing_shared_mode,
-                    backend_key,
-                    deployment_mode,
-                )
-            shared_model_info["mode"] = existing_shared_mode
-
-        # Always register the (possibly mode-preserved) shared backend info.
         litellm.register_model(
-            model_cost={_key: shared_model_info for _key in backend_keys},
+            model_cost={_key: keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
             persist_across_reloads=False,
         )
 
@@ -12565,26 +12686,56 @@ class Router:
         members: Final = routing_group.models if routing_group is not None else ()
         return served_model if served_model == target or served_model in members else model_name
 
-    def map_team_model(self, team_model_name: str | None, team_id: str) -> str | None:
+    def map_team_model(
+        self, team_model_name: str | None, team_id: str, custom_llm_provider: str | None = None
+    ) -> str | None:
         """
-        Check if team_model_name resolves to team-specific deployments.
+        Resolve explicit team models or select a deployment for model-less calls.
 
-        Returns the public model name (unchanged) so the router can find all
-        sibling deployments via team_id filtering, instead of collapsing to a
-        single internal model_name.
-
-        When team_model_name is None (e.g. vector store / file endpoints that
-        don't include a model in their request), returns the first matching
-        team deployment's team_public_model_name so the router can inject BYOK
-        credentials from the team-scoped deployment.
-
-        Returns:
-        - str: the team_model_name if team deployments exist for this team
-        - None: if no team-specific model is found
+        Model-less calls with no provider use the first team deployment. With a provider, they
+        use the first team deployment of that provider, pinned by ID when its public name also
+        covers another provider.
         """
         models: Final = self.get_model_list(model_name=team_model_name, team_id=team_id)
         if not models:
             return None
+        if team_model_name is None and custom_llm_provider is not None:
+
+            def team_deployment_public_name(deployment: DeploymentTypedDict) -> str | None:
+                model_info: Final = _configured_model_info(deployment)
+                if model_info.get("team_id") != team_id:
+                    return None
+                team_public_model_name: Final = model_info.get("team_public_model_name")
+                return (
+                    team_public_model_name
+                    if isinstance(team_public_model_name, str) and team_public_model_name
+                    else deployment["model_name"]
+                )
+
+            matching_deployment: Final = next(
+                (
+                    model
+                    for model in models
+                    if team_deployment_public_name(model) is not None
+                    and provider_for_generic_call(model["litellm_params"]) == custom_llm_provider
+                ),
+                None,
+            )
+            if matching_deployment is None:
+                return None
+            public_name: Final = team_deployment_public_name(matching_deployment)
+            if public_name is None:
+                return None
+            same_public_name_deployments: Final = tuple(
+                candidate for candidate in models if team_deployment_public_name(candidate) == public_name
+            )
+            if all(
+                provider_for_generic_call(candidate["litellm_params"]) == custom_llm_provider
+                for candidate in same_public_name_deployments
+            ):
+                return public_name
+            deployment_id: Final = _configured_model_info(matching_deployment).get("id")
+            return deployment_id if isinstance(deployment_id, str) else None
         for model in models:
             if model.get("model_info", {}).get("team_id") == team_id:
                 if team_model_name is None:
@@ -13379,6 +13530,13 @@ class Router:
                 client = self.cache.get_cache(key=cache_key, local_only=True, parent_otel_span=parent_otel_span)
             return client
         elif client_type == "async":
+            if (
+                deployment["litellm_params"].get(  # pyright: ignore[reportUnknownMemberType]  # legacy mapping
+                    "kubernetes_pod_discovery"
+                )
+                is True
+            ):
+                return None
             if kwargs.get("stream") is True:
                 cache_key = f"{model_id}_stream_async_client"
                 client = self.cache.get_cache(key=cache_key, local_only=True, parent_otel_span=parent_otel_span)
@@ -13388,6 +13546,13 @@ class Router:
                 client = self.cache.get_cache(key=cache_key, local_only=True, parent_otel_span=parent_otel_span)
                 return client
         else:
+            if (
+                deployment["litellm_params"].get(  # pyright: ignore[reportUnknownMemberType]  # legacy mapping
+                    "kubernetes_pod_discovery"
+                )
+                is True
+            ):
+                return None
             if kwargs.get("stream") is True:
                 cache_key = f"{model_id}_stream_client"
                 client = self.cache.get_cache(key=cache_key, parent_otel_span=parent_otel_span)
@@ -14417,7 +14582,7 @@ class Router:
         Router._pop_effort_from_nested_carrier(request_kwargs, "output_config")
         Router._pop_effort_from_nested_carrier(request_kwargs, "reasoning")
 
-    async def async_get_available_deployment(
+    async def _async_get_available_deployment_unresolved(  # noqa: ANN202  # legacy selector result remains inferred
         self,
         model: str,
         request_kwargs: dict,
@@ -14454,7 +14619,7 @@ class Router:
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
-            return self.get_available_deployment(
+            return self._get_available_deployment_unresolved(
                 model=model,
                 messages=messages,
                 input=input,
@@ -14592,6 +14757,12 @@ class Router:
                         )
                     )
             raise e
+
+    async_get_available_deployment = (  # pyright: ignore[reportUnknownVariableType]  # legacy selector return
+        async_resolve_pods_after(
+            _async_get_available_deployment_unresolved  # pyright: ignore[reportUnknownArgumentType]  # legacy type
+        )
+    )
 
     async def async_get_available_deployment_for_pass_through(
         self,
@@ -15359,7 +15530,7 @@ class Router:
         }
         return cast(StandardLoggingRoutingDecision, kept)  # cast-ok: dropping optional keys preserves the type
 
-    def get_available_deployment(
+    def _get_available_deployment_unresolved(  # noqa: ANN202  # legacy selector result remains inferred
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
@@ -15531,6 +15702,12 @@ class Router:
         )
         phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
         return deployment
+
+    get_available_deployment = (  # pyright: ignore[reportUnknownVariableType]  # legacy selector return
+        resolve_pods_after(
+            _get_available_deployment_unresolved  # pyright: ignore[reportUnknownArgumentType]  # legacy annotations
+        )
+    )
 
     def get_available_deployment_for_pass_through(
         self,
@@ -15953,15 +16130,22 @@ class Router:
             CustomRoutingStrategy: litellm.router.CustomRoutingStrategyBase
         """
 
+        strategy: Final = CustomRoutingStrategy
         setattr(
             self,
             "get_available_deployment",
-            CustomRoutingStrategy.get_available_deployment,
+            resolve_pods_after_bound(
+                strategy.get_available_deployment,  # pyright: ignore[reportUnknownArgumentType]  # legacy stub
+                self.kubernetes_pod_discovery,
+            ),
         )
         setattr(
             self,
             "async_get_available_deployment",
-            CustomRoutingStrategy.async_get_available_deployment,
+            async_resolve_pods_after_bound(
+                strategy.async_get_available_deployment,  # pyright: ignore[reportUnknownArgumentType]  # legacy stub
+                self.kubernetes_pod_discovery,
+            ),
         )
 
     def _reset_custom_routing_strategy(self) -> None:

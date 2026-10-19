@@ -40,6 +40,14 @@ class ServerStreamingClassification(str, Enum):
 SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
+KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS", 5.0
+)
+KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS", 300.0
+)
+KUBERNETES_POD_DISCOVERY_DNS_TIMEOUT_SECONDS: Final = 2.0
+KUBERNETES_POD_ROUTING_KEY: Final = "kubernetes_pod_routing"
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = get_env_int("ROUTER_MAX_FALLBACKS", 5)
@@ -1030,6 +1038,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
+    "https://api.openinfer.ai/v1",
 ]
 
 
@@ -1098,6 +1107,7 @@ openai_compatible_providers: Final[list] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "openinfer",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
@@ -1253,14 +1263,6 @@ together_ai_models: Final[set] = set(
 )
 # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-
-baseten_models: Final[set] = set(
-    [
-        "qvv0xeq",
-        "q841o8w",
-        "31dxrj3",
-    ]
-)  # FALCON 7B  # WizardLM  # Mosaic ML
 
 featherless_ai_models: Final[set] = set(
     [
@@ -1631,6 +1633,7 @@ OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_to
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
+VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"

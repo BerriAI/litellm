@@ -49,9 +49,12 @@ def _completion_kwargs_for_thinking(
     *,
     tools: list[dict[str, object]] | None = None,
     api_base: str | None = None,
+    model_info: dict[str, str] | None = None,
 ) -> Mapping[str, object]:
     extra_kwargs: Final = {
-        key: value for key, value in (("custom_llm_provider", provider), ("api_base", api_base)) if value is not None
+        key: value
+        for key, value in (("custom_llm_provider", provider), ("api_base", api_base), ("model_info", model_info))
+        if value is not None
     }
     completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
         max_tokens=1024,
@@ -80,10 +83,11 @@ def _reasoning_effort_sent_for_thinking(
     *,
     tools: list[dict[str, object]] | None = None,
     api_base: str | None = None,
+    model_info: dict[str, str] | None = None,
 ) -> object:
-    return _completion_kwargs_for_thinking(model, provider, thinking, tools=tools, api_base=api_base).get(
-        "reasoning_effort"
-    )
+    return _completion_kwargs_for_thinking(
+        model, provider, thinking, tools=tools, api_base=api_base, model_info=model_info
+    ).get("reasoning_effort")
 
 
 SUMMARIZED_THINKING = {"type": "enabled", "budget_tokens": 4096, "summary": "auto"}
@@ -183,6 +187,22 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
 
         assert sent == "high"
 
+    def test_a_chat_pinned_deployment_gets_the_plain_tier_on_a_responses_row(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``mode: chat`` pin sends that deployment to chat completions even though its shared row
+        says ``responses``, so the adapter has to read the pin too or chat gets the Responses-only dict."""
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        model: Final = "bedrock_mantle/openai.gpt-5.4"
+
+        unpinned = _reasoning_effort_sent_for_thinking(model, "bedrock_mantle", PLAIN_THINKING)
+        pinned = _reasoning_effort_sent_for_thinking(
+            model, "bedrock_mantle", PLAIN_THINKING, model_info={"id": "pinned-id", "mode": "chat"}
+        )
+
+        assert isinstance(unpinned, dict)
+        assert pinned == "high"
+
     @pytest.mark.parametrize(
         "model, provider",
         [
@@ -204,6 +224,23 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
         sent: Final = _reasoning_effort_sent_for_thinking("azure/responses/gpt-5-mini", "azure", PLAIN_THINKING)
 
         assert sent == {"effort": "high", "summary": "detailed"}
+
+    @pytest.mark.parametrize(
+        "model, provider, summary",
+        [
+            ("bedrock_mantle/openai.gpt-5.4", "bedrock_mantle", "auto"),
+            ("azure/responses/gpt-5-mini", "azure", "detailed"),
+        ],
+    )
+    def test_auto_summary_asks_each_bridged_target_for_a_level_it_accepts(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, model: str, provider: str, summary: str
+    ) -> None:
+        """Mantle's OpenAI path accepts only ``auto``, so the opt-in summary must not send it ``detailed``."""
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+
+        sent = _reasoning_effort_sent_for_thinking(model, provider, PLAIN_THINKING)
+
+        assert sent == {"effort": "high", "summary": summary}
 
     @pytest.mark.parametrize(
         "api_base, expected",
@@ -287,17 +324,37 @@ class TestTheNormalizedTierIsTheTierSent:
     @pytest.mark.parametrize(
         "model, provider",
         [
+            ("gpt-5.5", "azure_ai"),
+            ("azure_ai/gpt-5.5", "azure_ai"),
+            ("gpt-5.6", "azure"),
+            ("us/gpt-5.6", "azure"),
+        ],
+    )
+    def test_an_azure_hosted_deployment_without_the_flag_drops_to_the_tier_it_accepts(
+        self, local_model_cost_map, model, provider
+    ):
+        """Chat Completions answers ``max`` on gpt-5.6 with a 400 naming ``none`` through ``xhigh``
+        (OpenAI, 2026-10-01) and none of these Azure rows declares the level, so the adapter sends
+        the tier below instead of the rejected one."""
+        assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [
             ("gpt-6-astra", "azure_ai"),
             ("azure_ai/gpt-6-astra", "azure_ai"),
             ("gpt-6-astra", "azure"),
             ("us/gpt-6-astra", "azure"),
+            ("eu/gpt-6-astra", "azure"),
         ],
     )
-    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(
+    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_its_chat_route_accepts(
         self, local_model_cost_map: None, model: str, provider: str
     ) -> None:
-        """The deployment answers ``max`` with a 400 naming ``none`` through ``xhigh``, so the rows
-        say so and the adapter sends the tier below instead of the rejected one."""
+        """A Foundry gpt-6-astra answers a Chat Completions ``max`` with a 400 naming low through
+        xhigh while honoring the same level on the Responses route (2026-10-01). The row's flag is
+        route-blind, so it keeps max off and the adapter, which cannot know which route the call
+        takes, sends the tier below instead of the level chat rejects."""
         assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
 
     def test_the_openai_hosted_twin_still_sends_max(self, local_model_cost_map):
