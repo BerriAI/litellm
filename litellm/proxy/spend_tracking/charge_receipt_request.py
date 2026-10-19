@@ -107,12 +107,16 @@ async def authorize_charge_receipt(
         return
     if request.scope.get("litellm_websocket_auth"):
         raise HTTPException(400, "WebSocket inference does not support required charge receipts.")
-    if request.method in {"GET", "HEAD"} and RouteChecks.is_info_route(request.url.path):
+    from litellm.proxy.auth.auth_utils import get_request_route
+
+    route: Final = get_request_route(request)
+    if request.method in {"GET", "HEAD"} and RouteChecks.is_info_route(route):
         return
-    if request.method == "POST" and request.url.path == "/utils/token_counter":
+    if request.method == "POST" and route == "/utils/token_counter":
         return
-    if request.method != "POST" or request.url.path not in SUPPORTED_RECEIPT_ROUTES:
+    if request.method != "POST" or route not in SUPPORTED_RECEIPT_ROUTES:
         raise HTTPException(400, "This route does not support required charge receipts.")
+    root: Final = str(request.scope.get("app_root_path", request.scope.get("root_path", ""))).rstrip("/")
     token: Final = request.headers.get("x-litellm-billing-context", "")
     if not token or len(token) > 4096:
         raise HTTPException(400, "A signed billing context is required for this key.")
@@ -137,7 +141,7 @@ async def authorize_charge_receipt(
         or claims.exp - claims.iat > 300
         or claims.exp <= claims.iat
         or claims.method != request.method
-        or claims.route != request.url.path
+        or claims.route != root + route
         or claims.body_sha256 != sha256(await request.body()).hexdigest()
     ):
         raise HTTPException(400, "The billing context does not match this request.")

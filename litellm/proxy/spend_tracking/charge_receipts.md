@@ -49,7 +49,7 @@ The timestamps above illustrate a five-minute validity interval; use the actual 
 
 Version 1 supports `/responses`, `/responses/compact`, and `/chat/completions`, including their `/v1` aliases. Background requests and WebSocket inference are rejected for required-receipt keys. Responses terminal envelopes and Chat Completions' final DONE wait for durable capture. Non-streaming responses wait before returning. Failures after dispatch tell compatible SDKs not to automatically retry inference
 
-Use dedicated application keys. Required-receipt keys may read the existing information routes and call `/utils/token_counter`. All other unqualified routes, including custom passthrough routes, are rejected before dispatch
+Use dedicated application keys. The signed `route` includes the external `SERVER_ROOT_PATH` prefix, such as `/genai/v1/responses`. Required-receipt keys may read the existing information routes and call `/utils/token_counter`. All other unqualified routes, including custom passthrough routes, are rejected before dispatch
 
 If a streaming client disconnects, the gateway keeps reading the in-flight provider call for up to `LITELLM_CHARGE_RECEIPTS_DRAIN_TIMEOUT_SECONDS`, which defaults to 120 seconds. This captures final usage during application deployments. A user pressing Stop also leaves that one call running within this bound. It does not start another inference request. After the deadline the upstream stream closes, and any amount that cannot be established remains unresolved. Give the gateway's graceful shutdown a longer deadline when draining these calls
 

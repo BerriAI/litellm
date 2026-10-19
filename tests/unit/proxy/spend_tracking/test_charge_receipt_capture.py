@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Mapping
 from typing import Final
+from unittest.mock import Mock
 
 import pytest
 
@@ -19,12 +20,12 @@ from tests.unit.proxy.spend_tracking._charge_receipt_cases import (
 
 
 @pytest.mark.asyncio
-async def test_capture_waits_for_database_ack_and_journals_no_request_content() -> None:
+async def test_cancelled_caller_still_commits_once_and_waits_for_database_ack() -> None:
     query: Final = ScriptedQuery(hold=True)
     runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
     capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash))
     expected: Final = RECEIPT.model_copy(update={"event_id": capture.event_id})
-    query.replies = (acknowledged(expected),)
+    query.replies = (ConnectionError("lost commit acknowledgement"), acknowledged(expected))
     event: Final = priced_event()
     saving: Final = asyncio.create_task(
         capture.capture_success(
@@ -45,31 +46,18 @@ async def test_capture_waits_for_database_ack_and_journals_no_request_content() 
     await asyncio.sleep(0)
     assert not waiting.done() and not saving.done()
     assert json.loads(str(query.calls[0][2])) == expected.model_dump()
-    query.release.set()
-    result: Final = await saving
-    assert isinstance(result, CommittedCharge) and result.amount_usd == "0.25"
-    assert await waiting
-    repeated: Final = await capture.capture_event(priced_event(amount=0.5))
-    assert repeated is result and len(query.calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_caller_cancellation_cannot_cancel_a_started_charge_write() -> None:
-    query: Final = ScriptedQuery(hold=True)
-    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
-    capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash))
-    query.replies = (acknowledged(RECEIPT.model_copy(update={"event_id": capture.event_id})),)
-    caller: Final = asyncio.create_task(capture.capture_event(priced_event()))
-    await query.entered.wait()
-    caller.cancel()
+    saving.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await caller
+        await saving
     closing: Final = asyncio.create_task(runtime.close())
     await asyncio.sleep(0)
     assert not closing.done()
     query.release.set()
     await closing
-    assert await capture.wait() and len(query.calls) == 1
+    assert await waiting and len(query.calls) == 2
+    assert query.calls[0] == query.calls[1]
+    repeated: Final = await capture.capture_event(priced_event(amount=0.5))
+    assert isinstance(repeated, CommittedCharge) and repeated.amount_usd == "0.25" and len(query.calls) == 2
     assert not await runtime.ready()
 
 
@@ -102,23 +90,46 @@ async def test_a_known_late_charge_can_follow_an_unpriced_failure() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("committed_before_failure", (False, True))
-async def test_optional_accounting_failure_cannot_drop_or_repeat_a_known_charge(committed_before_failure: bool) -> None:
+@pytest.mark.parametrize("failure", ("before_commit", "after_commit", "timeout"))
+async def test_optional_accounting_failure_cannot_drop_or_repeat_a_known_charge(
+    failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy.spend_tracking.charge_receipt_capture import ChargeCapture
     from litellm.proxy.spend_tracking.spend_event import SpendEvent
 
+    clock: Final = Mock(return_value=0.0)
+    monkeypatch.setattr(asyncio.get_running_loop(), "time", clock)
+    finalizing: Final = asyncio.Event()
+
     async def finalize(details: Mapping[str, object], event: SpendEvent, capture: ChargeCapture) -> None:
-        if committed_before_failure:
+        finalizing.set()
+        if failure == "timeout":
+            await asyncio.Event().wait()
+        if failure == "after_commit":
             await capture.persist()
         raise ConnectionError("accounting dependency unavailable")
 
-    query: Final = ScriptedQuery()
-    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query), finalize=finalize)
+    query: Final = ScriptedQuery(hold=failure == "timeout")
+    runtime: Final = ChargeReceiptRuntime(
+        SETTINGS.model_copy(update={"commit_timeout_seconds": 3}), ChargeReceiptStore(query), finalize=finalize
+    )
     capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash))
     query.replies = (acknowledged(RECEIPT.model_copy(update={"event_id": capture.event_id})),)
-    result: Final = await capture.capture_event(priced_event(), {})
+    saving: Final = asyncio.create_task(capture.capture_event(priced_event(), {}))
+    waiting: Final = asyncio.create_task(capture.wait())
+    if failure == "timeout":
+        await finalizing.wait()
+        clock.return_value = 3.5
+        await query.entered.wait()
+        clock.return_value = 5.5
+        tick: Final = asyncio.Event()
+        asyncio.get_running_loop().call_later(0, tick.set)
+        await tick.wait()
+        assert not waiting.done()
+        query.release.set()
+    result: Final = await saving
     assert isinstance(result, CommittedCharge) and result.amount_usd == RECEIPT.amount_usd
-    assert await capture.wait() and len(query.calls) == 1
+    assert await waiting and len(query.calls) == 1
 
 
 @pytest.mark.asyncio

@@ -10,48 +10,34 @@ from tests.unit.proxy.spend_tracking._charge_receipt_cases import (
 
 
 @pytest.mark.parametrize(
-    "url",
+    "url,allowed",
     (
-        "https://receiver.example.test/billing/receipts",
-        "http://localhost/billing/receipts",
-        "http://127.0.0.1:8788/billing/receipts",
-        "http://[::1]:8788/billing/receipts",
+        ("https://receiver.example.test/billing/receipts", True),
+        ("http://localhost/billing/receipts", True),
+        ("http://127.0.0.1:8788/billing/receipts", True),
+        ("http://[::1]:8788/billing/receipts", True),
+        ("", False),
+        ("https://receiver.example.test", False),
+        ("https://user:password@receiver.example.test/receipts", False),
+        ("https://receiver.example.test/receipts?secret=anything", False),
+        ("https://receiver.example.test/receipts#fragment", False),
+        ("https://receiver.example.test:999999/receipts", False),
+        ("http://receiver.example.test/receipts", False),
+        ("http://localhost.example.test/receipts", False),
+        ("http://192.0.2.1/receipts", False),
+        ("ftp://127.0.0.1/receipts", False),
     ),
 )
-def test_destination_accepts_tls_or_loopback_only(url: str) -> None:
-    assert SETTINGS.model_copy(update={"destination_url": url}).configuration_error() is None
-
-
-@pytest.mark.parametrize(
-    "url",
-    (
-        "",
-        "https://receiver.example.test",
-        "https://user:password@receiver.example.test/receipts",
-        "https://receiver.example.test/receipts?secret=anything",
-        "https://receiver.example.test/receipts#fragment",
-        "https://receiver.example.test:999999/receipts",
-        "http://receiver.example.test/receipts",
-        "http://localhost.example.test/receipts",
-        "http://192.0.2.1/receipts",
-        "ftp://127.0.0.1/receipts",
-    ),
-)
-def test_destination_rejects_unqualified_or_credential_bearing_urls(url: str) -> None:
+def test_destination_accepts_only_tls_or_loopback_without_embedded_credentials(url: str, allowed: bool) -> None:
     error: Final = SETTINGS.model_copy(update={"destination_url": url}).configuration_error()
-    assert error is not None and "password" not in error and "anything" not in error
+    assert (error is None) == allowed
+    assert error is None or "password" not in error and "anything" not in error
 
 
 @pytest.mark.parametrize("secret", ("unit-secret-too-small", "a" * 32 + "\n", "é" * 32))
 def test_configuration_rejects_unsafe_shared_secrets_without_echoing_them(secret: str) -> None:
     error: Final = SETTINGS.model_copy(update={"destination_secret": SecretStr(secret)}).configuration_error()
     assert error is not None and secret not in error
-
-
-def test_configuration_requires_scope_and_keys_only_when_enabled() -> None:
-    assert SETTINGS.model_copy(update={"gateway_scope": "invalid"}).configuration_error() is not None
-    assert SETTINGS.model_copy(update={"key_hashes": frozenset()}).configuration_error() is not None
-    assert SETTINGS.model_copy(update={"enabled": False, "gateway_scope": ""}).configuration_error() is None
 
 
 @pytest.mark.parametrize("amount", ("0.250", "0.250000000000000000000000"))

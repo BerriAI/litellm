@@ -169,6 +169,6 @@ class ChargeCapture:
         return await self._append_with_retry(remaining - 1)
 
     async def wait(self) -> bool:
-        with anyio.move_on_after(self.runtime.settings.commit_timeout_seconds + 2):
+        with anyio.move_on_after(2 * self.runtime.settings.commit_timeout_seconds + 2):
             await self.done.wait()
         return isinstance(self.result, CommittedCharge)
