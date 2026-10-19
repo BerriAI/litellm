@@ -9,7 +9,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Final
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
 
 import anthropic
 import httpx
@@ -27,7 +28,12 @@ pytestmark: Final = pytest.mark.shares_worker_state
 CRAFTED_MODEL: Final = ("exceeded " * 32_000)[:288_000]
 HOSTILE_5KB_MODEL: Final = ("exceeded budget " * 400)[:5_000]
 BENIGN_288KB_MODEL: Final = "x" * len(CRAFTED_MODEL)
+_Oversized: TypeAlias = Literal["crafted", "benign"]
+OVERSIZED_MODELS: Final[Mapping[_Oversized, str]] = MappingProxyType(
+    {"crafted": CRAFTED_MODEL, "benign": BENIGN_288KB_MODEL}
+)
 CRAFTED_SLOWDOWN_FACTOR: Final = 10
+CRAFTED_BURST_SLOWDOWN_FACTOR: Final = 3
 FAST_SECONDS: Final = 10.0
 LIVELINESS_STALL_BUDGET_SECONDS: Final = 5.0
 ROW_SECONDS: Final = 70
@@ -350,17 +356,17 @@ def _burst_call(client: httpx.Client, label: str, path: str, body: Mapping[str, 
 
 def _burst(
     client: httpx.Client,
-    oversized_model: str,
+    oversized: _Oversized,
     happy_model: str,
     happy_key: str,
     open_key: str,
     during: Callable[[], None],
 ) -> tuple[_BurstResult, ...]:
-    oversized: Final = tuple(
+    oversized_calls: Final = tuple(
         (
-            f"oversized-{path}-{index}",
+            f"{oversized}-{path}-{index}",
             path,
-            _body(path, oversized_model, uuid.uuid4().hex, stream=index % 2 == 1),
+            _body(path, OVERSIZED_MODELS[oversized], uuid.uuid4().hex, stream=index % 2 == 1),
             open_key,
         )
         for path in (CHAT, MESSAGES, RESPONSES)
@@ -377,7 +383,8 @@ def _burst(
         httpx.Client(base_url=client.base_url, timeout=client.timeout, trust_env=False) as fresh,
     ):
         first: Final = tuple(
-            pool.submit(_burst_call, client, label, path, body, key) for label, path, body, key in oversized + happy
+            pool.submit(_burst_call, client, label, path, body, key)
+            for label, path, body, key in oversized_calls + happy
         )
         wait(first, return_when=FIRST_COMPLETED)
         during()
@@ -387,9 +394,10 @@ def _burst(
         return tuple(future.result() for future in first + second)
 
 
-def _slowest_oversized_refusal(results: tuple[_BurstResult, ...]) -> float:
-    refused: Final = tuple(result for result in results if result.label.startswith("oversized") and result.status)
-    assert refused and all(result.status == 400 for result in refused), refused
+def _slowest_refusal(results: tuple[_BurstResult, ...], oversized: _Oversized) -> float:
+    refused: Final = tuple(result for result in results if result.label.startswith(oversized) and result.status)
+    assert refused, f"every {oversized} request dropped: {results}"
+    assert all(result.status == 400 for result in refused), refused
     return max(result.seconds for result in refused)
 
 
@@ -425,16 +433,14 @@ def test_killing_one_worker_mid_burst_leaves_the_other_serving_crafted_and_happy
         workers: Final = owned.worker_pids()
         assert len(workers) == 2, workers
         victim: Final = min(workers)
-        control: Final = _slowest_oversized_refusal(
-            _burst(client, BENIGN_288KB_MODEL, model, key, open_key, lambda: None)
-        )
+        control: Final = _slowest_refusal(_burst(client, "benign", model, key, open_key, lambda: None), "benign")
 
         with owned.replacing_worker(victim) as kill:
-            results: Final = _burst(client, CRAFTED_MODEL, model, key, open_key, kill)
+            results: Final = _burst(client, "crafted", model, key, open_key, kill)
             dropped: Final = tuple(result for result in results if result.status is None)
             assert len(dropped) < len(results), results
             assert_within_factor_of_control(
-                _slowest_oversized_refusal(results), control=control, factor=CRAFTED_SLOWDOWN_FACTOR
+                _slowest_refusal(results, "crafted"), control=control, factor=CRAFTED_BURST_SLOWDOWN_FACTOR
             )
             late: Final = tuple(result for result in results if result.label.startswith("late"))
             assert all(result.status == 200 for result in late), late
@@ -464,11 +470,9 @@ def test_upstream_returning_503_mid_burst_logs_every_failure_with_its_own_cluste
         model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
         key: Final = scenario.key(models=[model])
         open_key: Final = scenario.key()
-        control: Final = _slowest_oversized_refusal(
-            _burst(client, BENIGN_288KB_MODEL, model, key, open_key, lambda: None)
-        )
+        control: Final = _slowest_refusal(_burst(client, "benign", model, key, open_key, lambda: None), "benign")
         wire.drain()
-        results: Final = _burst(client, CRAFTED_MODEL, model, key, open_key, lambda: None)
+        results: Final = _burst(client, "crafted", model, key, open_key, lambda: None)
         assert all(result.status is not None for result in results), results
         happy: Final = tuple(result for result in results if result.label.startswith("happy"))
         assert all(result.status == 503 for result in happy), happy
@@ -479,7 +483,7 @@ def test_upstream_returning_503_mid_burst_logs_every_failure_with_its_own_cluste
             seen
         )
         assert_within_factor_of_control(
-            _slowest_oversized_refusal(results), control=control, factor=CRAFTED_SLOWDOWN_FACTOR
+            _slowest_refusal(results, "crafted"), control=control, factor=CRAFTED_BURST_SLOWDOWN_FACTOR
         )
         codes: Final = {
             result.label: _error_information(string_value(result.call_id))["normalized_error"] for result in results
@@ -487,7 +491,5 @@ def test_upstream_returning_503_mid_burst_logs_every_failure_with_its_own_cluste
         assert all(code == "503_PROVIDER_OVERLOADED" for label, code in codes.items() if label.startswith("happy")), (
             codes
         )
-        assert all(code == "400_INVALID_REQUEST" for label, code in codes.items() if label.startswith("oversized")), (
-            codes
-        )
+        assert all(code == "400_INVALID_REQUEST" for label, code in codes.items() if label.startswith("crafted")), codes
         assert client.get("/health/liveliness").status_code == 200
