@@ -52,6 +52,7 @@ def _provider_fields() -> dict[str, object]:
     return {
         "reasoning_content": SECRET,
         "reasoning": SECRET,
+        "reasoning_details": [{"type": "reasoning.text", "text": SECRET, "index": 0, "format": "unknown"}],
         "thinking_blocks": [{"type": "thinking", "thinking": SECRET}],
         "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
         "citations": [{"cited_text": SECRET}],
