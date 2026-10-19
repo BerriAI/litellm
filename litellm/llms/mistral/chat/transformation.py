@@ -617,6 +617,10 @@ class MistralConfig(OpenAIGPTConfig):
                             # The flattened content string cannot carry Mistral
                             # citation chunks; keep the original block list
                             # reachable instead of dropping them silently.
+                            # This is the list exactly as the provider sent it
+                            # -- thinking and text blocks included, not only the
+                            # reference blocks -- so the field is the raw
+                            # provider input, not a filtered citation list.
                             choice["message"]["mistral_content_blocks"] = content
                         if thinking_content:
                             choice["message"]["reasoning_content"] = thinking_content
@@ -730,7 +734,12 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                     ):
                         # citation chunks carry no text; expose them on
                         # provider_specific_fields instead of dropping them
-                        delta["provider_specific_fields"] = {"mistral_content_blocks": content}
+                        existing_fields = delta.get("provider_specific_fields")
+                        if isinstance(existing_fields, dict):
+                            # keep whatever the provider already put there
+                            existing_fields["mistral_content_blocks"] = content
+                        else:
+                            delta["provider_specific_fields"] = {"mistral_content_blocks": content}
         except Exception:
             # Fall back to default parsing if custom handling fails
             return super().chunk_parser(chunk)
