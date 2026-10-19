@@ -88,10 +88,10 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
-    # 25 bound columns per row plus the inlined updated_at, so the row count is what
-    # separates one multi-row statement from a hundred single-row ones.
-    assert len(params) == 100 * 25
-    assert "$2500::text" in sql
+    # 26 bound columns per row (team_id included) plus the inlined updated_at, so the row
+    # count is what separates one multi-row statement from a hundred single-row ones.
+    assert len(params) == 100 * 26
+    assert "$2600::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
 
 
@@ -101,7 +101,7 @@ def test_conflict_target_is_the_full_unique_constraint():
     conflict_target = re.search(r"ON CONFLICT \(([^)]*)\)", sql)
     assert conflict_target is not None
     assert conflict_target.group(1) == (
-        '"tag", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint"'
+        '"tag", "team_id", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint"'
     )
 
 
