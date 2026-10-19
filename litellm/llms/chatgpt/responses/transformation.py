@@ -90,6 +90,13 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
         else:
             request["instructions"] = base_instructions
+        # The Codex backend rejects role=system input items ("System messages are not allowed")
+        # but accepts role=developer, which is what an in-sequence system message means there.
+        if isinstance(request.get("input"), list):
+            request["input"] = [
+                {**item, "role": "developer"} if isinstance(item, dict) and item.get("role") == "system" else item
+                for item in request["input"]
+            ]
         request["store"] = False
         request["stream"] = True
         include: Final = list(request.get("include") or [])
