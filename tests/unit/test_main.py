@@ -9039,7 +9039,7 @@ async def test_converse_fallback_prices_the_current_attempt(
     active_logging: Final = response.logging_obj if stream else logging_obj
     assert active_logging.response_cost_calculator(result) == pytest.approx(expected)
     active_logging.update_environment_variables(litellm_params={}, optional_params={})
-    assert active_logging.response_cost_calculator(result) == pytest.approx(expected)
+    assert active_logging.response_cost_calculator(result, ignore_stamped_cost=True) == pytest.approx(expected)
     if asynchronous:
         await client.close()
     else:
