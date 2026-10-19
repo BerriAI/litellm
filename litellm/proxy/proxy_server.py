@@ -13696,10 +13696,6 @@ async def _provider_token_count(
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
-    """Count with the provider, using the token_count_model in its region when one is set.
-
-    Returns None when the count should be estimated locally, or the provider's failure when the framed local
-    estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
     count_model: Final = settings.count_model
     counted: Final = await (
         count_with(model_to_use, None) if count_model is None else count_with(count_model.model, count_model.region)
@@ -13718,7 +13714,7 @@ async def _provider_token_count(
             "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
         )
     )
-    if count_model is None and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
+    if local_estimate_allowed:
         return failure
     raise failure.to_proxy_exception()
 

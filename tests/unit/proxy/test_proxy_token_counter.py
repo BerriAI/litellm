@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx
 import pytest
+import respx
 import tiktoken
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -40,6 +41,7 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -362,63 +364,41 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
 
 
 @pytest.mark.asyncio
-async def test_internal_token_counter_anthropic_provider_detection():
-    """
-    Test that the internal token_counter correctly detects Anthropic providers
-    and handles the from_anthropic_endpoint flag appropriately
-    """
-
-    # Test with Anthropic provider
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": "claude-test",
-                "litellm_params": {
-                    "model": "anthropic/claude-3-sonnet-20240229",
-                    "api_key": "test-key",
-                },
-            }
-        ]
+@pytest.mark.parametrize("status_code", (400, 401, 403, 404, 429, 500))
+@pytest.mark.parametrize(
+    ("model", "count_url"),
+    (
+        ("anthropic/claude-sonnet-5-5", "https://api.anthropic.com/v1/messages/count_tokens"),
+        ("openai/gpt-6.1-sol", "https://api.openai.com/v1/responses/input_tokens"),
+    ),
+)
+async def test_provider_errors_return_labelled_local_estimates(
+    monkeypatch: pytest.MonkeyPatch, status_code: int, model: str, count_url: str
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "Count the whole request locally when the count API is unavailable."}
+    ]
+    router: Final = Router(
+        model_list=[{"model_name": "counted", "litellm_params": {"model": model, "api_key": "test-count-key"}}]
     )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
 
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
-
-    # Test with is_direct_request=False (simulating call from Anthropic endpoint)
-    # The provider counter is engaged: its API error surfaces instead of a local count
-    with pytest.raises(ProxyException) as exc_info:
-        await token_counter(
-            request=TokenCountRequest(
-                model="claude-test",
-                messages=[{"role": "user", "content": "hello"}],
-            ),
-            call_endpoint=True,
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(count_url).mock(
+            return_value=httpx.Response(
+                status_code, json={"type": "error", "error": {"type": "api_error", "message": "Count unavailable"}}
+            )
         )
-    assert exc_info.value.type == "token_counting_error"
-
-    # Test with non-Anthropic provider
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-test",
-                "litellm_params": {
-                    "model": "gpt-4",
-                },
-            }
-        ]
-    )
-
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
-
-    with pytest.raises(ProxyException) as missing_key:
-        await token_counter(
-            request=TokenCountRequest(
-                model="gpt-test",
-                messages=[{"role": "user", "content": "hello"}],
-            ),
-            call_endpoint=True,
+        counted: Final = await token_counter(
+            request=TokenCountRequest(model="counted", messages=messages), call_endpoint=True
         )
-    assert missing_key.value.code == "401"
-    assert "No OpenAI API key is set for model gpt-test" in missing_key.value.message
+
+    assert counted.total_tokens == litellm.token_counter(model=model.split("/", 1)[1], messages=messages)
+    assert counted.count_source == "local_estimate"
+    assert counted.error is False
 
 
 @pytest.mark.asyncio
@@ -915,69 +895,6 @@ async def test_bedrock_handler_httpx_error_status_code_propagation():
                             assert exc_info.value.message == "Forbidden - Invalid credentials"
 
 
-@pytest.mark.asyncio
-async def test_token_counter_httpx_status_error_raises_proxy_exception():
-    """
-    When provider_counter.count_tokens() raises httpx.HTTPStatusError,
-    the token_counter endpoint should catch it and raise a ProxyException
-    with the upstream status code and error message.
-    """
-
-    upstream_status = 429
-    upstream_message = "Rate limit exceeded"
-    response = httpx.Response(
-        status_code=upstream_status,
-        request=httpx.Request("POST", "https://provider.example.com/count"),
-    )
-    http_error = httpx.HTTPStatusError(
-        message=upstream_message,
-        request=response.request,
-        response=response,
-    )
-
-    mock_counter = MagicMock()
-    mock_counter.should_use_token_counting_api.return_value = True
-    mock_counter.count_tokens = AsyncMock(side_effect=http_error)
-
-    # Save originals
-    original_get_provider_token_counter = litellm.proxy.proxy_server._get_provider_token_counter
-    original_router = litellm.proxy.proxy_server.llm_router
-
-    try:
-
-        def mock_get_provider_token_counter(deployment, model_to_use):
-            return (mock_counter, "claude-4-6-sonnet", "vertex_ai")
-
-        litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
-
-        mock_router = MagicMock()
-        mock_router.async_get_available_deployment = AsyncMock(
-            return_value={
-                "litellm_params": {
-                    "model": "vertex_ai/claude-4-6-sonnet",
-                    "api_key": "fake-key",
-                },
-                "model_info": {},
-            }
-        )
-        litellm.proxy.proxy_server.llm_router = mock_router
-
-        with pytest.raises(ProxyException) as exc_info:
-            await token_counter(
-                request=TokenCountRequest(
-                    model="claude-4-6-sonnet",
-                    messages=[{"role": "user", "content": "hello"}],
-                ),
-                call_endpoint=True,
-            )
-
-        assert exc_info.value.code == str(upstream_status)
-        assert upstream_message in exc_info.value.message
-        assert exc_info.value.type == "token_counting_error"
-        assert exc_info.value.param == "model"
-    finally:
-        litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
-        litellm.proxy.proxy_server.llm_router = original_router
 
 
 @pytest.mark.asyncio
@@ -1044,71 +961,6 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
         litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
 
 
-@pytest.mark.asyncio
-async def test_proxy_token_counter_error_raises_when_enabled():
-    """
-    Test that proxy token_counter raises ProxyException when disable_token_counter=False
-    and the provider returns an error response, never falling back to the local tokenizer.
-    """
-    # Create error response
-    error_response = TokenCountResponse(
-        total_tokens=0,
-        request_model="bedrock/anthropic.claude-3-sonnet",
-        model_used="anthropic.claude-3-sonnet",
-        tokenizer_type="bedrock_api",
-        error=True,
-        error_message="Rate limit exceeded",
-        status_code=429,
-    )
-
-    # Create mock router that returns a deployment
-    mock_deployment = {
-        "litellm_params": {
-            "model": "bedrock/anthropic.claude-3-sonnet",
-        },
-        "model_info": {},
-    }
-
-    mock_router = MagicMock()
-    mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
-
-    setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
-
-    # Save original value and function
-    original_disable = litellm.disable_token_counter
-    original_get_provider_token_counter = litellm.proxy.proxy_server._get_provider_token_counter
-
-    try:
-        litellm.disable_token_counter = False
-
-        # Create a mock counter that returns an error response
-        mock_counter = MagicMock(spec=BedrockTokenCounter)
-        mock_counter.should_use_token_counting_api.return_value = True
-        mock_counter.count_tokens = AsyncMock(return_value=error_response)
-
-        # Replace the function directly
-        def mock_get_provider_token_counter(deployment, model_to_use):
-            return (mock_counter, "anthropic.claude-3-sonnet", "bedrock")
-
-        litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
-
-        with patch("litellm.token_counter") as mock_local_counter:
-            with pytest.raises(ProxyException) as exc_info:
-                await token_counter(
-                    request=TokenCountRequest(
-                        model="claude-bedrock",
-                        messages=[{"role": "user", "content": "hello"}],
-                    ),
-                    call_endpoint=True,
-                )
-
-        assert exc_info.value.code == "429"
-        assert "Rate limit exceeded" in exc_info.value.message
-        assert exc_info.value.type == "token_counting_error"
-        mock_local_counter.assert_not_called()
-    finally:
-        litellm.disable_token_counter = original_disable
-        litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
 
 
 @pytest.mark.asyncio
@@ -1325,7 +1177,7 @@ _OPUS_IN_US_EAST_1: Final = TokenCountModel(model="us.anthropic.claude-opus-5-5"
 
 async def _ladder(
     counter: _ScriptedCounter, settings: TokenCountSettings, local_estimate_allowed: bool = True
-) -> TokenCountResponse | None:
+) -> TokenCountResponse | ProviderCountFailure | None:
     return await _provider_token_count(
         count_with=partial(
             _try_provider_token_count,
@@ -1381,17 +1233,18 @@ async def test_token_count_model_counts_the_same_request_in_its_own_region_witho
     assert _SONNET_DEPLOYMENT["litellm_params"]["aws_region_name"] == "us-west-2"
 
 
-@pytest.mark.parametrize("status_code", [401, 403, 429, 500])
+@pytest.mark.parametrize("status_code", (400, 401, 403, 404, 429, 500))
+@pytest.mark.parametrize("framing", (None, 0, 10))
 @pytest.mark.asyncio
-async def test_errors_other_than_cannot_count_raise_even_with_framing(status_code: int):
+async def test_provider_count_errors_preserve_legacy_local_fallback(status_code: int, framing: int | None):
     counter: Final = _ScriptedCounter(
         {"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=status_code)}
     )
 
-    with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=10, count_model=None))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=framing, count_model=None))
 
-    assert (raised.value.code, raised.value.message) == (str(status_code), f"scripted {status_code} for sonnet")
+    assert isinstance(result, ProviderCountFailure)
+    assert (result.status_code, result.message) == (status_code, f"scripted {status_code} for sonnet")
 
 
 @pytest.mark.parametrize("status_code", [400, 403, 404, 500])
@@ -1401,38 +1254,36 @@ async def test_token_count_model_failure_names_its_region_so_the_user_can_enable
         {"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)}
     )
 
-    with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=None, count_model=_OPUS_IN_US_EAST_1))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=None, count_model=_OPUS_IN_US_EAST_1))
 
-    assert raised.value.code == str(status_code)
-    assert raised.value.message.startswith(f"scripted {status_code} for opus")
-    assert "us.anthropic.claude-opus-5-5 in us-east-1" in raised.value.message
+    assert isinstance(result, ProviderCountFailure)
+    assert result.status_code == status_code
+    assert result.message.startswith(f"scripted {status_code} for opus")
+    assert "us.anthropic.claude-opus-5-5 in us-east-1" in result.message
     assert len(counter.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_token_count_model_without_a_region_answers_its_error_unchanged():
+async def test_token_count_model_without_a_region_preserves_its_error_for_a_failed_local_estimate():
     counter: Final = _ScriptedCounter({"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404)})
 
-    with pytest.raises(ProxyException) as raised:
-        await _ladder(
-            counter,
-            TokenCountSettings(
-                framing=None, count_model=TokenCountModel(model="us.anthropic.claude-opus-5-5", region=None)
-            ),
-        )
+    result: Final = await _ladder(
+        counter,
+        TokenCountSettings(framing=None, count_model=TokenCountModel(model="us.anthropic.claude-opus-5-5", region=None)),
+    )
 
-    assert (raised.value.code, raised.value.message) == ("404", "scripted 404 for opus")
+    assert isinstance(result, ProviderCountFailure)
+    assert (result.status_code, result.message) == (404, "scripted 404 for opus")
 
 
 @pytest.mark.asyncio
-async def test_uncountable_model_without_framing_raises():
+async def test_uncountable_model_without_framing_preserves_legacy_local_fallback():
     counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404)})
 
-    with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=None, count_model=None))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=None, count_model=None))
 
-    assert raised.value.code == "404"
+    assert isinstance(result, ProviderCountFailure)
+    assert (result.status_code, result.message) == (404, "scripted 404 for sonnet")
 
 
 @pytest.mark.asyncio
@@ -1447,16 +1298,16 @@ async def test_uncountable_model_with_framing_falls_through_to_the_local_estimat
 
 @pytest.mark.parametrize("status_code", [400, 404])
 @pytest.mark.asyncio
-async def test_token_count_model_error_stands_even_with_framing(status_code: int):
+async def test_token_count_model_failure_allows_a_framed_local_estimate(status_code: int):
     counter: Final = _ScriptedCounter(
         {"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)}
     )
 
-    with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=78, count_model=_OPUS_IN_US_EAST_1))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=78, count_model=_OPUS_IN_US_EAST_1))
 
-    assert raised.value.code == str(status_code)
-    assert "us.anthropic.claude-opus-5-5 in us-east-1" in raised.value.message
+    assert isinstance(result, ProviderCountFailure)
+    assert result.status_code == status_code
+    assert "us.anthropic.claude-opus-5-5 in us-east-1" in result.message
 
 
 @pytest.mark.asyncio
@@ -1470,7 +1321,7 @@ async def test_uncountable_model_with_framing_raises_when_local_counting_is_disa
 
 
 @pytest.mark.asyncio
-async def test_request_the_counter_rejects_before_calling_the_provider_answers_400_without_framing():
+async def test_rejected_provider_conversion_still_allows_a_local_estimate():
     counter: Final = _ScriptedCounter(
         {
             "us.anthropic.claude-sonnet-5-5": _provider_reply(
@@ -1479,10 +1330,10 @@ async def test_request_the_counter_rejects_before_calling_the_provider_answers_4
         }
     )
 
-    with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=100, count_model=None))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=100, count_model=None))
 
-    assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for sonnet")
+    assert isinstance(result, ProviderCountFailure)
+    assert (result.status_code, result.message) == (400, "scripted 400 for sonnet")
 
 
 @pytest.mark.parametrize("model", ["openai/gpt-5.4-mini", "gemini/gemini-3.8-flash"])
