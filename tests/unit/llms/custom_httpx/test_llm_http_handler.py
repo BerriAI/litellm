@@ -522,7 +522,7 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
 @pytest.mark.asyncio
 async def test_async_response_api_handler_validates_environment_off_the_event_loop() -> None:
     def validate_environment(**_kwargs: object) -> dict[str, str]:
-        return {"validated-on-thread": str(threading.get_ident())}
+        return {"validated-on-thread": str(threading.get_ident()), "x-override": "provider"}
 
     config: Final = Mock()
     config.validate_environment.side_effect = validate_environment
@@ -546,10 +546,12 @@ async def test_async_response_api_handler_validates_environment_off_the_event_lo
         litellm_params=GenericLiteLLMParams(),
         logging_obj=logging_obj,
         client=client,
+        extra_headers={"x-override": "caller"},
     )
 
     validated_headers: Final = config.async_transform_responses_api_request.await_args.kwargs["headers"]
     assert validated_headers["validated-on-thread"] != str(threading.get_ident())
+    assert validated_headers["x-override"] == "caller"
     client.post.assert_awaited_once()
 
 
