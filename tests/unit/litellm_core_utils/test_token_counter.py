@@ -1504,7 +1504,7 @@ def _pdf_source(pdf_base64: str) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("case", ("pages", "compressed_stream", "total_streams", "objects", "input_bytes"))
-def test_pdf_counting_over_budget_preserves_legacy_image_estimate(case: str):
+def test_pdf_counting_over_budget_preserves_legacy_image_estimate(case: str) -> None:
     from litellm.litellm_core_utils.token_counter import (
         _PDF_MAX_INPUT_BYTES,
         _PDF_MAX_OBJECTS,
@@ -1530,7 +1530,7 @@ def test_pdf_counting_over_budget_preserves_legacy_image_estimate(case: str):
     )
 
 
-def test_compressed_pdf_within_budget_keeps_text_and_page_counts():
+def test_compressed_pdf_within_budget_keeps_text_and_page_counts() -> None:
     pages: Final = ("Count the first page", "Count the second page")
     compressed: Final = _pdf_source(_pdf_base64(pages, compressed=True))
     uncompressed: Final = _pdf_source(_pdf_base64(pages))
@@ -1540,7 +1540,7 @@ def test_compressed_pdf_within_budget_keeps_text_and_page_counts():
 
 
 @pytest.mark.parametrize("nested", (False, True))
-def test_pdf_form_budget_never_returns_a_partial_count(nested: bool):
+def test_pdf_form_budget_never_returns_a_partial_count(nested: bool) -> None:
     from pypdf import PdfWriter
     from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject
 
@@ -1593,7 +1593,7 @@ def test_pdf_form_budget_never_returns_a_partial_count(nested: bool):
     )
 
 
-def test_pdf_counting_restores_the_callers_parser_limits():
+def test_pdf_counting_restores_the_callers_parser_limits() -> None:
     from pypdf import get_configuration
 
     original: Final = get_configuration()
