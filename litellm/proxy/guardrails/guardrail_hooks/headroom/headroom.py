@@ -18,13 +18,11 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.compression.compress import get_protected_indices
-from litellm.constants import (
-    HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
-    SESSION_ID_GENERATED_METADATA_KEY,
-)
+from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+    user_api_key_auth_from_request_data,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     get_attribute_or_key,
@@ -32,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     group_tool_exchanges,
     has_tool_with_name,
 )
+from litellm.litellm_core_utils.provider_affinity import get_stable_session_id
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
@@ -60,20 +59,8 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
-# Routes related Headroom calls to the same pod so its pod-local cache can be
-# reused. The value is derived per tenant (see ``_affinity_key``) and carries no
-# credential, so Headroom needs no end-user authentication of its own.
 AFFINITY_HEADER: Final = "x-headroom-affinity"
-# Fallback salt for the affinity digest when the guardrail config does not set
-# one. Deployments that need the digest to differ across instances (or that want
-# it rotated) set ``affinity_salt`` in the guardrail config instead.
-_DEFAULT_AFFINITY_SALT: Final = "litellm-headroom-affinity-v1"
-# How much of the digest to forward. 32 hex chars is far past collision range for
-# a routing hint while staying short enough to log.
 _AFFINITY_KEY_LENGTH: Final = 32
-# Identities the proxy has already authenticated, most specific first. A client
-# supplied tenant name is deliberately absent: it cannot establish identity.
-_TENANT_ID_KEYS: Final = ("user_api_key_team_id", "user_api_key_org_id", "user_api_key_user_id", "user_api_key_hash")
 _STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
     (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
 )
@@ -105,74 +92,25 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isin
     return isinstance(value, list)
 
 
-def _explicit_session_id(request_data: dict[str, object]) -> str | None:
-    """The caller's own session id, or None when there is none worth pinning.
+def _affinity_key(request_data: Mapping[str, object]) -> str | None:
+    """Opaque routing value for related Headroom calls, or None.
 
-    A session id the proxy generated for a request that arrived without one is
-    unique per request, so affinity built on it would send every call to a
-    different pod and the cache would never hit. That case is marked in metadata
-    and skipped, matching how session affinity is resolved for other providers.
+    Both halves must be present: without a session id there is nothing to keep
+    together, and without a key the proxy authenticated the same session id could
+    belong to different tenants. Neither raw value leaves the proxy.
     """
-    metadata: Final = request_data.get("metadata")
-    if _is_str_object_dict(metadata) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
+    session_id: Final = get_stable_session_id(request_data)
+    key_hash: Final = user_api_key_auth_from_request_data(request_data).api_key
+    if not session_id or not key_hash:
         return None
-    for key in ("litellm_session_id", "session_id"):
-        value: Final = request_data.get(key)
-        if isinstance(value, str) and value:
-            return value
-    if _is_str_object_dict(metadata):
-        value: Final = metadata.get("session_id")
-        if isinstance(value, str) and value:
-            return value
-    return None
+    return hashlib.sha256(f"{key_hash}|{session_id}".encode()).hexdigest()[:_AFFINITY_KEY_LENGTH]
 
 
-def _tenant_id(request_data: dict[str, object]) -> str | None:
-    """The authenticated identity this request runs as, or None when anonymous.
-
-    Only keys the proxy itself resolved from a validated key are considered: a
-    client supplied tenant name never establishes identity, so two tenants
-    cannot end up sharing an affinity value by naming themselves the same thing.
-
-    The identity keys live under ``metadata`` / ``litellm_metadata`` on a proxied
-    request rather than at the top level (see
-    ``litellm.proxy.route_llm_request.get_team_id_from_data``), so both nested
-    containers are searched. The top level is checked too for SDK calls, where
-    they do sit flat.
-    """
-    containers: Final[list[Mapping[str, object]]] = [request_data]
-    for container_key in ("metadata", "litellm_metadata"):
-        nested: Final = request_data.get(container_key)
-        if _is_str_object_dict(nested):
-            containers.append(nested)
-
-    for container in containers:
-        for key in _TENANT_ID_KEYS:
-            value: Final = container.get(key)
-            if isinstance(value, str) and value:
-                return f"{key}={value}"
-            if isinstance(value, int) and not isinstance(value, bool):
-                return f"{key}={value}"
-    return None
-
-
-def _affinity_key(request_data: dict[str, object], salt: str = _DEFAULT_AFFINITY_SALT) -> str | None:
-    """Opaque, tenant-scoped routing value for related Headroom calls, or None.
-
-    Returns None unless both halves are present: without a session id there is
-    nothing to keep together, and without a trusted tenant identity the same
-    session id could belong to different tenants, so affinity is omitted rather
-    than risk crossing a tenant boundary. The raw session id never leaves the
-    proxy: Headroom only ever sees a salted digest.
-    """
-    session_id: Final = _explicit_session_id(request_data)
-    if not session_id:
-        return None
-    tenant: Final = _tenant_id(request_data)
-    if not tenant:
-        return None
-    digest: Final = hashlib.sha256(f"{salt or _DEFAULT_AFFINITY_SALT}|{tenant}|{session_id}".encode()).hexdigest()
-    return digest[:_AFFINITY_KEY_LENGTH]
+@dataclass(frozen=True, slots=True)
+class _IssuedHashes:
+    hashes: frozenset[str]
+    expires_at: float
+    affinity: str | None
 
 
 def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -593,7 +531,6 @@ class HeadroomGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         ccr_retrieval: bool = True,
-        affinity_salt: str | None = None,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -607,15 +544,10 @@ class HeadroomGuardrail(CustomGuardrail):
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
         self.ccr_retrieval = ccr_retrieval
-        # Salted so the digest Headroom receives cannot be replayed to recover
-        # another tenant's session id. Deployments can rotate or vary it per
-        # instance via the guardrail config; the default keeps the value stable
-        # for the common single-deployment case.
-        self.affinity_salt: str = affinity_salt or _DEFAULT_AFFINITY_SALT
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
-        self._issued_hashes_by_call_id: dict[str, tuple[frozenset[str], float]] = {}
+        self._issued_hashes_by_call_id: dict[str, _IssuedHashes] = {}
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
             guardrail_name=guardrail_name,
             event_hook=event_hook,
@@ -668,9 +600,7 @@ class HeadroomGuardrail(CustomGuardrail):
     def _prune_expired_hashes(self) -> None:
         now: Final = time.monotonic()
         self._issued_hashes_by_call_id = {
-            call_id: (hashes, expiry)
-            for call_id, (hashes, expiry) in self._issued_hashes_by_call_id.items()
-            if expiry > now
+            call_id: issued for call_id, issued in self._issued_hashes_by_call_id.items() if issued.expires_at > now
         }
 
     def _handle_compress_failure(
@@ -908,19 +838,20 @@ class HeadroomGuardrail(CustomGuardrail):
         # user message, so it is withheld here at some cost to history ranking.
         # request_data is a bare dict on the base signature; narrow it before
         # reading the untranslated messages so long tool names can be recovered.
-        raw_messages: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data).get("messages")
-        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
+        narrowed_request_data: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data)
+        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(narrowed_request_data.get("messages"))
         protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids)
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
             return inputs
 
         model: Final = self.headroom_model or request_data.get("model")
+        affinity: Final = _affinity_key(narrowed_request_data)
         start_time: Final = time.time()
         result: Final = await self._call_compress(
             messages=_flatten_messages_for_compression(compressible),
             model=model if isinstance(model, str) else None,
-            affinity=_affinity_key(_REQUEST_DATA_ADAPTER.validate_python(request_data), self.affinity_salt),
+            affinity=affinity,
         )
         end_time: Final = time.time()
 
@@ -971,7 +902,11 @@ class HeadroomGuardrail(CustomGuardrail):
         if not call_id:
             call_id = str(uuid.uuid4())
             request_data["litellm_call_id"] = call_id
-        self._issued_hashes_by_call_id[call_id] = (frozenset(hashes), time.monotonic() + _HASH_CACHE_TTL_SECONDS)
+        self._issued_hashes_by_call_id[call_id] = _IssuedHashes(
+            hashes=frozenset(hashes),
+            expires_at=time.monotonic() + _HASH_CACHE_TTL_SECONDS,
+            affinity=affinity,
+        )
 
         existing_tools: Final = inputs.get("tools")
         retrieve_tool: Final = _build_headroom_retrieve_tool()
@@ -1034,14 +969,11 @@ class HeadroomGuardrail(CustomGuardrail):
 
         self._prune_expired_hashes()
         call_id: Final = _resolve_call_id(logging_obj, kwargs)
-        valid_hashes = self._issued_hashes_by_call_id.get(call_id, (frozenset(), 0.0))[0] if call_id else frozenset()
+        issued: Final = self._issued_hashes_by_call_id.get(call_id) if call_id else None
+        valid_hashes: Final = issued.hashes if issued else frozenset()
+        affinity: Final = issued.affinity if issued else None
 
         retrieved: Final[list[tuple[dict[str, object], str]]] = []
-        # The compress call that issued these hashes ran under the originating
-        # request, so its affinity value is what has to be replayed here for the
-        # retrieve to land on the pod holding the entry. kwargs carries the same
-        # request_data shape apply_guardrail sees.
-        affinity: Final = _affinity_key(_REQUEST_DATA_ADAPTER.validate_python(kwargs), self.affinity_salt)
         for tc in tool_calls:
             arguments = tc.get("arguments", {})
             raw_hash = arguments.get("hash", "") if isinstance(arguments, dict) else ""

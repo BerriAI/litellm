@@ -19,13 +19,17 @@ Tests cover:
 - CCR: async_build_agentic_loop_plan calls retrieve endpoint and builds follow-up messages
 - CCR: streaming /chat/completions is converted to a non-streaming call so the agentic
   loop resolves the retrieve tool call, then fake-streamed back to the client
-- session affinity: an explicit session id plus an authenticated tenant identity
-  produce a stable, tenant-scoped x-headroom-affinity header on /v1/compress and
-  /v1/retrieve, and the header is omitted whenever either half is missing
+- session affinity: an explicit session id plus the key hash the proxy stamped
+  produce a stable x-headroom-affinity header on /v1/compress, /v1/retrieve replays
+  the value stored with the issued hashes, and the header is omitted whenever
+  either half is missing
 """
 
+import copy
 import json
+import re
 import time
+from collections.abc import Mapping, Sequence
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -35,12 +39,12 @@ import respx
 from fastapi import HTTPException
 
 import litellm
-
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     AFFINITY_HEADER,
-    HeadroomGuardrail,
-    has_headroom_retrieve_tool,
     HEADROOM_RETRIEVE_TOOL_NAME,
+    HeadroomGuardrail,
+    _IssuedHashes,
+    has_headroom_retrieve_tool,
 )
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
@@ -512,9 +516,10 @@ async def test_async_build_agentic_loop_plan_calls_retrieve_and_builds_messages(
         tool_id="call_abc123",
     )
     messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
-    guardrail._issued_hashes_by_call_id["call-1"] = (
-        frozenset({"b573993006976af767214fac"}),
-        time.monotonic() + 999,
+    guardrail._issued_hashes_by_call_id["call-1"] = _IssuedHashes(
+        hashes=frozenset({"b573993006976af767214fac"}),
+        expires_at=time.monotonic() + 999,
+        affinity=None,
     )
 
     with patch.object(
@@ -578,9 +583,10 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
             "content": "Retrieve more: hash=deadbeef000000000000dead",
         }
     ]
-    guardrail._issued_hashes_by_call_id["call-1"] = (
-        frozenset({"deadbeef000000000000dead"}),
-        time.monotonic() + 999,
+    guardrail._issued_hashes_by_call_id["call-1"] = _IssuedHashes(
+        hashes=frozenset({"deadbeef000000000000dead"}),
+        expires_at=time.monotonic() + 999,
+        affinity=None,
     )
 
     with patch.object(
@@ -662,9 +668,10 @@ async def test_async_build_agentic_loop_plan_rejects_hash_issued_for_different_c
     request just because the second request echoes that hash-shaped string
     back in its own messages -- retrieval must be scoped per litellm_call_id,
     not derived by re-scanning attacker-controlled message text."""
-    guardrail._issued_hashes_by_call_id["call-A"] = (
-        frozenset({"b573993006976af767214fac"}),
-        time.monotonic() + 999,
+    guardrail._issued_hashes_by_call_id["call-A"] = _IssuedHashes(
+        hashes=frozenset({"b573993006976af767214fac"}),
+        expires_at=time.monotonic() + 999,
+        affinity=None,
     )
 
     tool_calls = [
@@ -738,9 +745,10 @@ async def test_async_build_agentic_loop_plan_builds_responses_api_function_call_
         }
     ]
     messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
-    guardrail._issued_hashes_by_call_id["call-1"] = (
-        frozenset({"b573993006976af767214fac"}),
-        time.monotonic() + 999,
+    guardrail._issued_hashes_by_call_id["call-1"] = _IssuedHashes(
+        hashes=frozenset({"b573993006976af767214fac"}),
+        expires_at=time.monotonic() + 999,
+        affinity=None,
     )
 
     with patch.object(
@@ -812,9 +820,10 @@ async def test_async_build_agentic_loop_plan_builds_anthropic_tool_result_messag
         }
     ]
     messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
-    guardrail._issued_hashes_by_call_id["call-1"] = (
-        frozenset({"b573993006976af767214fac"}),
-        time.monotonic() + 999,
+    guardrail._issued_hashes_by_call_id["call-1"] = _IssuedHashes(
+        hashes=frozenset({"b573993006976af767214fac"}),
+        expires_at=time.monotonic() + 999,
+        affinity=None,
     )
 
     with patch.object(
@@ -904,8 +913,8 @@ async def test_service_declared_ccr_hashes_drive_injection_and_validation(guardr
     )
 
     assert has_headroom_retrieve_tool(result.get("tools") or [])
-    ((issued, _expiry),) = guardrail._issued_hashes_by_call_id.values()
-    assert issued == frozenset({"98ca69107318", "b573993006976af767214fac"})
+    (issued,) = guardrail._issued_hashes_by_call_id.values()
+    assert issued.hashes == frozenset({"98ca69107318", "b573993006976af767214fac"})
 
 
 @pytest.mark.asyncio
@@ -2317,9 +2326,10 @@ async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
     to a client that never declared the tool."""
     original_content = "the full uncompressed document"
     final_answer = "the document says hello"
-    guardrail._issued_hashes_by_call_id["ccr-call-id"] = (
-        frozenset({CCR_HASH}),
-        time.monotonic() + 999,
+    guardrail._issued_hashes_by_call_id["ccr-call-id"] = _IssuedHashes(
+        hashes=frozenset({CCR_HASH}),
+        expires_at=time.monotonic() + 999,
+        affinity=None,
     )
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -2371,9 +2381,10 @@ async def test_streaming_responses_resolves_ccr_retrieval_end_to_end(
     instead of streaming a headroom_retrieve function_call to the client."""
     original_content = "the full uncompressed document"
     final_answer = "the document says hello"
-    guardrail._issued_hashes_by_call_id["ccr-call-id"] = (
-        frozenset({CCR_HASH}),
-        time.monotonic() + 999,
+    guardrail._issued_hashes_by_call_id["ccr-call-id"] = _IssuedHashes(
+        hashes=frozenset({CCR_HASH}),
+        expires_at=time.monotonic() + 999,
+        affinity=None,
     )
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -2427,9 +2438,10 @@ def test_sync_streaming_responses_resolves_ccr_retrieval_end_to_end(
     completed response object."""
     original_content = "the full uncompressed document"
     final_answer = "the document says hello"
-    guardrail._issued_hashes_by_call_id["ccr-call-id"] = (
-        frozenset({CCR_HASH}),
-        time.monotonic() + 999,
+    guardrail._issued_hashes_by_call_id["ccr-call-id"] = _IssuedHashes(
+        hashes=frozenset({CCR_HASH}),
+        expires_at=time.monotonic() + 999,
+        affinity=None,
     )
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -2853,7 +2865,9 @@ def _anthropic_response_with_text_and_tool_call() -> dict:
 
 
 async def _plan_for(guardrail: HeadroomGuardrail, response, messages: list):
-    guardrail._issued_hashes_by_call_id["call-1"] = (frozenset({"h" * 24}), time.monotonic() + 60)
+    guardrail._issued_hashes_by_call_id["call-1"] = _IssuedHashes(
+        hashes=frozenset({"h" * 24}), expires_at=time.monotonic() + 60, affinity=None
+    )
     logging_obj = MagicMock()
     logging_obj.litellm_call_id = "call-1"
     logging_obj.model_call_details = {}
@@ -3081,229 +3095,156 @@ def test_unusable_timeout_falls_back_to_the_default(configured: float):
     assert guardrail.timeout.connect == 5.0
 
 
-def _affinity_of(call: "respx.models.Call") -> str | None:
+CHAT_REQUEST: Final[Mapping[str, object]] = {
+    "model": "gpt-4o",
+    "litellm_session_id": "sess-abc",
+    "metadata": {"user_api_key_hash": "hash-a"},
+}
+MESSAGES_REQUEST: Final[Mapping[str, object]] = {
+    "model": "gpt-4o",
+    "litellm_session_id": "sess-abc",
+    "litellm_metadata": {"user_api_key_hash": "hash-a"},
+}
+FORGED_IDENTITY: Final[Mapping[str, object]] = {"user_api_key_hash": "forged", "user_api_key_team_id": "victim"}
+
+
+def _affinity_of(call: respx.models.Call) -> str | None:
     value: Final = call.request.headers.get(AFFINITY_HEADER)
     return str(value) if value else None
 
 
 def _captured_affinity(route: respx.Route) -> str | None:
-    """Read the affinity header off the most recent call on this route.
-
-    route.calls[0] would always be the first request, which is wrong when a test
-    drives several requests through one route and wants to compare them.
-    """
     return _affinity_of(route.calls[-1])
 
 
-@pytest.mark.asyncio
-async def test_compress_sends_stable_tenant_scoped_affinity(
-    guardrail: HeadroomGuardrail,
-    respx_mock: respx.MockRouter,
-):
-    """Related calls in one conversation reach the same pod, and the raw ids never leave."""
-    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").mock(
+def _mock_compress(respx_mock: respx.MockRouter, ccr_hashes: Sequence[str] = ()) -> respx.Route:
+    messages: Final = COMPRESSED_MESSAGES_WITH_HASH if ccr_hashes else COMPRESSED_MESSAGES
+    return respx_mock.post(f"{FAKE_API_BASE}/v1/compress").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "messages": COMPRESSED_MESSAGES,
-                "tokens_before": 1000,
-                "tokens_after": 100,
-            },
+            json={"messages": messages, "tokens_before": 1000, "tokens_after": 100, "ccr_hashes": list(ccr_hashes)},
         )
     )
-    inputs: Final = GenericGuardrailAPIInputs(
-        texts=["A" * 5000],
-        structured_messages=ORIGINAL_MESSAGES,
+
+
+async def _compress_with(guardrail: HeadroomGuardrail, request_data: Mapping[str, object]) -> None:
+    await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=["A" * 5000], structured_messages=ORIGINAL_MESSAGES),
+        request_data=copy.deepcopy(dict(request_data)),
+        input_type="request",
     )
-    request_data: Final = {
-        "model": "gpt-4o",
-        "litellm_session_id": "sess-abc",
-        "metadata": {"user_api_key_team_id": "team-1"},
-    }
 
-    for _ in range(2):
-        await guardrail.apply_guardrail(
-            inputs=inputs,
-            request_data=dict(request_data),
-            input_type="request",
-        )
 
-    sent: Final = [_affinity_of(call) for call in route.calls]
-    assert len(sent) == 2, f"expected two compress calls, got {len(sent)}"
-    first: Final = sent[0]
-    assert first is not None, "an authenticated session must produce an affinity value"
-    assert sent[0] == sent[1], f"the same conversation must map to one affinity, got {sent}"
-    assert len(first) == 32
+@pytest.mark.asyncio
+async def test_compress_sends_stable_affinity_for_one_conversation(
+    httpx_transport: None,
+    guardrail: HeadroomGuardrail,
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = _mock_compress(respx_mock)
+
+    await _compress_with(guardrail, CHAT_REQUEST)
+    await _compress_with(guardrail, CHAT_REQUEST)
+
+    first, second = tuple(_affinity_of(call) for call in route.calls)
+    assert first is not None
+    assert second == first
+    assert re.fullmatch(r"[0-9a-f]{32}", first)
     assert "sess-abc" not in first
-    assert "team-1" not in first
+    assert "hash-a" not in first
 
 
 @pytest.mark.asyncio
-async def test_affinity_differs_per_tenant_for_the_same_session_id(
+async def test_affinity_differs_per_key_for_the_same_session_id(
+    httpx_transport: None,
     guardrail: HeadroomGuardrail,
     respx_mock: respx.MockRouter,
-):
-    """A session id is reusable across tenants, so it cannot be the affinity on its own."""
-    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").mock(
-        return_value=httpx.Response(
-            200,
-            json={"messages": COMPRESSED_MESSAGES, "tokens_before": 1000, "tokens_after": 100},
-        )
-    )
-    inputs: Final = GenericGuardrailAPIInputs(
-        texts=["A" * 5000],
-        structured_messages=ORIGINAL_MESSAGES,
-    )
+) -> None:
+    route: Final = _mock_compress(respx_mock)
 
-    seen: Final[list[str | None]] = []
-    for team_id in ("team-A", "team-B"):
-        await guardrail.apply_guardrail(
-            inputs=inputs,
-            request_data={
-                "model": "gpt-4o",
-                "litellm_session_id": "shared-session",
-                "metadata": {"user_api_key_team_id": team_id},
-            },
-            input_type="request",
-        )
-        seen.append(_affinity_of(route.calls[-1]))
+    await _compress_with(guardrail, CHAT_REQUEST)
+    await _compress_with(guardrail, {**CHAT_REQUEST, "metadata": {"user_api_key_hash": "hash-b"}})
 
-    assert seen[0] is not None and seen[1] is not None
-    assert seen[0] != seen[1], f"different tenants must differ, got {seen}"
+    key_a, key_b = tuple(_affinity_of(call) for call in route.calls)
+    assert key_a is not None
+    assert key_b is not None
+    assert key_b != key_a
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("request_extra", [{}, {"user_api_key_team_alias": "chosen-by-caller"}])
-async def test_affinity_omitted_without_an_authenticated_tenant(
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"model": "gpt-4o", "metadata": {"user_api_key_hash": "hash-a"}},
+        {**CHAT_REQUEST, "metadata": {"litellm_session_id_generated": True, "user_api_key_hash": "hash-a"}},
+        {**MESSAGES_REQUEST, "litellm_metadata": {"litellm_session_id_generated": True, "user_api_key_hash": "hash-a"}},
+        {"model": "gpt-4o", "litellm_session_id": "sess-abc"},
+    ],
+    ids=["no_session_id", "generated_session_id_chat", "generated_session_id_messages", "no_stamped_identity"],
+)
+async def test_affinity_omitted_when_either_half_is_missing(
+    httpx_transport: None,
     guardrail: HeadroomGuardrail,
     respx_mock: respx.MockRouter,
-    request_extra: dict,
-):
-    """Without a trusted identity the header is dropped rather than risking a cross-tenant route."""
-    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").mock(
-        return_value=httpx.Response(
-            200,
-            json={"messages": COMPRESSED_MESSAGES, "tokens_before": 1000, "tokens_after": 100},
-        )
-    )
+    request_data: Mapping[str, object],
+) -> None:
+    route: Final = _mock_compress(respx_mock)
 
-    await guardrail.apply_guardrail(
-        inputs=GenericGuardrailAPIInputs(
-            texts=["A" * 5000],
-            structured_messages=ORIGINAL_MESSAGES,
-        ),
-        request_data={"model": "gpt-4o", "litellm_session_id": "sess-abc", **request_extra},
-        input_type="request",
-    )
+    await _compress_with(guardrail, request_data)
 
     assert _captured_affinity(route) is None
 
 
 @pytest.mark.asyncio
-async def test_affinity_omitted_for_a_proxy_generated_session_id(
+async def test_affinity_ignores_identity_a_client_puts_in_the_body(
+    httpx_transport: None,
     guardrail: HeadroomGuardrail,
     respx_mock: respx.MockRouter,
-):
-    """A generated id is unique per request, so pinning on it would defeat the cache."""
-    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").mock(
-        return_value=httpx.Response(
-            200,
-            json={"messages": COMPRESSED_MESSAGES, "tokens_before": 1000, "tokens_after": 100},
-        )
-    )
+) -> None:
+    route: Final = _mock_compress(respx_mock)
 
-    await guardrail.apply_guardrail(
-        inputs=GenericGuardrailAPIInputs(
-            texts=["A" * 5000],
-            structured_messages=ORIGINAL_MESSAGES,
-        ),
-        request_data={
-            "model": "gpt-4o",
-            "litellm_session_id": "generated-per-request",
-            "metadata": {
-                "litellm_session_id_generated": True,
-                "user_api_key_team_id": "team-1",
-            },
-        },
-        input_type="request",
-    )
+    await _compress_with(guardrail, CHAT_REQUEST)
+    await _compress_with(guardrail, {**CHAT_REQUEST, **FORGED_IDENTITY})
+    await _compress_with(guardrail, {"model": "gpt-4o", "litellm_session_id": "sess-abc", **FORGED_IDENTITY})
 
-    assert _captured_affinity(route) is None
+    stamped, forged_beside_stamped, forged_alone = tuple(_affinity_of(call) for call in route.calls)
+    assert stamped is not None
+    assert forged_beside_stamped == stamped
+    assert forged_alone is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("container", ["metadata", "litellm_metadata"])
-async def test_affinity_uses_the_nested_identity_a_proxied_request_carries(
+async def test_affinity_reads_identity_from_the_container_the_route_stamps(
+    httpx_transport: None,
     guardrail: HeadroomGuardrail,
     respx_mock: respx.MockRouter,
-    container: str,
-):
-    """A proxied request keeps its identity nested, not at the top level.
+) -> None:
+    route: Final = _mock_compress(respx_mock)
 
-    Reading only the top level would silently disable affinity for every real
-    proxy call, so each container the proxy actually populates is covered.
-    """
-    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").mock(
-        return_value=httpx.Response(
-            200,
-            json={"messages": COMPRESSED_MESSAGES, "tokens_before": 1000, "tokens_after": 100},
-        )
-    )
+    await _compress_with(guardrail, CHAT_REQUEST)
+    await _compress_with(guardrail, MESSAGES_REQUEST)
+    await _compress_with(guardrail, {**CHAT_REQUEST, "litellm_metadata": {"user_api_key_token": "hash-a"}})
 
-    await guardrail.apply_guardrail(
-        inputs=GenericGuardrailAPIInputs(
-            texts=["A" * 5000],
-            structured_messages=ORIGINAL_MESSAGES,
-        ),
-        request_data={
-            "model": "gpt-4o",
-            "litellm_session_id": "sess-abc",
-            container: {"user_api_key_team_id": "team-1"},
-        },
-        input_type="request",
-    )
-
-    assert _captured_affinity(route) is not None, f"{container} must supply the tenant identity"
+    chat, messages, chat_through_unified_guardrail = tuple(_affinity_of(call) for call in route.calls)
+    assert chat is not None
+    assert messages == chat
+    assert chat_through_unified_guardrail == chat
 
 
 @pytest.mark.asyncio
-async def test_retrieve_replays_the_same_affinity_the_compress_call_sent(
+async def test_retrieve_replays_the_affinity_the_compress_call_sent(
+    httpx_transport: None,
     guardrail: HeadroomGuardrail,
     respx_mock: respx.MockRouter,
-):
-    """The retrieve must carry the identical value, or it lands on a different pod.
-
-    Asserting the header merely exists would not catch a replay that recomputes a
-    different digest, which is the failure this is here to prevent.
-    """
-    compress: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").mock(
-        return_value=httpx.Response(
-            200,
-            json={"messages": COMPRESSED_MESSAGES, "tokens_before": 1000, "tokens_after": 100},
-        )
-    )
-    request_data: Final = {
-        "litellm_call_id": "call-1",
-        "litellm_session_id": "sess-abc",
-        "metadata": {"user_api_key_team_id": "team-1"},
-    }
-
-    await guardrail.apply_guardrail(
-        inputs=GenericGuardrailAPIInputs(
-            texts=["A" * 5000],
-            structured_messages=ORIGINAL_MESSAGES,
-        ),
-        request_data=dict(request_data),
-        input_type="request",
-    )
-
-    compress_affinity: Final = _captured_affinity(compress)
-    assert compress_affinity is not None, "authenticated session must produce an affinity value"
-
+) -> None:
+    compress: Final = _mock_compress(respx_mock, ccr_hashes=(CCR_HASH,))
     retrieve: Final = respx_mock.get(f"{FAKE_API_BASE}/v1/retrieve/{CCR_HASH}").mock(
         return_value=httpx.Response(200, json={"original_content": "restored"})
     )
-    guardrail._issued_hashes_by_call_id["call-1"] = (frozenset({CCR_HASH}), time.monotonic() + 999)
+
+    await _compress_with(guardrail, {**CHAT_REQUEST, "litellm_call_id": "call-1"})
+    compress_affinity: Final = _captured_affinity(compress)
+    assert compress_affinity is not None
 
     await guardrail.async_build_agentic_loop_plan(
         tools={"tool_calls": [{"arguments": {"hash": CCR_HASH}}]},
@@ -3314,7 +3255,8 @@ async def test_retrieve_replays_the_same_affinity_the_compress_call_sent(
         anthropic_messages_optional_request_params={},
         logging_obj=None,
         stream=False,
-        kwargs=dict(request_data),
+        kwargs={"litellm_call_id": "call-1"},
     )
 
+    assert retrieve.called
     assert _captured_affinity(retrieve) == compress_affinity
