@@ -1449,7 +1449,7 @@ def _should_auto_add_team_creator(
     response_model=LiteLLM_TeamTable,
 )
 @management_endpoint_wrapper
-async def new_team(
+async def new_team(  # batched-write-ok: management endpoint, auth reaches it only to auto-create a team
     data: NewTeamRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

@@ -665,7 +665,7 @@ class DBSpendUpdateWriter:
         )
         spend_logs: Final = SpendLogsRepository(prisma_client).table
         try:
-            claimed: Final = await spend_logs.create_many(
+            claimed: Final = await spend_logs.create_many(  # batched-write-ok: one row per batch retrieve
                 data=[prisma_client.jsonify_object(row)],
                 skip_duplicates=True,
             )
@@ -709,7 +709,8 @@ class DBSpendUpdateWriter:
             )
             return False
         try:
-            taken_over: Final = await SpendLogsRepository(prisma_client).table.update_many(
+            spend_logs: Final = SpendLogsRepository(prisma_client).table
+            taken_over: Final = await spend_logs.update_many(  # batched-write-ok: one row per batch retrieve
                 data=prisma_client.jsonify_object(
                     MappingProxyType({field: value for field, value in row.items() if field != "request_id"})
                 ),

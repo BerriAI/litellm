@@ -20,8 +20,9 @@ LIT013 (`*-ok` suppression that suppresses nothing), LIT014 (comprehension
 with more than one `for` or `if` clause; suppress with
 `# comprehension-ok: <reason>` on a spanned line, which belongs to the innermost
 violating comprehension spanning it and to any single-line violating
-comprehension on that line), and LIT015 (pydantic model not frozen; suppress
-with `# frozen-ok: <reason>`).
+comprehension on that line), LIT015 (pydantic model not frozen; suppress
+with `# frozen-ok: <reason>`), and LIT016 (Prisma write reachable from a
+per-request spend-tracking root; suppress with `# batched-write-ok: <reason>`).
 
 The merge-base counts come from scripts/lint_base_counts.py: the disk cache,
 then the CI artifact published for that commit, then a pass of the current
@@ -159,7 +160,8 @@ def cmd_check(base: str) -> None:
         "Remove the new violations, give each a reason (`# noqa: XXX  # <reason>`, "
         "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, `# cast-ok: <reason>`, "
         "`# guard-ok: <reason>`, `# kwargs-ok: <reason>`, `# rebind-ok: <reason>`, "
-        "`# writable-ok: <reason>`, `# comprehension-ok: <reason>`, `# frozen-ok: <reason>`), "
+        "`# writable-ok: <reason>`, `# comprehension-ok: <reason>`, `# frozen-ok: <reason>`, "
+        "`# batched-write-ok: <reason>`), "
         "or remove an equal number "
         "elsewhere; the ceiling is the merge-base count."
     )

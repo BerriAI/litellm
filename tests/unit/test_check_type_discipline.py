@@ -1057,3 +1057,149 @@ def test_a_fanned_out_run_reports_each_generated_file_exactly_once(tmp_path):
     reported = _run_checker(tmp_path)
     assert reported
     assert len({line.split(":")[0] for line in reported}) == len(paths)
+
+
+# --------------------------------------------------------------------------- #
+# Request-path DB writes (LIT016) and the `batched-write-ok` marker
+# --------------------------------------------------------------------------- #
+
+_WRITER = """
+from litellm.proxy.db.model_usage_rollup import increment_daily_model_usage
+
+
+class DBSpendUpdateWriter:
+    async def update_database(self, payload: object) -> None:
+        await self._record_spend_log(payload)
+        await self._batch_database_updates(payload)
+
+    async def _record_spend_log(self, payload: object) -> None:
+        return None
+
+    async def _batch_database_updates(self, payload: object) -> None:
+        await increment_daily_model_usage(prisma_client=None, payload=payload)
+        await self._update_user_db(payload)
+
+    async def _update_user_db(self, payload: object) -> None:
+        return None
+"""
+
+_ROLLUP = """
+class DailyModelUsageRepository:
+    def __init__(self, prisma_client: object) -> None:
+        self.table = prisma_client
+
+
+async def increment_daily_model_usage(prisma_client: object, payload: object) -> None:
+    await DailyModelUsageRepository(prisma_client).table.upsert(
+        where={"id": 1},
+        data={"create": {}, "update": {}},
+    )
+"""
+
+
+def _request_path_codes(tmp_path: Path, files: dict[str, str]) -> list[tuple[str, int, str]]:
+    for rel, source in files.items():
+        target = tmp_path / "litellm" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source, encoding="utf-8")
+    paths = tuple(sorted((tmp_path / "litellm").rglob("*.py")))
+    return sorted((v.path.name, v.line, v.code) for v in checker.iter_request_path_write_violations(paths))
+
+
+def _pr_43649_shape(rollup: str = _ROLLUP, writer: str = _WRITER) -> dict[str, str]:
+    return {"proxy/db/db_spend_update_writer.py": writer, "proxy/db/model_usage_rollup.py": rollup}
+
+
+def test_write_reached_through_an_imported_function_is_lit016(tmp_path: Path):
+    # The #43649 shape: _batch_database_updates -> increment_daily_model_usage -> table.upsert(.
+    assert _request_path_codes(tmp_path, _pr_43649_shape()) == [("model_usage_rollup.py", 8, "LIT016")]
+
+
+def test_violation_names_the_call_chain_from_the_root(tmp_path: Path):
+    for rel, source in _pr_43649_shape().items():
+        (tmp_path / "litellm" / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "litellm" / rel).write_text(source, encoding="utf-8")
+    found = list(checker.iter_request_path_write_violations(tuple(sorted((tmp_path / "litellm").rglob("*.py")))))
+    assert len(found) == 1
+    assert "DBSpendUpdateWriter._batch_database_updates -> increment_daily_model_usage" in found[0].message
+    assert "table.upsert(" in found[0].message
+
+
+def test_write_in_a_self_method_reached_from_the_root_is_lit016(tmp_path: Path):
+    writer = _WRITER.replace(
+        "    async def _update_user_db(self, payload: object) -> None:\n        return None\n",
+        "    async def _update_user_db(self, payload: object) -> None:\n"
+        "        await self.prisma.db.litellm_usertable.update(where={}, data={})\n",
+    )
+    rollup = _ROLLUP.replace("    await DailyModelUsageRepository(prisma_client).table.upsert(", "    return (")
+    assert _request_path_codes(tmp_path, _pr_43649_shape(rollup, writer)) == [
+        ("db_spend_update_writer.py", 18, "LIT016")
+    ]
+
+
+def test_write_in_a_function_no_root_reaches_is_clean(tmp_path: Path):
+    files = _pr_43649_shape(rollup=_ROLLUP.replace("async def increment_daily_model_usage", "async def nightly_rollup"))
+    files["proxy/db/db_spend_update_writer.py"] = _WRITER.replace(
+        "from litellm.proxy.db.model_usage_rollup import increment_daily_model_usage\n", ""
+    ).replace("        await increment_daily_model_usage(prisma_client=None, payload=payload)\n", "")
+    assert _request_path_codes(tmp_path, files) == []
+
+
+def test_write_outside_the_proxy_and_repositories_packages_is_not_walked(tmp_path: Path):
+    files = _pr_43649_shape()
+    files["integrations/model_usage_rollup.py"] = files.pop("proxy/db/model_usage_rollup.py")
+    files["proxy/db/db_spend_update_writer.py"] = _WRITER.replace(
+        "litellm.proxy.db.model_usage_rollup", "litellm.integrations.model_usage_rollup"
+    )
+    assert _request_path_codes(tmp_path, files) == []
+
+
+def test_read_calls_on_the_request_path_are_clean(tmp_path: Path):
+    rollup = _ROLLUP.replace("table.upsert(", "table.find_unique(")
+    assert _request_path_codes(tmp_path, _pr_43649_shape(rollup)) == []
+
+
+def test_execute_raw_on_the_request_path_is_lit016(tmp_path: Path):
+    rollup = _ROLLUP.replace(
+        '    await DailyModelUsageRepository(prisma_client).table.upsert(\n        where={"id": 1},\n        data={"create": {}, "update": {}},\n    )\n',
+        "    await prisma_client.db.execute_raw('INSERT INTO t VALUES (1)')\n",
+    )
+    assert _request_path_codes(tmp_path, _pr_43649_shape(rollup)) == [("model_usage_rollup.py", 8, "LIT016")]
+
+
+def test_batched_write_ok_on_the_write_line_suppresses_lit016(tmp_path: Path):
+    rollup = _ROLLUP.replace("table.upsert(", "table.upsert(  # batched-write-ok: one row per flush of the spend queue")
+    assert _request_path_codes(tmp_path, _pr_43649_shape(rollup)) == []
+
+
+def test_batched_write_ok_on_the_def_line_cuts_the_function_out_of_the_walk(tmp_path: Path):
+    rollup = _ROLLUP.replace(
+        "async def increment_daily_model_usage(prisma_client: object, payload: object) -> None:",
+        "async def increment_daily_model_usage(  # batched-write-ok: called once per flush, not per request\n"
+        "    prisma_client: object, payload: object\n) -> None:",
+    )
+    assert _request_path_codes(tmp_path, _pr_43649_shape(rollup)) == []
+
+
+def test_batched_write_ok_on_an_unreached_line_is_lit013(tmp_path: Path):
+    rollup = _ROLLUP.replace(
+        "class DailyModelUsageRepository:", "class DailyModelUsageRepository:  # batched-write-ok: nothing here writes"
+    )
+    assert _request_path_codes(tmp_path, _pr_43649_shape(rollup)) == [
+        ("model_usage_rollup.py", 2, "LIT013"),
+        ("model_usage_rollup.py", 8, "LIT016"),
+    ]
+
+
+def test_batched_write_ok_without_a_reason_is_lit005_and_does_not_suppress(tmp_path: Path):
+    rollup = _ROLLUP.replace("table.upsert(", "table.upsert(  # batched-write-ok")
+    assert _request_path_codes(tmp_path, _pr_43649_shape(rollup)) == [("model_usage_rollup.py", 8, "LIT016")]
+    assert "LIT005" in _codes(tmp_path, "x = 1  # batched-write-ok\n")
+
+
+def test_main_reports_lit016_alongside_the_per_file_rules(tmp_path: Path):
+    for rel, source in _pr_43649_shape().items():
+        (tmp_path / "litellm" / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "litellm" / rel).write_text(source, encoding="utf-8")
+    reported = _run_checker(tmp_path / "litellm")
+    assert any(line.endswith("model_usage_rollup.py:8: LIT016") or ": LIT016 " in line for line in reported)

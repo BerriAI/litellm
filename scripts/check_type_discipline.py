@@ -18,8 +18,8 @@ LIT003  noqa suppression without rule codes or without a reason.
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
 LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` /
-        `# rebind-ok` / `# writable-ok` / `# comprehension-ok` / `# frozen-ok`
-        suppression without a reason.
+        `# rebind-ok` / `# writable-ok` / `# comprehension-ok` / `# frozen-ok` /
+        `# batched-write-ok` suppression without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -101,6 +101,22 @@ LIT015  Pydantic model class that is not frozen. Set `frozen=True` in
         models, while `TypedDict` classes are exempt. Replace in-place field writes
         with `model_copy(update=...)`. Suppress with `# frozen-ok: <reason>` on the
         `class` line.
+LIT016  Prisma write reachable from a per-request spend-tracking entry point. The
+        roots are REQUEST_PATH_ROOTS (`DBSpendUpdateWriter.update_database`,
+        `DBSpendUpdateWriter._batch_database_updates` and the `_ProxyDBLogger`
+        success hook); the checker builds a name-resolved call graph over
+        `litellm.proxy` and `litellm.repositories` (same-module and imported
+        functions, `self.`/`cls.` methods of the enclosing class, module and class
+        attribute calls through the import table, and a bare method-name match when
+        at most _MAX_NAME_CANDIDATES functions share the name) and flags every
+        `.create/.update/.upsert/.create_many/.update_many/.delete/.delete_many(`
+        with a `data=`/`where=` keyword or on a `.table`/`.db.litellm_*` receiver, and
+        every `.execute_raw(`, inside a reached function. Those functions run once per
+        request, so a write there is a statement per request instead of one per
+        flush of the spend-update queue. This is a whole-tree rule: it runs once over
+        every target path, not per file. Suppress with `# batched-write-ok: <reason>`
+        on the write's first line, or on a `def` line to keep that function and
+        everything it calls out of the walk; a marker that does neither is LIT013.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -191,6 +207,7 @@ REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
 COMPREHENSION_OK_RE = re.compile(r"#\s*comprehension-ok(?::\s*(?P<reason>.*))?")
 FROZEN_OK_RE: Final = re.compile(r"#\s*frozen-ok(?::\s*(?P<reason>.*))?")
+BATCHED_WRITE_OK_RE: Final = re.compile(r"#\s*batched-write-ok(?::\s*(?P<reason>.*))?")
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +230,9 @@ OK_SUPPRESSIONS: Final[tuple[_OkToken, ...]] = (
     _OkToken("comprehension-ok", COMPREHENSION_OK_RE, frozenset(("LIT014",))),
     _OkToken("frozen-ok", FROZEN_OK_RE, frozenset(("LIT015",))),
 )
+# LIT016 is a whole-tree rule, so its marker is applied by iter_request_path_write_violations, not per file.
+BATCHED_WRITE_OK: Final = _OkToken("batched-write-ok", BATCHED_WRITE_OK_RE, frozenset(("LIT016",)))
+ALL_OK_SUPPRESSIONS: Final = (*OK_SUPPRESSIONS, BATCHED_WRITE_OK)
 
 
 class Violation(NamedTuple):
@@ -242,7 +262,7 @@ def _valid_ok(regex: re.Pattern[str], text: str) -> bool:
 
 def _comment_violations(path: Path, line_no: int, text: str) -> Iterator[Violation]:
     """Pure: all LIT003/004/005 findings for one comment."""
-    for ok in OK_SUPPRESSIONS:
+    for ok in ALL_OK_SUPPRESSIONS:
         m = ok.pattern.search(text)
         if m and len((m.group("reason") or "").strip()) < MIN_REASON_LEN:
             yield Violation(path, line_no, "LIT005", f"{ok.token} requires a reason: `# {ok.token}: <reason>`")
@@ -283,13 +303,13 @@ def scan_comments(path: Path, source: str) -> tuple[Mapping[str, frozenset[int]]
         # tokenize raises TokenError (EOF mid-construct) or a SyntaxError subclass
         # (IndentationError / TabError) on malformed source; defer to ast.parse below,
         # which re-raises and is reported as LIT000 rather than crashing the run.
-        return {ok.token: frozenset() for ok in OK_SUPPRESSIONS}, ()
+        return {ok.token: frozenset() for ok in ALL_OK_SUPPRESSIONS}, ()
 
     return (
         MappingProxyType(
             {
                 ok.token: frozenset(line for line, text in comment_toks if _valid_ok(ok.pattern, text))
-                for ok in OK_SUPPRESSIONS
+                for ok in ALL_OK_SUPPRESSIONS
             }
         ),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
@@ -1034,9 +1054,7 @@ def _comprehension_owners(tree: ast.AST, ok_lines: frozenset[int]) -> Mapping[in
     silences a multi-line enclosing one and a violation sharing its only line
     can still be suppressed.
     """
-    violating: Final = tuple(
-        n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES) and _violates(n)
-    )
+    violating: Final = tuple(n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES) and _violates(n))
 
     def nesting_key(node: ast.expr) -> tuple[int, int]:
         return (len(_span(node)), (node.end_col_offset or node.col_offset) - node.col_offset)
@@ -1092,24 +1110,344 @@ def apply_suppressions(
     kept = tuple(
         v
         for v in raw
-        if not any(
-            v.line in suppressions.get(ok.token, frozenset()) and v.code in ok.codes
-            for ok in OK_SUPPRESSIONS
-        )
+        if not any(v.line in suppressions.get(ok.token, frozenset()) and v.code in ok.codes for ok in OK_SUPPRESSIONS)
     )
     unused = (
         Violation(
             path,
             line,
             "LIT013",
-            f"`# {ok.token}` suppresses nothing: no "
-            f"{'/'.join(sorted(ok.codes))} violation on this line, so delete it",
+            f"`# {ok.token}` suppresses nothing: no {'/'.join(sorted(ok.codes))} violation on this line, so delete it",
         )
         for ok in OK_SUPPRESSIONS
         for line in sorted(suppressions.get(ok.token, frozenset()))
         if not any(v.line == line and v.code in ok.codes for v in raw)
     )
     return (*kept, *unused)
+
+
+# --------------------------------------------------------------------------- #
+# Request-path DB writes (LIT016)
+# --------------------------------------------------------------------------- #
+
+REQUEST_PATH_ROOTS: Final[tuple[tuple[str, str], ...]] = (
+    ("litellm.proxy.db.db_spend_update_writer", "DBSpendUpdateWriter.update_database"),
+    ("litellm.proxy.db.db_spend_update_writer", "DBSpendUpdateWriter._batch_database_updates"),
+    ("litellm.proxy.hooks.proxy_track_cost_callback", "_ProxyDBLogger.async_log_success_event"),
+)
+REQUEST_PATH_PACKAGES: Final = ("litellm.proxy", "litellm.repositories")
+PRISMA_WRITE_METHODS: Final = frozenset(
+    ("create", "update", "upsert", "create_many", "update_many", "delete", "delete_many", "execute_raw")
+)
+_PRISMA_WRITE_KEYWORDS: Final = frozenset(("data", "where"))
+# Method names shared by builtins, stdlib and logging objects: a bare-name match on these
+# would wire every `d.get()` or `logger.info()` into the graph, so they never resolve by name.
+_UNRESOLVABLE_METHOD_NAMES: Final = frozenset(
+    (
+        *PRISMA_WRITE_METHODS,
+        "add",
+        "append",
+        "clear",
+        "copy",
+        "count",
+        "decode",
+        "encode",
+        "endswith",
+        "extend",
+        "find",
+        "format",
+        "get",
+        "index",
+        "items",
+        "join",
+        "keys",
+        "lower",
+        "pop",
+        "remove",
+        "replace",
+        "setdefault",
+        "sort",
+        "split",
+        "startswith",
+        "strip",
+        "upper",
+        "values",
+        "debug",
+        "info",
+        "warning",
+        "error",
+        "exception",
+        "log",
+        "dict",
+        "json",
+        "model_copy",
+        "model_dump",
+        "model_validate",
+        "add_done_callback",
+        "cancel",
+        "create_task",
+        "gather",
+        "result",
+        "run",
+        "sleep",
+        "wait",
+        "get_nowait",
+        "put",
+        "put_nowait",
+        "qsize",
+        "acquire",
+        "release",
+        "close",
+        "open",
+        "read",
+        "write",
+        "send",
+        "match",
+        "search",
+        "sub",
+        "findall",
+        "group",
+        "date",
+        "isoformat",
+        "now",
+        "strftime",
+        "strptime",
+        "timestamp",
+        "utcnow",
+        "connect",
+        "disconnect",
+        "execute",
+        "find_first",
+        "find_many",
+        "find_unique",
+        "query_raw",
+    )
+)
+_MAX_NAME_CANDIDATES: Final = 4
+
+
+@dataclass(frozen=True, slots=True)
+class _Function:
+    key: str
+    qualname: str
+    module: str
+    class_name: str | None
+    path: Path
+    node: ast.FunctionDef | ast.AsyncFunctionDef
+    cut: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _Module:
+    name: str
+    path: Path
+    functions: tuple[_Function, ...]
+    imports: Mapping[str, str]
+    marker_lines: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class _CallGraph:
+    modules: Mapping[str, _Module]
+    functions: Mapping[str, _Function]
+    by_name: Mapping[str, tuple[str, ...]]
+    by_method: Mapping[tuple[str, str], tuple[str, ...]]
+
+
+def _module_name(path: Path) -> str | None:
+    """`.../litellm/proxy/db/x.py` -> `litellm.proxy.db.x`; None when the path is not under a `litellm` dir."""
+    parts: Final = path.resolve().with_suffix("").parts
+    if "litellm" not in parts[:-1]:
+        return None
+    start: Final = len(parts) - 2 - parts[-2::-1].index("litellm")
+    dotted: Final = parts[start:-1] if parts[-1] == "__init__" else parts[start:]
+    return ".".join(dotted)
+
+
+def _in_request_path_scope(module: str) -> bool:
+    return any(module == pkg or module.startswith(pkg + ".") for pkg in REQUEST_PATH_PACKAGES)
+
+
+def _own_body(node: ast.AST) -> Iterator[ast.AST]:
+    """Walk `node` without descending into nested defs or classes: those are their own graph nodes."""
+    for child in ast.iter_child_nodes(node):
+        yield child
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            yield from _own_body(child)
+
+
+def _imports_of(tree: ast.Module) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            alias.asname or alias.name: f"{node.module}.{alias.name}"
+            if isinstance(node, ast.ImportFrom)
+            else alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom)) and (not isinstance(node, ast.ImportFrom) or node.module)
+            for alias in node.names
+        }  # comprehension-ok: one import table per module, the inner loop is the alias list
+    )
+
+
+def _functions_of(
+    body: Iterable[ast.AST], module: str, path: Path, class_name: str | None, prefix: str, marker_lines: frozenset[int]
+) -> Iterator[_Function]:
+    for node in body:
+        if isinstance(node, ast.ClassDef):
+            yield from _functions_of(node.body, module, path, node.name, f"{prefix}{node.name}.", marker_lines)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            qualname: Final = f"{prefix}{node.name}"
+            yield _Function(
+                f"{module}:{qualname}", qualname, module, class_name, path, node, node.lineno in marker_lines
+            )
+            yield from _functions_of(node.body, module, path, class_name, f"{qualname}.", marker_lines)
+
+
+def _load_module(path: Path) -> _Module | None:
+    module: Final = _module_name(path)
+    if module is None or not _in_request_path_scope(module):
+        return None
+    try:
+        source: Final = path.read_text(encoding="utf-8")
+        tree: Final = ast.parse(source, filename=str(path))
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return None
+    marker_lines: Final = scan_comments(path, source)[0][BATCHED_WRITE_OK.token]
+    return _Module(
+        module,
+        path,
+        tuple(_functions_of(tree.body, module, path, None, "", marker_lines)),
+        _imports_of(tree),
+        marker_lines,
+    )
+
+
+def _group(pairs: Iterable[tuple[object, str]]) -> Mapping[object, tuple[str, ...]]:
+    ordered: Final = sorted(pairs, key=lambda p: repr(p[0]))
+    return MappingProxyType({k: tuple(key for _, key in g) for k, g in groupby(ordered, key=lambda p: p[0])})
+
+
+def build_call_graph(paths: Sequence[Path]) -> _CallGraph:
+    modules: Final = tuple(m for m in map(_load_module, paths) if m is not None)
+    functions: Final = tuple(f for m in modules for f in m.functions)
+    return _CallGraph(
+        MappingProxyType({m.name: m for m in modules}),
+        MappingProxyType({f.key: f for f in functions}),
+        _group((f.node.name, f.key) for f in functions),
+        _group(((f.class_name, f.node.name), f.key) for f in functions if f.class_name is not None),
+    )
+
+
+def _resolve_call(call: ast.Call, fn: _Function, graph: _CallGraph) -> tuple[str, ...]:
+    imports: Final = graph.modules[fn.module].imports
+    func: Final = call.func
+    if isinstance(func, ast.Name):
+        local: Final = f"{fn.module}:{func.id}"
+        if local in graph.functions:
+            return (local,)
+        target: Final = imports.get(func.id)
+        if target is None:
+            return ()
+        module, _, name = target.rpartition(".")
+        imported: Final = f"{module}:{name}"
+        return (imported,) if imported in graph.functions else ()
+    if not isinstance(func, ast.Attribute):
+        return ()
+    method: Final = func.attr
+    receiver: Final = func.value
+    if isinstance(receiver, ast.Name) and receiver.id in ("self", "cls") and fn.class_name is not None:
+        own: Final = graph.by_method.get((fn.class_name, method))
+        if own:
+            return own
+    if isinstance(receiver, ast.Name) and receiver.id in imports:
+        target_mod: Final = imports[receiver.id]
+        module_fn: Final = f"{target_mod}:{method}"
+        if module_fn in graph.functions:
+            return (module_fn,)
+        owner, _, cls = target_mod.rpartition(".")
+        class_fn: Final = f"{owner}:{cls}.{method}"
+        if class_fn in graph.functions:
+            return (class_fn,)
+    if method in _UNRESOLVABLE_METHOD_NAMES or method.startswith("__"):
+        return ()
+    candidates: Final = graph.by_name.get(method, ())
+    return candidates if len(candidates) <= _MAX_NAME_CANDIDATES else ()
+
+
+def _callees(fn: _Function, graph: _CallGraph) -> frozenset[str]:
+    return frozenset(
+        key for node in _own_body(fn.node) if isinstance(node, ast.Call) for key in _resolve_call(node, fn, graph)
+    )  # comprehension-ok: flattening the per-call resolution into one edge set
+
+
+def _is_prisma_write(call: ast.Call) -> bool:
+    if not isinstance(call.func, ast.Attribute) or call.func.attr not in PRISMA_WRITE_METHODS:
+        return False
+    if call.func.attr == "execute_raw" or any(kw.arg in _PRISMA_WRITE_KEYWORDS for kw in call.keywords):
+        return True
+    receiver: Final = ast.unparse(call.func.value)
+    return ".table" in receiver or ".db.litellm_" in receiver
+
+
+def _reach(graph: _CallGraph) -> Mapping[str, str | None]:
+    """BFS from REQUEST_PATH_ROOTS over callee edges; maps every reached function to the caller it was reached from."""
+    roots: Final = tuple(f"{m}:{q}" for m, q in REQUEST_PATH_ROOTS if f"{m}:{q}" in graph.functions)
+    parents: dict[str, str | None] = {k: None for k in roots}  # mutable-ok: BFS frontier bookkeeping
+    frontier: list[str] = list(roots)  # mutable-ok: BFS frontier bookkeeping
+    while frontier:
+        key: Final = frontier.pop()  # rebind-ok: loop-local
+        if graph.functions[key].cut:
+            continue
+        fresh: Final = tuple(c for c in sorted(_callees(graph.functions[key], graph)) if c not in parents)
+        parents.update((c, key) for c in fresh)
+        frontier.extend(fresh)
+    return MappingProxyType(parents)
+
+
+def _chain(key: str, parents: Mapping[str, str | None], graph: _CallGraph) -> str:
+    names: Final = []  # mutable-ok: walking parent pointers to the root
+    cursor: str | None = key  # rebind-ok: walks the parent chain
+    while cursor is not None:
+        names.append(graph.functions[cursor].qualname)
+        cursor = parents[cursor]  # rebind-ok: walks the parent chain
+    return " -> ".join(reversed(names))
+
+
+def iter_request_path_write_violations(paths: Sequence[Path]) -> Iterator[Violation]:
+    """LIT016 for every Prisma write a request-path root reaches, plus LIT013 for `batched-write-ok` markers
+    that neither sit on such a write nor cut a reached function."""
+    graph: Final = build_call_graph(paths)
+    parents: Final = _reach(graph)
+    reached: Final = tuple(graph.functions[k] for k in parents)
+    used: dict[Path, set[int]] = {}  # mutable-ok: marker bookkeeping across functions
+    for fn in reached:
+        if fn.cut:
+            used.setdefault(fn.path, set()).add(fn.node.lineno)
+            continue
+        markers: Final = graph.modules[fn.module].marker_lines
+        for call in _own_body(fn.node):
+            if not isinstance(call, ast.Call) or not _is_prisma_write(call):
+                continue
+            if call.lineno in markers:
+                used.setdefault(fn.path, set()).add(call.lineno)
+                continue
+            yield Violation(
+                fn.path,
+                call.lineno,
+                "LIT016",
+                f"`{ast.unparse(call.func)}(` is a DB write on the request path "
+                f"({_chain(fn.key, parents, graph)}); every request runs it, so move it behind the batched "
+                f"spend-update queue or justify it with `# batched-write-ok: <reason>`",
+            )
+    for module in graph.modules.values():
+        for line in sorted(module.marker_lines - used.get(module.path, set())):
+            yield Violation(
+                module.path,
+                line,
+                "LIT013",
+                f"`# {BATCHED_WRITE_OK.token}` suppresses nothing: no LIT016 write and no request-path function "
+                f"on this line, so delete it",
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -1130,9 +1468,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
     except SyntaxError as exc:
         return (*violations, Violation(path, exc.lineno or 0, "LIT000", f"syntax error: {exc.msg}"))
 
-    comprehension_violations: Final = tuple(
-        iter_comprehension_violations(path, tree, suppressions["comprehension-ok"])
-    )
+    comprehension_violations: Final = tuple(iter_comprehension_violations(path, tree, suppressions["comprehension-ok"]))
 
     return (
         *violations,
@@ -1192,7 +1528,7 @@ def main(argv: Sequence[str]) -> int:
         return 2
 
     targets: Final = tuple(collect_paths(paths))
-    violations: Final = sorted(scan_paths(targets))
+    violations: Final = sorted((*scan_paths(targets), *iter_request_path_write_violations(targets)))
     for v in violations:
         print(v.render())
 
