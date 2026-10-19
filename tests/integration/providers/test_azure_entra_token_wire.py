@@ -544,6 +544,30 @@ def test_oidc_azure_deployments_share_one_entra_mint_per_audience(
     assert minted == (shared, other)
 
 
+def test_an_oidc_token_beside_a_client_secret_is_the_credential_sent_on_every_api_version(
+    service_gateway: Gateway, azure: Wire
+) -> None:
+    audience: Final = _audience("precedence")
+    with service_gateway.scenario() as scenario:
+        models: Final = tuple(
+            scenario.model(
+                model=f"azure/{_DEPLOYMENT}",
+                api_base=azure.url,
+                api_key=None,
+                api_version=api_version,
+                azure_ad_token=f"oidc/azure/{audience}",
+                tenant_id=_TENANT,
+                client_id=_SERVICE_CLIENT,
+                client_secret="scripted-service-secret",
+            )
+            for api_version in (_LEGACY_API_VERSION, "v1")
+        )
+        answers: Final = tuple(_chat_authorization(service_gateway, model) for model in models)
+
+    oidc: Final = f"Bearer {_exchanged_token(_secret_token(audience))}"
+    assert answers == (oidc, oidc)
+
+
 def test_bing_grounding_mints_off_the_event_loop_and_reuses_its_entra_token_across_searches(
     service_gateway: Gateway, entra: Entra, foundry: Wire
 ) -> None:
