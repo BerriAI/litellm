@@ -954,7 +954,9 @@ impl Settle for Reservation {
         };
         let mut keys = Vec::new();
         let mut changes = Vec::new();
+        let keep = record.cut_off_after_dispatch();
         for (counter, charged) in self.plan.counters.iter().zip(&self.charged) {
+            let cost = if keep { *charged } else { cost };
             let delta = cost - charged;
             if delta == 0.0 && *charged == 0.0 {
                 continue;

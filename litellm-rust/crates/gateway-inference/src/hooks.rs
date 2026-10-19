@@ -50,13 +50,14 @@ impl Hooks {
 
 /// One request's admission, and the deployment its last attempt went to. Dropped before it
 /// finishes, as when the client goes away mid-route, it records the request as interrupted so
-/// the hooks still return what they reserved.
+/// the hooks still settle: what they reserved comes back unless the request already reached a
+/// provider, which may bill it.
 pub(crate) struct Tracking {
     pipeline: Arc<Pipeline>,
     route: Route,
     admission: Option<Admission>,
     /// The deployment the latest attempt went to, and when it was sent.
-    deployment: Mutex<Option<(DeploymentFacts, SystemTime)>>,
+    deployment: Mutex<Option<(Option<DeploymentFacts>, SystemTime)>>,
     started: Instant,
 }
 
@@ -190,18 +191,20 @@ impl Tracking {
     }
 
     /// Notes the deployment an attempt went to; the last one is the one that served.
+    /// Its send time is kept even when no hook reads the deployment, so settling can tell a
+    /// request that reached a provider from one that did not.
     pub(crate) fn attempt(&self, name: &str, attempt: &Attempt<'_>) {
-        if !self.pipeline.reads(Facts::DEPLOYMENT) {
-            return;
-        }
         let deployment: &Deployment = attempt.deployment;
-        let facts = DeploymentFacts {
-            id: attempt.id.into(),
-            model_group: name.into(),
-            model: deployment.model.clone(),
-            provider: deployment.custom_llm_provider.clone(),
-            api_base: deployment.api_base.clone(),
-        };
+        let facts = self
+            .pipeline
+            .reads(Facts::DEPLOYMENT)
+            .then(|| DeploymentFacts {
+                id: attempt.id.into(),
+                model_group: name.into(),
+                model: deployment.model.clone(),
+                provider: deployment.custom_llm_provider.clone(),
+                api_base: deployment.api_base.clone(),
+            });
         *self.deployment.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((facts, SystemTime::now()));
     }
@@ -234,7 +237,7 @@ impl Tracking {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
-            .unzip()
+            .map_or((None, None), |(facts, sent_at)| (facts, Some(sent_at)))
     }
 
     /// Adds the hooks' response headers and follows the body to its end; an error is recorded

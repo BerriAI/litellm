@@ -1148,12 +1148,13 @@ impl Settle for Held {
             tokens,
         } = *self;
         let charge = tokens.and_then(|tokens| {
-            // The proxy counts every token but cache reads. Without usage, a success keeps its
-            // reservation and a failure returns it.
+            // The proxy counts every token but cache reads. Without usage, a success or a request
+            // cut off after it reached the provider keeps its reservation, and a failure returns it.
             let actual = match (&record.outcome.usage, record.succeeded()) {
                 (Some(usage), _) => i64::try_from(usage.total_tokens() - usage.cache_read_tokens)
                     .unwrap_or(i64::MAX),
                 (None, true) => tokens.reserved,
+                (None, false) if record.cut_off_after_dispatch() => tokens.reserved,
                 (None, false) => 0,
             };
             let delta = actual - tokens.reserved;
