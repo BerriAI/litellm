@@ -35,7 +35,7 @@ import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
