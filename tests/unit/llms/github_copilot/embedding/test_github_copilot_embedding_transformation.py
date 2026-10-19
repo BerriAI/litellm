@@ -1,3 +1,4 @@
+import uuid
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -38,7 +39,7 @@ def test_github_copilot_embedding_config_validate_environment():
     assert validated_headers["Authorization"] == f"Bearer {mock_api_key}"
     assert validated_headers["copilot-integration-id"] == "vscode-chat"
     assert validated_headers["editor-version"] == "vscode/1.115.0"
-    assert "x-request-id" not in validated_headers
+    assert str(uuid.UUID(validated_headers["x-request-id"])) == validated_headers["x-request-id"]
 
     # Test with authentication failure
     config.authenticator.get_api_key.side_effect = GetAPIKeyError(

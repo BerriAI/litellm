@@ -28621,7 +28621,7 @@ def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lack
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": 4102444800}))
+    (tmp_path / "access-token").write_text("gho_test")
     model_list: Final = [
         {
             "model_name": "mixed-json-mode",

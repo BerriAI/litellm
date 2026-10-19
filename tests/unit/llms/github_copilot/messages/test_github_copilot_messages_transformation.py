@@ -151,7 +151,7 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_context_
 
 @pytest.mark.usefixtures("local_beta_headers_config")
 def test_github_copilot_safeguards_do_not_derive_the_dangerous_tool_use_beta() -> None:
-    session: Final = GithubCopilotUserSession(token="gh.test-key", api_base="https://api.githubcopilot.com")
+    session: Final = GithubCopilotUserSession(token="gh.test-key")
 
     validated_headers, _ = GithubCopilotAnthropicMessagesConfig().validate_anthropic_messages_environment(
         headers={},

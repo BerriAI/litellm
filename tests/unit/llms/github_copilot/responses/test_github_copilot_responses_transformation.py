@@ -8,6 +8,7 @@ Source: litellm/llms/github_copilot/responses/transformation.py
 """
 
 import os
+import uuid
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -114,6 +115,7 @@ class TestGithubCopilotResponsesAPITransformation:
 
         config = GithubCopilotResponsesAPIConfig()
         headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params={})
+        next_headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params={})
 
         assert headers["Authorization"] == "Bearer test-api-key-123"
         assert headers["accept"] == "application/json"
@@ -122,10 +124,11 @@ class TestGithubCopilotResponsesAPITransformation:
         assert headers["editor-version"] == "vscode/1.115.0"
         assert headers["editor-plugin-version"] == "copilot-chat/0.26.7"
         assert headers["user-agent"] == "GitHubCopilotChat/0.26.7"
-        assert "openai-intent" not in headers
-        assert "x-github-api-version" not in headers
-        assert "x-request-id" not in headers
-        assert "x-vscode-user-agent-library-version" not in headers
+        assert headers["openai-intent"] == "conversation-panel"
+        assert headers["x-github-api-version"] == "2025-04-01"
+        assert headers["x-vscode-user-agent-library-version"] == "electron-fetch"
+        assert str(uuid.UUID(headers["x-request-id"])) == headers["x-request-id"]
+        assert next_headers["x-request-id"] != headers["x-request-id"]
 
     @patch(  # test-quality-ok: matches the Authenticator-mocking convention already used throughout this file
         "litellm.llms.github_copilot.responses.transformation.Authenticator"

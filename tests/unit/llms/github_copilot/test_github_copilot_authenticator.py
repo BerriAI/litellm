@@ -1,5 +1,6 @@
 import logging
 import os
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -170,6 +171,7 @@ class TestGitHubCopilotAuthenticator:
             "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION": "",
             "GITHUB_COPILOT_API_VERSION": "2026-06-01",
             "GITHUB_COPILOT_OPENAI_INTENT": "conversation-edits",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION": "",
             "GITHUB_COPILOT_API_BASE": "https://api.githubcopilot.com",
         }
 
@@ -206,12 +208,13 @@ class TestGitHubCopilotAuthenticator:
                 "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             },
         }
-        assert request_headers == {
+        assert {header: value for header, value in request_headers.items() if header != "x-request-id"} == {
             **expected_auth_headers,
             "openai-intent": "conversation-edits",
             "x-github-api-version": "2026-06-01",
             "Authorization": "Bearer " + "opencode-oauth-token",
         }
+        assert str(uuid.UUID(request_headers["x-request-id"])) == request_headers["x-request-id"]
         mock_client.get.assert_not_called()
 
     def test_get_access_token_from_file(self, authenticator):

@@ -638,11 +638,11 @@ def test_github_copilot_messages_forward_safeguards_without_deriving_the_beta(
     token_dir: Final = tmp_path / "copilot"
     token_dir.mkdir()
     with wire_server(anthropic_peer) as wire:
-        (token_dir / "api-key.json").write_text(
-            json.dumps({"token": "synthetic-copilot-token", "expires_at": 4102444800, "endpoints": {"api": wire.url}})
-        )
+        (token_dir / "access-token").write_text("synthetic-copilot-token")
         with (
-            owned_proxy(gateway, tmp_path, {"GITHUB_COPILOT_TOKEN_DIR": str(token_dir)}) as owned,
+            owned_proxy(
+                gateway, tmp_path, {"GITHUB_COPILOT_TOKEN_DIR": str(token_dir), "GITHUB_COPILOT_API_BASE": wire.url}
+            ) as owned,
             owned.scenario() as scenario,
         ):
             model: Final = scenario.model(model="github_copilot/claude-sonnet-4-5", api_base=wire.url)

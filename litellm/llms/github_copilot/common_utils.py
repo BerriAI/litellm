@@ -6,6 +6,7 @@ import os
 from collections.abc import MutableMapping
 from typing import Final
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
 
@@ -31,12 +32,12 @@ _COPILOT_AUTH_HEADER_CONFIG = (
     ("user-agent", "GITHUB_COPILOT_USER_AGENT", DEFAULT_COPILOT_USER_AGENT),
 )
 _COPILOT_REQUEST_HEADER_CONFIG = _COPILOT_AUTH_HEADER_CONFIG + (
-    ("openai-intent", "GITHUB_COPILOT_OPENAI_INTENT", None),
-    ("x-github-api-version", "GITHUB_COPILOT_API_VERSION", None),
+    ("openai-intent", "GITHUB_COPILOT_OPENAI_INTENT", "conversation-panel"),
+    ("x-github-api-version", "GITHUB_COPILOT_API_VERSION", API_VERSION),
     (
         "x-vscode-user-agent-library-version",
         "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION",
-        None,
+        "electron-fetch",
     ),
 )
 
@@ -103,6 +104,7 @@ def get_copilot_default_headers(
     return {
         **_get_configured_copilot_headers(_COPILOT_REQUEST_HEADER_CONFIG),
         "Authorization": f"Bearer {api_key}",
+        "x-request-id": str(uuid4()),
     }
 
 
