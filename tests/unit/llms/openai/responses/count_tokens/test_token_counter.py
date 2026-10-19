@@ -537,6 +537,11 @@ _CALLER_BODY: Final[dict[str, object]] = {
     "metadata": {"run": "nightly"},
     "drop_params": False,
     "additional_drop_params": [],
+    "timeout": 30,
+    "extra_headers": {"x-trace": "1"},
+    "disable_fallbacks": True,
+    "spend_logs_metadata": {"team": "search"},
+    "mock_testing_fallbacks": True,
 }
 
 
@@ -563,7 +568,7 @@ async def _native_count(
         pytest.param(
             _KEEP_ALL,
             {"model": "gpt-4o", "input": "hi", "text": _ANSWER_FORMAT, "max_output_tokens": "lots"},
-            id="keeps-every-caller-field",
+            id="keeps-responses-fields",
         ),
         pytest.param(
             DropPolicy(drop_params=True, additional_drop_params=frozenset()),

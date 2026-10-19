@@ -20,6 +20,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.transformation impor
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
+from litellm.types.llms.openai import ResponsesAPIRequestParams
 from litellm.types.utils import all_litellm_params
 
 
@@ -347,13 +348,16 @@ class OpenAICountTokensConfig:
 
 
 _COUNT_REQUEST_FIELDS: Final = InputTokenCountParams.__required_keys__ | InputTokenCountParams.__optional_keys__
+_INFERENCE_REQUEST_FIELDS: Final = (
+    ResponsesAPIRequestParams.__required_keys__ | ResponsesAPIRequestParams.__optional_keys__
+)
 _LITELLM_REQUEST_FIELDS: Final = frozenset((*all_litellm_params, "drop_params", "additional_drop_params"))
 
 
 def _forwards(field: str, policy: DropPolicy) -> bool:
     if field in _LITELLM_REQUEST_FIELDS or field in policy.additional_drop_params:
         return False
-    return not policy.drop_params or field in _COUNT_REQUEST_FIELDS
+    return field in _COUNT_REQUEST_FIELDS or (not policy.drop_params and field in _INFERENCE_REQUEST_FIELDS)
 
 
 def _restored(field: str, value: object) -> object:
