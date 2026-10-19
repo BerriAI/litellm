@@ -44,6 +44,14 @@ _PodSelection: TypeAlias = tuple[str, int, Literal["round_robin", "session_affin
 _DeploymentT: Final = TypeVar("_DeploymentT")
 
 
+@dataclass(frozen=True, slots=True)
+class KubernetesPodLookup:
+    service_host: str
+    port: int | None
+    pod_ips: tuple[str, ...]
+    error: str | None
+
+
 def _retry_count_from_metadata(metadata: object) -> int | None:
     if not isinstance(metadata, Mapping):
         return None
@@ -188,6 +196,18 @@ class KubernetesPodDiscovery:
         finally:
             self._end_refresh(key)
 
+    async def async_lookup_pods(self, deployment: object) -> KubernetesPodLookup | None:
+        eligible: Final = self._eligible(deployment)
+        if eligible is None:
+            return None
+        _, (host, port), _ = eligible
+        result: Final = await self._async_getaddrinfo(host, port)
+        if isinstance(result, OSError):
+            if isinstance(result, socket.gaierror) and self._is_authoritative_no_pods(result):
+                return KubernetesPodLookup(service_host=host, port=port, pod_ips=(), error=None)
+            return KubernetesPodLookup(service_host=host, port=port, pod_ips=(), error=str(result))
+        return KubernetesPodLookup(service_host=host, port=port, pod_ips=self._pod_ips(result), error=None)
+
     @staticmethod
     def _session_id(request_kwargs: Mapping[str, object] | None) -> str | None:
         if request_kwargs is None:
@@ -290,6 +310,17 @@ class KubernetesPodDiscovery:
         except asyncio.CancelledError:
             self._abandon_lookup(key, host, lookup)
             raise
+        except OSError as error:
+            return error
+
+    async def _async_getaddrinfo(self, host: str, port: int | None) -> Sequence[_AddressInfo] | OSError:
+        lookup: Final = asyncio.get_running_loop().getaddrinfo(
+            host, port, type=socket.SOCK_STREAM, flags=socket.AI_ADDRCONFIG
+        )
+        try:
+            return await asyncio.wait_for(lookup, timeout=self.dns_timeout_seconds)
+        except (TimeoutError, asyncio.TimeoutError):
+            return socket.gaierror(socket.EAI_AGAIN, f"DNS lookup for {host} exceeded {self.dns_timeout_seconds}s")
         except OSError as error:
             return error
 
