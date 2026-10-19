@@ -19,7 +19,7 @@ from litellm.proxy.spend_tracking.charge_receipts import (
     ChargeReceiptSettings,
     ChargeReceiptStore,
 )
-from litellm.types.charge_receipts import CommittedCharge, FailedCharge
+from litellm.types.charge_receipts import CHARGE_OUTCOME_KEY, CommittedCharge, FailedCharge
 from tests.integration._support.prisma_clients import connected_prisma
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -71,6 +71,7 @@ async def journal(database: Prisma) -> AsyncIterator[JournalCase]:
     try:
         yield JournalCase(database, ChargeReceiptStore(database.query_raw), receipt)
     finally:
+        await database.execute_raw('DELETE FROM "LiteLLM_SpendLogs" WHERE api_key=$1', key_hash)
         await database.execute_raw('DELETE FROM "LiteLLM_ChargeReceipt" WHERE key_hash=$1', key_hash)
         await database.execute_raw('DELETE FROM "LiteLLM_VerificationToken" WHERE token=$1', key_hash)
 
@@ -96,34 +97,20 @@ async def test_concurrent_distinct_charges_do_not_lose_key_increments(journal: J
     assert await journal.receipt_count() == 16
 
 
-class LostCommitAcknowledgement:
-    def __init__(self, case: JournalCase) -> None:
+class ReceiptWriteFault:
+    def __init__(self, case: JournalCase, failure: str) -> None:
         self.case: Final = case
-        self.lost = False
+        self.failure: Final = failure
 
     async def __call__(self, query: str, *parameters: object) -> Sequence[Mapping[str, object]]:
+        if self.failure == "timeout":
+            await asyncio.Event().wait()
+        if self.failure == "unwritten":
+            raise ConnectionError("receipt database unreachable")
         rows: Final = await self.case.database.query_raw(query, *parameters)
-        if not self.lost and await self.case.receipt_count() == 1:
-            self.lost = True
+        if self.failure == "lost_ack":
             raise ConnectionError("injected lost database acknowledgement")
         return rows
-
-
-async def test_lost_commit_acknowledgement_does_not_rebill_on_retry(journal: JournalCase) -> None:
-    store: Final = ChargeReceiptStore(LostCommitAcknowledgement(journal))
-    first: Final = await store.append(journal.receipt)
-    assert first == FailedCharge(journal.receipt.key_hash, "database_unavailable")
-    balance: Final = await journal.balance()
-    assert balance["spend"] == balance["total_spend"] == 0.25
-    second: Final = await store.append(journal.receipt)
-    assert second == CommittedCharge(
-        journal.receipt.event_id,
-        journal.receipt.key_hash,
-        journal.receipt.amount_usd,
-        duplicate=True,
-        key_counter_updated=True,
-    )
-    assert await journal.balance() == balance and await journal.receipt_count() == 1
 
 
 async def test_failed_key_write_rolls_back_the_receipt_in_the_same_transaction(journal: JournalCase) -> None:
@@ -267,15 +254,16 @@ async def test_stream_chunk_does_not_commit_zero_before_final_usage(journal: Jou
     assert (await journal.balance())["spend"] == 0
 
 
-async def test_only_receipted_calls_skip_the_legacy_key_debit(
-    journal: JournalCase, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("failure", ("none", "unwritten", "lost_ack", "timeout"))
+async def test_receipt_failure_preserves_other_accounting_without_rebilling_the_key(
+    journal: JournalCase, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     from litellm import Usage
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
-    from litellm.proxy.utils import ProxyLogging
+    from litellm.proxy.utils import ProxyLogging, update_spend
     from tests.integration._support.prisma_clients import connected_proxy_prisma
 
     identity: Final = str(uuid4())
@@ -292,10 +280,12 @@ async def test_only_receipted_calls_skip_the_legacy_key_debit(
             logging: Final = ProxyLogging(UserApiKeyCache())
             monkeypatch.setattr(proxy_server, "prisma_client", client)
             monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
-            monkeypatch.setattr(proxy_server, "disable_spend_logs", True)
+            monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
             monkeypatch.setattr(proxy_server, "general_settings", {"disable_error_logs": True})
             runtime: Final = ChargeReceiptRuntime(
-                receipt_settings(journal), journal.store, finalize=ProxyDBLogger().finalize_required_charge
+                receipt_settings(journal),
+                ChargeReceiptStore(ReceiptWriteFault(journal, failure)),
+                finalize=ProxyDBLogger().finalize_required_charge,
             )
             logging.charge_receipts = runtime
             call: Final = Logging(
@@ -307,29 +297,37 @@ async def test_only_receipted_calls_skip_the_legacy_key_debit(
                 litellm_call_id=str(uuid4()),
                 function_id=str(uuid4()),
             )
-            call.required_charge_capture = runtime.bind(
+            capture: Final = runtime.bind(
                 BillingContext(request_id=journal.receipt.request_id, key_hash=journal.receipt.key_hash)
             )
+            call.required_charge_capture = capture
             auth: Final = UserAPIKeyAuth(
                 api_key=journal.receipt.key_hash,
                 user_id=identity,
                 team_id=identity,
                 request_route="/v1/chat/completions",
             )
+            details: Final = {
+                "model": journal.receipt.model,
+                "litellm_call_id": identity,
+                "response_cost": 0.25,
+                "litellm_logging_obj": call,
+                "combined_usage_object": Usage(prompt_tokens=4, completion_tokens=2, total_tokens=6),
+            }
             for _ in range(2):
                 await ProxyDBLogger().async_post_call_failure_hook(
-                    request_data={
-                        "model": journal.receipt.model,
-                        "response_cost": 0.25,
-                        "litellm_logging_obj": call,
-                        "combined_usage_object": Usage(prompt_tokens=4, completion_tokens=2, total_tokens=6),
-                    },
+                    request_data=details,
                     original_exception=ConnectionError("provider stream interrupted"),
                     user_api_key_dict=auth,
                 )
+            outcome: Final = capture.result
+            assert isinstance(outcome, CommittedCharge if failure == "none" else FailedCharge)
+            await ProxyDBLogger().async_log_success_event(
+                {**details, CHARGE_OUTCOME_KEY: outcome}, None, datetime.now(timezone.utc), datetime.now(timezone.utc)
+            )
             deadline: Final = time.monotonic() + 10
             while True:
-                await logging.db_spend_update_writer.db_update_spend_transaction_handler(client, 1, logging)
+                await update_spend(client, None, logging)
                 rows: Final = await journal.database.query_raw(
                     'SELECT u.spend AS user_spend,t.spend AS team_spend FROM "LiteLLM_UserTable" u '
                     'JOIN "LiteLLM_TeamTable" t ON t.team_id=u.user_id WHERE u.user_id=$1',
@@ -339,10 +337,20 @@ async def test_only_receipted_calls_skip_the_legacy_key_debit(
                     break
                 assert time.monotonic() < deadline, rows
                 await asyncio.sleep(0.01)
-            assert (await journal.balance())["spend"] == 0.25
+            committed: Final = failure in ("none", "lost_ack")
+            assert (await journal.balance())["spend"] == (0.25 if committed else 0)
+            logs: Final = await journal.database.query_raw(
+                'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=$1', journal.receipt.key_hash
+            )
+            assert logs == [{"spend": 0.25}]
             cached_spend, _ = await proxy_server.read_spend_counter_cache_value("spend:key:" + journal.receipt.key_hash)
             assert cached_spend == 0.25
-            assert await journal.receipt_count() == 1
+            assert await journal.receipt_count() == int(committed)
+            receipt: Final = capture.receipt
+            assert receipt is not None
+            replay: Final = await journal.store.append(receipt)
+            assert isinstance(replay, CommittedCharge) and replay.duplicate == committed
+            assert (await journal.balance())["spend"] == 0.25
             await logging.db_spend_update_writer.update_database(
                 token=journal.receipt.key_hash,
                 response_cost=0.25,
@@ -350,7 +358,7 @@ async def test_only_receipted_calls_skip_the_legacy_key_debit(
                 end_user_id=None,
                 team_id=None,
                 org_id=None,
-                kwargs={"model": journal.receipt.model, "litellm_params": {}},
+                kwargs={**details, "litellm_call_id": str(uuid4())},
                 completion_response=None,
                 start_time=datetime.now(timezone.utc),
                 end_time=datetime.now(timezone.utc),

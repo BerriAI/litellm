@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
+from decimal import Decimal
 from typing import Final
 from unittest.mock import Mock
 
@@ -79,18 +80,23 @@ async def test_invalid_price_is_unconfirmed_not_a_zero_dollar_receipt(amount: fl
 
 
 @pytest.mark.asyncio
-async def test_a_known_late_charge_can_follow_an_unpriced_failure() -> None:
+@pytest.mark.parametrize(
+    "amount,wire",
+    ((0.25, "0.25"), (1.4299999999999998e-9, "0.00000000143"), (1e12, "1000000000000")),
+)
+async def test_a_known_late_charge_preserves_wire_precision(amount: float, wire: str) -> None:
     query: Final = ScriptedQuery()
     runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
     capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash))
     assert isinstance(await capture.capture_failure({}, 0, STAMP, STAMP), FailedCharge)
-    query.replies = (acknowledged(RECEIPT.model_copy(update={"event_id": capture.event_id})),)
-    assert isinstance(await capture.capture_event(priced_event()), CommittedCharge)
+    query.replies = (acknowledged(RECEIPT.model_copy(update={"event_id": capture.event_id, "amount_usd": wire})),)
+    outcome: Final = await capture.capture_event(priced_event(amount=amount))
+    assert isinstance(outcome, CommittedCharge) and Decimal(outcome.amount_usd) == Decimal(wire)
     assert await capture.wait() and len(query.calls) == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ("before_commit", "after_commit", "timeout"))
+@pytest.mark.parametrize("failure", ("before_commit", "after_commit", "after_commit_wait", "timeout"))
 async def test_optional_accounting_failure_cannot_drop_or_repeat_a_known_charge(
     failure: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -100,13 +106,16 @@ async def test_optional_accounting_failure_cannot_drop_or_repeat_a_known_charge(
     clock: Final = Mock(return_value=0.0)
     monkeypatch.setattr(asyncio.get_running_loop(), "time", clock)
     finalizing: Final = asyncio.Event()
+    release: Final = asyncio.Event()
 
     async def finalize(details: Mapping[str, object], event: SpendEvent, capture: ChargeCapture) -> None:
         finalizing.set()
         if failure == "timeout":
             await asyncio.Event().wait()
-        if failure == "after_commit":
+        if failure in ("after_commit", "after_commit_wait"):
             await capture.persist()
+        if failure == "after_commit_wait":
+            await release.wait()
         raise ConnectionError("accounting dependency unavailable")
 
     query: Final = ScriptedQuery(hold=failure == "timeout")
@@ -117,6 +126,9 @@ async def test_optional_accounting_failure_cannot_drop_or_repeat_a_known_charge(
     query.replies = (acknowledged(RECEIPT.model_copy(update={"event_id": capture.event_id})),)
     saving: Final = asyncio.create_task(capture.capture_event(priced_event(), {}))
     waiting: Final = asyncio.create_task(capture.wait())
+    if failure == "after_commit_wait":
+        assert await waiting and not saving.done()
+        release.set()
     if failure == "timeout":
         await finalizing.wait()
         clock.return_value = 3.5
@@ -130,27 +142,6 @@ async def test_optional_accounting_failure_cannot_drop_or_repeat_a_known_charge(
     result: Final = await saving
     assert isinstance(result, CommittedCharge) and result.amount_usd == RECEIPT.amount_usd
     assert await waiting and len(query.calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_committed_response_does_not_wait_for_optional_accounting_to_finish() -> None:
-    from litellm.proxy.spend_tracking.charge_receipt_capture import ChargeCapture
-    from litellm.proxy.spend_tracking.spend_event import SpendEvent
-
-    release: Final = asyncio.Event()
-
-    async def finalize(details: Mapping[str, object], event: SpendEvent, capture: ChargeCapture) -> None:
-        await capture.persist()
-        await release.wait()
-
-    query: Final = ScriptedQuery()
-    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query), finalize=finalize)
-    capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash))
-    query.replies = (acknowledged(RECEIPT.model_copy(update={"event_id": capture.event_id})),)
-    settling: Final = asyncio.create_task(capture.capture_event(priced_event(), {}))
-    assert await capture.wait() and not settling.done()
-    release.set()
-    assert isinstance(await settling, CommittedCharge) and len(query.calls) == 1
 
 
 @pytest.mark.asyncio

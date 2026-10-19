@@ -57,7 +57,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
-from litellm.types.charge_receipts import CommittedCharge, FailedCharge, charge_outcome
+from litellm.types.charge_receipts import CommittedCharge, charge_outcome
 from litellm.types.utils import (
     CallTypes,
     LiteLLMBatch,
@@ -916,14 +916,6 @@ async def _update_database_and_spend_counters_in_batch(
                     budget_reservation["finalized"] = True
             raise
 
-    if charge is not None:
-        try:
-            await apply_counters()
-        except Exception:  # noqa: BLE001  # counter outages must not discard the durable charge
-            verbose_proxy_logger.warning("Spend counters unavailable during required charge settlement")
-        if isinstance(await charge.persist(), FailedCharge):
-            return False
-
     try:
         charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
@@ -937,7 +929,7 @@ async def _update_database_and_spend_counters_in_batch(
             end_time=end_time,
             org_id=org_id,
             project_id=project_id,
-            **({"key_spend_committed": True} if charge is not None else {}),
+            **({"skip_key_spend": True} if charge is not None else {}),
         )
     except Exception:
         if budget_reservation is not None:
@@ -956,8 +948,14 @@ async def _update_database_and_spend_counters_in_batch(
         await _release_budget_reservation(budget_reservation=budget_reservation)
         return False
 
-    if charge is None:
+    try:
         await apply_counters()
+    except Exception:  # noqa: BLE001  # counter outages must not discard the durable charge
+        if charge is None:
+            raise
+        verbose_proxy_logger.warning("Spend counters unavailable during required charge settlement")
+    if charge is not None:
+        await charge.persist()
     return True
 
 

@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation
 from typing import Final
 from uuid import uuid4
 
@@ -125,18 +125,21 @@ class ChargeCapture:
             return FailedCharge(self.context.key_hash, "invalid_charge")
         try:
             usage: Final = _Usage.model_validate(event.combined_usage or event.standard_logging_object or {})
+            amount: Final = Decimal(str(event.response_cost)).quantize(
+                Decimal("1e-24"), context=Context(prec=40, rounding=ROUND_HALF_EVEN)
+            )
             receipt: Final = ChargeReceipt(
                 event_id=self.event_id,
                 request_id=self.context.request_id,
                 gateway_scope=self.runtime.settings.gateway_scope,
                 key_hash=self.context.key_hash,
-                amount_usd="0" if event.response_cost == 0 else format(Decimal(str(event.response_cost)), "f"),
+                amount_usd="0" if event.response_cost == 0 else format(amount, "f").rstrip("0").rstrip("."),
                 model=event.model,
                 input_tokens=usage.prompt_tokens,
                 output_tokens=usage.completion_tokens,
                 total_tokens=usage.total_tokens,
             )
-        except ValidationError:
+        except (ValidationError, InvalidOperation):
             return FailedCharge(self.context.key_hash, "invalid_charge")
         self.receipt = receipt
         if self.runtime.finalize is not None and details is not None:

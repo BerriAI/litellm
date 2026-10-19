@@ -513,7 +513,7 @@ class DBSpendUpdateWriter:
         end_time: datetime,
         response_cost: float | None,
         project_id: str | None = None,
-        key_spend_committed: bool = False,
+        skip_key_spend: bool = False,
     ) -> bool:
         """Record the request's spend, answering whether its cost still needs charging.
 
@@ -605,7 +605,7 @@ class DBSpendUpdateWriter:
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
                     request_model_access_groups=get_request_model_access_groups(kwargs),
-                    key_spend_committed=key_spend_committed,
+                    skip_key_spend=skip_key_spend,
                 )
             )
 
@@ -1025,7 +1025,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         request_model_access_groups: Sequence[str] = (),
         project_id: str | None = None,
-        key_spend_committed: bool = False,
+        skip_key_spend: bool = False,
     ):
         """
         Runs all 13 spend-update helpers sequentially inside a single asyncio task.
@@ -1054,7 +1054,7 @@ class DBSpendUpdateWriter:
         try:
             await self._update_key_db(
                 response_cost=response_cost,
-                hashed_token=None if key_spend_committed else hashed_token,
+                hashed_token=None if skip_key_spend else hashed_token,
                 prisma_client=prisma_client,
             )
         except Exception:

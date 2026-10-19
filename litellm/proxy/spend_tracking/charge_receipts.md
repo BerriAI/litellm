@@ -2,7 +2,7 @@
 
 Required receipts are an opt-in accounting contract for selected virtual keys. The proxy reuses its canonical cost calculation and compact spend-event projection. It commits the key's `spend` and `total_spend` increments together with an immutable receipt in PostgreSQL, then delivers that receipt through a separate worker
 
-Required finalization uses the existing cost pipeline. Cached-budget bookkeeping runs before the atomic key charge, so a cold counter cannot include the charge twice. The same pipeline schedules the remaining rollups and alerts, and the later optional logging pass skips an already finalized charge
+Required finalization uses the existing cost pipeline. Cached-budget bookkeeping and the usual spend-log and rollup queues run before the atomic key charge. Those queues still receive the charge when receipt storage fails. The receipt transaction alone owns that call's key debit, so a lost commit acknowledgement cannot trigger a second legacy debit. The later optional logging pass skips the accounting already attempted for that call
 
 Configure these values separately on the gateway and delivery worker:
 
@@ -53,7 +53,7 @@ Use dedicated application keys. The signed `route` includes the external `SERVER
 
 If a streaming client disconnects, the gateway keeps reading the in-flight provider call for up to `LITELLM_CHARGE_RECEIPTS_DRAIN_TIMEOUT_SECONDS`, which defaults to 120 seconds. This captures final usage during application deployments. A user pressing Stop also leaves that one call running within this bound. It does not start another inference request. After the deadline the upstream stream closes, and any amount that cannot be established remains unresolved. Give the gateway's graceful shutdown a longer deadline when draining these calls
 
-The delivery body is an object with an `events` array of at most 32 receipts. Each receipt contains `version`, `event_id`, `request_id`, `gateway_scope`, `key_hash`, `currency`, `amount_usd`, `model`, and optional token counters. It contains no prompt, response text, or credential. Amounts are decimal strings and currency is `USD`
+The delivery body is an object with an `events` array of at most 32 receipts. Each receipt contains `version`, `event_id`, `request_id`, `gateway_scope`, `key_hash`, `currency`, `amount_usd`, `model`, and optional token counters. It contains no prompt, response text, or credential. Amounts are `USD` decimal strings, rounded half-even to the version 1 limit of 24 fractional digits
 
 The consumer returns HTTP 200 with an `acknowledged` array containing only event IDs committed locally. It may return per-event `rejected` details. Duplicate event delivery must not change money twice, and a reused event ID with different contents must be rejected. Delivery acknowledgements referring to events outside the leased batch are rejected by the publisher
 
@@ -61,6 +61,6 @@ Deploy compatible gateway code across all replicas before applications start req
 
 A committed receipt survives publisher or gateway process loss and can be delivered later. A crash before capture commits still leaves an uncertain upstream amount. The contract does not make provider invoices discoverable when usage was never reported, and it does not replay inference. PostgreSQL durability and backup/failover guarantees remain deployment requirements
 
-If a key is removed while an admitted request is finishing, the original receipt is retained with `key_counter_updated=false`; no credential is recreated. Investigate that retained evidence against the original key scope. Existing key counters are floating-point values, while each receipt retains the canonical decimal representation of its reported charge
+If a key is removed while an admitted request is finishing, the original receipt is retained with `key_counter_updated=false`; no credential is recreated. Investigate that retained evidence against the original key scope. Existing key counters are floating-point values, while each receipt retains its decimal amount at version 1 precision
 
 The small durable write has a real completion-time cost. Measure the deployed database, cached-budget work, streaming completion, and delivery contention. Time to first text, full completion, and receipt visibility are separate metrics
