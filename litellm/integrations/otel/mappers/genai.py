@@ -39,6 +39,7 @@ from litellm.integrations.otel.model.semconv import (
     User,
 )
 from litellm.integrations.otel.model.spans import postgres_operation
+from litellm.integrations.otel.model.trace_controls import END_USER_METADATA_KEY
 
 
 class GenAIMapper:
@@ -47,7 +48,7 @@ class GenAIMapper:
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
         GenAI.OUTPUT_TYPE: lambda d: d.output_type.value if d.output_type else None,
         GenAI.CONVERSATION_ID: lambda d: d.session_id,
-        User.ID: lambda d: d.trace.user_id,
+        User.ID: lambda d: d.promoted_metadata.get(END_USER_METADATA_KEY),
         GenAI.REQUEST_MODEL: lambda d: d.request_model or None,
         GenAI.REQUEST_TEMPERATURE: lambda d: d.request_params.temperature,
         GenAI.REQUEST_TOP_P: lambda d: d.request_params.top_p,

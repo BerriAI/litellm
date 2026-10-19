@@ -15,6 +15,7 @@ _OPENINFERENCE_CALLBACKS: Final = ("arize", "arize_phoenix", "weave_otel")
 _GENAI_CALLBACKS: Final = ("otel", "langfuse_otel", "langtrace", "signoz", "levo", "newrelic", "agentops")
 _UNUSED_ENDPOINT: Final[dict[str, JsonValue]] = {"otel": {"exporter": "http/protobuf", "endpoint": "unused"}}
 _METADATA_ALLOWLIST: Final = "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"
+_LANGFUSE_CALLBACK: Final = "langfuse_otel"
 
 
 def _settings(callback: str) -> Mapping[str, JsonValue] | None:
@@ -65,6 +66,11 @@ def _model_call_spans(destination: Wire, markers: tuple[str, ...]) -> Mapping[st
     return eventually(by_marker, lambda found: all(found.values()), seconds=30)
 
 
+def _carrying(spans: Mapping[str, tuple[dict[str, str], ...]], value: str) -> tuple[str, ...]:
+    model_call_spans: Final = itertools.chain.from_iterable(spans.values())
+    return tuple(key for span in model_call_spans for key, attribute in span.items() if value in str(attribute))
+
+
 def _chat(rig: Rig, marker: str, key: str, headers: Mapping[str, str], extra: Mapping[str, JsonValue]) -> None:
     response: Final = rig.proxy.request(
         "POST",
@@ -81,7 +87,7 @@ def test_otel_v2_callback_sends_the_request_user_as_user_id(callback: str, gatew
     run: Final = uuid.uuid4().hex
     end_user: Final = f"end-user-{run}"
     caller: Final = f"caller-{run}"
-    markers: Final = (f"end-{run}", f"caller-{run}-marker", f"owner-{run}")
+    markers: Final = (f"end-{run}", f"trace-{run}", f"owner-{run}")
     with (
         _rig(
             gateway,
@@ -106,9 +112,11 @@ def test_otel_v2_callback_sends_the_request_user_as_user_id(callback: str, gatew
             _chat(rig, marker, key, headers, extra)
         spans: Final = _model_call_spans(rig.destination, markers)
     users: Final = {marker: {attributes.get("user.id") for attributes in spans[marker]} for marker in markers}
-    assert users == {markers[0]: {end_user}, markers[1]: {caller}, markers[2]: {None}}, spans
+    caller_user: Final = caller if callback == _LANGFUSE_CALLBACK else end_user
+    assert users == {markers[0]: {end_user}, markers[1]: {caller_user}, markers[2]: {None}}, spans
     sessions: Final = {attributes.get("session.id") for attributes in itertools.chain.from_iterable(spans.values())}
     assert end_user not in sessions, spans
+    assert callback == _LANGFUSE_CALLBACK or not _carrying(spans, caller), spans
 
 
 @pytest.mark.parametrize("callback", ("arize", "otel", "langfuse_otel"))
@@ -118,7 +126,7 @@ def test_otel_v2_callback_withholds_an_end_user_the_metadata_allowlist_drops(
     run: Final = uuid.uuid4().hex
     end_user: Final = f"end-user-{run}"
     caller: Final = f"caller-{run}"
-    markers: Final = (f"end-{run}", f"caller-{run}-marker")
+    markers: Final = (f"end-{run}", f"trace-{run}")
     with (
         _rig(
             gateway,
@@ -137,7 +145,6 @@ def test_otel_v2_callback_withholds_an_end_user_the_metadata_allowlist_drops(
         )
         spans: Final = _model_call_spans(rig.destination, markers)
     users: Final = {marker: {attributes.get("user.id") for attributes in spans[marker]} for marker in markers}
-    assert users == {markers[0]: {None}, markers[1]: {caller}}, spans
-    model_call_spans: Final = tuple(itertools.chain.from_iterable(spans.values()))
-    values: Final = tuple(itertools.chain.from_iterable(span.values() for span in model_call_spans))
-    assert not [value for value in values if end_user in str(value)], spans
+    assert users == {markers[0]: {None}, markers[1]: {caller if callback == _LANGFUSE_CALLBACK else None}}, spans
+    assert not _carrying(spans, end_user), spans
+    assert callback == _LANGFUSE_CALLBACK or not _carrying(spans, caller), spans

@@ -45,6 +45,7 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
+from litellm.integrations.otel.mappers.genai import GenAIMapper  # noqa: E402
 from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterSpec  # noqa: E402
 from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
 from litellm.integrations.otel.model.semconv import User  # noqa: E402
@@ -302,38 +303,80 @@ def test_replayed_llm_call_span_does_not_take_the_payloads_session_id():
     assert GenAI.CONVERSATION_ID not in span.attributes
 
 
+def _user_kwargs(metadata, messages=None, call_id="call_1"):
+    payload: Final = _payload(metadata={**_payload()["metadata"], **metadata}, litellm_call_id=call_id)
+    if messages is not None:
+        payload["messages"] = messages
+    return {**_kwargs(payload), "litellm_params": {"metadata": metadata}, "messages": messages or []}
+
+
+def _logger_with(**config):
+    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", **config)
+    exporter: Final = InMemorySpanExporter()
+    return OpenTelemetryV2(
+        config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter)
+    ), exporter
+
+
 @pytest.mark.parametrize(
     ("metadata", "expected"),
     [
         ({"user_api_key_end_user_id": "end-1"}, "end-1"),
-        ({"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}, "caller-1"),
+        ({"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}, "end-1"),
+        ({"trace_user_id": "caller-1"}, None),
         ({"user_api_key_user_id": "internal-1"}, None),
     ],
-    ids=["proxy-end-user", "caller-trace-user-wins", "internal-user-never-sent"],
+    ids=["proxy-end-user", "caller-trace-user-not-sent", "caller-trace-user-alone", "internal-user-never-sent"],
 )
-def test_llm_call_span_carries_the_request_user_as_user_id(metadata, expected):
+def test_llm_call_span_carries_the_end_user_as_user_id(metadata, expected):
     logger, exporter = _logger()
-    _emit_llm(logger, {**_kwargs(), "litellm_params": {"metadata": metadata}})
+    _emit_llm(logger, _user_kwargs(metadata))
     (span,) = exporter.get_finished_spans()
     assert span.attributes.get(User.ID) == expected
+    assert "caller-1" not in {str(value) for value in span.attributes.values()}
 
 
 @pytest.mark.parametrize(
-    ("metadata", "expected"),
-    [
-        ({"user_api_key_end_user_id": "end-1"}, None),
-        ({"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}, "caller-1"),
-    ],
-    ids=["end-user-withheld", "caller-trace-user-still-sent"],
+    "metadata",
+    [{"user_api_key_end_user_id": "end-1"}, {"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}],
+    ids=["end-user", "end-user-and-caller-trace-user"],
 )
-def test_llm_call_span_withholds_an_end_user_the_metadata_allowlist_drops(metadata, expected):
-    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", baggage_metadata_keys=["user_api_key_org_id"])
-    exporter: Final = InMemorySpanExporter()
-    logger: Final = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
-    _emit_llm(logger, {**_kwargs(), "litellm_params": {"metadata": metadata}})
+def test_llm_call_span_withholds_an_end_user_the_metadata_allowlist_drops(metadata):
+    logger, exporter = _logger_with(baggage_metadata_keys=["user_api_key_org_id"])
+    _emit_llm(logger, _user_kwargs(metadata))
     (span,) = exporter.get_finished_spans()
-    assert span.attributes.get(User.ID) == expected
-    assert "end-1" not in {str(value) for value in span.attributes.values()}
+    assert User.ID not in span.attributes
+    assert not {"end-1", "caller-1"} & {str(value) for value in span.attributes.values()}
+
+
+def test_user_id_costs_no_other_attribute_at_the_span_limit(monkeypatch):
+    def spans() -> list:
+        logger, exporter = _logger_with(
+            mapper_names=["genai", "openinference"], capture_message_content=CaptureMessageContent.SPAN_ONLY
+        )
+        for count in range(40, 70):
+            messages = [{"role": "user", "content": f"m{index}"} for index in range(count)]
+            _emit_llm(logger, _user_kwargs({"user_api_key_end_user_id": "end-1"}, messages, f"call_{count}"))
+        return list(exporter.get_finished_spans())
+
+    with_user_id: Final = spans()
+    monkeypatch.delitem(GenAIMapper._LLM_CALL_ATTRS, User.ID)
+    without_user_id: Final = spans()
+    assert {span.attributes.get(User.ID) for span in with_user_id} == {"end-1", None}
+    for with_user, without in zip(with_user_id, without_user_id, strict=True):
+        assert set(with_user.attributes) - {User.ID} == set(without.attributes)
+        assert with_user.dropped_attributes == without.dropped_attributes
+
+
+def test_langfuse_vocabulary_keeps_the_caller_trace_user_at_the_span_limit():
+    logger, exporter = _logger_with(
+        mapper_names=["genai", "openinference", "langfuse"], capture_message_content=CaptureMessageContent.SPAN_ONLY
+    )
+    messages: Final = [{"role": "user", "content": f"m{index}"} for index in range(80)]
+    _emit_llm(logger, _user_kwargs({"trace_user_id": "caller-1"}, messages))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[User.ID] == "caller-1"
+    assert span.dropped_attributes == 0
 
 
 def test_streaming_span_carries_time_to_first_chunk():

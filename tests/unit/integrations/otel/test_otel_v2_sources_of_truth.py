@@ -1546,34 +1546,28 @@ def test_llm_span_stamps_gen_ai_conversation_id_only_when_the_caller_sent_one():
     assert GenAI.CONVERSATION_ID not in GenAIMapper().map(without)
 
 
-def test_llm_span_stamps_user_id_only_when_the_request_names_a_user():
-    with_user: Final = LLMCallSpanData.from_standard_logging_payload(
-        _sample_payload(), trace=TraceControls(user_id="end-1")
-    )
-    assert GenAIMapper().map(with_user)[User.ID] == "end-1"
-
-    without: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload())
-    assert User.ID not in GenAIMapper().map(without)
+def _end_user_payload():
+    payload: Final = _sample_payload()
+    return {**payload, "metadata": {**payload["metadata"], "user_api_key_end_user_id": "end-1"}}
 
 
 @pytest.mark.parametrize(
-    ("trace", "metadata_keys", "expected"),
+    ("payload", "trace", "metadata_keys", "expected"),
     [
-        (TraceControls(user_id="end-1", user_id_is_end_user=True), ("user_api_key_end_user_id",), "end-1"),
-        (TraceControls(user_id="end-1", user_id_is_end_user=True), ("user_api_key_org_id",), None),
-        (TraceControls(user_id="caller-1"), ("user_api_key_org_id",), "caller-1"),
+        (_end_user_payload(), TraceControls(), ("user_api_key_end_user_id",), "end-1"),
+        (_end_user_payload(), TraceControls(), ("user_api_key_org_id",), None),
+        (_end_user_payload(), TraceControls(user_id="caller-1"), ("user_api_key_end_user_id",), "end-1"),
+        (_sample_payload(), TraceControls(user_id="caller-1"), ("user_api_key_end_user_id",), None),
     ],
-    ids=["end-user-allowlisted", "end-user-withheld", "caller-trace-user-always-sent"],
+    ids=["end-user-allowlisted", "end-user-withheld", "caller-trace-user-not-sent", "no-end-user"],
 )
-def test_llm_span_sends_the_end_user_only_when_the_metadata_allowlist_releases_it(trace, metadata_keys, expected):
-    data: Final = LLMCallSpanData.from_standard_logging_payload(
-        _sample_payload(), trace=trace, metadata_keys=metadata_keys
-    )
+def test_llm_span_sends_only_the_allowlisted_end_user_as_user_id(payload, trace, metadata_keys, expected):
+    data: Final = LLMCallSpanData.from_standard_logging_payload(payload, trace=trace, metadata_keys=metadata_keys)
     assert GenAIMapper().map(data).get(User.ID) == expected
 
 
 @pytest.mark.parametrize("callback_name", ["otel", *sorted(PRESET_BY_CALLBACK)])
-def test_every_v2_callback_sends_the_request_user_as_user_id(callback_name, monkeypatch):
+def test_every_v2_callback_sends_the_end_user_and_only_langfuse_the_caller_trace_user(callback_name, monkeypatch):
     for name in ("LEVOAI_API_KEY", "LEVOAI_ORG_ID", "LEVOAI_WORKSPACE_ID"):
         monkeypatch.setenv(name, "levo-test")
     monkeypatch.setenv("LEVOAI_COLLECTOR_URL", "http://127.0.0.1:4318")
@@ -1582,11 +1576,16 @@ def test_every_v2_callback_sends_the_request_user_as_user_id(callback_name, monk
         if callback_name == "otel"
         else PRESET_BY_CALLBACK[callback_name](allow_missing_credentials=True)
     )
-    data: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(), trace=TraceControls(user_id="end-1"))
-    attrs: Final = {
-        key: value for mapper in resolve_mappers(config.mapper_names) for key, value in mapper.map(data).items()
-    }
-    assert attrs[User.ID] == "end-1"
+    mappers: Final = resolve_mappers(config.mapper_names)
+
+    def user_id(trace: TraceControls) -> object:
+        data: Final = LLMCallSpanData.from_standard_logging_payload(
+            _end_user_payload(), trace=trace, metadata_keys=tuple(config.baggage_metadata_keys)
+        )
+        return {key: value for mapper in mappers for key, value in mapper.map(data).items()}.get(User.ID)
+
+    assert user_id(TraceControls(user_id="end-1", user_id_is_end_user=True)) == "end-1"
+    assert user_id(TraceControls(user_id="caller-1")) == ("caller-1" if callback_name == "langfuse_otel" else "end-1")
 
 
 def test_llm_span_carries_proxy_request_route():

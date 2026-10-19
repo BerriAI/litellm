@@ -13,6 +13,7 @@ from opentelemetry.trace.status import Status, StatusCode
 
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, AttrValue, SpanData
+from litellm.integrations.otel.mappers.langfuse import LangfuseMapper
 from litellm.integrations.otel.mappers.openinference import fit_indexed_messages
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.payloads import (
@@ -23,7 +24,7 @@ from litellm.integrations.otel.model.payloads import (
     ServiceSpanData,
     SpanError,
 )
-from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
+from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError, User
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     SpanRole,
@@ -171,6 +172,11 @@ class SpanEmitter:
         self._mappers: list[AttributeMapper] = (
             list(mappers) if mappers is not None else resolve_mappers(config.mapper_names)
         )
+        self._shed_first: Final = (
+            frozenset[str]()
+            if any(isinstance(mapper, LangfuseMapper) for mapper in self._mappers)
+            else frozenset({User.ID})
+        )
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.
         self._emitted: OrderedDict[tuple[str, SpanRole], None] = OrderedDict()
@@ -303,7 +309,8 @@ class SpanEmitter:
         )
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
-        for key, value in fit_indexed_messages(mapped, attribute_budget(span, reserved, frozenset(mapped))).items():
+        budget: Final = attribute_budget(span, reserved, frozenset(mapped))
+        for key, value in fit_indexed_messages(mapped, budget, self._shed_first).items():
             span.set_attribute(key, value)
         if error:
             stamped: Final = stamp_error(span, error)
