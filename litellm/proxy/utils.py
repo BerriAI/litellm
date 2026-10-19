@@ -1016,6 +1016,7 @@ def _failure_usage_to_lift(
     request_body: Mapping[str, object],
     dispatched: bool,
     provider_billed: bool = False,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -1059,15 +1060,16 @@ def _failure_usage_to_lift(
         return None
     if not provider_billed:
         return estimated_usage, 0.0
-    return estimated_usage, _estimated_input_cost(model_call_details, estimated_usage.prompt_tokens)
+    return estimated_usage, _estimated_input_cost(model_call_details, estimated_usage.prompt_tokens, litellm_params)
 
 
-def _deployment_cost_per_token(model_call_details: Mapping[str, object]) -> CostPerToken | None:
+def _deployment_cost_per_token(raw_params: Mapping[str, object] | None) -> CostPerToken | None:
     """The deployment's own rates (``input_cost_per_token`` and ``output_cost_per_token``),
-    read from the top level of ``litellm_params`` first and then from the router-stamped
-    ``model_info`` the way the success path does, so a billed failure is priced like a
-    success on the same deployment instead of from the public cost map."""
-    raw_params: Final = model_call_details.get("litellm_params")
+    read from the top level of the logging object's ``litellm_params`` first and then from
+    the router-stamped ``model_info`` the way the success path does, so a billed failure is
+    priced like a success on the same deployment instead of from the public cost map. The
+    source is ``Logging.litellm_params`` (deployment config), never the flattened
+    ``model_call_details`` copy that a request body key can overwrite."""
     if not isinstance(raw_params, dict):
         return None
     params: Final = cast("Mapping[str, object]", raw_params)  # cast-ok: untyped router dict, rates checked below
@@ -1082,7 +1084,11 @@ def _deployment_cost_per_token(model_call_details: Mapping[str, object]) -> Cost
     )
 
 
-def _estimated_input_cost(model_call_details: Mapping[str, object], prompt_tokens: int) -> float:
+def _estimated_input_cost(
+    model_call_details: Mapping[str, object],
+    prompt_tokens: int,
+    litellm_params: Mapping[str, object] | None,
+) -> float:
     """Input price for the estimated prompt; an unpriceable model (not in the cost map and no
     deployment rate) keeps the row at $0 rather than dropping the failure row."""
     try:
@@ -1090,7 +1096,7 @@ def _estimated_input_cost(model_call_details: Mapping[str, object], prompt_token
             model=str(model_call_details.get("model") or ""),
             custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
             prompt_tokens=prompt_tokens,
-            custom_cost_per_token=_deployment_cost_per_token(model_call_details),
+            custom_cost_per_token=_deployment_cost_per_token(litellm_params),
         )
     except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
         verbose_proxy_logger.debug(
@@ -1259,6 +1265,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         request_body=request_data,
         dispatched=_first_handoff is not None,
         provider_billed=provider_billed,
+        litellm_params=getattr(_logging_obj, "litellm_params", None),
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),

@@ -2029,11 +2029,11 @@ def test_a_timed_out_request_is_priced_at_the_deployment_rate_when_litellm_param
             "call_type": "acompletion",
             "model": FAILURE_USAGE_MODEL,
             "messages": ONE_USER_MESSAGE,
-            "litellm_params": {"input_cost_per_token": 0.5, "output_cost_per_token": 1.0},
         },
         request_body={},
         dispatched=True,
         provider_billed=True,
+        litellm_params={"input_cost_per_token": 0.5, "output_cost_per_token": 1.0},
     )
 
     assert lifted is not None
@@ -2050,19 +2050,43 @@ def test_a_timed_out_request_is_priced_at_the_deployment_rate_when_model_info_se
             "call_type": "acompletion",
             "model": FAILURE_USAGE_MODEL,
             "messages": ONE_USER_MESSAGE,
-            "litellm_params": {
-                "metadata": {"model_info": {"id": "dep-1", "input_cost_per_token": 0.25}},
-            },
         },
         request_body={},
         dispatched=True,
         provider_billed=True,
+        litellm_params={"metadata": {"model_info": {"id": "dep-1", "input_cost_per_token": 0.25}}},
     )
 
     assert lifted is not None
     usage, response_cost = lifted
     assert usage.prompt_tokens > 0
     assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
+
+
+def test_a_litellm_params_key_in_the_request_body_cannot_zero_the_timeout_price():
+    """``model_call_details`` is flattened with the request's optional_params, so a body key
+    named ``litellm_params`` can land there; the deployment rate must come from the logging
+    object's own ``litellm_params`` instead."""
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={
+            "call_type": "acompletion",
+            "model": FAILURE_USAGE_MODEL,
+            "messages": ONE_USER_MESSAGE,
+            "litellm_params": {"input_cost_per_token": 0},
+        },
+        request_body={},
+        dispatched=True,
+        provider_billed=True,
+        litellm_params={"model": f"openai/{FAILURE_USAGE_MODEL}"},
+    )
+
+    assert lifted is not None
+    usage, response_cost = lifted
+    expected_cost, _ = litellm.cost_per_token(model=FAILURE_USAGE_MODEL, prompt_tokens=usage.prompt_tokens)
+    assert response_cost == pytest.approx(expected_cost)
+    assert response_cost > 0
 
 
 def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rate():
