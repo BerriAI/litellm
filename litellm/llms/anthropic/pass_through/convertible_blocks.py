@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -6,6 +6,8 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.types.utils import TokenCountMessagesFormat
 
@@ -104,3 +106,82 @@ def unconvertible_blocks_error(
             )
         case _:
             assert_never(messages_format)
+
+
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _list_items(value: object) -> tuple[object, ...]:
+    return _OBJECTS.validate_python(value) if isinstance(value, list) else ()
+
+
+def _is_non_string_text(block: object) -> bool:
+    match as_str_mapping(block):
+        case {"type": "text", "text": str()}:
+            return False
+        case {"type": "text", "text": _}:
+            return True
+        case _:
+            return False
+
+
+def tool_result_text_part(block: object) -> str | None:
+    match block:
+        case {"type": "text", "text": str(text)}:
+            return text
+        case {"type": "text", "text": object()}:
+            return None
+        case {"type": "text"}:
+            return ""
+        case _:
+            return None
+
+
+def tool_result_text_parts(tool_result: Mapping[str, object]) -> tuple[str, ...]:
+    parts: Final = map(tool_result_text_part, _list_items(tool_result.get("content")))
+    return tuple(part for part in parts if part is not None)
+
+
+def _user_content_blocks(message: object) -> tuple[object, ...]:
+    match as_str_mapping(message):
+        case {"role": "user", "content": content}:
+            return _list_items(content)
+        case _:
+            return ()
+
+
+def _non_string_text_errors(label: str, content: object) -> Iterator[str]:
+    return (
+        f"{label} content.{index}.text: Input should be a valid string"
+        for index, text_block in enumerate(_list_items(content))
+        if _is_non_string_text(text_block)
+    )
+
+
+def _tool_result_text_errors(block: object) -> Iterator[str]:
+    match block:
+        case {"type": "tool_result", "tool_use_id": object() as tool_use_id, "content": object() as content}:
+            return _non_string_text_errors(f"tool_result {tool_use_id}", content)
+        case {"type": "tool_result", "content": object() as content}:
+            return _non_string_text_errors("tool_result", content)
+        case _:
+            return iter(())
+
+
+def malformed_tool_result_text_error(messages: Iterable[object]) -> str | None:
+    blocks: Final = chain.from_iterable(map(_user_content_blocks, messages))
+    return next(chain.from_iterable(map(_tool_result_text_errors, blocks)), None)
+
+
+def reject_malformed_tool_result_text(
+    messages: Iterable[Mapping[str, object]], model: str, forwarded_kwargs: Mapping[str, object]
+) -> None:
+    if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
+        return
+    error: Final = malformed_tool_result_text_error(messages)
+    if error is None:
+        return
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    raise litellm.BadRequestError(
+        message=error, model=model, llm_provider=provider if isinstance(provider, str) else ""
+    )
