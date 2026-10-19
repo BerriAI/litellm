@@ -4740,12 +4740,13 @@ def test_a_request_body_cannot_move_its_spend_row_onto_a_background_settlement_i
         "litellm_call_id": "call-failed",
         "litellm_params": {"metadata": {"user_api_key": "test-key"}},
     }
+    failed_at: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     row: Final = get_logging_payload(
         kwargs=request_body,
         response_obj=Exception("upstream rejected the request"),
-        start_time=datetime.datetime.now(timezone.utc),
-        end_time=datetime.datetime.now(timezone.utc),
+        start_time=failed_at,
+        end_time=failed_at,
     )
 
     assert row["request_id"] == "call-failed"
