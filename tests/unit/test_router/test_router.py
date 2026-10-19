@@ -1,4 +1,5 @@
 import ast, asyncio, importlib, time
+import base64
 import contextlib
 import copy
 import functools
@@ -38,6 +39,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.llms.anthropic.pass_through.messages.streaming_iterator import closing_superseded_attempt
 from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
@@ -7810,6 +7812,33 @@ async def test_aresponses_enforces_context_window_pre_call_check():
         await router.aresponses(
             model="small-ctx",
             input="this responses input is definitely much longer than five tokens for sure",
+        )
+
+
+@pytest.mark.asyncio
+async def test_aresponses_counts_an_original_detail_image_against_the_context_window():
+    ihdr: Final = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + (4000).to_bytes(4, "big") * 2
+    large_image: Final = "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vision",
+                "litellm_params": {"model": "gpt-5.5", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": high_detail_image_token_upper_bound() * 2},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aresponses(
+            model="vision",
+            input=[
+                {
+                    "role": "user",
+                    "content": [{"type": "input_image", "image_url": large_image, "detail": "original"}],
+                }
+            ],
         )
 
 

@@ -1635,6 +1635,25 @@ def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_
     assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()
 
 
+def _original_detail_message(width: int, height: int) -> list[dict[str, object]]:
+    image: Final = {"url": _png_data_url(width, height), "detail": "original"}
+    return [{"role": "user", "content": [{"type": "image_url", "image_url": image}]}]
+
+
+def test_original_detail_image_is_counted_at_its_full_resolution() -> None:
+    large_image_tokens: Final = token_counter(messages=_original_detail_message(4000, 3000))
+
+    assert large_image_tokens > high_detail_image_token_upper_bound()
+    assert token_counter(messages=_original_detail_message(512, 512)) < large_image_tokens
+
+
+def test_original_detail_image_tokens_stop_growing_at_the_largest_accepted_image() -> None:
+    oversized: Final = calculate_img_tokens(_png_data_url(20_000, 20_000), mode="original")
+
+    assert calculate_img_tokens(_png_data_url(40_000, 40_000), mode="original") == oversized
+    assert calculate_img_tokens(_png_data_url(4000, 3000), mode="original") < oversized
+
+
 HUB_SETUP_SCRIPT: Final = """
 import json
 import sys

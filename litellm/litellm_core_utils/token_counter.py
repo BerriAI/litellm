@@ -6,7 +6,7 @@ import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from itertools import accumulate
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
 import anyio
 import anyio.lowlevel
@@ -29,6 +29,9 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    OPENAI_IMAGE_MAX_PATCHES,
+    OPENAI_IMAGE_PATCH_SIZE_PX,
+    OPENAI_IMAGE_PATCH_TOKEN_MULTIPLIER,
     PDF_DATA_URL_PREFIX,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
@@ -62,6 +65,9 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import Message, SelectTokenizerResponse
+
+ImageDetail: TypeAlias = Literal["low", "high", "auto", "original"]
+IMAGE_DETAILS: Final[frozenset[ImageDetail]] = frozenset(("low", "high", "auto", "original"))
 
 
 def get_modified_max_tokens(
@@ -191,6 +197,11 @@ def calculate_tiles_needed(
     return total_tiles
 
 
+def original_detail_image_tokens(width: int, height: int) -> int:
+    patches: Final = math.ceil(width / OPENAI_IMAGE_PATCH_SIZE_PX) * math.ceil(height / OPENAI_IMAGE_PATCH_SIZE_PX)
+    return math.ceil(min(patches, OPENAI_IMAGE_MAX_PATCHES) * OPENAI_IMAGE_PATCH_TOKEN_MULTIPLIER)
+
+
 def high_detail_image_token_upper_bound(base_tokens: int = 85) -> int:
     largest_tile_count: Final = calculate_tiles_needed(
         MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES, MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
@@ -305,7 +316,7 @@ def get_image_dimensions(
 
 def calculate_img_tokens(
     data,
-    mode: Literal["low", "high", "auto"] = "auto",
+    mode: ImageDetail = "auto",
     base_tokens: int = 85,  # openai default - https://openai.com/pricing
     use_default_image_token_count: bool = False,
 ):
@@ -314,7 +325,7 @@ def calculate_img_tokens(
 
     Args:
         data (str): The URL or base64 encoded string of the image.
-        mode (Literal["low", "high", "auto"]): The mode to use for calculating the number of tokens.
+        mode (ImageDetail): The mode to use for calculating the number of tokens.
         base_tokens (int): The base number of tokens for an image.
         use_default_image_token_count (bool): When True, will NOT make a GET request to the image URL and instead return the default image dimensions.
 
@@ -326,6 +337,8 @@ def calculate_img_tokens(
         return DEFAULT_IMAGE_TOKEN_COUNT
     if mode == "low" or mode == "auto":
         return base_tokens
+    elif mode == "original":
+        return original_detail_image_tokens(*get_image_dimensions(data=data))
     elif mode == "high":
         # Run the async function using the helper
         width, height = get_image_dimensions(
@@ -748,8 +761,8 @@ def _count_image_tokens(
     """
     if isinstance(image_url, dict):
         detail: Final = image_url.get("detail", "auto")
-        if detail not in ["low", "high", "auto"]:
-            raise ValueError(f"Invalid detail value: {detail}. Expected 'low', 'high', or 'auto'.")
+        if detail not in IMAGE_DETAILS:
+            raise ValueError(f"Invalid detail value: {detail}. Expected 'low', 'high', 'auto', or 'original'.")
         url: Final = image_url.get("url")
         if not url:
             raise ValueError("Missing required key 'url' in image_url dict.")

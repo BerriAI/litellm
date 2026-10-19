@@ -2,6 +2,7 @@ import os
 import re
 import sys
 from enum import Enum
+from fractions import Fraction
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -504,6 +505,10 @@ DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT: Final = get_env_int("DEFAULT_MOCK_RESP
 DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT: Final = get_env_int("DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT", 20)
 MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES: Final = get_env_int("MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES", 768)
 MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES: Final = get_env_int("MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES", 2000)
+# OpenAI's "original" image detail, https://developers.openai.com/api/docs/guides/images-vision (2026-10-19)
+OPENAI_IMAGE_PATCH_SIZE_PX: Final = 32
+OPENAI_IMAGE_MAX_PATCHES: Final = 30_000
+OPENAI_IMAGE_PATCH_TOKEN_MULTIPLIER: Final = Fraction(6, 5)
 # tiktoken's BPE merge loop is quadratic in the length of a single regex piece, so a long run of one
 # repeated character (dot leaders, whitespace, zero-padded base64) can take minutes on a multi-MB payload.
 # Encoding in chunks makes the cost linear, at a drift of at most ~1 token per chunk boundary. The upper
