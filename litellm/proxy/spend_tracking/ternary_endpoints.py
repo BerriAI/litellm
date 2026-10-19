@@ -270,7 +270,9 @@ async def update_ternary_settings(
     try:
         updated: Final = TernarySettings.model_validate({**current.model_dump(), **changes})
     except ValidationError as e:
-        raise _http_error(400, str(e)) from e
+        raise _http_error(
+            400, "; ".join(error["msg"] for error in e.errors(include_input=False, include_url=False))
+        ) from e
 
     await _save_validated(store, updated)
     verbose_proxy_logger.info("Ternary settings updated")
