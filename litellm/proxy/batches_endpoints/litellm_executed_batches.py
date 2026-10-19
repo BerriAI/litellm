@@ -656,6 +656,7 @@ class LiteLLMExecutedBatchRunner:
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(run.user_api_key_dict),
             "user_api_end_user_max_budget": run.user_api_key_dict.end_user_max_budget,
             "tags": list(run.request_tags),
+            "inherited_tags": LiteLLMProxyRequestSetup.get_inherited_tags(run.user_api_key_dict),
             "batch_id": run.unified_batch_id,
         }
 

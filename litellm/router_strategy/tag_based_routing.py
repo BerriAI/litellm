@@ -5,6 +5,7 @@ Use this to route requests between Teams
 - if deployments are set with default tags, return all default deployment
 - If no default_deployments are set, return all deployments
 - A "!tag" excludes deployments carrying that tag; a "&tag" requires it
+- With tag_routing_prefix set, only prefixed request tags and key/team/project tags route
 """
 
 import re
@@ -432,6 +433,18 @@ def _inherited_constraint_sets(
     return frozenset(inherited_required), frozenset(inherited_excluded)
 
 
+def _tags_that_route(
+    request_tags: Sequence[str], rewritten_tags: Sequence[str], policy_tags: frozenset[str], routing_prefix: str
+) -> tuple[str, ...]:
+    if not routing_prefix:
+        return tuple(rewritten_tags)
+    return tuple(
+        rewritten
+        for original, rewritten in zip(request_tags, rewritten_tags, strict=True)
+        if original.startswith(routing_prefix) or original in policy_tags
+    )
+
+
 def _tag_known_to_group(
     llm_router_instance: LitellmRouter,
     model: str,
@@ -528,9 +541,16 @@ async def get_deployments_for_tag(
         # value, exactly as if the caller had sent it unprefixed -- and its
         # post-strip value is remembered in routing_confirmed as an explicit,
         # caller-declared routing directive, exempt from the "maybe foreign to this
-        # group" heuristics that unprefixed tags still go through unchanged below.
+        # group" heuristics below.
         rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags or [], routing_prefix)
-        required_tags, positive_tags, excluded_patterns = _split_tags(rewritten_tags)
+        required_tags, positive_tags, excluded_patterns = _split_tags(
+            _tags_that_route(
+                request_tags or (),
+                rewritten_tags,
+                frozenset(_tags_in_metadata(metadata, key="inherited_tags")),
+                routing_prefix,
+            )
+        )
         inherited_required_set, inherited_excluded_set = _inherited_constraint_sets(
             metadata.get("inherited_tags"), routing_prefix
         )
