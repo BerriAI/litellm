@@ -28743,7 +28743,7 @@ def test_update_kwargs_with_deployment_reads_stream_options_from_pydantic_litell
     from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
     from litellm.types.router import LiteLLM_Params
 
-    kwargs: dict = {"stream": True, "metadata": {}}
+    kwargs: Final[dict[str, object]] = {"stream": True, "metadata": {}}
     Router()._update_kwargs_with_deployment(
         deployment={
             "model_name": "gpt-5-mini",
