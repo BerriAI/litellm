@@ -370,6 +370,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -469,6 +470,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.parametrize(
@@ -564,6 +566,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://{default_location}-aiplatform.googleapis.com/v1/projects/{default_project}/locations/{default_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {default_credentials}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio

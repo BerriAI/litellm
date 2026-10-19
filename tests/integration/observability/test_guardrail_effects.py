@@ -27,6 +27,8 @@ from openai import APIError, AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
 def test_guardrail_rewrites_system_and_user_in_actual_anthropic_request(gateway: Gateway, tmp_path: Path) -> None:
@@ -225,7 +227,7 @@ def test_guardrail_denial_prevents_provider_and_preserves_allowed_control(gatewa
             model: Final = scenario.model()
             key: Final = scenario.key(models=[model])
             with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-                observed.get("/__observations")
+                observed.delete("/__observations").raise_for_status()
                 denied: Final = candidate.request(
                     "POST",
                     "/v1/chat/completions",
@@ -1181,7 +1183,7 @@ def test_responses_pre_call_denial_streams_sse_with_typed_message_item(gateway: 
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             response: Final = candidate.request(
                 "POST",
                 "/v1/responses",
@@ -1223,7 +1225,7 @@ def test_responses_pre_call_denial_returns_json_with_typed_message_item(gateway:
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             response: Final = candidate.request(
                 "POST", "/v1/responses", {"model": model, "input": "say hi", "guardrails": [identity]}
             )
@@ -1395,7 +1397,7 @@ def test_responses_pre_call_denial_stream_event_vocabulary(gateway: Gateway, tmp
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             response: Final = candidate.request(
                 "POST",
                 "/v1/responses",
@@ -1451,7 +1453,7 @@ def test_responses_pre_call_denial_stream_requests_have_distinct_ids(gateway: Ga
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             responses: Final = tuple(
                 candidate.request(
                     "POST",
@@ -1587,7 +1589,7 @@ def test_responses_unguarded_stream_reaches_upstream(gateway: Gateway, tmp_path:
         assert denied.status_code == 200, denied.text
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             response: Final = candidate.request(
                 "POST",
                 "/v1/responses",
@@ -1934,7 +1936,7 @@ def test_responses_pre_call_denial_stream_survives_worker_burst(gateway: Gateway
         model: Final = scenario.model(api_base=_dead_api_base())
         healthy: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
 
             def burst(index: int) -> httpx.Response:
                 if index % 3 == 0:

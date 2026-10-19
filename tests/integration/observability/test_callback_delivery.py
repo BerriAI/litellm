@@ -14,6 +14,8 @@ from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.covers(
     "other.observability.callbacks.credentials_stay_out_of_event_bodies",

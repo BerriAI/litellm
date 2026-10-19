@@ -2,9 +2,10 @@ import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -20,6 +21,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -104,6 +106,37 @@ def _proxy_stamped_used_client_oauth_token(
     proxy_metadata: Final = request_data.get(proxy_bucket)
     stamped: Final = proxy_metadata.get("used_client_oauth_token") if isinstance(proxy_metadata, dict) else None
     return stamped if isinstance(stamped, bool) else None
+
+
+def _str_keyed_fields(value: object) -> Mapping[str, object]:
+    return value if is_str_keyed_mapping(value) else {}
+
+
+def _is_model_group(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+_TAG_LIST: Final = TypeAdapter(list[str])
+
+
+def _is_tag_list(value: object) -> bool:
+    try:
+        return bool(_TAG_LIST.validate_python(value, strict=True))
+    except ValidationError:
+        return False
+
+
+_ROUTED_METADATA_FIELD_CHECKS: Final = MappingProxyType({"model_group": _is_model_group, "tags": _is_tag_list})
+
+
+def _routed_metadata_fallback(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    caller_metadata: Final = _str_keyed_fields(request_data.get("metadata"))
+    routed_metadata: Final = _str_keyed_fields(request_data.get("litellm_metadata"))
+    return {
+        field: routed_metadata[field]
+        for field, is_valid in _ROUTED_METADATA_FIELD_CHECKS.items()
+        if not caller_metadata.get(field) and is_valid(routed_metadata.get(field))
+    }
 
 
 def _failure_snapshot_with_guardrails_recorded_after_it(
@@ -246,10 +279,11 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata, original_exception=original_exception
         )
 
-        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_data, request_route)
+        request_fields: Final = _str_keyed_fields(request_data)
+        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_fields, request_route)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
-        existing_metadata.update(_metadata)
+        existing_metadata.update({**_routed_metadata_fallback(request_fields), **_metadata})
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
         litellm_metadata: Final[ObjectMapping] = (
@@ -506,11 +540,7 @@ class _ProxyDBLogger(CustomLogger):
                 await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
-                # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
-                # result=None; their per-turn costs are tracked on the inner aresponses/realtime calls.
-                if sl_object is None and (
-                    not kwargs.get("model") or kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime")
-                ):
+                if sl_object is None and (not kwargs.get("model") or kwargs.get("call_type") == "_arealtime"):
                     verbose_proxy_logger.warning(
                         "Cost tracking - skipping, no standard_logging_object for call_type=%s",
                         kwargs.get("call_type", "unknown"),
