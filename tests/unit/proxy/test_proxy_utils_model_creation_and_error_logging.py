@@ -2042,6 +2042,29 @@ def test_a_timed_out_request_is_priced_at_the_deployment_rate_when_litellm_param
     assert response_cost == pytest.approx(usage.prompt_tokens * 0.5)
 
 
+def test_a_timed_out_request_is_priced_at_the_deployment_rate_when_model_info_sets_one():
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={
+            "call_type": "acompletion",
+            "model": FAILURE_USAGE_MODEL,
+            "messages": ONE_USER_MESSAGE,
+            "litellm_params": {
+                "metadata": {"model_info": {"id": "dep-1", "input_cost_per_token": 0.25}},
+            },
+        },
+        request_body={},
+        dispatched=True,
+        provider_billed=True,
+    )
+
+    assert lifted is not None
+    usage, response_cost = lifted
+    assert usage.prompt_tokens > 0
+    assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
+
+
 def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rate():
     from litellm.proxy.utils import _failure_usage_to_lift
 

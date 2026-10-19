@@ -157,7 +157,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging, _deployment_model_info
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -1063,15 +1063,17 @@ def _failure_usage_to_lift(
 
 
 def _deployment_cost_per_token(model_call_details: Mapping[str, object]) -> CostPerToken | None:
-    """The deployment's own rates from ``litellm_params`` (``input_cost_per_token`` and
-    ``output_cost_per_token`` in the model_list entry), so a billed failure is priced like
-    a success on the same deployment instead of from the public cost map."""
+    """The deployment's own rates (``input_cost_per_token`` and ``output_cost_per_token``),
+    read from the top level of ``litellm_params`` first and then from the router-stamped
+    ``model_info`` the way the success path does, so a billed failure is priced like a
+    success on the same deployment instead of from the public cost map."""
     raw_params: Final = model_call_details.get("litellm_params")
     if not isinstance(raw_params, dict):
         return None
     params: Final = cast("Mapping[str, object]", raw_params)  # cast-ok: untyped router dict, rates checked below
-    input_rate: Final = params.get("input_cost_per_token")
-    output_rate: Final = params.get("output_cost_per_token")
+    model_info: Final = _deployment_model_info(raw_params)
+    input_rate: Final = params.get("input_cost_per_token") or model_info.get("input_cost_per_token")
+    output_rate: Final = params.get("output_cost_per_token") or model_info.get("output_cost_per_token")
     if not isinstance(input_rate, (int, float)):
         return None
     return CostPerToken(
