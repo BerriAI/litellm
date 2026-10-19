@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { sessionSpendLogsCall } from "../../networking";
 import { LogEntry } from "../types";
+import { toast } from "@/lib/toast";
+import * as localStorageUtils from "@/utils/localStorageUtils";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
 
 vi.mock("../../networking", () => ({
@@ -83,19 +85,78 @@ const sessionLogs = [
 const renderSessionDrawer = () => {
   vi.mocked(sessionSpendLogsCall).mockResolvedValue({ data: sessionLogs, total: 4, total_pages: 1 });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const drawer = (open: boolean) => (
+  const drawer = (open: boolean, sessionId = "session-1") => (
     <QueryClientProvider client={queryClient}>
-      <LogDetailsDrawer open={open} onClose={() => {}} logEntry={null} sessionId="session-1" accessToken="token" />
+      <LogDetailsDrawer open={open} onClose={() => {}} logEntry={null} sessionId={sessionId} accessToken="token" />
     </QueryClientProvider>
   );
-  const { rerender } = render(drawer(true));
-  return { rerender, drawer };
+  const { rerender, unmount } = render(drawer(true));
+  return { rerender, drawer, unmount };
 };
 
 const sidebarEventNames = () =>
   screen.queryAllByText(/^(llm-early|llm-late|tool-early|tool-late)$/).map((el) => el.textContent);
 
 describe("LogDetailsDrawer session sidebar sorting", () => {
+  beforeEach(() => localStorage.removeItem("litellm_session_logs_default_sort"));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("saves a default sort for reopened sessions and a fresh page mount", async () => {
+    const { rerender, drawer, unmount } = renderSessionDrawer();
+    await screen.findByText("llm-early");
+    fireEvent.click(screen.getByRole("tab", { name: "Start time" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set as default" }));
+    expect(screen.getByRole("button", { name: "Default in this browser" })).toBeDisabled();
+
+    rerender(drawer(false));
+    rerender(drawer(true));
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-early", "tool-early", "llm-late", "tool-late"]));
+    unmount();
+    renderSessionDrawer();
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-early", "tool-early", "llm-late", "tool-late"]));
+  });
+
+  it("keeps a temporary sort separate from the default for the next session", async () => {
+    localStorage.setItem("litellm_session_logs_default_sort", "start_time");
+    const { rerender, drawer } = renderSessionDrawer();
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-early", "tool-early", "llm-late", "tool-late"]));
+    fireEvent.click(screen.getByRole("tab", { name: "Duration" }));
+    expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]);
+    rerender(drawer(true, "session-2"));
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-early", "tool-early", "llm-late", "tool-late"]));
+  });
+
+  it("lets duration become the saved default again", async () => {
+    localStorage.setItem("litellm_session_logs_default_sort", "start_time");
+    const { unmount } = renderSessionDrawer();
+    await screen.findByText("llm-early");
+    fireEvent.click(screen.getByRole("tab", { name: "Duration" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set as default" }));
+    unmount();
+    renderSessionDrawer();
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
+  });
+
+  it("falls back to duration when the stored preference is invalid", async () => {
+    localStorage.setItem("litellm_session_logs_default_sort", "unsupported-mode");
+    renderSessionDrawer();
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
+    expect(screen.getByRole("tab", { name: "Duration" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("reports a failed save without pretending the default changed", async () => {
+    vi.spyOn(localStorageUtils, "setLocalStorageItem").mockImplementation(() => {});
+    const { rerender, drawer } = renderSessionDrawer();
+    await screen.findByText("llm-early");
+    fireEvent.click(screen.getByRole("tab", { name: "Start time" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set as default" }));
+    expect(toast.error).toHaveBeenCalledWith("Couldn't save the default sort in this browser");
+    expect(screen.getByRole("button", { name: "Set as default" })).toBeEnabled();
+    rerender(drawer(false));
+    rerender(drawer(true));
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
+  });
+
   it("defaults to duration order, longest call first across LLM and MCP calls", async () => {
     renderSessionDrawer();
     await waitFor(() => expect(sidebarEventNames()).toHaveLength(4));
