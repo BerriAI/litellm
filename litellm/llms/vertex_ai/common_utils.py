@@ -23,7 +23,7 @@ from litellm.types.llms.vertex_ai import (
     PartType,
     Schema,
 )
-from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
@@ -1274,9 +1274,11 @@ class VertexAITokenCounter(BaseTokenCounter):
         system: object | None = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIError as PartnerVertexAIError,
         )
@@ -1291,6 +1293,23 @@ class VertexAITokenCounter(BaseTokenCounter):
             model_to_use, count_tokens_params_request
         ):
             return None
+
+        without_count_route: Final = (
+            VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and count_tokens_publisher(model_to_use) is None
+        )
+        model_info: Final[Mapping[str, object]] = deployment.get("model_info") or {}
+        if without_count_route and messages and model_info.get("custom_tokenizer") is not None:
+            return None
+        if without_count_route:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="vertex_ai_partner_models",
+                error=True,
+                error_message=f"LiteLLM does not support counting tokens for Vertex AI model {model_to_use}.",
+                status_code=400,
+            )
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
@@ -1352,6 +1371,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         else:
             from litellm.llms.vertex_ai.count_tokens.context import (
                 VertexGeminiCountContextError,
+                count_context_edits,
                 count_context_error_response,
                 gemini_count_contents,
                 inference_request_view,
@@ -1361,7 +1381,14 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
 
-            request_view: Final = inference_request_view(messages or [], system, messages_format)
+            request_view: Final = await inference_request_view(
+                messages or [],
+                system,
+                messages_format,
+                count_context_edits(context_management, tools, count_tokens_params_request, model_to_use),
+            )
+            if isinstance(request_view, VertexGeminiCountContextError):
+                return count_context_error_response(request_view, request_model, model_to_use)
             count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)

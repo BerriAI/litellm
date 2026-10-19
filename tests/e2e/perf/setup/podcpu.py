@@ -103,7 +103,7 @@ class NoSampler:
         return None
 
 
-def _in_cluster() -> tuple[str, str, str] | None:
+def in_cluster() -> tuple[str, str, str] | None:
     token: Final = _SERVICE_ACCOUNT / "token"
     ca: Final = _SERVICE_ACCOUNT / "ca.crt"
     namespace: Final = _SERVICE_ACCOUNT / "namespace"
@@ -115,7 +115,7 @@ def _in_cluster() -> tuple[str, str, str] | None:
 @contextmanager
 def gateway_cpu_sampler() -> Generator[GatewayCpuSampler | NoSampler]:
     selector: Final = os.environ.get(SELECTOR_ENV, "")
-    cluster: Final = _in_cluster()
+    cluster: Final = in_cluster()
     sampler: Final = (
         GatewayCpuSampler(selector, cluster[2], cluster[0], cluster[1]) if selector and cluster else NoSampler()
     )

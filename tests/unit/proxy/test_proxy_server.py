@@ -3205,6 +3205,7 @@ async def test_update_config_success_callback_normalization(monkeypatch):
             self.db.litellm_config = MagicMock()
             self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
             self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
+            self.writer_db = self.db
 
     monkeypatch.setattr(proxy_server, "prisma_client", MockPrisma())
 
