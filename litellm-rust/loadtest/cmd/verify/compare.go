@@ -32,6 +32,11 @@ func compareSides(r *report, a, b string, da, db *dbTotals, ma, mb map[string]*f
 		}
 		r.add(info("total spend ("+a+" / "+b+")", both, fmt.Sprintf("$%.6f / $%.6f", da.Spend, db.Spend)))
 	}
+	// Bifrost's metrics and log objects have their own schema; listing their differences from
+	// LiteLLM's says nothing, so only LiteLLM sides compare telemetry.
+	if isBifrost(a) || isBifrost(b) {
+		return
+	}
 	if ma != nil && mb != nil {
 		fa, fb := litellmFamilies(ma), litellmFamilies(mb)
 		r.add(info("metrics only on "+a, both, missing(fa, fb)))

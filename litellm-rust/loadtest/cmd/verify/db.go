@@ -38,6 +38,7 @@ func (d deploymentTotals) prices() (in, out float64, ok bool) {
 
 // dbTotals is the one JSON row `verify sql` selects for a key set.
 type dbTotals struct {
+	Dialect     string                       `json:"dialect"` // "bifrost" for bifrostQuery's row
 	Rows        int64                        `json:"rows"`
 	Success     int64                        `json:"success_rows"`
 	Prompt      int64                        `json:"prompt_tokens"`
@@ -70,6 +71,10 @@ func sqlCmd(args []string) {
 	fs := flag.NewFlagSet("sql", flag.ExitOnError)
 	set := fs.String("set", "", "key set name, as given to genconfig -key-sets")
 	fs.Parse(args)
+	if isBifrost(*set) {
+		fmt.Fprint(os.Stdout, bifrostQuery(*set))
+		return
+	}
 	fmt.Fprint(os.Stdout, query(*set))
 }
 
@@ -136,6 +141,10 @@ func dollars(r *report, name, side string, want, got float64) {
 }
 
 func checkDB(r *report, side string, e expected, db dbTotals) {
+	if isBifrost(side) {
+		checkBifrostDB(r, side, e, db)
+		return
+	}
 	ok := e.Total.Requests
 	exact(r, "spend log rows", side, ok, db.Rows)
 	exact(r, "spend log rows marked success", side, ok, db.Success)
