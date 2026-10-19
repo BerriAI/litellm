@@ -19766,8 +19766,14 @@ def _owner_route_update_status(existing: list[str], incoming: list[str]) -> int 
         (["llm_api_routes"], [], None),
         (["llm_api_routes", "/key/spend/report"], [], 403),
         (["llm_api_routes", "/key/spend/report"], ["llm_api_routes"], 403),
+        (["llm_api_routes", "/key/spend/report"], ["/key/spend/report", "llm_api_routes"], None),
     ],
-    ids=["preset_to_full_access", "default_list_to_full_access", "default_list_to_ai_apis"],
+    ids=[
+        "preset_to_full_access",
+        "default_list_to_full_access",
+        "default_list_to_ai_apis",
+        "default_list_sent_back_unchanged",
+    ],
 )
 def test_owner_cannot_change_the_routes_a_key_got_from_default_key_generate_params(
     monkeypatch: pytest.MonkeyPatch, existing: list[str], incoming: list[str], expected_status: int | None
@@ -22818,18 +22824,17 @@ async def test_custom_key_policy_sees_the_routes_a_member_key_is_saved_with(
     monkeypatch: pytest.MonkeyPatch, default_key_generate_params: dict[str, list[str]] | None
 ) -> None:
     monkeypatch.setattr(litellm, "default_key_generate_params", default_key_generate_params)
-    received: list[CustomKeyPolicyRequest] = []
+    policy: Final = AsyncMock(return_value={"decision": True})
     generate_key: Final = AsyncMock(return_value={"key": "sk-member", "user_id": "member-1", "team_id": "team-1"})
 
-    with patch(  # test-quality-ok: inject policy hook
-        "litellm.proxy.proxy_server.user_custom_key_policy", _seven_day_policy(received)
-    ):
+    with patch("litellm.proxy.proxy_server.user_custom_key_policy", policy):  # test-quality-ok: inject policy hook
         await _team_admin_generates_member_key(
             AsyncMock(return_value=MagicMock(user_role=LitellmUserRoles.INTERNAL_USER.value)), generate_key
         )
 
-    assert received[0].effective_key.allowed_routes == ["llm_api_routes"]
-    assert received[0].effective_key.allowed_routes == generate_key.await_args.kwargs["allowed_routes"]
+    policy_request: Final = policy.await_args.args[0]
+    assert policy_request.effective_key.allowed_routes == ["llm_api_routes"]
+    assert policy_request.effective_key.allowed_routes == generate_key.await_args.kwargs["allowed_routes"]
 
 
 @pytest.mark.asyncio

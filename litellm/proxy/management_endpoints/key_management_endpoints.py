@@ -1077,6 +1077,10 @@ def _enforce_allowed_routes_update_permission(
     existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
+    if data.allowed_routes is not None and frozenset(data.allowed_routes) == frozenset(
+        existing_key_row.allowed_routes or ()
+    ):
+        return
     if _is_safe_preset_route_transition(
         incoming_allowed_routes=data.allowed_routes,
         existing_allowed_routes=existing_key_row.allowed_routes,
