@@ -4257,3 +4257,47 @@ async def test_headroom_unsafe_native_mapping_preserves_request_and_tools(
     assert entries[0]["guardrail_status"] == "guardrail_failed_to_respond"
     assert entries[0]["duration"] >= 0
     assert extract_compression_saved_tokens({"guardrail_information": entries}) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("skip_source", ["guardrail", "global"])
+@pytest.mark.parametrize("include_system_item", [False, True])
+async def test_headroom_skipped_system_messages_preserve_response_compression(
+    skip_source: str, include_system_item: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "skip_system_message_in_guardrail", skip_source == "global")
+    callback: Final = HeadroomGuardrail(
+        api_base="https://headroom.example.com", compress_latest_turn=True,
+    )
+    callback.skip_system_message_in_guardrail = True if skip_source == "guardrail" else None
+    prefix: Final = [{"role": "system", "content": "Keep all identifiers"}] if include_system_item else []
+    items: Final = [*prefix,
+        {"role": "user", "content": "Read old data"},
+        {"type": "function_call", "call_id": "old_call", "name": "read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "old_call", "output": "old " * 500},
+        {"role": "assistant", "content": "Done"},
+        {"role": "user", "content": "Read new data"},
+        {"type": "function_call", "call_id": "new_call", "name": "read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "new_call", "output": "new " * 500},
+    ]
+    route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(200, json={"messages": [
+        {"role": "user", "content": "Read old"},
+        {"role": "tool", "tool_call_id": "old_call", "content": "old summary"},
+        {"role": "user", "content": "Read new"},
+        {"role": "tool", "tool_call_id": "new_call", "content": "new summary"},
+    ]})
+    result: Final = await OpenAIResponsesHandler().process_input_messages(
+        {"instructions": "Be terse", "input": items}, callback
+    )
+    assert route.called
+    assert result["instructions"] == "Be terse"
+    assert result["input"] == [*prefix,
+        {"role": "user", "content": "Read old"}, items[len(prefix) + 1],
+        {"type": "function_call_output", "call_id": "old_call", "output": "old summary"},
+        {"role": "assistant", "content": "Done"},
+        {"role": "user", "content": "Read new"}, items[len(prefix) + 5],
+        {"type": "function_call_output", "call_id": "new_call", "output": "new summary"},
+    ]

@@ -911,15 +911,31 @@ class HeadroomGuardrail(CustomGuardrail):
         )
 
         if self.compress_latest_turn and "input" in request_data:
-            from litellm.llms.openai.responses.guardrail_translation.handler import patch_response_request_fields
+            from litellm.llms.base_llm.guardrail_translation.utils import (
+                effective_skip_system_message_for_guardrail,
+                scoped_structured_message_indices,
+            )
+            from litellm.llms.openai.responses.guardrail_translation.handler import (
+                OpenAIResponsesHandler,
+                patch_response_request_fields,
+            )
+
+            full_messages: Final = OpenAIResponsesHandler().get_structured_messages(request_data) or []
+            scoped_indices: Final = scoped_structured_message_indices(
+                full_messages,
+                scan_only_tool_results=False,
+                skip_system=effective_skip_system_message_for_guardrail(self),
+                skip_tool=False,
+            )
 
             if (
                 patch_response_request_fields(
                     typed_request.get("input"),
                     typed_request.get("instructions"),
-                    messages,
+                    full_messages,
                     compressed,
                     preserve_text_metadata=True,
+                    scoped_indices=scoped_indices,
                 )
                 is None
             ):

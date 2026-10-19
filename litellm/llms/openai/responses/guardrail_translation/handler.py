@@ -508,11 +508,13 @@ def patch_response_request_fields(
     structured_messages: Sequence[object],
     *,
     preserve_text_metadata: bool = False,
+    scoped_indices: Sequence[int] | None = None,
 ) -> _RequestFields | None:
     input_items: Final = (
         [{"role": "user", "content": raw_input}] if isinstance(raw_input, str) and preserve_text_metadata else raw_input
     )
-    if not isinstance(input_items, list) or len(original_messages) != len(structured_messages):
+    message_indices: Final = range(len(original_messages)) if scoped_indices is None else scoped_indices
+    if not isinstance(input_items, list) or len(message_indices) != len(structured_messages):
         return None
     offset: Final = 1 if instructions else 0
     provenance: Final = _input_item_provenance(input_items, tuple(original_messages)[offset:])
@@ -521,8 +523,8 @@ def patch_response_request_fields(
     item_for_message, tainted = provenance
     changed: Final = tuple(
         (index, rewritten)
-        for index, (original, rewritten) in enumerate(zip(original_messages, structured_messages))
-        if original != rewritten
+        for index, rewritten in zip(message_indices, structured_messages)
+        if original_messages[index] != rewritten
     )
     instruction_rewrites: Final = tuple(rewritten for index, rewritten in changed if index < offset)
     rewritten_instructions: Final = (
