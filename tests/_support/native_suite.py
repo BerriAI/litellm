@@ -1,5 +1,4 @@
-from collections.abc import Callable, Generator, Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Generator
 from importlib import import_module
 from pathlib import Path
 from typing import Final
@@ -7,49 +6,55 @@ from typing import Final
 import pytest
 from _pytest.terminal import TerminalReporter
 
-SELECTED: Final = pytest.StashKey[frozenset[str]]()
-PASSED: Final = pytest.StashKey[frozenset[str]]()
+NATIVE_PASSED: Final = "litellm_native_suite_passed"
 
 
 def load_native() -> object:
     return import_module("litellm.rust_bridge._native")
 
 
-@dataclass(frozen=True, slots=True)
 class NativeSuite:
-    root: Path
-    native: Callable[[], object] = load_native
+    def __init__(self, root: Path, native: Callable[[], object] = load_native) -> None:
+        self.root: Final = root
+        self.native: Final = native
+        self.passed: bool = False
 
     def pytest_configure(self, config: pytest.Config) -> None:
         try:
             self.native()
         except ImportError as error:
             raise pytest.UsageError("Native tests require a compiled litellm.rust_bridge._native extension") from error
-        config.stash[SELECTED] = frozenset()
-        config.stash[PASSED] = frozenset()
-
-    @pytest.hookimpl(wrapper=True)
-    def pytest_collection_modifyitems(self, config: pytest.Config, items: list[pytest.Item]) -> Iterator[None]:
-        yield
-        config.stash[SELECTED] = frozenset(
-            item.nodeid
-            for item in items
-            if item.path.is_relative_to(self.root) and item.get_closest_marker("requires_rust_extension") is not None
-        )
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_makereport(
         self, item: pytest.Item, call: pytest.CallInfo[None]
     ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
         report: Final = yield
-        if report.when == "call" and report.passed and item.nodeid in item.config.stash[SELECTED]:
-            item.config.stash[PASSED] = item.config.stash[PASSED] | {item.nodeid}
+        if (
+            report.when == "call"
+            and report.passed
+            and item.path.is_relative_to(self.root)
+            and item.get_closest_marker("requires_rust_extension") is not None
+        ):
+            report.user_properties.append((NATIVE_PASSED, True))
         return report
 
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        if (
+            report.when == "call"
+            and report.passed
+            and any(name == NATIVE_PASSED and value is True for name, value in report.user_properties)
+        ):
+            self.passed = True
+
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
-        if session.config.getoption("collectonly", default=False) is True or session.exitstatus != pytest.ExitCode.OK:
+        if (
+            hasattr(session.config, "workerinput")
+            or session.config.getoption("collectonly", default=False) is True
+            or session.exitstatus != pytest.ExitCode.OK
+        ):
             return
-        if not session.config.stash[SELECTED] or not session.config.stash[PASSED]:
+        if not self.passed:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
             reporter: Final = session.config.pluginmanager.get_plugin("terminalreporter")
             if isinstance(reporter, TerminalReporter):

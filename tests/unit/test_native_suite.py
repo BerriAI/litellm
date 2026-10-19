@@ -60,3 +60,32 @@ def test_missing_extension_fails_before_test_collection(pytester: Pytester) -> N
 
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     assert not result.getreports("pytest_collectreport")
+
+
+@pytest.mark.parametrize(
+    ("source", "inside_root", "expected"),
+    (
+        (NATIVE, True, pytest.ExitCode.OK),
+        ("@pytest.mark.skip(reason='unavailable')\n" + NATIVE, True, pytest.ExitCode.TESTS_FAILED),
+        ("def test_dispatch():\n    assert True\n", True, pytest.ExitCode.TESTS_FAILED),
+        (NATIVE, False, pytest.ExitCode.TESTS_FAILED),
+    ),
+    ids=("native", "native-skipped", "unmarked", "outside-root"),
+)
+def test_controller_requires_a_passing_native_worker_report(
+    pytester: Pytester, source: str, inside_root: bool, expected: pytest.ExitCode
+) -> None:
+    pytester.path.joinpath("test_suite.py").write_text("import pytest\n" + source)
+    root: Final = pytester.path if inside_root else pytester.path / "native"
+    result: Final = pytester.inline_run(  # pyright: ignore[reportUnknownMemberType]  # pytester leaves plugins untyped
+        plugins=(NativeSuite(root, available),)
+    )
+    controller: Final = NativeSuite(root, available)
+    for report in result.getreports("pytest_runtest_logreport"):
+        controller.pytest_runtest_logreport(report)
+    session: Final = pytest.Session.from_config(pytester.parseconfig())
+    session.exitstatus = pytest.ExitCode.OK
+
+    controller.pytest_sessionfinish(session)
+
+    assert session.exitstatus == expected
