@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from prisma import Prisma
-from pydantic import SecretStr, TypeAdapter
+from pydantic import SecretStr
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.spend_tracking.charge_receipt_capture import BillingContext, ChargeReceiptRuntime
@@ -20,23 +20,9 @@ from litellm.proxy.spend_tracking.charge_receipts import (
     ChargeReceiptStore,
 )
 from litellm.types.charge_receipts import CommittedCharge, FailedCharge
-from litellm.types.llms.base import LiteLLMBaseModel
 from tests.integration._support.prisma_clients import connected_prisma
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
-
-
-class _Balance(LiteLLMBaseModel):
-    spend: float
-    total_spend: float
-
-
-class _Count(LiteLLMBaseModel):
-    total: int
-
-
-_BALANCES: Final = TypeAdapter(tuple[_Balance, ...])
-_COUNTS: Final = TypeAdapter(tuple[_Count, ...])
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,24 +31,18 @@ class JournalCase:
     store: ChargeReceiptStore
     receipt: ChargeReceipt
 
-    async def balance(self) -> _Balance:
-        rows: Final = _BALANCES.validate_python(
-            await self.database.query_raw(
-                'SELECT spend,total_spend FROM "LiteLLM_VerificationToken" WHERE token=$1',
-                self.receipt.key_hash,
-            )
+    async def balance(self) -> dict[str, float]:
+        rows: Final = await self.database.query_raw(
+            'SELECT spend,total_spend FROM "LiteLLM_VerificationToken" WHERE token=$1', self.receipt.key_hash
         )
         assert len(rows) == 1
-        return rows[0]
+        return {field: float(rows[0][field]) for field in ("spend", "total_spend")}
 
     async def receipt_count(self) -> int:
-        rows: Final = _COUNTS.validate_python(
-            await self.database.query_raw(
-                'SELECT count(*) AS total FROM "LiteLLM_ChargeReceipt" WHERE key_hash=$1',
-                self.receipt.key_hash,
-            )
+        rows: Final = await self.database.query_raw(
+            'SELECT count(*) AS total FROM "LiteLLM_ChargeReceipt" WHERE key_hash=$1', self.receipt.key_hash
         )
-        return rows[0].total
+        return int(rows[0]["total"])
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
@@ -100,7 +80,7 @@ async def test_concurrent_receipt_retries_post_one_key_charge(journal: JournalCa
     assert all(isinstance(result, CommittedCharge) for result in results), results
     assert sum(isinstance(result, CommittedCharge) and not result.duplicate for result in results) == 1
     balance: Final = await journal.balance()
-    assert balance.spend == balance.total_spend == 0.25
+    assert balance["spend"] == balance["total_spend"] == 0.25
     assert await journal.receipt_count() == 1
     conflict: Final = await journal.store.append(journal.receipt.model_copy(update={"amount_usd": "0.5"}))
     assert conflict == FailedCharge(journal.receipt.key_hash, "receipt_conflict")
@@ -112,7 +92,7 @@ async def test_concurrent_distinct_charges_do_not_lose_key_increments(journal: J
     results: Final = await asyncio.gather(*(journal.store.append(receipt) for receipt in receipts))
     assert all(isinstance(result, CommittedCharge) and not result.duplicate for result in results), results
     balance: Final = await journal.balance()
-    assert balance.spend == balance.total_spend == 16 * 0.25
+    assert balance["spend"] == balance["total_spend"] == 16 * 0.25
     assert await journal.receipt_count() == 16
 
 
@@ -134,7 +114,7 @@ async def test_lost_commit_acknowledgement_does_not_rebill_on_retry(journal: Jou
     first: Final = await store.append(journal.receipt)
     assert first == FailedCharge(journal.receipt.key_hash, "database_unavailable")
     balance: Final = await journal.balance()
-    assert balance.spend == balance.total_spend == 0.25
+    assert balance["spend"] == balance["total_spend"] == 0.25
     second: Final = await store.append(journal.receipt)
     assert second == CommittedCharge(
         journal.receipt.event_id,
@@ -162,14 +142,14 @@ async def test_failed_key_write_rolls_back_the_receipt_in_the_same_transaction(j
             outcome: Final = await journal.store.append(journal.receipt)
             assert outcome == FailedCharge(journal.receipt.key_hash, "database_unavailable")
             balance: Final = await journal.balance()
-            assert balance.spend == balance.total_spend == 0
+            assert balance["spend"] == balance["total_spend"] == 0
             assert await journal.receipt_count() == 0
         finally:
             await journal.database.execute_raw(f'DROP TRIGGER "{trigger}" ON "LiteLLM_VerificationToken"')
     finally:
         await journal.database.execute_raw(f'DROP FUNCTION "{trigger}"()')
     assert isinstance(await journal.store.append(journal.receipt), CommittedCharge)
-    assert (await journal.balance()).spend == 0.25 and await journal.receipt_count() == 1
+    assert (await journal.balance())["spend"] == 0.25 and await journal.receipt_count() == 1
 
 
 async def test_delivery_lease_expires_and_stale_ack_cannot_remove_new_claim(journal: JournalCase) -> None:
@@ -195,7 +175,7 @@ async def test_delivery_lease_expires_and_stale_ack_cannot_remove_new_claim(jour
     )
     assert delivered[0]["delivered_at"] is not None
     assert await journal.store.claim(first_owner, 32) == ()
-    assert (await journal.balance()).spend == 0.25
+    assert (await journal.balance())["spend"] == 0.25
 
 
 async def test_retry_retains_charge_without_rebilling_and_zero_is_a_fresh_receipt(journal: JournalCase) -> None:
@@ -213,7 +193,7 @@ async def test_retry_retains_charge_without_rebilling_and_zero_is_a_fresh_receip
     assert isinstance(await journal.store.append(zero), CommittedCharge)
     assert await journal.receipt_count() == 2
     balance: Final = await journal.balance()
-    assert balance.spend == balance.total_spend == 0.25
+    assert balance["spend"] == balance["total_spend"] == 0.25
 
 
 async def test_key_removal_retains_original_charge_evidence_without_recreating_key(journal: JournalCase) -> None:
@@ -284,7 +264,7 @@ async def test_stream_chunk_does_not_commit_zero_before_final_usage(journal: Jou
         cache_hit=True,
     )
     assert await journal.receipt_count() == 1
-    assert (await journal.balance()).spend == 0
+    assert (await journal.balance())["spend"] == 0
 
 
 async def test_only_receipted_calls_skip_the_legacy_key_debit(
@@ -359,7 +339,7 @@ async def test_only_receipted_calls_skip_the_legacy_key_debit(
                     break
                 assert time.monotonic() < deadline, rows
                 await asyncio.sleep(0.01)
-            assert (await journal.balance()).spend == 0.25
+            assert (await journal.balance())["spend"] == 0.25
             cached_spend, _ = await proxy_server.read_spend_counter_cache_value("spend:key:" + journal.receipt.key_hash)
             assert cached_spend == 0.25
             assert await journal.receipt_count() == 1
@@ -375,7 +355,7 @@ async def test_only_receipted_calls_skip_the_legacy_key_debit(
                 start_time=datetime.now(timezone.utc),
                 end_time=datetime.now(timezone.utc),
             )
-            while (await journal.balance()).spend != 0.5:
+            while (await journal.balance())["spend"] != 0.5:
                 assert time.monotonic() < deadline
                 await asyncio.sleep(0.01)
                 await logging.db_spend_update_writer.db_update_spend_transaction_handler(client, 1, logging)

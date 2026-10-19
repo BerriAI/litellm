@@ -41,33 +41,6 @@ def request_for(path: str = "/v1/responses", *, method: str = "POST", token: str
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "path,method,token",
-    (
-        ("/v1/embeddings", "POST", ""),
-        ("/v1/responses", "GET", ""),
-        ("/v1/responses", "POST", ""),
-        ("/v1/responses", "POST", "x" * 4097),
-        ("/v1/responses", "POST", "not-a-jwt"),
-    ),
-)
-async def test_unqualified_requests_fail_before_any_database_or_provider_work(
-    path: str,
-    method: str,
-    token: str,
-) -> None:
-    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(ScriptedQuery()))
-    with pytest.raises(HTTPException) as error:
-        await authorize_charge_receipt(
-            request_for(path, method=method, token=token),
-            UserAPIKeyAuth(api_key=RECEIPT.key_hash),
-            runtime,
-            {"model": "owned-model"},
-        )
-    assert error.value.status_code == 400
-
-
-@pytest.mark.asyncio
 async def test_unbound_authenticated_context_cannot_release_a_successful_response() -> None:
     request: Final = request_for()
     request.state.charge_receipt_context = BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash)
@@ -98,6 +71,9 @@ class FrozenJWTClock(datetime):
         "expired",
         "unsupported",
         "websocket",
+        "missing",
+        "oversized",
+        "malformed",
     ),
 )
 async def test_signed_context_binds_the_original_scope_and_exact_request(
@@ -128,7 +104,8 @@ async def test_signed_context_binds_the_original_scope_and_exact_request(
     async def receive() -> Message:
         return {"type": "http.request", "body": body, "more_body": False}
 
-    request: Final = Request(request_for(path, token=token).scope, receive)
+    supplied: Final = {"missing": "", "oversized": "x" * 4097, "malformed": "not-a-jwt"}.get(changed, token)
+    request: Final = Request(request_for(path, token=supplied).scope, receive)
     request.scope["litellm_websocket_auth"] = changed == "websocket"
     query: Final = ScriptedQuery((({"installed": True, "durable": True},),))
     runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
