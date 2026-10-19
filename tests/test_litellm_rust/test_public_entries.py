@@ -285,3 +285,22 @@ async def test_sync_entry_with_flag_true_raises_setup_errors_at_await(entry: Ent
         assert inspect.iscoroutine(pending)
         with pytest.raises(RuntimeError, match="is unavailable"):
             await pending
+
+
+@pytest.mark.parametrize("entry", ENTRIES, ids=entry_id)
+async def test_async_native_failures_carry_the_retry_count_and_timeout_the_router_reads(entry: Entry) -> None:
+    failure: Final = litellm.RateLimitError(message="limited", llm_provider="openai", model="gpt-4o")
+
+    async def failing(_: NativeCall) -> object:
+        raise failure
+
+    entry.async_binding.override(failing)
+    try:
+        with scenario_rules(entry, SCENARIOS["required"]), pytest.raises(litellm.RateLimitError) as caught:
+            await entry.asynchronous(*entry.args(), **entry.kwargs(num_retries=3, timeout=7.0))
+    finally:
+        entry.async_binding.reset()
+
+    assert caught.value is failure
+    assert getattr(caught.value, "num_retries", None) == 3
+    assert getattr(caught.value, "timeout", None) == 7.0

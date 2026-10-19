@@ -73,7 +73,11 @@ class Feature(str, Enum):
     MESSAGES_INTERCEPTOR = "messages_interceptor"
     """A registered MessagesInterceptor that takes over the call."""
     AGENTIC_LOOP_HOOK = "agentic_loop_hook"
-    """A logger overriding async_should_run_agentic_loop, which may run follow-up calls."""
+    """A logger overriding async_should_run_agentic_loop, which may run follow-up calls.
+
+    Every interception that turns a stream into a converted stream in its pre-call deployment hook
+    (websearch, code interpreter, headroom) also overrides this method, so this feature keeps those
+    calls on Python too."""
     TLS_POLICY = "tls_policy"
     """An OpenSSL security level or ECDH curve that native TLS cannot apply."""
     MANAGED_RESOURCE_IDS = "managed_resource_ids"

@@ -25,6 +25,16 @@ def call_hook(
     return hook(request, args, kwargs)
 
 
+async def _stamped(start: Callable[[], Awaitable[ResultT]], kwargs: Mapping[str, object]) -> ResultT:
+    from litellm.utils import stamp_async_failure
+
+    try:
+        return await start()
+    except Exception as error:
+        stamp_async_failure(error, kwargs)
+        raise
+
+
 @dataclass(frozen=True, slots=True)
 class PublicDispatch(Generic[RequestT]):
     route: Route
@@ -100,7 +110,7 @@ class PublicDispatch(Generic[RequestT]):
             return await runtime.arun(
                 self.context(native_request),
                 binding=binding,
-                native=lambda hook: native(hook, native_request, args, kwargs),
+                native=lambda hook: _stamped(lambda: native(hook, native_request, args, kwargs), kwargs),
                 python=python,
                 rules=selected_rules,
             )
@@ -115,7 +125,7 @@ class PublicDispatch(Generic[RequestT]):
         return await runtime.arun(
             context,
             binding=binding,
-            native=lambda hook: native(hook, request, args, kwargs),
+            native=lambda hook: _stamped(lambda: native(hook, request, args, kwargs), kwargs),
             python=lambda: python(*args, **kwargs),
             rules=selected_rules,
         )
