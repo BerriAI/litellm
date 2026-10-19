@@ -85,7 +85,16 @@ PROVIDERS = (
             vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
         ),
     ),
-    # RealtimeProvider("bedrock", "bedrock-realtime", ...) # TODO: Enable when Bedrock is passing
+    RealtimeProvider(
+        "bedrock",
+        "bedrock-realtime",
+        LiteLLMParamsBody(
+            model="bedrock/amazon.nova-2-sonic-v1:0",
+            aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+            aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+            aws_region_name="os.environ/AWS_REGION",
+        ),
+    ),
     # RealtimeProvider(
     #     "xai",
     #     "xai-realtime",
@@ -307,9 +316,11 @@ def as_text(message: str | bytes) -> str:
 class RealtimeSession:
     connection: Connection
 
-    def send(self, event: BaseModel) -> None:
+    @step("Send the realtime event {event.type} over the websocket")
+    def send(self, event: SessionUpdate | ConversationItemCreate | ResponseCreate | InputAudioBufferAppend) -> None:
         self.connection.send(event.model_dump_json(by_alias=True, exclude_none=True))
 
+    @step("Wait for a {stop_type} event on the realtime websocket")
     def collect_until(
         self, stop_type: str, *, timeout: float
     ) -> tuple[ReceivedEvent, ...]:
@@ -381,6 +392,7 @@ class RealtimeSession:
 class RealtimeClient:
     proxy: ProxyClient
 
+    @step("Add a realtime deployment that calls {provider.litellm_params.model}")
     def provision(self, provider: RealtimeProvider) -> tuple[str, str]:
         """Register this provider's realtime deployment through /model/new and return
         (model_name, model_id). The name is marker-unique so it never collides with a
@@ -393,6 +405,7 @@ class RealtimeClient:
         )
         return model_name, model_id
 
+    @step("Open a /v1/realtime websocket session to {model}")
     @contextmanager
     def connect(
         self, *, key: str, model: str, timeout: float = 15.0

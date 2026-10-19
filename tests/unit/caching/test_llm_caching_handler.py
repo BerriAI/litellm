@@ -535,7 +535,7 @@ async def test_the_pool_is_released_once_the_stream_it_carried_ends(monkeypatch,
             def is_released() -> bool:
                 return pool.connections == []
         else:
-            session = transport._get_valid_client_session()
+            session = transport.get_valid_client_session()
 
             def is_released() -> bool:
                 return session.closed

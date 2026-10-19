@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
@@ -15,8 +16,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_ollama_image,
-    custom_prompt,
     ollama_pt,
+    render_custom_prompt_template,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
@@ -25,7 +26,12 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionUsageBlock,
+)
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
@@ -33,9 +39,10 @@ from litellm.types.utils import (
     ModelResponseStream,
     ProviderField,
     StreamingChoices,
+    generate_id,
 )
 
-from ..common_utils import OllamaError, OllamaModelInfo, _convert_image
+from ..common_utils import OllamaError, OllamaModelInfo, convert_image
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -90,6 +97,15 @@ class _OllamaGenerateResponse(TypedDict):
 
 
 _OLLAMA_GENERATE_RESPONSE: Final = TypeAdapter(_OllamaGenerateResponse)
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_CODE_FENCE: Final = re.compile(r"^```(?:json)?\s*(.*?)\s*(?:```)?$", re.DOTALL)
+_JSON_OBJECT_START: Final = re.compile(r"(?:```(?:json)?\s*)?\{")
+_JSON_OBJECT_PARTIAL_START: Final = re.compile(r"`{0,3}|```(?:j|js|jso|json)?\s*")
+
+
+def _strip_json_code_fence(text: str) -> str:
+    fenced: Final = _JSON_CODE_FENCE.match(text.strip())
+    return fenced.group(1) if fenced else text
 
 
 class OllamaConfig(BaseConfig):
@@ -319,7 +335,9 @@ class OllamaConfig(BaseConfig):
                 model_response.choices[0].finish_reason = "stop"
             else:
                 try:
-                    response_content: Final[object] = json.loads(response_text)
+                    response_content: Final = _JSON_VALUE.validate_python(
+                        json.loads(_strip_json_code_fence(response_text))
+                    )
 
                     # Check if this is a function call format with name/arguments structure
                     if (
@@ -419,11 +437,8 @@ class OllamaConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            ollama_prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            ollama_prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="ollama"
             )
         elif text_completion_request:  # handle `/completions` requests
             ollama_prompt = get_str_from_messages(messages=messages)
@@ -451,7 +466,7 @@ class OllamaConfig(BaseConfig):
         if format is not None:
             data["format"] = format
         if images is not None:
-            data["images"] = [_convert_image(convert_to_ollama_image(image)) for image in images]
+            data["images"] = [convert_image(convert_to_ollama_image(image)) for image in images]
         if think is not None:
             data["think"] = think
 
@@ -485,14 +500,10 @@ class OllamaConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        if api_base is None:
-            api_base = "http://localhost:11434"
-        if api_base.endswith("/api/generate"):
-            url = api_base
-        else:
-            url = f"{api_base}/api/generate"
-
-        return url
+        clean_api_base: Final = (api_base or "http://localhost:11434").rstrip("/")
+        if clean_api_base.endswith("/api/generate"):
+            return clean_api_base
+        return f"{clean_api_base}/api/generate"
 
     def get_model_response_iterator(
         self,
@@ -510,8 +521,53 @@ class OllamaConfig(BaseConfig):
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         super().__init__(streaming_response, sync_stream, json_mode)
+        self.response_id: Final[str] = generate_id()
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
+        self.streamed_content: bool = False
+        self.held_content: str = ""
+        self.holding_json_object: bool = False
+
+    def _hold_json_object_start(self, content: str) -> str | None:
+        if self.streamed_content:
+            return content
+        self.held_content += content
+        if self.holding_json_object:
+            return None
+        candidate: Final = self.held_content.lstrip()
+        if _JSON_OBJECT_START.match(candidate):
+            self.holding_json_object = True
+            return None
+        if _JSON_OBJECT_PARTIAL_START.fullmatch(candidate):
+            return None
+        self.streamed_content = True
+        released: Final = self.held_content
+        self.held_content = ""
+        return released
+
+    def _flush_held_content(self, usage: ChatCompletionUsageBlock | None) -> GenericStreamingChunk:
+        held: Final = self.held_content
+        self.held_content = ""
+        try:
+            parsed: Final[object] = json.loads(_strip_json_code_fence(held))
+        except json.JSONDecodeError:
+            return GenericStreamingChunk(text=held, is_finished=True, finish_reason="stop", usage=usage)
+        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+            return GenericStreamingChunk(
+                text="",
+                tool_use=ChatCompletionToolCallChunk(
+                    id=f"call_{uuid.uuid4()}",
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=parsed["name"], arguments=json.dumps(parsed["arguments"])
+                    ),
+                    index=0,
+                ),
+                is_finished=True,
+                finish_reason="tool_calls",
+                usage=usage,
+            )
+        return GenericStreamingChunk(text=held, is_finished=True, finish_reason="stop", usage=usage)
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         return self.chunk_parser(json.loads(str_line))
@@ -538,6 +594,8 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         completion_tokens=eval_count,
                         total_tokens=prompt_eval_count + eval_count,
                     )
+                if self.held_content:
+                    return self._flush_held_content(usage)
                 return GenericStreamingChunk(
                     text=text,
                     is_finished=is_finished,
@@ -559,9 +617,10 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     if self.started_reasoning_content and not self.finished_reasoning_content:
                         reasoning_content = text
                     else:
-                        content = text
+                        content = self._hold_json_object_start(text)
 
                 return ModelResponseStream(
+                    id=self.response_id,
                     choices=[
                         StreamingChoices(
                             index=0,
@@ -581,24 +640,26 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 # Return reasoning content as ModelResponseStream so UIs can render it
                 thinking_content: Final = chunk.get("thinking") or ""
                 return ModelResponseStream(
+                    id=self.response_id,
                     choices=[
                         StreamingChoices(
                             index=0,
                             delta=Delta(reasoning_content=thinking_content),
                         )
-                    ]
+                    ],
                 )
             else:
                 # In this case, 'thinking' is not present in the chunk, chunk["done"] is false,
                 # and chunk["response"] is falsy (None or empty string),
                 # but Ollama is just starting to stream, so it should be processed as a normal dict
                 return ModelResponseStream(
+                    id=self.response_id,
                     choices=[
                         StreamingChoices(
                             index=0,
                             delta=Delta(reasoning_content=""),
                         )
-                    ]
+                    ],
                 )
                 # raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:

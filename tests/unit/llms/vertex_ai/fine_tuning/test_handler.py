@@ -3,7 +3,11 @@ import json
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import google.auth
+import google.auth.credentials
+import httpx
 import pytest
+import respx
 
 import litellm
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -572,3 +576,105 @@ def _restore_litellm_state(state) -> None:
     for attr, value in state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, value)
+
+
+_VERTEX_TUNING_JOB = {
+    "name": "projects/test-project/locations/us-central1/tuningJobs/42",
+    "tunedModelDisplayName": "gemini-1.0-pro-002-tuned",
+    "baseModel": "gemini-1.0-pro-002",
+    "supervisedTuningSpec": {"trainingDatasetUri": "gs://bucket/train.jsonl"},
+    "state": "JOB_STATE_RUNNING",
+    "createTime": "2024-12-31T22:40:20.211140Z",
+    "updateTime": "2024-12-31T22:40:20.211140Z",
+}
+_BOTH_CALL_STYLES = pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+
+
+class _StaticGoogleCredentials(google.auth.credentials.Credentials):
+    def refresh(self, request):
+        self.token = "test-token"
+
+
+@pytest.fixture
+def vertex_tuning_endpoint(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
+    monkeypatch.setattr(google.auth, "default", lambda scopes: (_StaticGoogleCredentials(), "test-project"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    return respx_mock.post(host="us-central1-aiplatform.googleapis.com")
+
+
+def _vertex_json_response(payload: object) -> httpx.Response:
+    return httpx.Response(200, content=json.dumps(payload).encode())
+
+
+async def _created_vertex_tuning_job(run_async: bool, endpoint: respx.Route, payload: object):
+    endpoint.mock(return_value=_vertex_json_response(payload))
+    pending = VertexFineTuningAPI().create_fine_tuning_job(
+        _is_async=run_async,
+        create_fine_tuning_job_data=FineTuningJobCreate(
+            training_file="gs://bucket/train.jsonl", model="gemini-1.0-pro-002"
+        ),
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=None,
+        api_base=None,
+        timeout=600.0,
+    )
+    return await pending if run_async else pending
+
+
+@_BOTH_CALL_STYLES
+@pytest.mark.asyncio()
+async def test_vertex_fine_tuning_job_creation_returns_the_tuning_job_as_an_openai_job(
+    run_async: bool, vertex_tuning_endpoint: respx.Route
+):
+    job = await _created_vertex_tuning_job(run_async, vertex_tuning_endpoint, _VERTEX_TUNING_JOB)
+
+    assert (job.id, job.created_at, job.fine_tuned_model, job.model, job.status, job.training_file) == (
+        "projects/test-project/locations/us-central1/tuningJobs/42",
+        1735684820,
+        "gemini-1.0-pro-002-tuned",
+        "gemini-1.0-pro-002",
+        "running",
+        "gs://bucket/train.jsonl",
+    )
+
+
+@_BOTH_CALL_STYLES
+@pytest.mark.parametrize("body", [[_VERTEX_TUNING_JOB], [["state", "JOB_STATE_RUNNING"]], "state", 403, 2.5, None])
+@pytest.mark.asyncio()
+async def test_vertex_fine_tuning_job_creation_reports_a_tuning_job_body_that_is_not_an_object_as_a_type_error(
+    run_async: bool, vertex_tuning_endpoint: respx.Route, body: object
+):
+    with pytest.raises(TypeError, match=r"argument after \*\* must be a mapping"):
+        await _created_vertex_tuning_job(run_async, vertex_tuning_endpoint, body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _VERTEX_TUNING_JOB,
+        {"candidates": [{"content": {"parts": [{"text": "hello"}]}}], "usageMetadata": {"totalTokenCount": 3}},
+        {},
+        [{"a": 1}, 2, "x", None],
+        "text",
+        403,
+        2.5,
+        True,
+        None,
+    ],
+)
+@pytest.mark.asyncio()
+async def test_vertex_passthrough_post_returns_the_upstream_json_body_unchanged(
+    vertex_tuning_endpoint: respx.Route, body: object
+):
+    vertex_tuning_endpoint.mock(return_value=_vertex_json_response(body))
+
+    returned = await VertexFineTuningAPI().pass_through_vertex_ai_POST_request(
+        request_data={"baseModel": "gemini-1.0-pro-002"},
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=None,
+        request_route="/tuningJobs",
+    )
+
+    assert (type(returned), returned) == (type(body), body)

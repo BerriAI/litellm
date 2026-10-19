@@ -17,12 +17,14 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,7 +35,7 @@ from typing_extensions import TypedDict
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
-    _initialize_shared_aiohttp_session,
+    initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
     cleanup_router_config_variables,
@@ -47,6 +49,8 @@ from litellm.proxy.proxy_server import (
     run_ollama_serve,
     save_worker_config,
 )
+
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 
 from .conftest import normalize
 
@@ -224,6 +228,46 @@ async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monke
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_drains_audit_writes_beside_the_gateway_flush_before_disconnecting(monkeypatch):
+    """
+    A management call returns before its audit row is written, so shutdown waits
+    for that write while prisma is still connected. It waits beside the gateway
+    flush rather than before it, so the two waits overlap inside the teardown budget.
+    """
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
+    gateway_flush_started: Final = asyncio.Event()
+
+    fake_prisma = MagicMock()
+    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    async def _record_flush(client, accumulator):
+        gateway_flush_started.set()
+        calls.append("flush")
+
+    async def _audit_write_that_finishes_after_the_flush_starts() -> None:
+        await gateway_flush_started.wait()
+        calls.append("audit")
+
+    monkeypatch.setattr(ps, "flush_gateway_requests", _record_flush, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    track_audit_task(asyncio.create_task(_audit_write_that_finishes_after_the_flush_starts()))
+    await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
+
+    assert calls == ["flush", "audit", "disconnect"]
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch):
     """No prisma client means nothing to drain to, and no attempt is made."""
     flush = AsyncMock()
@@ -243,6 +287,34 @@ async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch
     await proxy_shutdown_event()
 
     assert flush.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_the_rest_of_teardown(monkeypatch):
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(
+        ps, "drain_post_call_redis_batches", AsyncMock(side_effect=lambda: calls.append("redis")), raising=False
+    )
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    async def _audit_callback_still_sending() -> None:
+        await asyncio.sleep(0.05)
+        calls.append("audit")
+
+    track_audit_task(asyncio.create_task(_audit_callback_still_sending()))
+    await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
+
+    assert calls == ["audit", "redis"]
 
 
 @pytest.mark.asyncio
@@ -349,7 +421,7 @@ async def test_flush_spend_counters_on_shutdown_logs_and_swallows_commit_errors(
 async def test_initialize_shared_aiohttp_session_returns_client_session():
     from aiohttp import ClientSession
 
-    session = await _initialize_shared_aiohttp_session()
+    session = await initialize_shared_aiohttp_session()
     try:
         observed = {
             "is_client_session": isinstance(session, ClientSession),
@@ -381,7 +453,7 @@ async def test_initialize_shared_aiohttp_session_aiohttp_missing_returns_none_on
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _raise_for_aiohttp)
-    result = await _initialize_shared_aiohttp_session()
+    result = await initialize_shared_aiohttp_session()
     assert result is None
 
 
@@ -900,6 +972,54 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     )
 
 
+@pytest.mark.asyncio
+async def test_proxy_shutdown_commits_spend_before_waiting_on_a_slow_logging_task_and_again_after_it() -> None:
+    """A worker killed while shutdown waits on a slow logging task keeps the spend it had already counted,
+    and a worker that finishes the wait also commits the spend that task adds."""
+    from litellm.responses import streaming_iterator as streaming_module
+
+    task_may_finish: Final = asyncio.Event()
+    task_finished: Final = asyncio.Event()
+    flushes: Final[list[tuple[str, bool]]] = []  # mutable-ok: records what each shutdown flush saw, which is the assertion
+
+    async def slow_logging_task() -> None:
+        await task_may_finish.wait()
+        task_finished.set()
+
+    def recording_flush(name: str) -> Callable[[], Awaitable[None]]:
+        async def flush() -> None:
+            flushes.append((name, task_finished.is_set()))
+            task_may_finish.set()
+
+        return flush
+
+    scheduler: Final = AsyncIOScheduler()
+    clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(ps, "flush_spend_counters_on_shutdown", recording_flush("spend counters")),
+        patch.object(ps, "_flush_spend_logs_queue_on_shutdown", recording_flush("spend logs")),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                streaming_module.spawn_logging_task(
+                    asyncio.get_running_loop(), slow_logging_task(), task_name="slow spend row"
+                )
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert flushes == [
+        ("spend counters", False),
+        ("spend logs", False),
+        ("spend counters", True),
+        ("spend logs", True),
+    ]
+
+
 def test_otel_global_provider_published_after_callback_init():
     """The OTel V2 global-provider publish must run after callback
     initialization in ``proxy_startup_event``.
@@ -914,7 +1034,7 @@ def test_otel_global_provider_published_after_callback_init():
     """
     wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
     source = inspect.getsource(wrapped)
-    init_pos = source.find("_initialize_startup_logging(")
+    init_pos = source.find("ProxyStartupEvent.initialize_startup_logging(")
     publish_pos = source.find("publish_global_otel_v2_provider(")
     assert init_pos != -1, "callback init call not found in proxy_startup_event"
     assert publish_pos != -1, "OTEL global publish not found in proxy_startup_event"
@@ -927,7 +1047,7 @@ def test_otel_global_provider_published_after_callback_init():
 
 def test_startup_warns_for_global_budget_without_database(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=None)
+        ProxyStartupEvent.warn_budget_without_db(max_budget=100.0, prisma_client=None)
 
     assert "litellm.max_budget=100.0" in caplog.text
     assert "will NOT be enforced" in caplog.text
@@ -936,7 +1056,7 @@ def test_startup_warns_for_global_budget_without_database(caplog):
 
 def test_startup_does_not_warn_for_global_budget_with_database(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=MagicMock())
+        ProxyStartupEvent.warn_budget_without_db(max_budget=100.0, prisma_client=MagicMock())
 
     assert "litellm.max_budget" not in caplog.text
 
@@ -944,7 +1064,7 @@ def test_startup_does_not_warn_for_global_budget_with_database(caplog):
 @pytest.mark.parametrize("max_budget", [0, None])
 def test_startup_does_not_warn_without_global_budget(caplog, max_budget):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_budget_without_db(max_budget=max_budget, prisma_client=None)
+        ProxyStartupEvent.warn_budget_without_db(max_budget=max_budget, prisma_client=None)
 
     assert "litellm.max_budget" not in caplog.text
 
@@ -1001,7 +1121,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
     source = inspect.getsource(wrapped)
     budget_check_pos = source.find("if prisma_client is not None and litellm.max_budget > 0:")
-    warn_pos = source.find("_warn_budget_without_db(")
+    warn_pos = source.find("warn_budget_without_db(")
     next_startup_section_pos = source.find(
         "await ProxyStartupEvent.initialize_scheduled_background_jobs(",
         budget_check_pos,
@@ -1089,7 +1209,7 @@ async def test_scorer_baseline_upgrade_preserves_existing_routers_and_is_not_ref
 @pytest.mark.asyncio
 async def test_tuning_baseline_waits_for_a_complete_db_model_census(monkeypatch):
     prisma_client = MagicMock()
-    monkeypatch.setattr(ps.proxy_config, "_get_models_from_db", AsyncMock(return_value=None))
+    monkeypatch.setattr(ps.proxy_config, "get_models_from_db", AsyncMock(return_value=None))
 
     result = await ProxyStartupEvent.enforce_heuristic_v1_tuning_baseline(
         prisma_client=prisma_client,

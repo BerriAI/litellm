@@ -1,3 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
+import DecisionModelSelect from "../add_model/DecisionModelSelect";
 import { AutoRouterAvailabilityContext, useAutoRouterAvailability } from "../add_model/AutoRouterAvailability";
 import AutoRouterClassifierTabs from "../add_model/AutoRouterClassifierTabs";
 import { usesClassifierContext } from "../add_model/classifier_types";
@@ -234,6 +238,42 @@ export const buildUpdatedComplexityRouterConfig = (
     ...preservedConfig,
     ...Object.fromEntries(Object.entries(built).filter(([key]) => !unowned.includes(key))),
   };
+};
+
+const EditClassifierTabs = ({
+  value,
+  onChange,
+  children,
+  modelInfo,
+  accessToken,
+  userRole,
+  isVisible,
+}: React.ComponentProps<typeof AutoRouterClassifierTabs> & {
+  modelInfo: ModelGroup[];
+  accessToken: string;
+  userRole: string;
+  isVisible: boolean;
+}) => {
+  const { userId } = useAuthorized();
+  const hasDeployment = Boolean(value.jev_classifier_config?.deployment_name);
+  const { data: deployments } = useQuery({
+    queryKey: autoRouterListKey(userId ?? "", userRole),
+    queryFn: () => fetchAllModelDeployments(accessToken, userId ?? "", userRole),
+    enabled: Boolean(isVisible && accessToken && hasDeployment),
+  });
+  return (
+    <AutoRouterClassifierTabs
+      value={value}
+      onChange={onChange}
+      decisionModel={
+        hasDeployment ? (
+          <DecisionModelSelect value={value} onChange={onChange} modelInfo={modelInfo} deployments={deployments} />
+        ) : undefined
+      }
+    >
+      {children}
+    </AutoRouterClassifierTabs>
+  );
 };
 
 const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
@@ -635,7 +675,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                 {isComplexityRouterModel ? (
                   /* Complexity Router Configuration */
                   <div className="w-full">
-                    <AutoRouterClassifierTabs value={complexityRouterConfig} onChange={setComplexityRouterConfig}>
+                    <EditClassifierTabs
+                      value={complexityRouterConfig}
+                      onChange={setComplexityRouterConfig}
+                      modelInfo={modelInfo}
+                      accessToken={accessToken}
+                      userRole={userRole}
+                      isVisible={isVisible}
+                    >
                       <ComplexityRouterConfig
                         editingTiers={editingTiers}
                         onEditingTiersChange={setEditingTiers}
@@ -664,7 +711,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                         autoRouterCompression={autoRouterCompression}
                         onAutoRouterCompressionChange={isMemberManaged ? undefined : setAutoRouterCompression}
                       />
-                    </AutoRouterClassifierTabs>
+                    </EditClassifierTabs>
                   </div>
                 ) : (
                   <>

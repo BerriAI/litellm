@@ -15,6 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
+    strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
 from litellm.llms.openai.chat.gpt_transformation import (
@@ -286,6 +287,24 @@ class MistralConfig(OpenAIGPTConfig):
         else:
             return super()._transform_messages(new_messages, model, False)
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues]  # mutable-ok: mirrors override contract
+        | Coroutine[object, object, list[AllMessageValues]]
+    ):
+        return self._transform_messages(messages, model, is_async)
+
     async def _transform_messages_async(self, messages: list[AllMessageValues], model: str) -> list[AllMessageValues]:
         """
         Handle modification of messages for Mistral API in an async context.
@@ -406,17 +425,14 @@ class MistralConfig(OpenAIGPTConfig):
     @classmethod
     def _strip_output_only_fields(cls, message: AllMessageValues) -> AllMessageValues:
         """
-        ``reasoning_content`` and ``thinking_blocks`` are output-only fields that
-        LiteLLM attaches to assistant responses. Mistral's input schema forbids
+        LiteLLM attaches output-only fields (``reasoning_content``, ``thinking_blocks``,
+        ``provider_specific_fields``) to assistant responses. Mistral's input schema forbids
         unknown fields, so replaying them verbatim in a follow-up turn triggers a
         422 ``extra_forbidden``. Drop them before the request is sent.
         """
         if message["role"] != "assistant":
             return message
-        return cast(
-            AllMessageValues,
-            {k: v for k, v in message.items() if k not in ("reasoning_content", "thinking_blocks")},
-        )
+        return strip_litellm_internal_message_fields(message)
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:

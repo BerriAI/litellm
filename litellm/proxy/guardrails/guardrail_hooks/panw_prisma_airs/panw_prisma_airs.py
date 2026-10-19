@@ -126,6 +126,7 @@ class _ResponsesInputItem(LiteLLMBaseModel):
 
 _ResponsesInput: TypeAlias = str | tuple[_ResponsesInputItem, ...] | None
 _RESPONSES_INPUT: Final[TypeAdapter[_ResponsesInput]] = TypeAdapter(_ResponsesInput)
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
 
 
 if TYPE_CHECKING:
@@ -640,7 +641,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # If the original args were structured, preserve the type.
         if isinstance(original_args, (dict, list)):
             try:
-                parsed: Final[object] = json.loads(masked_text)
+                parsed: Final = _DECODED_ARGUMENTS.validate_python(json.loads(masked_text))
             except (json.JSONDecodeError, TypeError):
                 raise HTTPException(
                     status_code=400,
@@ -1741,6 +1742,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return frozenset(text_idx for text_idx, source in enumerate(sources) if source == latest_human)
 
     def supports_scan_only_tool_results(self) -> bool:
+        return False
+
+    def supports_structured_messages(self) -> bool:
         return False
 
     @classmethod
