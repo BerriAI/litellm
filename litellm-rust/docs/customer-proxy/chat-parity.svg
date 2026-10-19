@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 340" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
+  <rect width="880" height="340" fill="#ffffff"/>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#555"/>
+    </marker>
+  </defs>
+  <text x="440" y="26" text-anchor="middle" font-size="15" font-weight="600" fill="#222">chatparity: one request, two proxies, one recording mock</text>
+
+  <rect x="20" y="120" width="170" height="100" rx="8" fill="#eef2ff" stroke="#6366f1"/>
+  <text x="105" y="148" text-anchor="middle" font-weight="600" fill="#222">chatparity run</text>
+  <text x="105" y="170" text-anchor="middle" fill="#444">340 cases:</text>
+  <text x="105" y="188" text-anchor="middle" fill="#444">19 deployments x</text>
+  <text x="105" y="206" text-anchor="middle" fill="#444">15 scenarios x mode</text>
+
+  <rect x="300" y="60" width="200" height="70" rx="8" fill="#fef3c7" stroke="#d97706"/>
+  <text x="400" y="90" text-anchor="middle" font-weight="600" fill="#222">Python proxy</text>
+  <text x="400" y="110" text-anchor="middle" fill="#444">litellm --config config.yaml</text>
+
+  <rect x="300" y="210" width="200" height="70" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="400" y="240" text-anchor="middle" font-weight="600" fill="#222">Rust gateway</text>
+  <text x="400" y="260" text-anchor="middle" fill="#444">same config.yaml</text>
+
+  <rect x="610" y="120" width="250" height="100" rx="8" fill="#f3f4f6" stroke="#6b7280"/>
+  <text x="735" y="146" text-anchor="middle" font-weight="600" fill="#222">mock provider (in chatparity)</text>
+  <text x="735" y="166" text-anchor="middle" fill="#444">OpenAI-compatible, Azure, Anthropic,</text>
+  <text x="735" y="184" text-anchor="middle" fill="#444">Bedrock Converse, Gemini, Vertex</text>
+  <text x="735" y="204" text-anchor="middle" fill="#444">records every request it gets</text>
+
+  <path d="M190 150 L298 100" stroke="#555" fill="none" marker-end="url(#a)"/>
+  <path d="M190 190 L298 240" stroke="#555" fill="none" marker-end="url(#a)"/>
+  <path d="M500 95 L608 150" stroke="#555" fill="none" marker-end="url(#a)"/>
+  <path d="M500 245 L608 190" stroke="#555" fill="none" marker-end="url(#a)"/>
+  <text x="225" y="112" fill="#555">1. send</text>
+  <text x="225" y="240" fill="#555">2. send</text>
+  <text x="560" y="110" fill="#555">upstream A</text>
+  <text x="560" y="240" fill="#555">upstream B</text>
+
+  <rect x="20" y="290" width="840" height="36" rx="6" fill="#fff7ed" stroke="#ea580c"/>
+  <text x="440" y="313" text-anchor="middle" fill="#222">diff upstream A vs B (path, headers, body) and response A vs B (status, body, assembled stream) → report.md</text>
+</svg>
