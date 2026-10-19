@@ -1,8 +1,6 @@
-import asyncio
-import itertools
 import json
 import os
-import time
+import threading
 import traceback
 from typing import Callable, Final, Optional
 from unittest.mock import MagicMock, patch
@@ -2145,7 +2143,7 @@ class TestEntraIdTokenProviderCache:
         assert mock_credential.call_count == 2
 
 
-def test_username_password_token_provider_reuses_same_credentials_and_separates_passwords():
+def test_username_password_token_provider_reuses_same_credentials_and_separates_passwords() -> None:
     with (
         patch("azure.identity.UsernamePasswordCredential") as mock_credential,
         patch(
@@ -2153,19 +2151,19 @@ def test_username_password_token_provider_reuses_same_credentials_and_separates_
             side_effect=lambda credential, scope: lambda: "token",
         ),
     ):
-        first = get_azure_ad_token_from_username_password(
+        first: Final = get_azure_ad_token_from_username_password(
             client_id="client",
             azure_username="user",
             azure_password="password",
             scope="https://cognitiveservices.azure.com/.default",
         )
-        second = get_azure_ad_token_from_username_password(
+        second: Final = get_azure_ad_token_from_username_password(
             client_id="client",
             azure_username="user",
             azure_password="password",
             scope="https://cognitiveservices.azure.com/.default",
         )
-        changed_password = get_azure_ad_token_from_username_password(
+        changed_password: Final = get_azure_ad_token_from_username_password(
             client_id="client",
             azure_username="user",
             azure_password="different-password",
@@ -2177,49 +2175,35 @@ def test_username_password_token_provider_reuses_same_credentials_and_separates_
 
 
 @pytest.mark.asyncio
-async def test_non_v1_azure_token_refresh_does_not_block_the_event_loop():
+async def test_non_v1_azure_token_refresh_runs_off_the_event_loop_thread() -> None:
     from openai import AsyncAzureOpenAI
 
-    base_llm = BaseAzureLLM()
-    api_base: Final = "https://test.openai.azure.com"
+    def token_provider_naming_its_thread() -> str:
+        return str(threading.get_ident())
 
-    def slow_token_provider() -> str:
-        time.sleep(0.3)
-        return "slow-token"
-
-    client: Final = base_llm.get_azure_openai_client(
+    client: Final = BaseAzureLLM().get_azure_openai_client(
         api_key=None,
-        api_base=api_base,
+        api_base="https://test.openai.azure.com",
         api_version="2024-02-01",
-        litellm_params={"azure_ad_token_provider": slow_token_provider},
+        litellm_params={"azure_ad_token_provider": token_provider_naming_its_thread},
         _is_async=True,
     )
 
     assert isinstance(client, AsyncAzureOpenAI)
-    ticks: Final = itertools.count()
-    token_resolved: Final = asyncio.Event()
-
-    async def resolve_token() -> None:
-        try:
-            assert await client._get_azure_ad_token() == "slow-token"
-        finally:
-            token_resolved.set()
-
-    async def ticker() -> None:
-        while not token_resolved.is_set():
-            next(ticks)
-            await asyncio.sleep(0.01)
-
     try:
-        await asyncio.gather(resolve_token(), ticker())
-        assert next(ticks) > 0
+        token_thread: Final = await client._get_azure_ad_token()
     finally:
         await client.close()
+
+    assert token_thread is not None
+    assert token_thread != str(threading.get_ident())
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
-async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(monkeypatch, api_version):
+async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(
+    monkeypatch: pytest.MonkeyPatch, api_version: str
+) -> None:
     import httpx
 
     def echo_authorization(request: httpx.Request) -> httpx.Response:
