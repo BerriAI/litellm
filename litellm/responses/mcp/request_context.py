@@ -18,7 +18,7 @@ from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class _AuthCarryingMetadata(TypedDict):

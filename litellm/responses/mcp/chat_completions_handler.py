@@ -19,7 +19,7 @@ from litellm.types.utils import Message, ModelResponse
 from litellm.utils import CustomStreamWrapper, Rules, function_setup
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 def _follow_up_call_args(

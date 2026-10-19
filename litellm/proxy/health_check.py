@@ -32,11 +32,12 @@ from litellm.router_utils.auto_router_model_naming import (
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.router_utils.common_utils import is_model_capability_field
 from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
 
-# Provider routing and workload identity federation fields. Allowed for proxy admins so they can
-# see which region/version a deployment is checking and which identity it federates as; gated at
-# the endpoint layer for non-admin callers (see _strip_admin_only_fields_from_health_result).
+# Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
+# admins so they can see which region/version a deployment is checking and which identity it uses;
+# gated at the endpoint layer for non-admin callers (see _strip_admin_only_fields_from_health_result).
 ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = (
     "api_base",
     "api_version",
@@ -550,10 +551,13 @@ async def _run_model_health_check(model: dict):
         model_info, litellm_params
     )
     timeout: Final = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
+    probe_params: Final = (
+        {**litellm_params, "model_info": {"mode": model_info["mode"]}} if "mode" in model_info else litellm_params
+    )
 
     return await run_with_timeout(
         litellm.ahealth_check(
-            litellm_params,
+            probe_params,
             mode=mode,
             prompt=DEFAULT_HEALTH_CHECK_PROMPT,
             input=["test from litellm"],
@@ -777,6 +781,9 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> 
     return None
 
 
+_PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
 def update_litellm_params_for_health_check(model_info: dict, litellm_params: dict) -> dict:
     """
     Update the litellm params for health check.
@@ -867,7 +874,8 @@ def update_litellm_params_for_health_check(model_info: dict, litellm_params: dic
                 "bedrock"
             )
 
-    return litellm_params
+    probe_params: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params)
+    return {key: value for key, value in probe_params.items() if not is_model_capability_field(key)}
 
 
 _update_litellm_params_for_health_check: Final = update_litellm_params_for_health_check

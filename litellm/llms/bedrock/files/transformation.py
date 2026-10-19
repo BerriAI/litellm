@@ -66,8 +66,10 @@ from litellm.utils import get_llm_provider, get_optional_params
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     BedrockError,
+    deployment_model_info,
     merge_bedrock_aws_request_params,
     resolve_s3_encryption_key_id,
+    without_bedrock_native_output_opt_in,
 )
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
@@ -82,6 +84,13 @@ _S3_SIGNED_REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(
 LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 
 LIST_FILES_LOCATION_PARAM: Final = "_s3_list_files_location"
+
+
+def _header_or_empty(headers: Headers, name: str) -> str:
+    try:
+        return headers[name]
+    except KeyError:
+        return ""
 
 
 def _is_empty_s3_object_range_error(raw_response: Response) -> bool:
@@ -101,7 +110,7 @@ def _retrieved_s3_file_size(raw_response: Response) -> int:
     if _is_empty_s3_object_range_error(raw_response):
         return 0
     if status_code == 206:
-        content_range: Final = raw_response.headers.get("Content-Range", "")
+        content_range: Final = _header_or_empty(raw_response.headers, "Content-Range")
         range_parts: Final = content_range.removeprefix("bytes 0-0/")
         if content_range.startswith("bytes 0-0/") and range_parts.isdigit():
             return int(range_parts)
@@ -112,7 +121,7 @@ def _retrieved_s3_file_size(raw_response: Response) -> int:
             response=raw_response,
         )
     if status_code == 200:
-        content_length: Final = raw_response.headers.get("Content-Length", "")
+        content_length: Final = _header_or_empty(raw_response.headers, "Content-Length")
         if content_length.isdigit():
             return int(content_length)
         raise BedrockError(
@@ -982,10 +991,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
 
             config: Final = AmazonAnthropicClaudeConfig()
+            litellm_params: Final = without_bedrock_native_output_opt_in({})
             mapped_params = get_optional_params(
                 model=_invoke_route_model(model),
                 custom_llm_provider="bedrock",
                 messages=messages,
+                model_info=deployment_model_info(litellm_params),
                 **MappingProxyType(
                     {
                         k: v
@@ -1000,7 +1011,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 optional_params={
                     k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
                 },
-                litellm_params={},
+                litellm_params=dict(litellm_params),
                 headers={},
             )
 
@@ -1014,7 +1025,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
             converse_config: Final = AmazonConverseConfig()
             mapped_params = converse_config.map_openai_params(
-                non_default_params=optional_params,
+                non_default_params={k: v for k, v in optional_params.items() if k != "requestMetadata"},
                 optional_params={},
                 model=model,
                 drop_params=False,
@@ -1400,7 +1411,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         file_size: Final = _retrieved_s3_file_size(raw_response)
 
-        last_modified: Final = raw_response.headers.get("Last-Modified", "")
+        last_modified: Final = _header_or_empty(raw_response.headers, "Last-Modified")
         created_at: Final = int(parsedate_to_datetime(last_modified).timestamp()) if last_modified else 0
         return OpenAIFileObject(
             id=file_id,

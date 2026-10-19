@@ -6,7 +6,7 @@ itself, no proxy at all: `tests/e2e_harness`. Two fit, split it
 
 ## What good looks like
 
-Red when the claim in the name is broken. Prove it: mutate the behaviour, red; restore, green. Put the
+Red when the claim in the name is broken. Prove it: mutate the behaviour, red. Restore, green. Put the
 mutation in the PR body
 
 ```python
@@ -21,7 +21,7 @@ def test_custom_price_is_reported_and_charged(gateway: Gateway) -> None:
 Rates in the test, expected computed by hand, one call, `response.text` in the assert
 
 Assert the whole value. Iterating `expected_body.items()` (`test_responses_api_request_body.py`) cannot
-see an extra key; that is the shape of `stream_options.include_usage` (#19777, #28553)
+see an extra key. That is the shape of `stream_options.include_usage` (#19777, #28553)
 
 The linter catches no-assert, mock-echo and credential skips. It cannot see an assert
 behind an `if` (a poll that ends in `pytest.fail` is fine), `except Exception` around the call
@@ -29,7 +29,7 @@ behind an `if` (a poll that ends in `pytest.fail` is fine), `except Exception` a
 
 ## Where it goes
 
-What the assertion depends on goes in the test; everything else in conftest. A rate in a fixture three
+What the assertion depends on goes in the test. Everything else in conftest. A rate in a fixture three
 directories up makes a failed assertion unreadable. Extend the file that already covers the behaviour
 
 ## Writing it so a human can read it
