@@ -15,6 +15,7 @@ _API_KEY: Final = "synthetic-pdf-document-key"
 _ANSWER: Final = "The codeword is PELICAN-42."
 _TITLE: Final = "Quarterly report"
 _URL: Final = "https://example.com/brief.pdf"
+_SAP_TOKEN_TARGET: Final = "/oauth/token"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PARTS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
@@ -41,7 +42,11 @@ def _chat_completion(identity: str, model: str) -> Reply:
 
 
 def _only_body(wire: Wire) -> dict[str, JsonValue]:
-    received: Final = tuple(request for request in wire.drain() if request.method == "POST")
+    received: Final = tuple(
+        request
+        for request in wire.drain()
+        if request.method == "POST" and not request.target.startswith(_SAP_TOKEN_TARGET)
+    )
     assert len(received) == 1, received
     return _JSON_OBJECT.validate_json(received[0].body)
 
@@ -133,6 +138,73 @@ def _bedrock_reply(_: Request) -> Reply:
     )
 
 
+def _anthropic_reply(_: Request) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "msg_pdf",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": _ANSWER}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 300, "output_tokens": 9},
+            }
+        ).encode()
+    )
+
+
+def _sap_reply(request: Request) -> Reply:
+    if request.target.startswith(_SAP_TOKEN_TARGET):
+        return Reply(body=json.dumps({"access_token": "scripted", "expires_in": 3600}).encode())
+    match request.target:
+        case "/v2/lm/deployments":
+            deployment: Final = {
+                "scenarioId": "orchestration",
+                "configurationId": "orchestration-config",
+                "deploymentUrl": f"http://{request.headers['host']}/sap-deployment",
+                "createdAt": "2026-01-01T00:00:00Z",
+            }
+            return Reply(body=json.dumps({"resources": [deployment]}).encode())
+        case "/v2/lm/configurations/orchestration-config":
+            return Reply(body=json.dumps({"executableId": "orchestration"}).encode())
+        case _:
+            completion: Final = _JSON_OBJECT.validate_json(_chat_completion("chatcmpl-sap-pdf", "claude").body)
+            return Reply(body=json.dumps({"final_result": completion}).encode())
+
+
+def _snowflake(scenario: Scenario, wire: Wire) -> str:
+    return scenario.model(model="snowflake/claude-sonnet-4-5", api_base=wire.url, api_key=_API_KEY)
+
+
+def _sap(scenario: Scenario, wire: Wire) -> str:
+    service_key: Final = {
+        "clientid": "scripted",
+        "clientsecret": _API_KEY,
+        "url": wire.url,
+        "serviceurls": {"AI_API_URL": wire.url},
+    }
+    return scenario.model(model="sap/anthropic--claude-4.5-sonnet", api_base=wire.url, api_key=json.dumps(service_key))
+
+
+def _snowflake_pdf_parts(body: dict[str, JsonValue]) -> Sequence[JsonValue]:
+    return tuple(part.get("source") for part in _user_parts(body, "messages") if part.get("type") == "document")
+
+
+def _sap_pdf_parts(body: dict[str, JsonValue]) -> Sequence[JsonValue]:
+    config: Final = _JSON_OBJECT.validate_python(body["config"])
+    templating: Final = _JSON_OBJECT.validate_python(
+        _JSON_OBJECT.validate_python(config["modules"])["prompt_templating"]
+    )
+    prompt: Final = _JSON_OBJECT.validate_python(templating["prompt"])
+    turns: Final = _PARTS.validate_python(prompt["template"])
+    assert len(turns) == 1, turns
+    parts: Final = _PARTS.validate_python(turns[0]["content"])
+    return tuple(
+        _JSON_OBJECT.validate_python(part["image_url"]).get("url") for part in parts if part.get("type") == "image_url"
+    )
+
+
 def _gemini(scenario: Scenario, wire: Wire) -> str:
     return scenario.model(model="gemini/gemini-2.5-flash", api_base=wire.url, api_key=_API_KEY)
 
@@ -171,6 +243,16 @@ def _bedrock_pdf_parts(body: dict[str, JsonValue]) -> Sequence[JsonValue]:
             _Reader(_bedrock, _bedrock_reply, _bedrock_pdf_parts),
             lambda data: [{"format": "pdf", "source": {"bytes": data}}],
             id="bedrock-converse",
+        ),
+        pytest.param(
+            _Reader(_snowflake, _anthropic_reply, _snowflake_pdf_parts),
+            lambda data: [{"type": "base64", "media_type": "application/pdf", "data": data}],
+            id="snowflake-claude",
+        ),
+        pytest.param(
+            _Reader(_sap, _sap_reply, _sap_pdf_parts),
+            lambda data: [f"data:application/pdf;base64,{data}"],
+            id="sap-orchestration",
         ),
     ],
 )
