@@ -8,6 +8,7 @@ pub const BETA_HEADER: &str = "anthropic-beta";
 pub const VERSION_HEADER: &str = "anthropic-version";
 pub const DIRECT_BROWSER_ACCESS_HEADER: &str = "anthropic-dangerous-direct-browser-access";
 pub const API_VERSION: &str = "2023-06-01";
+pub const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
 
 pub const DEFAULT_HEADERS: &[(&str, &str)] = &[
     (VERSION_HEADER, API_VERSION),

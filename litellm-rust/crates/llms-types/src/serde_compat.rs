@@ -3,9 +3,65 @@ use serde::{
     de::{Error, Visitor},
 };
 use serde_with::DeserializeAs;
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 pub struct LaxI64;
 pub struct FiniteF64;
+
+pub const PYTHON_DEFAULT_INT_MAX_STR_DIGITS: usize = 4_300;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParsedInteger {
+    Value(i64),
+    OutOfRange,
+    Invalid,
+}
+
+pub fn parse_python_integer(value: &str, max_digits: usize) -> ParsedInteger {
+    let Some(normalized) = value
+        .trim()
+        .chars()
+        .map(|character| match character {
+            '+' | '-' | '_' => Some(character),
+            _ => decimal_digit(character),
+        })
+        .collect::<Option<String>>()
+    else {
+        return ParsedInteger::Invalid;
+    };
+    let digits = normalized.strip_prefix(['+', '-']).unwrap_or(&normalized);
+    if !digits
+        .split('_')
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        || (max_digits > 0 && digits.bytes().filter(u8::is_ascii_digit).count() > max_digits)
+    {
+        return ParsedInteger::Invalid;
+    }
+    normalized
+        .replace('_', "")
+        .parse::<i64>()
+        .map(ParsedInteger::Value)
+        .unwrap_or(ParsedInteger::OutOfRange)
+}
+
+fn decimal_digit(character: char) -> Option<char> {
+    if character.is_ascii_digit() {
+        return Some(character);
+    }
+    if character.general_category() != GeneralCategory::DecimalNumber {
+        return None;
+    }
+    // Unicode decimal digits form consecutive groups of ten
+    let preceding_digits = (0..u32::from(character))
+        .rev()
+        .take_while(|code| {
+            char::from_u32(*code).is_some_and(|character| {
+                character.general_category() == GeneralCategory::DecimalNumber
+            })
+        })
+        .count();
+    char::from_digit(u32::try_from(preceding_digits % 10).ok()?, 10)
+}
 
 impl<'de> DeserializeAs<'de, i64> for LaxI64 {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
@@ -89,19 +145,13 @@ fn integer_string(value: &str) -> Option<i64> {
         }
         None => value,
     };
-    if integer.starts_with('_') || integer.ends_with('_') || integer.contains("__") {
+    if !integer.is_ascii() || integer.trim() != integer {
         return None;
     }
-    let digits = integer.strip_prefix(['+', '-']).unwrap_or(integer);
-    if digits.is_empty()
-        || digits.starts_with('_')
-        || !digits
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || byte == b'_')
-    {
-        return None;
+    match parse_python_integer(integer, 0) {
+        ParsedInteger::Value(value) => Some(value),
+        ParsedInteger::OutOfRange | ParsedInteger::Invalid => None,
     }
-    integer.replace('_', "").parse().ok()
 }
 
 fn integral_float(value: f64) -> Option<i64> {
@@ -114,7 +164,9 @@ fn integral_float(value: f64) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use crate::serde_compat::{FiniteF64, LaxI64};
+    use super::{
+        FiniteF64, LaxI64, PYTHON_DEFAULT_INT_MAX_STR_DIGITS, ParsedInteger, parse_python_integer,
+    };
 
     use rstest::rstest;
     use serde::{Deserialize, Serialize};
@@ -174,6 +226,8 @@ mod tests {
     #[case::exponent(json!("1e3"))]
     #[case::missing_fraction(json!("2."))]
     #[case::missing_integer(json!(".0"))]
+    #[case::space_before_fraction(json!("2 .0"))]
+    #[case::unicode_digit(json!("١"))]
     #[case::leading_separator(json!("_2"))]
     #[case::repeated_separator(json!("2__0"))]
     #[case::fraction(json!(2.5))]
@@ -200,5 +254,42 @@ mod tests {
     fn floats_accept_finite_numbers(#[case] input: Value, #[case] expected: f64) {
         let numbers: Numbers = serde_json::from_value(json!({"float": input})).unwrap();
         assert_eq!(numbers.float, Some(expected));
+    }
+
+    #[rstest]
+    #[case::padded(" \t+0_1\n", ParsedInteger::Value(1))]
+    #[case::negative("-1", ParsedInteger::Value(-1))]
+    #[case::mixed_scripts("٠_１", ParsedInteger::Value(1))]
+    #[case::mathematical_digit("𝟙", ParsedInteger::Value(1))]
+    #[case::minimum("-9223372036854775808", ParsedInteger::Value(i64::MIN))]
+    #[case::positive_overflow("9223372036854775808", ParsedInteger::OutOfRange)]
+    #[case::negative_overflow("-9223372036854775809", ParsedInteger::OutOfRange)]
+    #[case::empty("", ParsedInteger::Invalid)]
+    #[case::sign_only("+", ParsedInteger::Invalid)]
+    #[case::leading_separator("_1", ParsedInteger::Invalid)]
+    #[case::trailing_separator("1_", ParsedInteger::Invalid)]
+    #[case::repeated_separator("1__0", ParsedInteger::Invalid)]
+    #[case::embedded_sign("1+0", ParsedInteger::Invalid)]
+    #[case::superscript("²", ParsedInteger::Invalid)]
+    #[case::fraction("1.0", ParsedInteger::Invalid)]
+    fn python_integer_strings(#[case] input: &str, #[case] expected: ParsedInteger) {
+        assert_eq!(
+            parse_python_integer(input, PYTHON_DEFAULT_INT_MAX_STR_DIGITS),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::at_limit("0".repeat(PYTHON_DEFAULT_INT_MAX_STR_DIGITS), PYTHON_DEFAULT_INT_MAX_STR_DIGITS, ParsedInteger::Value(0))]
+    #[case::over_limit("0".repeat(PYTHON_DEFAULT_INT_MAX_STR_DIGITS + 1), PYTHON_DEFAULT_INT_MAX_STR_DIGITS, ParsedInteger::Invalid)]
+    #[case::custom_limit("0".repeat(4), 3, ParsedInteger::Invalid)]
+    #[case::unlimited("0".repeat(PYTHON_DEFAULT_INT_MAX_STR_DIGITS + 1), 0, ParsedInteger::Value(0))]
+    #[case::sign_and_separators(" +٠_０ ".into(), 2, ParsedInteger::Value(0))]
+    fn python_integer_digit_limits(
+        #[case] input: String,
+        #[case] max_digits: usize,
+        #[case] expected: ParsedInteger,
+    ) {
+        assert_eq!(parse_python_integer(&input, max_digits), expected);
     }
 }

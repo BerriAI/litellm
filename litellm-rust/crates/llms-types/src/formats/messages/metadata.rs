@@ -165,48 +165,6 @@ pub struct Safeguard {
 )]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
-pub enum MessageRole {
-    #[strum(serialize = "user")]
-    User,
-    #[strum(serialize = "assistant")]
-    Assistant,
-    #[strum(serialize = "system")]
-    System,
-    #[strum(default, transparent)]
-    Other(String),
-}
-
-impl MessageRole {
-    pub fn as_str(&self) -> &str {
-        self.as_ref()
-    }
-}
-
-impl From<String> for MessageRole {
-    fn from(value: String) -> Self {
-        value.parse().unwrap_or_else(|never| match never {})
-    }
-}
-
-impl From<MessageRole> for String {
-    fn from(value: MessageRole) -> Self {
-        value.to_string()
-    }
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    strum::Display,
-    strum::EnumString,
-    strum::AsRefStr,
-    serde_with::DeserializeFromStr,
-    serde_with::SerializeDisplay,
-)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
 pub enum MessageType {
     #[strum(serialize = "message")]
     Message,
@@ -350,9 +308,7 @@ mod tests {
 
     use crate::formats::messages::McpServer;
 
-    use crate::formats::messages::{
-        MessageRole, MessageType, MessagesCompaction, MessagesContainer,
-    };
+    use crate::formats::messages::{MessageType, MessagesCompaction, MessagesContainer};
 
     use crate::formats::messages::{
         MessagesDiagnostics, MessagesDiagnosticsParam, MessagesMetadata,
@@ -511,15 +467,6 @@ mod tests {
     #[rstest]
     fn output_format_rejects_missing_schema() {
         assert!(serde_json::from_value::<OutputFormat>(json!({"type":"json_schema"})).is_err());
-    }
-
-    #[rstest]
-    #[case::user(json!("user"))]
-    #[case::assistant(json!("assistant"))]
-    #[case::system(json!("system"))]
-    #[case::future(json!("future_role"))]
-    fn message_roles_round_trip(#[case] wire: Value) {
-        round_trip::<MessageRole>(wire);
     }
 
     #[rstest]

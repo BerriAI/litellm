@@ -49,6 +49,7 @@ litellm-secrets-cyberark = { path = "crates/secrets-cyberark" }
 litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
 litellm-llms-types = { path = "crates/llms-types" }
+litellm-integrations = { path = "crates/integrations" }
 litellm-core-utils = { path = "crates/core-utils" }
 litellm-db = { path = "crates/db" }
 litellm-db-testing = { path = "crates/db-testing" }

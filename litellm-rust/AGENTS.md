@@ -8,6 +8,13 @@ For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of 
 
 Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `str::parse`) with no `as_str`/`parse` wrapper that only delegates, and spell each variant with explicit `#[strum(serialize = "...")]` instead of `serialize_all`
 
+## Python ports
+
+- Prefer mirroring the outer Python structure. Map `litellm/<path>.py` to `crates/<crate>/src/<path>.rs` in the crate that mirrors that folder
+- Keep class and public function names, with Rust acronym casing and no leading underscore for private helpers. A staticmethod-only class becomes free functions. A class with a Python base becomes a struct implementing the matching trait
+- Inside functions, design freely. Prefer typed values over dict inspection, new values over mutation, and tagged unions over string modes. Pin behavior with Rust tests
+- List skipped behavior under `Known partial ports` in the nearest AGENTS.md and test deliberate divergences
+
 ## Test placement
 
 - Never create a `tests.rs` (or `test.rs`) file under `src/`, and never `#[path = "tests.rs"] mod tests;`

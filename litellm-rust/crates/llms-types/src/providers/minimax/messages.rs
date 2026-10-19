@@ -64,6 +64,7 @@ mod tests {
         MinimaxMediaDetail, MinimaxMediaSource, MinimaxMessagesContentBlock,
     };
 
+    use crate::formats::messages::CacheControlType;
     use rstest::rstest;
     use serde_json::{Value, json};
 
@@ -97,8 +98,8 @@ mod tests {
                 assert_eq!(options.max_long_side_pixel, Some(1024));
                 assert_eq!(options.extra["future"], Value::Null);
                 assert_eq!(
-                    video.cache_control.as_ref().unwrap().cache_type.as_deref(),
-                    Some("ephemeral")
+                    video.cache_control.as_ref().unwrap().cache_type,
+                    Some(Some(CacheControlType::Ephemeral))
                 );
             }
             MinimaxMessagesContentBlock::MidConvSystem { text, extra } => {

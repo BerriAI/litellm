@@ -161,6 +161,7 @@ mod tests {
         messages::ContentSource,
     };
 
+    use crate::formats::messages::CacheControlType;
     use rstest::rstest;
     use serde_json::{Value, json};
 
@@ -208,8 +209,8 @@ mod tests {
         };
         assert_eq!(text, "hello");
         assert_eq!(
-            cache_control.as_ref().unwrap().cache_type.as_deref(),
-            Some("ephemeral")
+            cache_control.as_ref().unwrap().cache_type,
+            Some(Some(CacheControlType::Ephemeral))
         );
         assert_eq!(breakpoint.mode, PromptCacheMode::Explicit);
         assert!(breakpoint.extra.is_empty());
