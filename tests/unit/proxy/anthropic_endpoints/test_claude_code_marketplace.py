@@ -9,7 +9,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 import litellm
@@ -32,6 +32,11 @@ from litellm.types.proxy.claude_code_endpoints import (
     UpdatePluginRequest,
 )
 from tests._master_key import MASTER_KEY
+
+
+def _request(authorization: str | None = None) -> Request:
+    headers: Final = [] if authorization is None else [(b"authorization", authorization.encode())]
+    return Request({"type": "http", "headers": headers})
 
 
 def _make_mock_prisma():
@@ -284,7 +289,7 @@ async def test_get_marketplace_skips_plugin_with_null_manifest():
     table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
     await table.create(data={"name": "null-manifest-plugin", "manifest_json": None, "enabled": True})
 
-    response = await get_marketplace(request=MagicMock())
+    response = await get_marketplace(request=_request())
 
     assert response.status_code == 200
     body = json.loads(response.body)
@@ -340,14 +345,12 @@ async def test_get_plugin_returns_403_for_disabled_plugin_the_key_is_not_granted
 
 
 async def _marketplace_names(key: str | None) -> list[str]:
-    response = await get_marketplace(request=MagicMock(), key=key)
+    response = await get_marketplace(request=_request(), key=key)
     assert response.status_code == 200
     return sorted(plugin["name"] for plugin in json.loads(response.body)["plugins"])
 
 
-@pytest.mark.asyncio
-async def test_get_marketplace_key_query_param_adds_granted_disabled_plugins(monkeypatch):
-    await _register_public_and_private_plugins()
+def _install_fake_key_auth(monkeypatch) -> None:
     keys = {"sk-granted": _granted_user(["private-skill"]), "sk-plain": _NON_ADMIN_USER}
 
     async def _fake_auth(request, api_key: str) -> UserAPIKeyAuth:
@@ -358,13 +361,48 @@ async def test_get_marketplace_key_query_param_adds_granted_disabled_plugins(mon
 
     monkeypatch.setattr(claude_code_marketplace, "user_api_key_auth", _fake_auth)
 
+
+@pytest.mark.asyncio
+async def test_get_marketplace_key_query_param_adds_granted_disabled_plugins(monkeypatch):
+    await _register_public_and_private_plugins()
+    _install_fake_key_auth(monkeypatch)
+
     assert await _marketplace_names(None) == ["public-skill"]
     assert await _marketplace_names("sk-plain") == ["public-skill"]
     assert await _marketplace_names("sk-granted") == ["private-skill", "public-skill"]
 
     with pytest.raises(ProxyException) as exc_info:
-        await get_marketplace(request=MagicMock(), key="sk-bogus")
+        await get_marketplace(request=_request(), key="sk-bogus")
     assert exc_info.value.code == "401"
+
+
+async def _marketplace_names_via_header(authorization: str | None, key: str | None = None) -> list[str]:
+    response = await get_marketplace(request=_request(authorization), key=key)
+    assert response.status_code == 200
+    return sorted(plugin["name"] for plugin in json.loads(response.body)["plugins"])
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace_authorization_header_adds_granted_disabled_plugins(monkeypatch):
+    await _register_public_and_private_plugins()
+    _install_fake_key_auth(monkeypatch)
+
+    assert await _marketplace_names_via_header(None) == ["public-skill"]
+    assert await _marketplace_names_via_header("Bearer sk-plain") == ["public-skill"]
+    assert await _marketplace_names_via_header("Bearer sk-granted") == ["private-skill", "public-skill"]
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _marketplace_names_via_header("Bearer sk-bogus")
+    assert exc_info.value.code == "401"
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace_key_query_param_wins_over_authorization_header(monkeypatch):
+    await _register_public_and_private_plugins()
+    _install_fake_key_auth(monkeypatch)
+
+    assert await _marketplace_names_via_header("Bearer sk-plain", key="sk-granted") == ["private-skill", "public-skill"]
+    assert await _marketplace_names_via_header("Bearer sk-granted", key="sk-plain") == ["public-skill"]
 
 
 @pytest.mark.asyncio
@@ -379,7 +417,7 @@ async def test_get_marketplace_emits_installation_preference(preference):
         user_api_key_dict=_USER,
     )
 
-    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    marketplace = json.loads((await get_marketplace(request=_request())).body)
 
     assert marketplace["plugins"] == [
         {"name": "s3-skill", "source": _ARCHIVE_SOURCE, "version": "1.0.0", "installationPreference": preference}
@@ -408,7 +446,7 @@ async def test_get_marketplace_omits_installation_preference_when_unset():
         user_api_key_dict=_USER,
     )
 
-    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    marketplace = json.loads((await get_marketplace(request=_request())).body)
 
     assert "installationPreference" not in marketplace["plugins"][0]
 
@@ -452,7 +490,7 @@ async def test_update_plugin_without_installation_preference_clears_it():
         user_api_key_dict=_USER,
     )
 
-    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    marketplace = json.loads((await get_marketplace(request=_request())).body)
     assert "installationPreference" not in marketplace["plugins"][0]
 
 
@@ -470,7 +508,7 @@ async def test_stored_unknown_installation_preference_is_not_served(stored_value
         }
     )
 
-    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    marketplace = json.loads((await get_marketplace(request=_request())).body)
     listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
     plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
 
@@ -488,7 +526,7 @@ async def test_register_accepts_the_camel_case_installation_preference_key():
     )
 
     response = await register_plugin(request=request, user_api_key_dict=_USER)
-    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    marketplace = json.loads((await get_marketplace(request=_request())).body)
 
     assert response.plugin.installation_preference == "auto_install"
     assert (await _read_stored_manifest("s3-skill"))["installation_preference"] == "auto_install"
@@ -519,7 +557,7 @@ async def _assert_preference_refused(source, preference):
 
     assert register_error.value.status_code == 400
     assert update_error.value.status_code == 400
-    assert "installationPreference" not in json.loads((await get_marketplace(request=MagicMock())).body)["plugins"][0]
+    assert "installationPreference" not in json.loads((await get_marketplace(request=_request())).body)["plugins"][0]
 
 
 @pytest.mark.asyncio
@@ -543,7 +581,7 @@ async def test_available_preference_is_accepted_on_an_unpinned_archive():
         ),
         user_api_key_dict=_USER,
     )
-    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    marketplace = json.loads((await get_marketplace(request=_request())).body)
 
     assert response.plugin.installation_preference == "available"
     assert marketplace["plugins"][0]["installationPreference"] == "available"
@@ -704,7 +742,7 @@ async def test_archive_source_registers_and_is_served_verbatim_in_marketplace():
     assert response.action == "created"
     assert response.plugin.source == _ARCHIVE_SOURCE
 
-    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    marketplace = json.loads((await get_marketplace(request=_request())).body)
     assert marketplace["plugins"] == [{"name": "s3-skill", "source": _ARCHIVE_SOURCE, "version": "1.0.0"}]
 
 
@@ -878,7 +916,7 @@ async def test_get_marketplace():
         user_api_key_dict=user_api_key_dict,
     )
 
-    response: Final = await get_marketplace(request=MagicMock())
+    response: Final = await get_marketplace(request=_request())
 
     body: Final = json.loads(response.body.decode())
 
