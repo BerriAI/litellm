@@ -1591,3 +1591,49 @@ async def test_reasoning_output_item_done_without_signed_thinking_omits_encrypte
     reasoning_item: Final = reasoning_done_events[0].item
     assert getattr(reasoning_item, "status", None) == "completed"
     assert getattr(reasoning_item, "encrypted_content", None) is None
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_abrupt_stream_termination_flushes_pending_done_events(sync_mode: bool):
+    """
+    Verify stream ending while reasoning is active flushes pending reasoning done events in common_done_event_logic.
+    """
+    chunks: Final = (_reasoning_chunk("abrupt thinking"),)
+    iterator: Final = _build_iterator(chunks)
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_done_events: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "type", None) == "reasoning"
+    ]
+    assert len(reasoning_done_events) == 1
+    reasoning_item: Final = reasoning_done_events[0].item
+    assert getattr(reasoning_item, "status", None) == "completed"
+
+
+def test_extract_streamed_thinking_blocks_encrypted_caching_and_empty():
+    iterator: Final = _build_iterator([])
+    assert iterator._extract_streamed_thinking_blocks_encrypted() is None
+
+    iterator._cached_encrypted_reasoning_content = "cached_sig"
+    assert iterator._extract_streamed_thinking_blocks_encrypted() == "cached_sig"
+
+    iterator._flush_pending_reasoning_done_events()
+    assert iterator._reasoning_done_emitted is False
+
+
+def test_extract_streamed_thinking_blocks_encrypted_error_handling(monkeypatch: pytest.MonkeyPatch):
+    import sys
+
+    si_module: Final = sys.modules[LiteLLMCompletionStreamingIterator.__module__]
+    iterator: Final = _build_iterator([])
+    iterator.collected_chat_completion_chunks = [_chunk("test").model_dump()]
+
+    def _mock_builder(*args: object, **kwargs: object) -> None:
+        raise ValueError("simulated builder failure")
+
+    monkeypatch.setattr(si_module, "stream_chunk_builder", _mock_builder)
+    assert iterator._extract_streamed_thinking_blocks_encrypted() is None

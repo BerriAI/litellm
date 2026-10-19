@@ -1108,28 +1108,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _extract_streamed_thinking_blocks_encrypted(self) -> str | None:
         if self._cached_encrypted_reasoning_content is not None:
             return self._cached_encrypted_reasoning_content
-        if not self.collected_chat_completion_chunks:
+        chunks: Final = [
+            c if c.get("model") else {**c, "model": self.model or "unknown"}
+            for c in self.collected_chat_completion_chunks
+            if c.get("choices")
+        ]
+        if not chunks:
             return None
         try:
-            chunks: Final = [
-                c if c.get("model") else {**c, "model": self.model or "unknown"}
-                for c in self.collected_chat_completion_chunks
-                if c.get("choices")
-            ]
-            if not chunks:
-                return None
             built: Final = stream_chunk_builder(chunks=chunks)
-            if built and built.choices:
-                choice: Final = built.choices[0]
-                if isinstance(choice, Choices):
-                    thinking_blocks: Final[Sequence[Mapping[str, object]]] = (
-                        getattr(choice.message, "thinking_blocks", None) or ()
-                    )
-                    self._cached_encrypted_reasoning_content = encode_thinking_blocks(thinking_blocks)
-                    return self._cached_encrypted_reasoning_content
+            if built and built.choices and isinstance(built.choices[0], Choices):
+                thinking_blocks: Final[Sequence[Mapping[str, object]]] = (
+                    getattr(built.choices[0].message, "thinking_blocks", None) or ()
+                )
+                self._cached_encrypted_reasoning_content = encode_thinking_blocks(thinking_blocks)
         except (KeyError, ValueError, TypeError, AttributeError, IndexError):
-            return None
-        return None
+            pass
+        return self._cached_encrypted_reasoning_content
 
     def _flush_pending_reasoning_done_events(self) -> None:
         if not self._reasoning_active or self._reasoning_done_emitted:
