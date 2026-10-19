@@ -157,11 +157,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import (
-    Logging,
-    deployment_model_info,
-    deployment_pricing_model_info,
-)
+from litellm.litellm_core_utils.litellm_logging import Logging, deployment_pricing_model_info
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -1067,12 +1063,32 @@ def _failure_usage_to_lift(
     return estimated_usage, _estimated_input_cost(model_call_details, estimated_usage.prompt_tokens, litellm_params)
 
 
+def _router_deployment_id(litellm_params: Mapping[str, object] | None) -> object:
+    """The deployment id the router stamped on the request, resolved the way the success path's
+    ``Logging.get_router_model_id`` does: ``litellm_metadata`` before ``metadata`` (the router writes
+    the real id into ``litellm_metadata`` on /messages and /responses), and only a ``model_info``
+    that carries an ``id`` counts, so a client-supplied ``metadata.model_info`` cannot win."""
+    if litellm_params is None:
+        return None
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = litellm_params.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        model_info = cast("Mapping[str, object]", metadata).get("model_info")  # cast-ok: untyped router dict
+        if not isinstance(model_info, dict):
+            continue
+        model_id = cast("Mapping[str, object]", model_info).get("id")  # cast-ok: untyped router dict
+        if model_id is not None:
+            return model_id
+    return None
+
+
 def _deployment_cost_per_token(litellm_params: Mapping[str, object] | None, model: str) -> CostPerToken | None:
     """The pricing the router registered for this deployment under its ``model_info.id``, read
     through ``deployment_pricing_model_info`` exactly as the success path does; None means the
     public cost map. The id comes from ``Logging.litellm_params`` (deployment config), never from
     the flattened ``model_call_details`` copy that a request body key can overwrite."""
-    model_id: Final = deployment_model_info(litellm_params).get("id")
+    model_id: Final = _router_deployment_id(litellm_params)
     model_info: Final = deployment_pricing_model_info(
         model_id=str(model_id) if model_id is not None else None, deployment_model=model
     )

@@ -2051,6 +2051,35 @@ def test_a_timed_out_request_is_priced_at_the_rate_the_router_registered_for_the
     assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
 
 
+def test_the_deployment_id_is_resolved_like_the_success_path_litellm_metadata_first(monkeypatch):
+    """On /messages and /responses the router stamps the real deployment id into litellm_metadata;
+    a model_info on metadata (possibly client-supplied) must not pick the rate."""
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    for dep, rate in (("dep-lit145-real", 0.25), ("dep-lit145-wrong", 9.0)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            dep,
+            {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": rate, "output_cost_per_token": rate},
+        )
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={"call_type": "acompletion", "model": FAILURE_USAGE_MODEL, "messages": ONE_USER_MESSAGE},
+        request_body={},
+        dispatched=True,
+        provider_billed=True,
+        litellm_params={
+            "model": f"openai/{FAILURE_USAGE_MODEL}",
+            "metadata": {"model_info": {"id": "dep-lit145-wrong"}},
+            "litellm_metadata": {"model_info": {"id": "dep-lit145-real"}},
+        },
+    )
+
+    assert lifted is not None
+    usage, response_cost = lifted
+    assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
+
+
 def test_a_litellm_params_key_in_the_request_body_cannot_zero_the_timeout_price():
     """``model_call_details`` is flattened with the request's optional_params, so a body key
     named ``litellm_params`` can land there; the deployment rate must come from the logging
