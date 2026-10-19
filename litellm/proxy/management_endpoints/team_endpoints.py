@@ -5386,7 +5386,7 @@ async def _set_team_blocked(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    return record
+    return record.model_copy(update=dict.fromkeys(_TEAM_UPDATE_INCLUDE))
 
 
 @router.post("/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)])

@@ -4189,7 +4189,6 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
 def update_cache_read_keys(
     user_id: str | None,
     end_user_id: str | None,
-    team_id: str | None,
     tags: Sequence[object] | None,
     response_cost: float | None,
 ) -> tuple[str, ...]:
@@ -4197,9 +4196,8 @@ def update_cache_read_keys(
         return ()
     user_keys: tuple[str, ...] = (user_id, GLOBAL_PROXY_SPEND_CACHE_KEY) if user_id is not None else ()
     end_user_keys: tuple[str, ...] = (end_user_cache_key(end_user_id),) if end_user_id is not None else ()
-    team_keys: tuple[str, ...] = (f"team_id:{team_id}",) if team_id is not None else ()
     tag_keys: tuple[str, ...] = tuple(tag_cache_key(tag) for tag in tags or () if isinstance(tag, str) and tag)
-    return user_keys + end_user_keys + team_keys + tag_keys
+    return user_keys + end_user_keys + tag_keys
 
 
 _UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
@@ -4276,7 +4274,7 @@ async def update_cache(
     with service_target(AUTH_OBJECTS_TARGET):
         cached_values: Final = await _read_update_cache_values(
             keys=update_cache_read_keys(
-                user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
+                user_id=user_id, end_user_id=end_user_id, tags=tags, response_cost=response_cost
             ),
             parent_otel_span=parent_otel_span,
         )
@@ -4426,35 +4424,28 @@ async def update_cache(
             )
 
     ### UPDATE TEAM SPEND ###
-    async def _update_team_cache():
+    def _update_team_cache():
         if team_id is None or response_cost is None:
             return
 
         _id: Final = f"team_id:{team_id}"
         try:
-            cached_team: Final = cached_values.get(_id)
-            if cached_team is None:
-                # do nothing if team not in api key cache
-                return
-            existing_spend_obj: Final[LiteLLM_TeamTableCachedObj | None] = CacheCodec.deserialize(
-                cached_team, LiteLLM_TeamTableCachedObj
+            current_team: Final = CacheCodec.deserialize(
+                user_api_key_cache.get_cache(key=_id, local_only=True), LiteLLM_TeamTableCachedObj
             )
-            if existing_spend_obj is None:
+            if current_team is None:
                 return
             verbose_proxy_logger.debug(
-                "_update_team_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
+                "_update_team_db: existing spend: %s; response_cost: %s", current_team, response_cost
             )
-
-            existing_spend: Final[float] = existing_spend_obj.spend or 0.0
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend: Final = existing_spend + response_cost
-
-            existing_spend_obj.spend = new_spend
-            values_to_update_in_cache.append(
-                (
-                    _id,
-                    CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_TeamTableCachedObj),
-                )
+            user_api_key_cache.set_cache(
+                key=_id,
+                value=CacheCodec.serialize(
+                    current_team.model_copy(update={"spend": (current_team.spend or 0.0) + response_cost}),
+                    model_type=LiteLLM_TeamTableCachedObj,
+                ),
+                local_only=True,
+                ttl=get_management_object_ttl(user_api_key_cache),
             )
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -4531,7 +4522,7 @@ async def update_cache(
             await _update_end_user_cache()
 
         if team_id is not None:
-            await _update_team_cache()
+            _update_team_cache()
 
         if tags is not None:
             await _update_tag_cache()
