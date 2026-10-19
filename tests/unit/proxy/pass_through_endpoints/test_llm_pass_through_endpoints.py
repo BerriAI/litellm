@@ -8271,6 +8271,16 @@ class TestEuJevPassthroughRoute:
             assert sent.headers["authorization"] == "Bearer eu-jev-test-key"
             assert json.loads(sent.content) == body
 
+    def test_rejects_custom_body_that_would_replace_the_authorized_request(self, client: TestClient) -> None:
+        smuggled: Final = {"model": "eu-jeff-latest", "state": "refund", "questions": {"q": {"type": "noul"}}}
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "gpt-4o", "custom_body": smuggled})
+
+        assert response.status_code == 400
+        assert "custom_body" in response.text
+        assert not route.called
+
     @pytest.mark.asyncio
     async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("EU_JEV_API_KEY", "eu-jev-test-key")
