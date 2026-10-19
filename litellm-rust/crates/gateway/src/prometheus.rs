@@ -3,14 +3,15 @@
 //!
 //! It is an observer, so nothing here runs on the request path. Each finished request updates a
 //! few series per metric: the label values are hashed without allocating, and a series is created
-//! once, the first time its label values are seen. The text is built only when Prometheus scrapes.
+//! once, the first time its label values are seen. Each combination of label values is stored once
+//! and shared by every metric's series that has it. The text is built only when Prometheus scrapes.
 
 use std::{
     collections::{HashMap, HashSet},
     fmt::Write as _,
     hash::{BuildHasher, Hash, Hasher, RandomState},
     sync::{
-        RwLock,
+        Arc, RwLock,
         atomic::{AtomicU64, Ordering},
     },
     time::SystemTime,
@@ -65,6 +66,9 @@ enum Label {
 }
 
 use Label::*;
+
+/// How many labels there are, to index a [`LabelSet`] by label.
+const LABEL_COUNT: usize = ServiceTier as usize + 1;
 
 const LLM_API_LATENCY: &[Label] = &[
     ModelGroup,
@@ -390,8 +394,64 @@ struct GroupConfig {
     include_labels: Option<Vec<String>>,
 }
 
+/// One combination of label values, indexed by label, shared by the series of every family
+/// that has these values. Labels no enabled family emits stay `None`.
+type LabelSet = Arc<[Option<Box<str>>]>;
+
 /// The series that share a hash of their label values, each with those values.
-type Bucket = Vec<(Box<[Option<Box<str>>]>, Box<Cell>)>;
+type Bucket = Vec<(LabelSet, Box<Cell>)>;
+
+/// The label value combinations seen so far, so that each is stored once however many families
+/// have a series for it.
+struct LabelSets {
+    /// The labels any enabled family emits; the others don't tell sets apart.
+    labels: Box<[Label]>,
+    sets: RwLock<HashMap<u64, Vec<LabelSet>>>,
+}
+
+impl LabelSets {
+    fn new(labels: Vec<Label>) -> Self {
+        Self {
+            labels: labels.into(),
+            sets: RwLock::default(),
+        }
+    }
+
+    /// The stored set with these values, stored now if this is the first time they are seen.
+    fn get(&self, hasher: &RandomState, values: &Values<'_>) -> LabelSet {
+        let mut state = hasher.build_hasher();
+        for label in &self.labels {
+            values.get(*label).hash(&mut state);
+        }
+        let hash = state.finish();
+        let matches = |stored: &LabelSet| {
+            self.labels
+                .iter()
+                .all(|label| stored[*label as usize].as_deref() == values.get(*label))
+        };
+        {
+            let sets = self.sets.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(set) = sets
+                .get(&hash)
+                .and_then(|sets| sets.iter().find(|set| matches(set)))
+            {
+                return set.clone();
+            }
+        }
+        let mut sets = self.sets.write().unwrap_or_else(|e| e.into_inner());
+        let bucket = sets.entry(hash).or_default();
+        if let Some(set) = bucket.iter().find(|set| matches(set)) {
+            return set.clone();
+        }
+        let mut set = vec![None; LABEL_COUNT];
+        for label in &self.labels {
+            set[*label as usize] = values.get(*label).map(Box::from);
+        }
+        let set: LabelSet = set.into();
+        bucket.push(set.clone());
+        set
+    }
+}
 
 /// One metric's label names and series.
 struct Family {
@@ -470,17 +530,22 @@ impl Family {
         }
     }
 
-    fn with<R>(&self, hasher: &RandomState, values: &Values<'_>, apply: impl Fn(&Cell) -> R) -> R {
+    fn with<R>(
+        &self,
+        hasher: &RandomState,
+        sets: &LabelSets,
+        values: &Values<'_>,
+        apply: impl Fn(&Cell) -> R,
+    ) -> R {
         let mut state = hasher.build_hasher();
         for label in &self.labels {
             values.get(*label).hash(&mut state);
         }
         let hash = state.finish();
-        let matches = |stored: &[Option<Box<str>>]| {
-            stored
+        let matches = |stored: &LabelSet| {
+            self.labels
                 .iter()
-                .zip(self.labels.iter())
-                .all(|(stored, label)| stored.as_deref() == values.get(*label))
+                .all(|label| stored[*label as usize].as_deref() == values.get(*label))
         };
         {
             let series = self.series.read().unwrap_or_else(|e| e.into_inner());
@@ -496,11 +561,7 @@ impl Family {
         let index = match bucket.iter().position(|(stored, _)| matches(stored)) {
             Some(index) => index,
             None => {
-                let stored = self
-                    .labels
-                    .iter()
-                    .map(|label| values.get(*label).map(Box::from))
-                    .collect();
+                let stored = sets.get(hasher, values);
                 let cell = match self.metric.kind() {
                     Kind::Counter | Kind::Gauge => Cell::Value(AtomicF64::default()),
                     Kind::Latency | Kind::Histogram => {
@@ -531,10 +592,10 @@ impl Family {
                 let labels = self
                     .labels
                     .iter()
-                    .zip(values.iter())
-                    .map(|(label, value)| {
+                    .map(|label| {
+                        let value = values[*label as usize].as_deref();
                         let label: &'static str = label.into();
-                        format!("{label}=\"{}\"", escape(value.as_deref().unwrap_or("None")))
+                        format!("{label}=\"{}\"", escape(value.unwrap_or("None")))
                     })
                     .collect::<Vec<_>>()
                     .join(",");
@@ -725,6 +786,7 @@ fn seconds(from: SystemTime, to: SystemTime) -> Option<f64> {
 /// The `prometheus` observer.
 pub struct Prometheus {
     families: Vec<Option<Family>>,
+    label_sets: LabelSets,
     hasher: RandomState,
     end_user_label: bool,
     reads_headers: bool,
@@ -846,6 +908,16 @@ impl Prometheus {
             .iter()
             .flatten()
             .any(|family| family.labels.contains(&UserAgent));
+        let mut used = Vec::new();
+        for label in families
+            .iter()
+            .flatten()
+            .flat_map(|family| family.labels.iter())
+        {
+            if !used.contains(label) {
+                used.push(*label);
+            }
+        }
         let end_user_label = !matches!(
             litellm
                 .additional_fields
@@ -854,6 +926,7 @@ impl Prometheus {
         );
         Ok(Some(Self {
             families,
+            label_sets: LabelSets::new(used),
             hasher: RandomState::new(),
             end_user_label,
             reads_headers,
@@ -866,7 +939,7 @@ impl Prometheus {
 
     fn add(&self, metric: Metric, values: &Values<'_>, amount: f64) {
         if let Some(family) = self.family(metric) {
-            family.with(&self.hasher, values, |cell| {
+            family.with(&self.hasher, &self.label_sets, values, |cell| {
                 if let Cell::Value(value) = cell {
                     value.add(amount);
                 }
@@ -876,7 +949,7 @@ impl Prometheus {
 
     fn set(&self, metric: Metric, values: &Values<'_>, value: f64) {
         if let Some(family) = self.family(metric) {
-            family.with(&self.hasher, values, |cell| {
+            family.with(&self.hasher, &self.label_sets, values, |cell| {
                 if let Cell::Value(cell) = cell {
                     cell.set(value);
                 }
@@ -888,7 +961,7 @@ impl Prometheus {
         let (Some(family), Some(value)) = (self.family(metric), value) else {
             return;
         };
-        family.with(&self.hasher, values, |cell| {
+        family.with(&self.hasher, &self.label_sets, values, |cell| {
             if let Cell::Histogram(histogram) = cell {
                 histogram.observe(&family.buckets, value);
             }
@@ -1099,6 +1172,24 @@ mod tests {
         )
         .unwrap();
         assert!(Prometheus::from_config(&config).unwrap().is_some());
+    }
+
+    #[test]
+    fn every_family_shares_one_stored_label_set_per_combination() {
+        let prometheus = Prometheus::from_config(&config("")).unwrap().unwrap();
+        prometheus.record(&record(200, true, true));
+        prometheus.record(&record(200, true, true));
+        let sets = prometheus.label_sets.sets.read().unwrap();
+        let stored: Vec<&LabelSet> = sets.values().flatten().collect();
+        assert_eq!(stored.len(), 1);
+        let families = prometheus
+            .families
+            .iter()
+            .flatten()
+            .filter(|family| !family.series.read().unwrap().is_empty())
+            .count();
+        assert!(families > 1);
+        assert_eq!(Arc::strong_count(stored[0]), families + 1);
     }
 
     #[test]
