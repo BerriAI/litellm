@@ -1,10 +1,10 @@
-use std::{collections::BTreeMap as Map, io::Read, path::Path};
+use std::{collections::BTreeMap as Map, io::Read, path::Path, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_llms::base_llm::ocr::{error::Error, transformation::OCR_INLINE_MAX_BYTES};
 use litellm_llms_types::formats::ocr::OcrDocument;
 
-use crate::types::OcrDocumentInput;
+use crate::types::{LiteLLMOcrRequest, OcrDocumentInput, ResolvedOcrRequest};
 
 pub fn prepare_document(input: OcrDocumentInput) -> Result<OcrDocument, Error> {
     match input {
@@ -22,6 +22,21 @@ pub fn prepare_document(input: OcrDocumentInput) -> Result<OcrDocument, Error> {
             mime_type.as_deref(),
         )?),
     }
+}
+
+pub(crate) async fn resolve_document(
+    request: LiteLLMOcrRequest<OcrDocumentInput>,
+) -> Result<ResolvedOcrRequest, Error> {
+    if let OcrDocumentInput::Document(_) = &request.document {
+        return request.map_document(prepare_document);
+    }
+    let logger = litellm_tracing::Logger::current();
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || {
+        logger.scope(|| span.in_scope(|| request.map_document(prepare_document)))
+    })
+    .await
+    .map_err(|error| Error::DocumentTask(Arc::new(error)))?
 }
 
 pub fn read_path_document(path: &Path, mime_type: Option<&str>) -> Result<OcrDocument, Error> {

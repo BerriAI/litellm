@@ -67,6 +67,19 @@ async fn interception_runs_once_and_observers_receive_ordered_success_events() {
 }
 
 #[rstest::rstest]
+#[case::mutated_model("model-b")]
+#[tokio::test]
+async fn provider_request_uses_the_request_model_after_it_is_mutated(#[case] model: &str) {
+    let upstream = upstream([pages_response()]).await;
+    let mut request = ocr_request("mistral/model-a", &upstream.uri(), json!({}));
+    request.model = model.into();
+
+    perform(request).await.unwrap();
+
+    assert_eq!(only_request(&upstream).await.json()["model"], json!(model));
+}
+
+#[rstest::rstest]
 #[tokio::test]
 async fn a_blocking_before_send_prevents_the_call_and_emits_one_failure() {
     let upstream = upstream([pages_response()]).await;
