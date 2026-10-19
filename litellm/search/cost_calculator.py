@@ -37,9 +37,11 @@ def _pricing_model(
     custom_llm_provider: str | None,
     optional_params: Mapping[str, object] | None,
 ) -> str:
-    """`<provider>/search-<mode>` when the request's mode parameter names a priced entry, else `model`."""
+    """`<provider>/search-<mode>` when `model` is the generic `<provider>/search` entry (bare or provider-prefixed) and
+    the request's mode parameter names a priced entry, else `model`."""
     mode_param: Final = SEARCH_MODE_PARAM_BY_PROVIDER.get(custom_llm_provider or "")
-    if mode_param is None:
+    generic_model: Final = f"{custom_llm_provider}/search"
+    if mode_param is None or model not in (generic_model, f"{custom_llm_provider}/{generic_model}"):
         return model
     mode: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get(mode_param)
     mode_model: Final = f"{custom_llm_provider}/search-{mode}"

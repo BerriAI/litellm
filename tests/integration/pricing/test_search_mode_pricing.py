@@ -1,7 +1,7 @@
 import json
-import threading
 import uuid
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -9,6 +9,7 @@ from typing import Final
 import httpx
 import pytest
 import yaml
+from integration._support import interception_vendor as iv
 from integration._support.client import Gateway, Scenario, eventually, string_value
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
@@ -27,7 +28,10 @@ _RESULTS: Final = {
     },
 }
 _MODE_PARAM: Final = {"tavily": "search_depth", "linkup": "depth"}
+_QUERY_FIELD: Final = {"tavily": "query", "linkup": "q"}
 _MODE_ENTRY: Final = {"tavily": "tavily/search-advanced", "linkup": "linkup/search-deep"}
+_MODE_VALUE: Final = {"tavily": "advanced", "linkup": "deep"}
+_BASE_MODE: Final = {"tavily": "basic", "linkup": "standard"}
 _NO_PARAMS: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 
 
@@ -119,6 +123,102 @@ def test_search_is_charged_at_the_price_entry_for_the_mode_the_provider_ran(
         )
 
 
+@pytest.mark.parametrize(
+    ("provider", "modes"),
+    [
+        ("tavily", ("ultra-fast", "ADVANCED", " advanced", "", 7, ["advanced"], {"depth": "advanced"})),
+        ("linkup", ("DEEP", "deeper", "", 7, ["deep"], {"depth": "deep"})),
+    ],
+    ids=["tavily", "linkup"],
+)
+def test_a_mode_with_no_price_entry_of_its_own_is_charged_at_the_base_price(
+    gateway: Gateway, provider: str, modes: tuple[JsonValue, ...]
+) -> None:
+    mode_param: Final = _MODE_PARAM[provider]
+
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", f"/{provider}/search"), request.target
+        return Reply(body=json.dumps(_RESULTS[provider]).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        tool: Final = _search_tool(gateway, scenario, provider, f"{wire.url}/{provider}")
+        responses: Final = tuple(
+            gateway.request("POST", f"/v1/search/{tool}", {"query": _QUERY, mode_param: mode}) for mode in modes
+        )
+        assert [response.status_code for response in responses] == [200] * len(modes), [r.text for r in responses]
+        assert [json.loads(request.body)[mode_param] for request in wire.drain()] == list(modes)
+        assert [float(response.headers["x-litellm-response-cost"]) for response in responses] == pytest.approx(
+            [_price(f"{provider}/search")] * len(modes)
+        )
+        assert [_spend(gateway, response.headers["x-litellm-call-id"]) for response in responses] == pytest.approx(
+            [_price(f"{provider}/search")] * len(modes)
+        )
+
+
+def _burst_cells(provider: str) -> tuple[tuple[str, str | None], ...]:
+    return tuple((provider, mode) for mode in (_MODE_VALUE[provider], _BASE_MODE[provider], None))
+
+
+def _burst_price(provider: str, mode: str | None) -> float:
+    return _price(_MODE_ENTRY[provider] if mode == _MODE_VALUE[provider] else f"{provider}/search")
+
+
+def test_a_concurrent_burst_with_upstream_failures_charges_each_success_at_its_mode_price_and_no_failure(
+    gateway: Gateway,
+) -> None:
+    plan: Final = tuple(
+        (provider, mode, index % 7 == 0)
+        for index, (provider, mode) in enumerate((*_burst_cells("tavily"), *_burst_cells("linkup")) * 4)
+    )
+
+    def respond(request: Request) -> Reply:
+        provider: Final = request.target.split("/")[1]
+        if json.loads(request.body)[_QUERY_FIELD[provider]].endswith("-down"):
+            return Reply(status=500, body=b'{"detail":{"error":"scripted search outage"}}')
+        return Reply(body=json.dumps(_RESULTS[provider]).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        tools: Final = {
+            provider: _search_tool(gateway, scenario, provider, f"{wire.url}/{provider}")
+            for provider in ("tavily", "linkup")
+        }
+
+        def send(index: int) -> httpx.Response:
+            provider, mode, fails = plan[index]
+            query: Final = f"{_QUERY} {index}{'-down' if fails else ''}"
+            body: Final = {"query": query} if mode is None else {"query": query, _MODE_PARAM[provider]: mode}
+            return gateway.request("POST", f"/v1/search/{tools[provider]}", body)
+
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            responses: Final = tuple(pool.map(send, range(len(plan))))
+        assert [response.status_code for response in responses] == [500 if fails else 200 for *_, fails in plan], [
+            response.text for response in responses
+        ]
+        assert len(wire.drain()) == len(plan)
+        successes: Final = tuple(
+            (response, _burst_price(provider, mode))
+            for (provider, mode, fails), response in zip(plan, responses, strict=True)
+            if not fails
+        )
+        assert [float(response.headers["x-litellm-response-cost"]) for response, _ in successes] == pytest.approx(
+            [price for _, price in successes]
+        )
+        rows: Final = eventually(
+            lambda: gateway.rows(
+                'SELECT request_id, status, spend FROM "LiteLLM_SpendLogs" WHERE model_group = ANY(%s)',
+                (list(tools.values()),),
+            ),
+            lambda found: len(found) == len(plan),
+            seconds=70,
+        )
+        assert {str(row["request_id"]): float(str(row["spend"])) for row in rows if row["status"] == "success"} == (
+            pytest.approx({response.headers["x-litellm-call-id"]: price for response, price in successes})
+        )
+        assert [float(str(row["spend"])) for row in rows if row["status"] != "success"] == [0.0] * (
+            len(plan) - len(successes)
+        )
+
+
 def _owned_config(
     tmp_path: Path, search_tools: Sequence[JsonValue], litellm_settings: Mapping[str, JsonValue] = _NO_PARAMS
 ) -> Path:
@@ -206,19 +306,20 @@ def _anthropic_reply(identity: str, content: Sequence[JsonValue], stop_reason: s
     )
 
 
-def test_a_web_search_intercepted_on_messages_is_charged_at_the_search_tools_mode_price(
+def test_a_web_search_intercepted_on_every_llm_endpoint_is_charged_at_the_search_tools_mode_price(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     identity: Final = f"search-mode-{uuid.uuid4().hex}"
     tool: Final = f"tavily-intercepted-{uuid.uuid4().hex}"
-    searched: Final = threading.Event()
+    chat_deployment: Final = iv.deployment("search")
+    responses_deployment: Final = iv.deployment("search")
 
     def respond(request: Request) -> Reply:
         if request.target == "/tavily/search":
-            assert json.loads(request.body) == {"query": _QUERY, "search_depth": "advanced"}, request.body
-            searched.set()
+            assert json.loads(request.body)["search_depth"] == "advanced", request.body
             return Reply(body=json.dumps(_RESULTS["tavily"]).encode())
-        assert (request.method, request.target) == ("POST", "/v1/messages"), request.target
+        if request.target != "/v1/messages":
+            return iv.respond(request)
         body: Final = json.loads(request.body)
         if any(entry.get("type") == "web_search_20250305" for entry in body["tools"]):
             return _anthropic_reply(identity, [{"type": "text", "text": "not intercepted"}], "end_turn")
@@ -231,22 +332,10 @@ def test_a_web_search_intercepted_on_messages_is_charged_at_the_search_tools_mod
         tool_use: Final[JsonValue] = {
             "type": "tool_use",
             "id": identity,
-            "name": "litellm_web_search",
+            "name": iv.SEARCH_TOOL,
             "input": {"query": _QUERY},
         }
         return _anthropic_reply(identity, [tool_use], "tool_use")
-
-    def send(candidate: Gateway, model: str) -> httpx.Response:
-        return candidate.request(
-            "POST",
-            "/v1/messages",
-            {
-                "model": model,
-                "max_tokens": 64,
-                "messages": [{"role": "user", "content": f"{identity} {uuid.uuid4().hex}"}],
-                "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}],
-            },
-        )
 
     with wire_server(respond) as wire:
         path: Final = _owned_config(
@@ -256,22 +345,67 @@ def test_a_web_search_intercepted_on_messages_is_charged_at_the_search_tools_mod
                 "callbacks": ["websearch_interception"],
                 "websearch_interception_params": {
                     "enabled": True,
-                    "enabled_providers": ["anthropic"],
+                    "enabled_providers": ["anthropic", "azure"],
                     "search_tool_name": tool,
                 },
             },
         )
         with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as models:
-            model: Final = models.model(
-                model="anthropic/claude-sonnet-4-5-20250929", api_base=wire.url, api_key="synthetic-anthropic-key"
+            azure: Final = {"api_base": wire.url, "api_key": iv.AZURE_KEY, "api_version": iv.API_VERSION}
+            sends: Final = (
+                (
+                    "/v1/messages",
+                    {
+                        "model": models.model(
+                            model="anthropic/claude-sonnet-4-5-20250929",
+                            api_base=wire.url,
+                            api_key="synthetic-anthropic-key",
+                        ),
+                        "max_tokens": 64,
+                        "messages": [{"role": "user", "content": identity}],
+                        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}],
+                    },
+                    "answered",
+                ),
+                (
+                    "/v1/chat/completions",
+                    {
+                        "model": models.model(model=f"azure/{chat_deployment}", **azure),
+                        "messages": [{"role": "user", "content": f"Search for {chat_deployment}"}],
+                        "tools": [{"type": "web_search"}],
+                    },
+                    iv.answer(chat_deployment),
+                ),
+                (
+                    "/v1/responses",
+                    {
+                        "model": models.model(model=f"azure/{responses_deployment}", **azure),
+                        "input": f"Search for {responses_deployment}",
+                        "tools": [{"type": "web_search"}],
+                    },
+                    iv.answer(responses_deployment),
+                ),
             )
-            response: Final = eventually(lambda: send(candidate, model), lambda _: searched.is_set(), seconds=40)
-            assert response.status_code == 200, response.text
+            responses: Final = tuple(
+                eventually(
+                    lambda route=route, body=body: candidate.request("POST", route, body),
+                    lambda response, answer=answer: answer in response.text,
+                    seconds=40,
+                )
+                for route, body, answer in sends
+            )
+            assert [response.status_code for response in responses] == [200, 200, 200], [r.text for r in responses]
+            searches: Final = tuple(
+                json.loads(request.body)["query"] for request in wire.drain() if request.target == "/tavily/search"
+            )
+            assert sorted(searches) == sorted((_QUERY, iv.query(chat_deployment), iv.query(responses_deployment))), (
+                searches
+            )
             rows: Final = eventually(
                 lambda: candidate.rows(
                     """SELECT spend FROM "LiteLLM_SpendLogs" WHERE call_type IN ('search', 'asearch')""", ()
                 ),
-                lambda found: len(found) == 1,
+                lambda found: len(found) == len(searches),
                 seconds=70,
             )
-        assert float(str(rows[0]["spend"])) == pytest.approx(_price("tavily/search-advanced")), rows
+        assert [float(str(row["spend"])) for row in rows] == pytest.approx([_price("tavily/search-advanced")] * 3), rows

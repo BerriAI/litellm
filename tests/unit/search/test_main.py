@@ -22,6 +22,7 @@ SEARCH_MODE_PRICES: Final = {
     "linkup/search-deep": 0.011,
     "perplexity/search": 0.004,
     "perplexity/search-advanced": 0.009,
+    "tavily/negotiated-search": 0.004,
 }
 
 
@@ -156,6 +157,14 @@ def test_search_cost_is_the_price_entry_of_the_requested_mode(
         model=f"{provider}/search", custom_llm_provider=provider, optional_params=optional_params
     )
     assert cost == pytest.approx((expected, 0.0))
+
+
+@pytest.mark.usefixtures("_search_mode_prices")
+def test_a_registered_search_model_keeps_its_own_price_for_an_advanced_search() -> None:
+    cost: Final = search_provider_cost_per_query(
+        model="tavily/negotiated-search", custom_llm_provider="tavily", optional_params={"search_depth": "advanced"}
+    )
+    assert cost == pytest.approx((0.004, 0.0))
 
 
 @pytest.mark.usefixtures("_search_mode_prices")
