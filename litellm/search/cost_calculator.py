@@ -8,12 +8,16 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm.utils import get_model_info
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
 EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+SEARCH_MODE_PARAM_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
+    {"tavily": "search_depth", "linkup": "depth"}
+)
 
 
 def _provider_usage(
@@ -28,6 +32,20 @@ def _provider_usage(
         return None
 
 
+def _pricing_model(
+    model: str,
+    custom_llm_provider: str | None,
+    optional_params: Mapping[str, object] | None,
+) -> str:
+    """`<provider>/search-<mode>` when the request's mode parameter names a priced entry, else `model`."""
+    mode_param: Final = SEARCH_MODE_PARAM_BY_PROVIDER.get(custom_llm_provider or "")
+    if mode_param is None:
+        return model
+    mode: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get(mode_param)
+    mode_model: Final = f"{custom_llm_provider}/search-{mode}"
+    return mode_model if mode_model in litellm.model_cost else model
+
+
 def search_provider_cost_per_query(
     model: str,
     custom_llm_provider: str | None = None,
@@ -38,7 +56,8 @@ def search_provider_cost_per_query(
     Calculate cost for search-only providers.
 
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
-    Supports tiered pricing based on max_results parameter.
+    Supports tiered pricing based on max_results parameter, and per-mode price entries selected by the
+    provider's mode parameter (Tavily `search_depth`, Linkup `depth`).
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
@@ -61,7 +80,10 @@ def search_provider_cost_per_query(
         )
         return (input_cost, 0.0)
 
-    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    model_info: Final = get_model_info(
+        model=_pricing_model(model, custom_llm_provider, optional_params),
+        custom_llm_provider=custom_llm_provider,
+    )
 
     # Check for tiered pricing (e.g., Exa AI based on max_results)
     tiered_pricing: Final = model_info.get("tiered_pricing")

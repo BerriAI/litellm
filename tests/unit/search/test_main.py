@@ -1,4 +1,5 @@
 import datetime
+import json
 from typing import Final
 
 import httpx
@@ -10,6 +11,17 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.search.cost_calculator import search_provider_cost_per_query
 
 EXA_SEARCH_URL: Final = "https://api.exa.ai/search"
+TAVILY_SEARCH_URL: Final = "https://api.tavily.com/search"
+LINKUP_SEARCH_URL: Final = "https://api.linkup.so/v1/search"
+SEARCH_MODE_PRICES: Final = {
+    "tavily/search": 0.002,
+    "tavily/search-advanced": 0.007,
+    "tavily/search-fast": 0.001,
+    "linkup/search": 0.003,
+    "linkup/search-deep": 0.011,
+    "perplexity/search": 0.004,
+    "perplexity/search-advanced": 0.009,
+}
 
 
 @pytest.fixture
@@ -17,6 +29,16 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
     monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+
+
+@pytest.fixture
+def _search_mode_prices(_local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    for model, price in SEARCH_MODE_PRICES.items():
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {"input_cost_per_query": price, "litellm_provider": model.split("/", 1)[0], "mode": "search"},
+        )
 
 
 def _proxy_style_logging_obj() -> Logging:
@@ -90,3 +112,83 @@ def test_unpriced_fallback_search_tool_is_billed_at_its_own_price_not_the_failed
     )
 
     assert fallback._hidden_params["response_cost"] == pytest.approx(map_price)
+
+
+@pytest.mark.usefixtures("_search_mode_prices")
+@pytest.mark.parametrize(
+    ("provider", "optional_params", "expected"),
+    [
+        ("tavily", {"search_depth": "advanced"}, 0.007),
+        ("tavily", {"search_depth": "fast"}, 0.001),
+        ("tavily", {"search_depth": "basic"}, 0.002),
+        ("tavily", {"search_depth": "ultra-fast"}, 0.002),
+        ("tavily", {}, 0.002),
+        ("tavily", None, 0.002),
+        ("tavily", {"search_depth": ["advanced"]}, 0.002),
+        ("tavily", {"depth": "advanced"}, 0.002),
+        ("linkup", {"depth": "deep"}, 0.011),
+        ("linkup", {"depth": "standard"}, 0.003),
+        ("linkup", {}, 0.003),
+        ("linkup", {"search_depth": "deep"}, 0.003),
+        ("perplexity", {"search_depth": "advanced", "depth": "advanced"}, 0.004),
+    ],
+    ids=[
+        "tavily-advanced",
+        "tavily-fast",
+        "tavily-basic-has-no-entry",
+        "tavily-mode-without-entry",
+        "tavily-no-mode",
+        "tavily-no-params",
+        "tavily-non-string-mode",
+        "tavily-ignores-linkup-param",
+        "linkup-deep",
+        "linkup-standard-has-no-entry",
+        "linkup-no-mode",
+        "linkup-ignores-tavily-param",
+        "provider-without-mode-param-keeps-base-entry",
+    ],
+)
+def test_search_cost_is_the_price_entry_of_the_requested_mode(
+    provider: str, optional_params: dict[str, object] | None, expected: float
+) -> None:
+    cost: Final = search_provider_cost_per_query(
+        model=f"{provider}/search", custom_llm_provider=provider, optional_params=optional_params
+    )
+    assert cost == pytest.approx((expected, 0.0))
+
+
+@pytest.mark.usefixtures("_search_mode_prices")
+def test_search_cost_charges_every_query_at_the_mode_price() -> None:
+    cost: Final = search_provider_cost_per_query(
+        model="tavily/search",
+        custom_llm_provider="tavily",
+        number_of_queries=3,
+        optional_params={"search_depth": "advanced"},
+    )
+    assert cost == pytest.approx((3 * 0.007, 0.0))
+
+
+@pytest.mark.usefixtures("_search_mode_prices")
+def test_sync_tavily_advanced_search_reports_the_advanced_price(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(TAVILY_SEARCH_URL).respond(json={"results": [{"title": "t", "url": "https://example.com"}]})
+    response: Final = litellm.search(
+        query="litellm release notes", search_provider="tavily", api_key="test-tavily-key", search_depth="advanced"
+    )
+    assert json.loads(respx_mock.calls.last.request.content)["search_depth"] == "advanced"
+    assert response._hidden_params["response_cost"] == pytest.approx(0.007)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_search_mode_prices")
+async def test_async_linkup_deep_search_reports_the_deep_price(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(LINKUP_SEARCH_URL).respond(
+        json={"results": [{"type": "text", "name": "t", "url": "https://example.com", "content": "c"}]}
+    )
+    response: Final = await litellm.asearch(
+        query="litellm release notes", search_provider="linkup", api_key="test-linkup-key", depth="deep"
+    )
+    assert json.loads(respx_mock.calls.last.request.content)["depth"] == "deep"
+    assert response._hidden_params["response_cost"] == pytest.approx(0.011)
