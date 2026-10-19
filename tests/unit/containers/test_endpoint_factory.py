@@ -1,5 +1,6 @@
 import io
 import json
+from typing import Final
 
 import pytest
 from pydantic import ValidationError
@@ -68,7 +69,7 @@ class TestEndpointsConfig:
         assert "only-in-the-file" not in str(rejected.value)
 
     def test_a_packaged_json_object_is_returned_as_written(self, monkeypatch: pytest.MonkeyPatch):
-        document = {"endpoints": [{"name": "list_container_files"}], "schema_version": 2}
+        document: Final = {"endpoints": [{"name": "list_container_files"}], "schema_version": 2}
         monkeypatch.setattr(endpoint_factory, "open", lambda _path: io.StringIO(json.dumps(document)), raising=False)
 
         assert _load_endpoints_config() == document

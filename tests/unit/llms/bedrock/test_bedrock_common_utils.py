@@ -2137,7 +2137,7 @@ def test_bedrock_response_stream_shape_is_unavailable_when_botocore_describes_th
         patch("botocore.loaders.Loader.load_service_model", return_value=["only-in-the-description"]),
         patch.object(mod.verbose_logger, "warning") as warning,
     ):
-        shape = mod._load_bedrock_response_stream_shape()
+        shape: Final = mod._load_bedrock_response_stream_shape()
 
     assert shape is None
     (logged,) = warning.call_args_list
