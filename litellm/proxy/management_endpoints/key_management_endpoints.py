@@ -459,6 +459,8 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
     )
     metadata: Final = data.metadata or MappingProxyType({})
     folded_metadata: Final = {**metadata, **metadata_fields}
+    # The ui-session marker is mint-flow-only: /key/generate cannot stamp it (R1-L12).
+    folded_metadata.pop(UI_SESSION_METADATA_MARKER_KEY, None)
     columns: Final = handle_key_type(data, {**column_fields})
     expires: Final = (
         now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
@@ -918,6 +920,33 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
 _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS: Final = frozenset({"llm_api_routes", "info_routes"})
 
 
+_ALLOW_CHANGED_BY_METADATA_KEY: Final = "allow_litellm_changed_by_header"
+
+
+def _strip_non_admin_changed_by_metadata(
+    *,
+    data: KeyRequestBase,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Only proxy admins may enable caller-supplied audit attribution (R2-20).
+
+    The flag opts a key into honoring the ``litellm-changed-by`` header in
+    audit rows, so a self-granted flag lets any key holder forge the primary
+    audit attribution field. Silently stripped for non-admin writes.
+    """
+    metadata: Final = data.metadata
+    if not isinstance(metadata, dict):
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if metadata.get(_ALLOW_CHANGED_BY_METADATA_KEY) is not True:
+        return
+    metadata.pop(_ALLOW_CHANGED_BY_METADATA_KEY, None)
+    verbose_proxy_logger.info(
+        "Stripped allow_litellm_changed_by_header from key metadata: only proxy admins may enable caller-forwarded audit attribution."
+    )
+
+
 def _validate_caller_can_change_key_ownership(
     data: BaseModel | None,
     existing_key_row: LiteLLM_VerificationToken,
@@ -1300,8 +1329,22 @@ async def _common_key_generation_helper(
             detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
         )
 
+    _strip_non_admin_changed_by_metadata(data=data, user_api_key_dict=user_api_key_dict)
+
+    _reject_non_admin_budget_authority_metadata(
+        data=data,
+        existing_metadata=None,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     await _validate_end_user_budget_id_change(
         requested_budget_id=_requested_end_user_budget_id(data),
+        existing_budget_id=None,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    await _validate_budget_id_change(
+        requested_budget_id=data.budget_id,
         existing_budget_id=None,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
@@ -2538,7 +2581,11 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
-    casted_metadata: Final = cast(dict, non_default_values["metadata"])
+    # An explicit metadata=None means "clear this field"; the cast below holds
+    # the dict-shaped value only, so the clear-to-none path is handled at the
+    # tail via raw_metadata.
+    raw_metadata: Final[object] = non_default_values["metadata"]  # pyright: ignore[reportUnknownVariableType]  # key metadata is a db-shaped payload; the tail handles the explicit clear-to-none case
+    casted_metadata: Final = cast(dict, raw_metadata)
 
     # Reserved metadata fields are immutable once set. Preserve the existing value
     # when omitted, reject any explicit attempt to change it (including null).
@@ -2576,7 +2623,12 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
             "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - %s", e
         )
 
-    non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
+    # The ui-session marker is reserved for the minted dashboard sessions;
+    # update/regenerate cannot stamp it from caller data (R1-L12). An explicit
+    # metadata=None stays None (clear-to-none), so skip both here.
+    if raw_metadata is not None:
+        casted_metadata.pop(UI_SESSION_METADATA_MARKER_KEY, None)  # pyright: ignore[reportUnknownMemberType]  # the cast above intentionally keeps the db-metadata shape untyped
+        non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
     return non_default_values
 
 
@@ -3257,6 +3309,24 @@ def _requested_end_user_budget_id(data: KeyRequestBase) -> str | None:
     return get_key_end_user_budget_id(data.metadata) or ""
 
 
+async def _validate_budget_id_change(
+    requested_budget_id: str | None,
+    existing_budget_id: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+) -> None:
+    """A key's budget_id row supplies the key's effective limits (max_budget,
+    tpm/rpm, model_max_budget) from LiteLLM_BudgetTable, so only proxy admins
+    may change it. The delegation-ceiling check fires only when max_budget is
+    set explicitly, so an unvalidated budget_id bypasses it entirely (R1-H3).
+    Dangling ids stay a no-op, as upstream treats them."""
+    if requested_budget_id is None or requested_budget_id == (existing_budget_id or ""):
+        return
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        forbidden_detail: Final = {"error": "Only proxy admins can set budget_id on a key."}
+        raise HTTPException(status_code=403, detail=forbidden_detail)
+
+
 async def _validate_end_user_budget_id_change(
     requested_budget_id: str | None,
     existing_budget_id: str | None,
@@ -3276,6 +3346,71 @@ async def _validate_end_user_budget_id_change(
     if budget_row is None:
         missing_detail: Final = {"error": f"end_user_budget_id={requested_budget_id} does not match any budget."}
         raise HTTPException(status_code=400, detail=missing_detail)
+
+
+_TEMP_BUDGET_METADATA_KEYS: Final[frozenset[str]] = frozenset({"temp_budget_increase", "temp_budget_expiry"})
+
+
+def _key_request_changes_budget(
+    *,
+    data: KeyRequestBase,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> bool:
+    """Whether the request would move a key's budget enforcement.
+
+    max_budget, spend, budget_limits and soft_budget move the ceiling or the
+    recorded counter; budget_duration reshapes the window the ceiling resets
+    in. /key/update and /key/regenerate treat all of these as admin-only
+    changes for non-admin callers.
+    """
+    changed_max_budget: Final = data.max_budget is not None and data.max_budget != getattr(
+        existing_key_row, "max_budget", None
+    )
+    changed_budget_duration: Final = data.budget_duration is not None and data.budget_duration != getattr(
+        existing_key_row, "budget_duration", None
+    )
+    return (
+        changed_max_budget
+        or data.spend is not None
+        or changed_budget_duration
+        or "budget_limits" in data.model_fields_set
+        or "soft_budget" in data.model_fields_set
+    )
+
+
+def _reject_non_admin_budget_authority_metadata(
+    *,
+    data: KeyRequestBase,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Reject metadata that grants budget authority to a non-admin caller.
+
+    temp_budget_increase/temp_budget_expiry lift the effective max_budget at
+    auth time and a metadata-borne throttle_on_budget_exceeded flips a
+    hard-blocked over-budget key into throttled-continue. The equivalent typed
+    request fields are already admin-gated; without this check the same
+    values ride the free-form metadata dict past those gates.
+    """
+    incoming: Final = data.metadata if isinstance(data.metadata, Mapping) else {}  # pyright: ignore[reportUnknownVariableType]  # pydantic metadata fields arrive without a static type; reads stay gated below
+    existing: Final = existing_metadata if isinstance(existing_metadata, Mapping) else {}  # pyright: ignore[reportUnknownVariableType]  # row metadata is db-shaped; only membership and .get are read
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    sets_temp_budget: Final = any(key in incoming for key in _TEMP_BUDGET_METADATA_KEYS)
+    incoming_throttle: Final = incoming.get("throttle_on_budget_exceeded")  # pyright: ignore[reportUnknownMemberType]  # see above: untyped metadata payload
+    existing_throttle: Final = existing.get("throttle_on_budget_exceeded")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # see above: untyped metadata payload
+    escalates_throttle: Final = incoming_throttle is True and existing_throttle is not True
+    if not (sets_temp_budget or escalates_throttle):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                "Only proxy admins can set budget authority fields in key metadata "
+                "(temp_budget_increase, temp_budget_expiry, throttle_on_budget_exceeded)."
+            )
+        },
+    )
 
 
 _GENERAL_SETTINGS: Final = TypeAdapter(dict[str, object])
@@ -3342,6 +3477,8 @@ async def _validate_update_key_data(
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
     validate_budget_duration(data.budget_duration)
+
+    _strip_non_admin_changed_by_metadata(data=data, user_api_key_dict=user_api_key_dict)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
@@ -3430,12 +3567,7 @@ async def _validate_update_key_data(
     #   through the non-admin path would let a key owner / team member
     #   overwrite the live counter below real usage and silently weaken
     #   enforcement.
-    _is_budget_change: Final = (
-        (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
-        or data.spend is not None
-        or "budget_limits" in data.model_fields_set
-        or "soft_budget" in data.model_fields_set
-    )
+    _is_budget_change: Final = _key_request_changes_budget(data=data, existing_key_row=existing_key_row)
 
     _existing_metadata: Final = getattr(existing_key_row, "metadata", None)
     _existing_throttle: Final = (
@@ -3446,12 +3578,23 @@ async def _validate_update_key_data(
             status_code=403,
             detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
         )
+    _reject_non_admin_budget_authority_metadata(
+        data=data,
+        existing_metadata=_existing_metadata,  # pyright: ignore[reportUnknownArgumentType]  # row metadata is db-shaped; the callee only reads membership and .get
+        user_api_key_dict=user_api_key_dict,
+    )
 
     await _validate_end_user_budget_id_change(
         requested_budget_id=_requested_end_user_budget_id(data),
         existing_budget_id=get_key_end_user_budget_id(
             _existing_metadata if isinstance(_existing_metadata, dict) else None
         ),
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=checked_prisma_client,
+    )
+    await _validate_budget_id_change(
+        requested_budget_id=data.budget_id,
+        existing_budget_id=getattr(existing_key_row, "budget_id", None),
         user_api_key_dict=user_api_key_dict,
         prisma_client=checked_prisma_client,
     )
@@ -4812,9 +4955,13 @@ def _check_model_access_group(models: list[str] | None, llm_router: Router | Non
 _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
+UI_SESSION_METADATA_MARKER_KEY: Final = "ui_session_key"
+
+
 def metadata_json_with_limits(
     metadata: Mapping[str, object] | None,
     *,
+    allow_ui_session_marker: object = False,
     model_rpm_limit: Mapping[str, object] | None,
     model_tpm_limit: Mapping[str, object] | None,
     mcp_rpm_limit: Mapping[str, int] | None,
@@ -4840,6 +4987,11 @@ def metadata_json_with_limits(
     if metadata is None and not limits:
         return json.dumps(None)
     merged: Final = {**(metadata or _NO_METADATA), **dict(limits)}
+    # The ui-session marker is reserved for the minted dashboard sessions; a
+    # key minted outside those flows has it removed so a sentinel-named team
+    # row cannot forge the session credential shape (R1-L12).
+    if not allow_ui_session_marker:
+        merged.pop(UI_SESSION_METADATA_MARKER_KEY, None)
     return json.dumps(encrypt_callback_vars(merged))
 
 
@@ -4904,6 +5056,7 @@ async def generate_key_helper_fn(
     budget_limits: list | None = None,  # multiple concurrent budget windows
     *,
     llm_router: Router | None = None,
+    allow_ui_session_marker: object = False,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -4957,6 +5110,7 @@ async def generate_key_helper_fn(
 
     metadata_json: Final = metadata_json_with_limits(
         metadata,
+        allow_ui_session_marker=allow_ui_session_marker,
         model_rpm_limit=model_rpm_limit,
         model_tpm_limit=model_tpm_limit,
         mcp_rpm_limit=mcp_rpm_limit,
@@ -5876,6 +6030,26 @@ async def _execute_virtual_key_regeneration(
         user_api_key_dict=user_api_key_dict,
     )
 
+    if data is not None:
+        _strip_non_admin_changed_by_metadata(data=data, user_api_key_dict=user_api_key_dict)
+        _regenerate_is_proxy_admin: Final = (
+            user_api_key_dict.user_role is not None
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        if not _regenerate_is_proxy_admin and _key_request_changes_budget(data=data, existing_key_row=key_in_db):
+            await _check_key_admin_access(
+                user_api_key_dict=user_api_key_dict,
+                hashed_token=hashed_api_key,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                route="/key/regenerate (max_budget/spend)",
+            )
+        _reject_non_admin_budget_authority_metadata(
+            data=data,
+            existing_metadata=getattr(key_in_db, "metadata", None),
+            user_api_key_dict=user_api_key_dict,
+        )
+
     # Apply the same membership rule used on /key/update: when the caller
     # asks to point the regenerated key at a different organization_id,
     # require they are a member of (or proxy admin over) the target org.
@@ -5911,6 +6085,12 @@ async def _execute_virtual_key_regeneration(
             existing_budget_id=get_key_end_user_budget_id(
                 _existing_key_metadata if isinstance(_existing_key_metadata, dict) else None
             ),
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+        await _validate_budget_id_change(
+            requested_budget_id=data.budget_id,
+            existing_budget_id=getattr(key_in_db, "budget_id", None),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
@@ -7975,7 +8155,7 @@ async def _can_user_query_key_info(
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
         or user_api_key_dict.api_key == key
-        or key_info.user_id == user_api_key_dict.user_id
+        or (key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id)
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,
             existing_key_row=key_info,
