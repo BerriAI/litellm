@@ -491,6 +491,12 @@ def image_generation(
         ):
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+            # `max_retries` is kept out of `non_default_params` (it is in
+            # `openai_params`), so forward it explicitly: the handler reads it
+            # from `optional_params` and otherwise defaults to 2 retries.
+            max_retries: Final = kwargs.get("max_retries", None)
+            if max_retries is not None:
+                optional_params["max_retries"] = max_retries
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
