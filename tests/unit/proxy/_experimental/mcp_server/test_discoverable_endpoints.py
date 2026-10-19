@@ -6745,6 +6745,80 @@ async def test_interactive_bridge_authorize_without_session_redirects_to_login()
 
 
 @pytest.mark.asyncio
+async def test_interactive_bridge_authorize_with_revoked_session_redirects_to_login():
+    """When a UI session cookie's embedded key is revoked (logged out or deleted from DB),
+    the gateway must reject the stale session and redirect to litellm login (#46917)."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize_with_server
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate, client_id="admin-client", registration_url=None)
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
+            return_value="revoked-user",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._session_key_is_live",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        response = await authorize_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            client_id="ignored",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="s",
+            code_challenge="chal",
+            code_challenge_method="S256",
+        )
+    assert "/sso/key/generate" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_dcr_authorize_with_revoked_session_redirects_to_login():
+    """When a UI session cookie's embedded key is revoked in the DCR aggregate authorize flow,
+    the gateway must treat the user as unauthenticated and redirect to login (#46917)."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+    mock_request.cookies = {"token": "revoked_jwt"}
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.is_gateway_dcr_client_id",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
+            return_value="revoked-user",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._session_key_is_live",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.gateway_dcr_flow.open_gateway_dcr_client",
+            return_value=MagicMock(redirect_uris=["http://127.0.0.1:60108/callback"]),
+        ),
+    ):
+        response = await authorize(
+            request=mock_request,
+            client_id="dcr_client_id",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="client-state-1",
+            code_challenge="a" * 43,
+            code_challenge_method="S256",
+            response_type="code",
+        )
+    assert response.status_code == 303
+    assert "/sso/key/generate" in response.headers["location"]
+
+
+@pytest.mark.asyncio
 async def test_interactive_bridge_callback_seals_user_into_gateway_code():
     """When the OAuth state carries the captured SSO user, the callback forwards a gateway
     authorization code (sealing the user and upstream code) to the client instead of the raw upstream
