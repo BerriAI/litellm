@@ -330,6 +330,54 @@ async def test_aresponses_sends_the_declared_reasoning_effort_level_rounded_up(
     ] == [("kimi-1", "kimi-k3", "low")]
 
 
+def _effort_levels_disabled_by(entry: dict) -> tuple[str, ...]:
+    return tuple(level for level in ("none", "minimal", "low") if entry.get(f"supports_{level}_reasoning_effort") is False)
+
+
+def _gpt_5_row_disabling_a_level(provider: str) -> tuple[str, str]:
+    return next(
+        (key.removeprefix(f"{provider}/"), _effort_levels_disabled_by(entry)[0])
+        for key, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == provider and "gpt-5" in key and _effort_levels_disabled_by(entry)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider, api_base",
+    [("openai", "https://gpt5-gateway.example.test/v1"), ("azure", "https://gpt5.openai.azure.com")],
+)
+async def test_aresponses_sends_a_declared_level_the_model_map_disables(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    provider: str,
+    api_base: str,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model, level = _gpt_5_row_disabling_a_level(provider)
+    upstream: Final = respx_mock.post(url__regex=rf"{api_base}/.*responses.*").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_declared_disabled", model))
+    )
+    request: Final = {
+        "model": f"{provider}/{model}",
+        "api_base": api_base,
+        "api_version": "2025-04-01-preview",
+        "api_key": "fake-api-key",
+        "input": "hi",
+        "reasoning": {"effort": level},
+    }
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await litellm.aresponses(**request, model_info={"id": "undeclared"})
+    await litellm.aresponses(**request, model_info={"id": "declared", "reasoning_effort_levels": [level, "high"]})
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read())["reasoning"] == {"effort": level}
+
+
 @pytest.mark.asyncio
 async def test_aresponses_forwards_prompt_managed_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter

@@ -7,6 +7,7 @@ _apply_process_defaults()
 ### INIT VARIABLES #########################
 import threading
 import os
+import datetime
 
 from collections.abc import Mapping, Sequence
 from typing import (
@@ -62,7 +63,6 @@ from litellm.constants import (
     modelscope_models,
     empower_models,
     together_ai_models,
-    baseten_models,
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -625,6 +625,7 @@ bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
 fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
+baseten_models: Set[str] = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
 perplexity_models: Set = set()
@@ -743,6 +744,16 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
+def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
+    deprecation_date: Final = value.get("deprecation_date")
+    if not isinstance(deprecation_date, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
+    except ValueError:
+        return False
+
+
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     for key, value in tuple(model_cost_map.items()):
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
@@ -843,6 +854,11 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
+        elif value.get("litellm_provider") == "baseten":
+            if _is_past_deprecation_date(value):
+                baseten_models.discard(key)
+            else:
+                baseten_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key:

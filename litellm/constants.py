@@ -40,6 +40,14 @@ class ServerStreamingClassification(str, Enum):
 SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
+KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS", 5.0
+)
+KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS", 300.0
+)
+KUBERNETES_POD_DISCOVERY_DNS_TIMEOUT_SECONDS: Final = 2.0
+KUBERNETES_POD_ROUTING_KEY: Final = "kubernetes_pod_routing"
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = get_env_int("ROUTER_MAX_FALLBACKS", 5)
@@ -1255,14 +1263,6 @@ together_ai_models: Final[set] = set(
 )
 # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-
-baseten_models: Final[set] = set(
-    [
-        "qvv0xeq",
-        "q841o8w",
-        "31dxrj3",
-    ]
-)  # FALCON 7B  # WizardLM  # Mosaic ML
 
 featherless_ai_models: Final[set] = set(
     [

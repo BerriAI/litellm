@@ -51,6 +51,7 @@ from litellm.responses.mcp.round_billing import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.reasoning_effort_capability import (
+    deployment_reasoning_effort_levels,
     model_group_from_metadata,
     resolve_deployment_reasoning_effort,
 )
@@ -1646,6 +1647,7 @@ def responses(
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=allowed_openai_params,
             drop_params=normalize_drop_params(request_drop_params),
+            declared_reasoning_efforts=deployment_reasoning_effort_levels(deployment_model_info) or (),
         )
 
         litellm_logging_obj.update_from_kwargs(

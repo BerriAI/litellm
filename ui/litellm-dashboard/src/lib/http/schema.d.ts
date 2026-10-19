@@ -10187,6 +10187,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model/{model_id}/kubernetes_pods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Kubernetes Pods */
+        get: operations["get_kubernetes_pods_model__model_id__kubernetes_pods_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/{model_id}/update": {
         parameters: {
             query?: never;
@@ -30196,6 +30213,11 @@ export interface components {
              * @default false
              */
             search_tool_deny_by_default: boolean;
+            /**
+             * Self Serve Budget Policy
+             * @description Lets a non-admin change max_budget or budget_limits on a key they created and still own via /key/update. 'disabled' (default) requires an admin for any budget change. 'lower_only' lets the owner add or lower limits. 'ceiling' also lets the owner raise or remove limits when they could create that key with the new budget via /key/generate.
+             */
+            self_serve_budget_policy?: ("disabled" | "lower_only" | "ceiling") | null;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
@@ -33764,6 +33786,21 @@ export interface components {
              */
             tier: string;
         };
+        /** KubernetesPodsResponse */
+        KubernetesPodsResponse: {
+            /** Error */
+            error: string | null;
+            /** Model Id */
+            model_id: string;
+            /** Pod Count */
+            pod_count: number;
+            /** Pod Ips */
+            pod_ips: string[];
+            /** Port */
+            port: number | null;
+            /** Service Host */
+            service_host: string;
+        };
         /** LLMV2Calibration */
         LLMV2Calibration: {
             capable: components["schemas"]["LLMV2ProbabilityCalibration"];
@@ -35387,6 +35424,10 @@ export interface components {
             } | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
+            /** Stream Timeout By Service Tier */
+            stream_timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -35399,6 +35440,10 @@ export interface components {
             }[] | null;
             /** Timeout */
             timeout?: number | string | null;
+            /** Timeout By Service Tier */
+            timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Token Exchange Audience */
             token_exchange_audience?: string | null;
             /** Token Exchange Endpoint */
@@ -50629,6 +50674,10 @@ export interface components {
             } | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
+            /** Stream Timeout By Service Tier */
+            stream_timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -50641,6 +50690,10 @@ export interface components {
             }[] | null;
             /** Timeout */
             timeout?: number | string | null;
+            /** Timeout By Service Tier */
+            timeout_by_service_tier?: {
+                [key: string]: number;
+            } | null;
             /** Token Exchange Audience */
             token_exchange_audience?: string | null;
             /** Token Exchange Endpoint */
@@ -65025,6 +65078,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_kubernetes_pods_model__model_id__kubernetes_pods_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPodsResponse"];
                 };
             };
             /** @description Validation Error */

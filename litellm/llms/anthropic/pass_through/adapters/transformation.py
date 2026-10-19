@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.llms.anthropic.pass_through.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
@@ -1344,7 +1345,8 @@ class LiteLLMAnthropicMessagesAdapter:
         block: Final = cast(Mapping[str, object], item)  # cast-ok: untrusted client payload
         match block.get("type"):
             case "text":
-                return ChatCompletionTextObject(type="text", text=str(block.get("text") or ""))
+                text: Final = tool_result_text_part(block)
+                return None if text is None else ChatCompletionTextObject(type="text", text=text)
             case "image" | "document":
                 return self._tool_result_image_part(block.get("source"))
             case "tool_reference":

@@ -998,10 +998,6 @@ def _ocr_document_summary(document: object) -> str:
 
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 
-_DECISION_CALL_TYPES: Final[frozenset[str]] = frozenset(
-    (CallTypes.decisions.value, CallTypes.adecisions.value, CallTypes.systemone.value, CallTypes.asystemone.value)
-)
-
 
 def function_setup(
     original_function: str,
@@ -1249,9 +1245,6 @@ def function_setup(
                 if isinstance(search_query, list)
                 else search_query
             )
-        elif call_type in _DECISION_CALL_TYPES:
-            decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state") or kwargs.get("input") or ""
-            messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state, default=str)
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
             messages = args[1] if len(args) > 1 else kwargs.get("prompt")
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
@@ -9731,6 +9724,8 @@ class ProviderConfigManager:
     ) -> BaseLLMModelInfo | None:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
+        elif LlmProviders.BASETEN == provider:
+            return litellm.BasetenConfig()
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
         elif LlmProviders.GEMINI == provider:
@@ -10322,6 +10317,7 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
+        from litellm.llms.deepseek.search.transformation import DeepSeekSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
         from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
@@ -10361,6 +10357,7 @@ class ProviderConfigManager:
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
+            SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
