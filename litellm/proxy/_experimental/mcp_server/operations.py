@@ -3041,6 +3041,19 @@ async def _execute_handle_list_tools(
         return ListToolsResult(tools=[])
 
 
+async def _discover_tools_listing(
+    context: OperationContext, host_progress_callback: ProgressCallback | None
+) -> ListToolsResult:
+    from litellm.proxy._experimental.mcp_server.catalog import ToolListingFailedOutright
+
+    try:
+        return await _execute_handle_list_tools(
+            context, PaginatedRequestParams(), host_progress_callback, log_list_tools_to_spendlogs=False
+        )
+    except ToolListingFailedOutright:
+        return ListToolsResult(tools=[])
+
+
 async def _execute_mcp_server_tool_call(
     context: OperationContext, params: CallToolRequestParams, host_progress_callback: ProgressCallback | None = None
 ) -> CallToolResult | InputRequiredResult:
@@ -3517,14 +3530,7 @@ class GatewayOperations:
                 )
                 memo_token: Final = _mcp_server_admission_memo.set({})
                 tasks: Final = (
-                    asyncio.create_task(
-                        _execute_handle_list_tools(
-                            context,
-                            PaginatedRequestParams(),
-                            self._host_progress_callback,
-                            log_list_tools_to_spendlogs=False,
-                        )
-                    ),
+                    asyncio.create_task(_discover_tools_listing(context, self._host_progress_callback)),
                     *(asyncio.create_task(self.execute(listing, context)) for listing in listings),
                 )
                 try:
