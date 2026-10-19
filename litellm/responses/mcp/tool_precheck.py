@@ -1,10 +1,3 @@
-"""Decide whether request tools name the LiteLLM MCP gateway without importing the gateway handler.
-
-``litellm_proxy_mcp_handler`` sits on the proxy layer and needs the optional proxy extras. The SDK entry
-points ask this module first, so a base install never imports the handler for tools that do not name the
-gateway: function tools, provider-hosted tools, or an MCP server the provider calls itself.
-"""
-
 import importlib
 import re
 from collections.abc import Iterable
@@ -44,9 +37,6 @@ def _gateway_registry_loads() -> bool:
 
 
 def may_name_litellm_mcp_gateway(tools: Iterable[object] | None) -> bool:
-    """True when a tool names this gateway: server_url "litellm_proxy...", or an http(s) URL ending in
-    /mcp/<name> while this process can load the gateway's server registry. The handler's ``split_mcp_tools``
-    then settles which of the latter the gateway actually serves, and without the registry it serves none."""
     items: Final = tuple(tools or ())
     if any(map(names_gateway_explicitly, items)):
         return True

@@ -1,9 +1,3 @@
-"""The SDK entry points stay off the MCP gateway handler unless a tool can name the gateway.
-
-The handler module sits on the proxy layer and needs the optional ``mcp`` package. A base SDK install has
-neither, so ordinary tools must never make ``completion()`` or ``responses()`` import it.
-"""
-
 import json
 import sys
 from collections import deque
@@ -90,7 +84,6 @@ RESPONSES_PAYLOAD: Final = {
 
 @pytest.fixture
 def gateway_handler_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Importing any gateway handler module raises, as it does on an install without proxy extras."""
     for module_name in GATEWAY_HANDLER_MODULES:
         monkeypatch.setitem(sys.modules, module_name, None)
 
@@ -119,7 +112,6 @@ class _FailingImport(MetaPathFinder):
 def gateway_registry_unavailable(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, gateway_handler_unavailable: None
 ) -> None:
-    """The gateway's server registry fails to import the ways it does on installs without the proxy extras."""
     monkeypatch.delitem(sys.modules, GATEWAY_REGISTRY_MODULE, raising=False)
     monkeypatch.setattr(sys, "meta_path", [_FailingImport(GATEWAY_REGISTRY_MODULE, request.param), *sys.meta_path])
 
