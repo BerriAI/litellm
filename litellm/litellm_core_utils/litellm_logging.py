@@ -6371,14 +6371,24 @@ class StandardLoggingPayloadSetup:
             completion_response=init_response_obj,
             base_model=base_model,
             custom_pricing=custom_pricing,
-            router_model_id=router_model_id,
+        )
+        pricing_model_name: Final = (
+            select_model_name_for_cost_calc(
+                model=base_model if custom_pricing else None,
+                completion_response=init_response_obj,
+                base_model=base_model,
+                custom_pricing=custom_pricing,
+                router_model_id=router_model_id,
+            )
+            if router_model_id is not None
+            else model_cost_name
         )
         if model_cost_name is None:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
             try:
                 _model_cost_information: Final = litellm.get_model_info(
-                    model=model_cost_name,
+                    model=pricing_model_name or model_cost_name,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
                 )
