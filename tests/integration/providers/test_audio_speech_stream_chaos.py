@@ -30,7 +30,7 @@ from integration._support.process import (
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(4 * graceful_stop_seconds() + 300)
+pytestmark: Final = [pytest.mark.timeout(4 * graceful_stop_seconds() + 300), pytest.mark.shares_worker_state]
 
 _MODEL: Final = "chaos-speech"
 _SPEECH: Final = "/v1/audio/speech"
