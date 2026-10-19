@@ -4197,7 +4197,9 @@ async def test_headroom_latest_turn_patches_native_tool_result_with_metadata(
     ]})
     result: Final = await OpenAIResponsesHandler().process_input_messages({"input": items}, callback)
     assert route.called
-    assert result["input"] == [{**items[0], "content": "Summarize data"}, items[1], {**items[2], "output": "short data"}]
+    assert result["input"] == [
+        {**items[0], "content": "Summarize data"}, items[1], {**items[2], "output": "short data"}
+    ]
 
 
 @pytest.mark.asyncio

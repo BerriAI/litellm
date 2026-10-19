@@ -3112,7 +3112,9 @@ async def test_configured_latest_turn_compression_preserves_tool_linkage(
         ]
         assert json.loads(route.calls.last.request.content)["messages"] == [messages[0], messages[2]]
     finally:
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, callback, require_self=False)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, callback, require_self=False
+        )
 
 
 @pytest.mark.asyncio
@@ -3154,7 +3156,9 @@ async def test_latest_turn_preserves_cached_prefix_and_retrieval(
         route: Final = router.post(FAKE_API_BASE + "/v1/compress").respond(
             200, json={"messages": [{"role": "user", "content": "Short instruction"}]}
         )
-        result: Final = await callback.apply_guardrail(GenericGuardrailAPIInputs(structured_messages=messages), {}, "request")
+        result: Final = await callback.apply_guardrail(
+            GenericGuardrailAPIInputs(structured_messages=messages), {}, "request"
+        )
         assert route.called is enabled
         assert result["structured_messages"] == [
             *messages[:-1], {**messages[-1], "content": "Short instruction"} if enabled else messages[-1],
@@ -3174,7 +3178,9 @@ async def test_latest_turn_retains_each_text_parts_metadata(
     route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(
         200, json={"messages": [{"role": "user", "content": "short"}]}
     )
-    result: Final = await callback.apply_guardrail(GenericGuardrailAPIInputs(structured_messages=messages), {}, "request")
+    result: Final = await callback.apply_guardrail(
+        GenericGuardrailAPIInputs(structured_messages=messages), {}, "request"
+    )
     assert route.called
     assert result["structured_messages"] == [{"role": "user", "content": [
         {"type": "text", "text": "short", "source": "first"},
@@ -3183,7 +3189,9 @@ async def test_latest_turn_retains_each_text_parts_metadata(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("content", [[], ["invalid"], [{"type": "image_url", "image_url": {"url": "https://example.com/image"}}]])
+@pytest.mark.parametrize(
+    "content", [[], ["invalid"], [{"type": "image_url", "image_url": {"url": "https://example.com/image"}}]]
+)
 async def test_latest_turn_does_not_replace_non_text_content(
     content: list[object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3208,6 +3216,8 @@ async def test_latest_turn_unchanged_text_retains_original_metadata(
     route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(
         200, json={"messages": [{"role": "user", "content": "Already short"}]}
     )
-    result: Final = await callback.apply_guardrail(GenericGuardrailAPIInputs(structured_messages=original), {}, "request")
+    result: Final = await callback.apply_guardrail(
+        GenericGuardrailAPIInputs(structured_messages=original), {}, "request"
+    )
     assert route.called
     assert result["structured_messages"] == original
