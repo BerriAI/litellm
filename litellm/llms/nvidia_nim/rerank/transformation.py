@@ -210,7 +210,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Nvidia NIM rerank")
 
-        top_n: object = optional_rerank_params.get("top_n")
+        top_n: Final[object] = optional_rerank_params.get("top_n")
         if top_n is not None:
             if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
                 raise ValueError(f"top_n must be a positive integer, got: {top_n!r}")
