@@ -19766,13 +19766,23 @@ def _owner_route_update_status(existing: list[str], incoming: list[str]) -> int 
         (["llm_api_routes"], [], None),
         (["llm_api_routes", "/key/spend/report"], [], 403),
         (["llm_api_routes", "/key/spend/report"], ["llm_api_routes"], 403),
-        (["llm_api_routes", "/key/spend/report"], ["/key/spend/report", "llm_api_routes"], None),
+        (["llm_api_routes", "/key/spend/report"], ["llm_api_routes", "/key/spend/report"], None),
+        (["llm_api_routes", "/key/spend/report"], ["/key/spend/report", "llm_api_routes"], 403),
+        (
+            ["llm_api_routes", "/key/spend/report"],
+            ["llm_api_routes", "/key/spend/report", "/key/spend/report"],
+            403,
+        ),
+        (["/global/spend/report"], ["/global/spend/report"], None),
     ],
     ids=[
         "preset_to_full_access",
         "default_list_to_full_access",
         "default_list_to_ai_apis",
         "default_list_sent_back_unchanged",
+        "default_list_sent_back_reordered",
+        "default_list_sent_back_with_a_duplicate",
+        "admin_set_list_sent_back_unchanged",
     ],
 )
 def test_owner_cannot_change_the_routes_a_key_got_from_default_key_generate_params(
@@ -19785,6 +19795,27 @@ def test_owner_cannot_change_the_routes_a_key_got_from_default_key_generate_para
     )
 
     assert _owner_route_update_status(existing, incoming) == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_data", "expected_routes"),
+    [(GenerateKeyRequest(), []), (GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API), ["llm_api_routes"])],
+    ids=["no_key_type", "ai_apis"],
+)
+async def test_default_key_generate_params_allowed_routes_with_a_non_string_entry_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, request_data: GenerateKeyRequest, expected_routes: list[str]
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", 123]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(request_data, mock_insert_data)
+
+    assert (key_row.get("allowed_routes") or []) == expected_routes
 
 
 @pytest.mark.asyncio
@@ -19804,6 +19835,18 @@ async def test_default_key_generate_params_allowed_routes_empty_list_treated_as_
     )
 
     assert key_row["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_ignores_a_string_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"allowed_routes": "llm_api_routes"})
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(GenerateKeyRequest(), mock_insert_data)
+
+    assert not key_row.get("allowed_routes")
 
 
 @pytest.mark.asyncio

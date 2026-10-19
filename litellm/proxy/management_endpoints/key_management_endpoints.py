@@ -939,12 +939,16 @@ def _creates_team_service_account(request: GenerateKeyRequest) -> bool:
     )
 
 
-def _configured_default_allowed_routes() -> tuple[object, ...] | None:
+def _configured_default_allowed_routes() -> tuple[str, ...] | None:
     default_routes: Final[object] = (litellm.default_key_generate_params or {}).get("allowed_routes")
-    return tuple(default_routes) if isinstance(default_routes, list) and default_routes else None
+    if not isinstance(default_routes, list) or not default_routes:
+        return None
+    routes: Final[tuple[object, ...]] = tuple(default_routes)
+    string_routes: Final = tuple(route for route in routes if isinstance(route, str))
+    return string_routes if len(string_routes) == len(routes) else None
 
 
-def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[object, ...] | None:
+def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[str, ...] | None:
     configured_routes: Final = _configured_default_allowed_routes()
     if configured_routes is None or _creates_team_service_account(request):
         return None
@@ -1077,9 +1081,7 @@ def _enforce_allowed_routes_update_permission(
     existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    if data.allowed_routes is not None and frozenset(data.allowed_routes) == frozenset(
-        existing_key_row.allowed_routes or ()
-    ):
+    if data.allowed_routes is not None and list(data.allowed_routes) == list(existing_key_row.allowed_routes or ()):
         return
     if _is_safe_preset_route_transition(
         incoming_allowed_routes=data.allowed_routes,
