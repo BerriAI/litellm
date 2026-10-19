@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="800" viewBox="0 0 980 800" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="800" fill="#ffffff"/>
+  <text x="20" y="30" font-size="17" font-weight="bold" fill="#111">POST /v1/chat/completions to a gemini/ or vertex_ai/ Gemini deployment</text>
+
+  <!-- client -->
+  <rect x="20" y="60" width="150" height="56" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="95" y="84" text-anchor="middle" fill="#111" font-weight="bold">Client</text>
+  <text x="95" y="102" text-anchor="middle" fill="#333">OpenAI SDK body</text>
+
+  <!-- gateway handle -->
+  <rect x="220" y="50" width="330" height="94" rx="6" fill="#f5f5f5" stroke="#666"/>
+  <text x="385" y="72" text-anchor="middle" fill="#111" font-weight="bold">gateway-inference chat_completions</text>
+  <text x="385" y="92" text-anchor="middle" fill="#333">auth, hooks admit, route deployment</text>
+  <text x="385" y="110" text-anchor="middle" fill="#333">os.environ/ refs resolved via the secret source,</text>
+  <text x="385" y="128" text-anchor="middle" fill="#333">deployment vertex_* params added to the call</text>
+  <line x1="170" y1="88" x2="218" y2="88" stroke="#333" marker-end="url(#a)"/>
+
+  <rect x="590" y="50" width="370" height="94" rx="6" fill="#fff8e6" stroke="#b8860b"/>
+  <text x="775" y="72" text-anchor="middle" fill="#111" font-weight="bold">inference-chat chat_completions_provider</text>
+  <text x="775" y="92" text-anchor="middle" fill="#333">gemini: GoogleAiStudioGeminiConfig</text>
+  <text x="775" y="110" text-anchor="middle" fill="#333">vertex_ai + Gemini model: VertexGeminiConfig</text>
+  <text x="775" y="128" text-anchor="middle" fill="#555">Claude, partner, Gemma on Vertex: still refused</text>
+  <line x1="550" y1="97" x2="588" y2="97" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- shared request build -->
+  <rect x="20" y="176" width="560" height="236" rx="6" fill="#eef7ee" stroke="#3c8d3c"/>
+  <text x="300" y="198" text-anchor="middle" fill="#111" font-weight="bold">llms vertex_ai/gemini build_request (both surfaces)</text>
+  <text x="36" y="222" fill="#333">1. sort_params: supported OpenAI params per surface and model,</text>
+  <text x="54" y="240" fill="#333">unsupported refused (400) or dropped with drop_params</text>
+  <text x="36" y="260" fill="#333">2. map_openai_params: generationConfig, tools, toolConfig,</text>
+  <text x="54" y="278" fill="#333">thinkingConfig, responseSchema, speechConfig, safety</text>
+  <text x="36" y="298" fill="#333">3. messages to contents: system_instruction (cost map),</text>
+  <text x="54" y="316" fill="#333">images, files, audio, function_call / function_response,</text>
+  <text x="54" y="334" fill="#333">thought signatures back on calls</text>
+  <text x="36" y="354" fill="#333">4. Gemini 3: a dummy signature on a call that lost its own</text>
+  <text x="36" y="378" fill="#555">refused (501): cache_control, legacy functions, response_schema</text>
+  <text x="36" y="396" fill="#555">without support, remote media in a tool result</text>
+  <line x1="300" y1="144" x2="300" y2="174" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- urls and auth -->
+  <rect x="610" y="176" width="350" height="236" rx="6" fill="#ffffff" stroke="#4a6fa5"/>
+  <text x="785" y="198" text-anchor="middle" fill="#111" font-weight="bold">URL and credential</text>
+  <text x="626" y="222" fill="#111" font-weight="bold">AI Studio</text>
+  <text x="626" y="240" fill="#333">{v1beta|v1alpha}/models/{m}:generateContent</text>
+  <text x="626" y="258" fill="#333">api_base: {api_base}/models/{m}:generateContent</text>
+  <text x="626" y="276" fill="#333">x-goog-api-key: api_key, GOOGLE_API_KEY,</text>
+  <text x="644" y="294" fill="#333">GEMINI_API_KEY, PALM_API_KEY</text>
+  <text x="626" y="320" fill="#111" font-weight="bold">Vertex AI</text>
+  <text x="626" y="338" fill="#333">{region}-aiplatform/v1/projects/{p}/locations/</text>
+  <text x="644" y="356" fill="#333">{l}/publishers/google/models/{m}:generateContent</text>
+  <text x="626" y="374" fill="#333">Bearer: forwarded, or a Google access token</text>
+  <text x="644" y="392" fill="#333">from vertex_credentials, env or ADC</text>
+  <line x1="580" y1="294" x2="608" y2="294" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- upstream -->
+  <rect x="610" y="444" width="350" height="96" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="785" y="468" text-anchor="middle" fill="#111" font-weight="bold">Gemini</text>
+  <text x="785" y="488" text-anchor="middle" fill="#333">generateContent: application/json</text>
+  <text x="785" y="506" text-anchor="middle" fill="#333">stream: :streamGenerateContent?alt=sse</text>
+  <text x="785" y="524" text-anchor="middle" fill="#555">data: frames, no [DONE]</text>
+  <line x1="785" y1="412" x2="785" y2="442" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- response -->
+  <rect x="20" y="444" width="560" height="160" rx="6" fill="#eef7ee" stroke="#3c8d3c"/>
+  <text x="300" y="466" text-anchor="middle" fill="#111" font-weight="bold">response and stream (transform_generate_content_response, handler)</text>
+  <text x="36" y="490" fill="#333">text, thought parts to reasoning_content and thinking_blocks</text>
+  <text x="36" y="510" fill="#333">functionCall to tool_calls, signature kept in the id</text>
+  <text x="36" y="530" fill="#333">groundingMetadata to annotations and vertex_ai_* metadata</text>
+  <text x="36" y="550" fill="#333">finishReason mapped, tool calls make it tool_calls</text>
+  <text x="36" y="570" fill="#333">blocked prompt or flagged candidate: content_filter</text>
+  <text x="36" y="590" fill="#333">stream error event: its code and message end the stream</text>
+  <line x1="608" y1="492" x2="580" y2="492" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- bottom boxes -->
+  <rect x="20" y="636" width="440" height="144" rx="6" fill="#ffffff" stroke="#b8860b"/>
+  <text x="240" y="658" text-anchor="middle" fill="#111" font-weight="bold">usage and cost (gateway-inference Finish)</text>
+  <text x="36" y="682" fill="#333">prompt_tokens: promptTokenCount (+ tool use)</text>
+  <text x="36" y="702" fill="#333">completion_tokens: candidates + thoughts when</text>
+  <text x="54" y="720" fill="#333">the total does not already include them</text>
+  <text x="36" y="740" fill="#333">cached_tokens: cachedContentTokenCount</text>
+  <text x="36" y="760" fill="#555">config prices win, then the cost map entry</text>
+
+  <rect x="500" y="636" width="460" height="144" rx="6" fill="#ffffff" stroke="#3c8d3c"/>
+  <text x="730" y="658" text-anchor="middle" fill="#111" font-weight="bold">gateway startup (hooks::install)</text>
+  <text x="516" y="682" fill="#333">a gemini or vertex_ai deployment loads the cost map</text>
+  <text x="516" y="702" fill="#333">and installs it as ModelInfo, which answers</text>
+  <text x="516" y="722" fill="#333">supports_system_messages, supports_reasoning,</text>
+  <text x="516" y="742" fill="#333">supports_response_schema for gemini/{m} or {m}</text>
+  <line x1="240" y1="604" x2="240" y2="634" stroke="#333" marker-end="url(#a)"/>
+</svg>

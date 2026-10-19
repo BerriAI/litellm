@@ -27,6 +27,9 @@ pub enum LlmProviders {
     Deepseek,
     #[strum(serialize = "edenai")]
     Edenai,
+    /// Google AI Studio (`gemini/<model>`), the Gemini API addressed with an API key.
+    #[strum(serialize = "gemini")]
+    Gemini,
     #[strum(serialize = "minimax")]
     Minimax,
     #[strum(serialize = "mistral")]

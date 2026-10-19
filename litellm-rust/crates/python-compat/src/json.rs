@@ -13,7 +13,14 @@ use crate::{Error, Value, repr::float_repr};
 /// `json.dumps(value)`.
 pub fn dumps(value: &Value) -> Result<String, Error> {
     let mut out = String::new();
-    write_value(&mut out, value)?;
+    write_value(&mut out, value, true)?;
+    Ok(out)
+}
+
+/// `json.dumps(value, ensure_ascii=False)`: text outside ASCII is written as is.
+pub fn dumps_unicode(value: &Value) -> Result<String, Error> {
+    let mut out = String::new();
+    write_value(&mut out, value, false)?;
     Ok(out)
 }
 
@@ -79,7 +86,7 @@ pub fn to_json(value: &Value) -> Result<serde_json::Value, Error> {
     })
 }
 
-fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
+fn write_value(out: &mut String, value: &Value, ascii: bool) -> Result<(), Error> {
     match value {
         Value::None => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
@@ -88,14 +95,14 @@ fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
             let _ = write!(out, "{value}");
         }
         Value::Float(value) => out.push_str(&float_text(*value)),
-        Value::Str(text) => write_string(out, text),
+        Value::Str(text) => write_string(out, text, ascii),
         Value::List(values) | Value::Tuple(values) => {
             out.push('[');
             for (index, value) in values.iter().enumerate() {
                 if index > 0 {
                     out.push_str(", ");
                 }
-                write_value(out, value)?;
+                write_value(out, value, ascii)?;
             }
             out.push(']');
         }
@@ -105,9 +112,9 @@ fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
                 if index > 0 {
                     out.push_str(", ");
                 }
-                write_string(out, &json_key(key)?);
+                write_string(out, &json_key(key)?, ascii);
                 out.push_str(": ");
-                write_value(out, value)?;
+                write_value(out, value, ascii)?;
             }
             out.push('}');
         }
@@ -143,8 +150,9 @@ fn json_key(key: &Value) -> Result<String, Error> {
 }
 
 /// `py_encode_basestring_ascii`: escape `"`, `\`, control characters, and everything outside
-/// printable ASCII as `\uXXXX`, with surrogate pairs above the BMP.
-fn write_string(out: &mut String, text: &str) {
+/// printable ASCII as `\uXXXX`, with surrogate pairs above the BMP. Without `ascii`,
+/// `py_encode_basestring`: only `"`, `\` and control characters are escaped.
+fn write_string(out: &mut String, text: &str, ascii: bool) {
     out.push('"');
     for ch in text.chars() {
         match ch {
@@ -156,6 +164,7 @@ fn write_string(out: &mut String, text: &str) {
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
             ' '..='~' => out.push(ch),
+            ch if !ascii && ch >= ' ' => out.push(ch),
             ch => {
                 let mut units = [0u16; 2];
                 for unit in ch.encode_utf16(&mut units) {
@@ -165,4 +174,23 @@ fn write_string(out: &mut String, text: &str) {
         }
     }
     out.push('"');
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::ascii(true, r#"{"city": "M\u00fcnchen\n"}"#)]
+    #[case::unicode(false, "{\"city\": \"München\\n\"}")]
+    fn non_ascii_text_is_escaped_only_with_ensure_ascii(#[case] ascii: bool, #[case] text: &str) {
+        let value = from_json(serde_json::json!({"city": "München\n"}));
+        let dumped = match ascii {
+            true => dumps(&value),
+            false => dumps_unicode(&value),
+        };
+        assert_eq!(dumped.unwrap(), text);
+    }
 }

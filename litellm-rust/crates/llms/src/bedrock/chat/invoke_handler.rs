@@ -270,6 +270,7 @@ impl ConverseStreamIterator {
             index: self
                 .tool_calls_index
                 .unwrap_or_else(|| i64::try_from(index).unwrap_or(i64::MAX)),
+            provider_specific_fields: None,
         }
     }
 

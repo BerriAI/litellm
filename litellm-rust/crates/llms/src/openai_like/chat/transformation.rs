@@ -184,6 +184,7 @@ impl BaseConfig for OpenAILikeChatConfig {
                 },
                 ..ChatCompletionsUsage::default()
             },
+            extra: Map::new(),
         })
     }
 
@@ -280,6 +281,7 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
+        logprobs: None,
     })
 }
 

@@ -616,6 +616,7 @@ fn tool_call(block: &Value, index: usize, shape: &StreamShape) -> ChatCompletion
             provider_specific_fields: None,
         },
         index: index as i64,
+        provider_specific_fields: None,
     }
 }
 
@@ -766,6 +767,7 @@ fn anthropic_response(
             reasoning_content,
             thinking_blocks,
             provider_specific_fields: (!provider_fields.is_empty()).then_some(provider_fields),
+            annotations: None,
         }
     };
 
@@ -776,6 +778,7 @@ fn anthropic_response(
             index: 0,
             message,
             finish_reason: finish_reason_for(&stop_reason).to_string(),
+            logprobs: None,
         }],
         usage: usage_from_parts(
             body.usage.input_tokens,
@@ -783,6 +786,7 @@ fn anthropic_response(
             body.usage.cache_read_input_tokens.unwrap_or(0),
             body.usage.cache_creation_input_tokens.unwrap_or(0),
         ),
+        extra: Map::new(),
     })
 }
 

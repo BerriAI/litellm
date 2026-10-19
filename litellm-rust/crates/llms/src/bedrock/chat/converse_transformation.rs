@@ -552,6 +552,7 @@ fn converse_response(
                     provider_specific_fields: None,
                 },
                 index: index as i64,
+                provider_specific_fields: None,
             });
         }
         if let Some(reasoning) = extracted_reasoning {
@@ -658,10 +659,13 @@ fn converse_response(
                 reasoning_content,
                 thinking_blocks: thinking,
                 provider_specific_fields: (!provider_fields.is_empty()).then_some(provider_fields),
+                annotations: None,
             },
             finish_reason,
+            logprobs: None,
         }],
         usage,
+        extra: Map::new(),
     }
 }
 

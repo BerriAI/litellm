@@ -17,6 +17,9 @@ pub struct ChatCompletionToolCallChunk {
     pub tool_type: String,
     pub function: ChatCompletionToolCallFunctionChunk,
     pub index: i64,
+    /// Provider data that rides on the call, such as Gemini's `thought_signature`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_specific_fields: Option<Map<String, Value>>,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -103,6 +106,9 @@ pub struct ChatCompletionsChoiceMessage {
     pub thinking_blocks: Option<Vec<ChatCompletionThinkingBlock>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_specific_fields: Option<Map<String, Value>>,
+    /// OpenAI `url_citation` annotations, which Gemini's grounding sources become.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Vec<Value>>,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -110,6 +116,8 @@ pub struct ChatCompletionsChoice {
     pub index: u64,
     pub message: ChatCompletionsChoiceMessage,
     pub finish_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<Value>,
 }
 
 /// The normalized response handed back to the host.
@@ -123,4 +131,8 @@ pub struct ChatCompletionsResponse {
     pub model: String,
     pub choices: Vec<ChatCompletionsChoice>,
     pub usage: ChatCompletionsUsage,
+    /// Top-level fields a provider adds beside the OpenAI ones, such as Vertex AI's
+    /// `vertex_ai_grounding_metadata`.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
