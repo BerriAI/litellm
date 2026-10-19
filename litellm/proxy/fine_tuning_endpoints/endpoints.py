@@ -164,7 +164,8 @@ async def create_fine_tuning_job(
                 )
 
             response = cast(LiteLLMFineTuningJob, await llm_router.acreate_fine_tuning_job(**data))
-            response.training_file = unified_file_id
+            response.training_file = training_file
+            response.validation_file = fine_tuning_request.validation_file
             set_hidden_param(response, "unified_file_id", unified_file_id)
         ## ELSE, Route based on custom_llm_provider
         elif fine_tuning_request.custom_llm_provider:

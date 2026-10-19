@@ -13,6 +13,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.llms.anthropic.pass_through.convertible_blocks import malformed_tool_result_text_error
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -299,14 +300,16 @@ class OpenAICountTokensConfig:
         return input_items, instructions
 
     @staticmethod
-    def malformed_anthropic_messages_error(messages: Sequence[Mapping[str, object]]) -> str | None:
+    def malformed_anthropic_messages_error(
+        messages: Sequence[Mapping[str, object]], *, drop_params: bool
+    ) -> str | None:
         try:
             _ANTHROPIC_COUNT_MESSAGES.validate_python(messages)
         except ValidationError as e:
             return "; ".join(
                 f"messages.{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in e.errors()
             )
-        return None
+        return None if drop_params else malformed_tool_result_text_error(messages)
 
     @staticmethod
     def anthropic_messages_to_responses_input(

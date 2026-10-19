@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx
 import pytest
+import respx
 import tiktoken
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -36,6 +37,7 @@ load_dotenv()
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.types import Message
 
 import litellm
 from litellm import Router
@@ -57,7 +59,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
-from litellm.proxy._types import ProxyException, TokenCountRequest
+from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
@@ -1281,6 +1283,202 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.count_request_tokens = original_token_counter
+
+
+def _json_request(body: Mapping[str, object], user_agent: str) -> Request:
+    payload: Final = json.dumps(body).encode()
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages/count_tokens",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"user-agent", user_agent.encode())],
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_drop_params", "user_agent"),
+    (({"drop_params": True}, "python-httpx/0.28.1"), ({}, "claude-cli/2.1.0 (external, cli)")),
+)
+async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_drop_params_applies(
+    monkeypatch: pytest.MonkeyPatch, request_drop_params: dict[str, bool], user_agent: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    body: Final = {
+        "model": "gpt-tool-result",
+        **request_drop_params,
+        "messages": [
+            {"role": "user", "content": "run the build"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_log", "name": "bash", "input": {"cmd": "make"}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_log",
+                        "content": [{"type": "text", "text": "build ok"}, {"type": "text", "text": None}],
+                    }
+                ],
+            },
+        ],
+    }
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-tool-result", "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-test"}}
+        ]
+    )
+    request: Final = _json_request(body, user_agent)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock:
+        route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 9})
+        )
+        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
+
+    assert response["input_tokens"] == 9
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok"} in sent["input"]
+
+
+def _build_log_messages(log_text: JsonValue) -> list[dict[str, JsonValue]]:
+    return [
+        {"role": "user", "content": "run the build"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_log", "name": "bash", "input": {"cmd": "make"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_log",
+                    "content": [{"type": "text", "text": "build ok"}, {"type": "text", "text": log_text}],
+                }
+            ],
+        },
+    ]
+
+
+async def _count_on_a_model_without_a_count_api(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], router_defaults: dict[str, JsonValue] | None = None
+) -> JSONResponse | dict[str, JsonValue]:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-tool-result",
+                "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test"},
+            }
+        ],
+        default_litellm_params=router_defaults,
+    )
+    request: Final = _json_request(body, "python-httpx/0.28.1")
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    with respx.mock:
+        return await anthropic_count_tokens(request, UserAPIKeyAuth())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_text", (None, 5))
+async def test_count_tokens_without_a_count_api_rejects_a_non_string_tool_result_text(
+    monkeypatch: pytest.MonkeyPatch, log_text: JsonValue
+) -> None:
+    response: Final = await _count_on_a_model_without_a_count_api(
+        monkeypatch, {"model": "mistral-tool-result", "messages": _build_log_messages(log_text)}
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"] == {
+        "type": "invalid_request_error",
+        "message": "tool_result toolu_log content.1.text: Input should be a valid string",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("mistral-tool-result", "model-not-in-the-router"))
+async def test_count_tokens_without_a_count_api_counts_a_non_string_tool_result_text_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    response: Final = await _count_on_a_model_without_a_count_api(
+        monkeypatch, {"model": model, "drop_params": True, "messages": _build_log_messages(None)}
+    )
+
+    assert isinstance(response, dict)
+    assert isinstance(response["input_tokens"], int) and response["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body_drop_params", "expected_status"), (({}, None), ({"drop_params": False}, 400)))
+async def test_count_tokens_honors_router_default_drop_params_unless_the_body_overrides_it(
+    monkeypatch: pytest.MonkeyPatch, body_drop_params: dict[str, JsonValue], expected_status: int | None
+) -> None:
+    response: Final = await _count_on_a_model_without_a_count_api(
+        monkeypatch,
+        {"model": "mistral-tool-result", "messages": _build_log_messages(None), **body_drop_params},
+        router_defaults={"drop_params": True},
+    )
+
+    match response:
+        case JSONResponse():
+            assert response.status_code == expected_status
+        case _:
+            assert expected_status is None
+            assert isinstance(response["input_tokens"], int) and response["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_tool_result_text_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-native-drop",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_key": "sk-ant-test",
+                    "drop_params": True,
+                },
+            }
+        ]
+    )
+    request: Final = _json_request(
+        {"model": "claude-native-drop", "messages": _build_log_messages(5)}, "python-httpx/0.28.1"
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock:
+        route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7})
+        )
+        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
+
+    assert response["input_tokens"] == 7
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "build ok"}]
 
 
 class _ScriptedCounter(BaseTokenCounter):
