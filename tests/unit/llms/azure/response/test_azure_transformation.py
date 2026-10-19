@@ -609,7 +609,6 @@ class TestAzureResponsesAPIConfig:
         assert "tools" not in response_api_params
 
     def test_azure_responses_api_supports_context_management(self):
-        """Regression for #36391: Azure Responses API supports server-side compaction."""
         supported_params = self.config.get_supported_openai_params("gpt-5.1")
 
         assert "context_management" in supported_params
