@@ -8,10 +8,21 @@ from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.context import Context
 from pydantic import TypeAdapter
 
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 
 REQUEST_TAG_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[RequestTagMapping, ...])
+
+
+def is_baggage_mapped_route(route: str) -> bool:
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
+    return (
+        (RouteChecks.is_llm_api_route(route) or InitPassThroughEndpointHelpers.is_registered_pass_through_route(route))
+        and not RouteChecks.is_unbilled_route(route)
+        and not RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value)
+    )
 
 
 def mapping_rejection(message: str) -> ProxyException:

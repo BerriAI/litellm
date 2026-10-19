@@ -13,9 +13,13 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload
 
 from litellm._logging import verbose_logger
-from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY, ROUTING_REQUEST_TAGS_METADATA_KEY
+from litellm.constants import (
+    BAGGAGE_MAPPED_TAGS_METADATA_KEY,
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
+)
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
-from litellm.types.router import ConsumedRequestTagsStamp, DeploymentTypedDict, RouterErrors
+from litellm.types.router import BaggageMappedTagsStamp, ConsumedRequestTagsStamp, DeploymentTypedDict, RouterErrors
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -474,6 +478,27 @@ def _request_tags_after_router_consumption(metadata: object, model: str) -> Sequ
     return tuple(dict.fromkeys((*leftover, *(tag for tag in typed_inherited_tags if isinstance(tag, str)))))
 
 
+def without_baggage_mapped_tags(request_tags: Sequence[str] | None, metadata: object) -> Sequence[str] | None:
+    """Drop baggage-mapped tags that neither key, team or project policy nor the caller itself asked for."""
+    if request_tags is None or not isinstance(metadata, Mapping):
+        return request_tags
+    typed_metadata: Final[Mapping[str, object]] = metadata
+    stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
+    if not isinstance(stamp, BaggageMappedTagsStamp):
+        return request_tags
+    asked_for_tags: Final = (
+        *_metadata_tags(typed_metadata, "inherited_tags"),
+        *_metadata_tags(typed_metadata, "caller_tags"),
+    )
+    return tuple(tag for tag in request_tags if tag not in stamp.tags or tag in asked_for_tags) or None
+
+
+def _metadata_tags(metadata: Mapping[str, object], key: str) -> Sequence[object]:
+    tags: Final = metadata.get(key)
+    typed_tags: Final[Sequence[object]] = tags if isinstance(tags, (list, tuple)) else ()
+    return typed_tags
+
+
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
@@ -514,7 +539,9 @@ async def get_deployments_for_tag(
     verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
     if metadata_variable_name in request_kwargs:
         metadata: Final = request_kwargs[metadata_variable_name]
-        request_tags: Final = _request_tags_after_router_consumption(metadata, model)
+        request_tags: Final = without_baggage_mapped_tags(
+            _request_tags_after_router_consumption(metadata, model), metadata
+        )
         match_any: Final = llm_router_instance.tag_filtering_match_any
         routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
 
@@ -696,3 +723,21 @@ def get_tags_from_request_kwargs(
 
 
 _get_tags_from_request_kwargs = get_tags_from_request_kwargs
+
+
+def _request_metadata(request_kwargs: Mapping[str, object]) -> object:
+    metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
+    if metadata_variable_name in request_kwargs:
+        return request_kwargs[metadata_variable_name]
+    litellm_params: Final = request_kwargs.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return None
+    typed_litellm_params: Final[Mapping[str, object]] = litellm_params
+    return typed_litellm_params.get(metadata_variable_name)
+
+
+def get_routing_tags_from_request_kwargs(request_kwargs: Mapping[str, object]) -> Sequence[str]:
+    return (
+        without_baggage_mapped_tags(get_tags_from_request_kwargs(request_kwargs), _request_metadata(request_kwargs))
+        or ()
+    )

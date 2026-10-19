@@ -4757,6 +4757,43 @@ async def test_add_guardrails_from_policy_engine():
     attachment_registry._initialized = False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller_tags,inherited_tags,expected_guardrails",
+    [((), (), []), (("usecase:a",), (), ["usecase_guard"]), ((), ("usecase:a",), ["usecase_guard"])],
+)
+async def test_baggage_mapped_tags_match_tag_policies_only_when_the_caller_or_key_asked_for_them(
+    caller_tags, inherited_tags, expected_guardrails
+):
+    from typing import cast
+
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyGuardrails
+
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(litellm_baggage_mapped_tags=("usecase:a",))))
+    data = {"model": "gpt-4", "metadata": {"tags": [], "inherited_tags": inherited_tags}}
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
+    data["metadata"]["caller_tags"] = caller_tags
+    policy_registry = get_policy_registry()
+    attachment_registry = get_attachment_registry()
+    policy_registry._policies = {"usecase": Policy(guardrails=PolicyGuardrails(add=["usecase_guard"]))}
+    policy_registry._initialized = True
+    attachment_registry._attachments = [PolicyAttachment(policy="usecase", tags=["usecase:a"])]
+    attachment_registry._initialized = True
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data, metadata_variable_name="metadata", user_api_key_dict=UserAPIKeyAuth(api_key="test-key")
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+    assert "usecase:a" in data["metadata"]["tags"]
+    assert data["metadata"].get("guardrails", []) == expected_guardrails
+
+
 def test_match_and_track_policies_preserves_attachment_and_request_body_order():
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
@@ -10289,3 +10326,46 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"]
     assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"] == "gho_user_a_token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/images/generations", "/v1/rerank"])
+async def test_raw_body_inference_keeps_authenticated_baggage_tags_for_spend(route):
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model","metadata":{"tags":["existing"]}}'}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=a")],
+        },
+        receive,
+    )
+    admitted = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        admitted,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        MagicMock(),
+    )
+    reparsed = json.loads(await request.body())
+    enriched = await add_litellm_data_to_request(
+        data=reparsed,
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert "usecase:a" in enriched["metadata"]["tags"]
+    assert "existing" in enriched["metadata"]["tags"]
+    assert "usecase:a" not in enriched["metadata"]["inherited_tags"]
+    assert enriched["metadata"]["tags"].count("usecase:a") == 1
