@@ -193,13 +193,13 @@ def test_cortecs_decisions_request():
         route: Final = upstream.post("https://api.cortecs.ai/v1/systemone").respond(
             200,
             json={
-                "model": "gpt-6-sol",
+                "model": "clef-flash",
                 "answers": {"is_complaint": {"type": "noul", "noul": 0.9}},
                 "usage": {"input_tokens": 4, "output_tokens": 2},
             },
         )
         response: Final = litellm.decisions(
-            model="cortecs/gpt-6-sol",
+            model="cortecs/clef-flash",
             input="My order arrived broken.",
             questions=[
                 {"type": "predicate", "name": "is_complaint", "instructions": "Is this a complaint?"},
@@ -212,7 +212,7 @@ def test_cortecs_decisions_request():
     assert route.call_count == 1
     assert str(request.url) == "https://api.cortecs.ai/v1/systemone"
     assert request.headers["authorization"] == "Bearer cortecs-test-key"
-    assert body["model"] == "gpt-6-sol"
+    assert body["model"] == "clef-flash"
     assert body["state"] == "My order arrived broken."
     assert body["questions"] == {"is_complaint": {"type": "noul", "instructions": "Is this a complaint?"}}
     assert response.answers[0].type == "predicate"
