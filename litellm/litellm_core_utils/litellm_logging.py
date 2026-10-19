@@ -2165,7 +2165,7 @@ class Logging(LiteLLMLoggingBaseClass):
             else getattr(result_hidden_params, "additional_headers", None)
         )
         spilled_over: Final = is_spilled_over_ptu_request(
-            model_info=_deployment_model_info(litellm_params),
+            model_info=deployment_model_info(litellm_params),
             response_headers=self.model_call_details.get("response_headers"),
             additional_headers=additional_headers,
         )
@@ -5989,7 +5989,7 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> dict:
     return {}
 
 
-def _deployment_model_info(litellm_params: dict | None) -> Mapping[str, object]:
+def deployment_model_info(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
     """The router-stamped deployment model_info from whichever metadata field carries it."""
     if litellm_params is None:
         return MappingProxyType({})
