@@ -8,7 +8,7 @@ import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
+from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar, cast
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -42,6 +42,7 @@ from litellm.llms.anthropic.wif import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.integrations.anthropic_cache_control_hook import CacheControlInjectionPoint
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
@@ -50,13 +51,14 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
     AnthropicThinkingParam,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionCachedContent
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import LlmProviders
@@ -158,6 +160,36 @@ def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None
         and "claude" in model.lower()
         and supports_prompt_caching(model=model, custom_llm_provider=provider)
     )
+
+
+def _is_cacheable_anthropic_tool(tool: object) -> bool:
+    return isinstance(tool, dict) and tool.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+
+
+def tools_marked_for_a_tool_config_point(
+    tools: Sequence[object], points: Sequence[CacheControlInjectionPoint]
+) -> tuple[object, ...] | None:
+    """Put the ``tool_config`` point's breakpoint on the last tool Anthropic caches.
+
+    Anthropic caches tools as one prefix ending at the marked tool, so the last one carries
+    the mark, skipping tool-search tools whose transform drops cache markers. A client that
+    already marked a tool keeps its own breakpoint. Returns ``None`` when nothing is marked.
+    """
+    control: Final = next(
+        (
+            point.get("control") or ChatCompletionCachedContent(type="ephemeral")
+            for point in points
+            if point.get("location") == "tool_config" and isinstance(point.get("control"), (dict, type(None)))
+        ),
+        None,
+    )
+    if control is None or any(isinstance(tool, dict) and "cache_control" in tool for tool in tools):
+        return None
+    position: Final = next((i for i in range(len(tools) - 1, -1, -1) if _is_cacheable_anthropic_tool(tools[i])), None)
+    if position is None:
+        return None
+    fields: Final = cast(dict[str, object], tools[position])  # cast-ok: _is_cacheable_anthropic_tool checked dict
+    return (*tools[:position], {**fields, "cache_control": dict(control)}, *tools[position + 1 :])
 
 
 def is_claude_code_user_agent(user_agent: str) -> bool:

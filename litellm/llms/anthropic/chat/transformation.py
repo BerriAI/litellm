@@ -56,6 +56,7 @@ from litellm.llms.base_llm.base_utils import (
     unwrap_response_format_envelope,
 )
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
+from litellm.types.integrations.anthropic_cache_control_hook import CacheControlInjectionPoint
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -125,6 +126,7 @@ from ..common_utils import (
     refusal_provider_specific_fields,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
+    tools_marked_for_a_tool_config_point,
 )
 
 if TYPE_CHECKING:
@@ -2408,6 +2410,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
         optional_params.pop("client_metadata", None)
+        cache_control_points: Final = cast(
+            "Sequence[CacheControlInjectionPoint] | None", optional_params.pop("cache_control_injection_points", None)
+        )
+        marked_tools: Final = tools_marked_for_a_tool_config_point(
+            cast(Sequence[object], optional_params.get("tools") or ()), cache_control_points or ()
+        )
+        if marked_tools is not None:
+            from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+            optional_params["tools"] = list(marked_tools)
+            AnthropicCacheControlHook.record_gateway_injection(cast(Mapping[str, object], litellm_params), 1)
 
         # ``top_k`` is a provider-specific kwarg that bypasses
         # ``map_openai_params``; gate it here, the single boundary shared by
