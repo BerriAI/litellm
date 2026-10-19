@@ -10094,3 +10094,49 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
         prefixed_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
         assert litellm.get_model_info(model=short_name, custom_llm_provider="vertex_ai") == prefixed_info, model
         assert prefixed_info["key"] == f"vertex_ai/{model}", model
+
+
+_FAILING_CALL_CASES: Final = (
+    pytest.param("completion", "chat/completions", {"messages": [{"role": "user", "content": "hi"}]}, id="completion"),
+    pytest.param("responses", "responses", {"input": "hi"}, id="responses"),
+)
+_FAILING_ASYNC_CALL_CASES: Final = (
+    pytest.param("acompletion", "chat/completions", {"messages": [{"role": "user", "content": "hi"}]}, id="acompletion"),
+    pytest.param("aresponses", "responses", {"input": "hi"}, id="aresponses"),
+)
+
+
+@respx.mock
+@pytest.mark.parametrize("call_name, path, payload", _FAILING_CALL_CASES)
+def test_failed_call_keeps_global_num_retries_for_later_calls(
+    monkeypatch: pytest.MonkeyPatch, call_name: str, path: str, payload: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 3)
+    route: Final = respx.post(f"https://api.openai.com/v1/{path}").respond(500, json={"error": {"message": "boom"}})
+    call: Final = getattr(litellm, call_name)
+
+    for _ in range(2):
+        with pytest.raises(litellm.InternalServerError):
+            call(model="openai/gpt-5.6", api_key="sk-test", max_retries=0, **payload)
+
+    assert route.call_count == 8
+    assert litellm.num_retries == 3
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("call_name, path, payload", _FAILING_ASYNC_CALL_CASES)
+async def test_failed_async_call_keeps_global_num_retries_for_later_calls(
+    monkeypatch: pytest.MonkeyPatch, call_name: str, path: str, payload: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 3)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx.post(f"https://api.openai.com/v1/{path}").respond(500, json={"error": {"message": "boom"}})
+    call: Final = getattr(litellm, call_name)
+
+    for _ in range(2):
+        with pytest.raises(litellm.InternalServerError):
+            await call(model="openai/gpt-5.6", api_key="sk-test", max_retries=0, **payload)
+
+    assert route.call_count == 8
+    assert litellm.num_retries == 3
