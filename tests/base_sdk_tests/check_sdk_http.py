@@ -142,7 +142,10 @@ def check_responses(base: str, asynchronous: bool = False) -> None:
             "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
         }
     )
-    tools: Final = [{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}]
+    tools: Final = [
+        {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"},
+        {"type": "mcp", "server_label": "repos", "server_url": "https://mcp.example.com/mcp/repos"},
+    ]
     arguments: Final = dict(model="openai/gpt-6", input="ping", tools=tools, api_key="test-key", api_base=base + "/v1")
     response: Final = asyncio.run(litellm.aresponses(**arguments)) if asynchronous else litellm.responses(**arguments)
     assert payload(response)["output"] == output
