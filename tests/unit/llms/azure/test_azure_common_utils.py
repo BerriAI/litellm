@@ -2,7 +2,9 @@ import json
 import os
 import threading
 import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Final, Optional
+from urllib.parse import parse_qs
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +16,7 @@ from litellm.llms.azure.common_utils import (
     _cached_entra_id_token_provider,
     get_azure_ad_token,
     get_azure_ad_token_from_entra_id,
+    get_azure_ad_token_from_oidc,
     get_azure_ad_token_from_username_password,
 )
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -2201,16 +2204,28 @@ async def test_non_v1_azure_token_refresh_runs_off_the_event_loop_thread() -> No
 async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_request(
     monkeypatch: pytest.MonkeyPatch, api_version: str
 ) -> None:
+    import asyncio
+
     import httpx
 
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    exchange_started: Final = threading.Event()
+    loop_ran_during_exchange: Final = threading.Event()
+    exchanges: Final[list[bool]] = []
 
-    exchange_threads: Final[list[int]] = []
+    class TokenEndpoint(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
 
-    def entra_token_endpoint(request: httpx.Request) -> httpx.Response:
-        exchange_threads.append(threading.get_ident())
-        assert b"client_assertion=federated-oidc-token" in request.content
-        return httpx.Response(200, json={"access_token": f"exchanged-{api_version}", "expires_in": 3600})
+        def do_POST(self) -> None:
+            form: Final = parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
+            assert form["client_assertion"] == ["federated-oidc-token"]
+            exchange_started.set()
+            exchanges.append(loop_ran_during_exchange.wait(timeout=5))
+            body: Final = json.dumps({"access_token": f"exchanged-{api_version}", "expires_in": 3600}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
     def echo_authorization(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -2230,33 +2245,41 @@ async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_re
             },
         )
 
+    async def mark_loop_running_once_exchange_starts() -> None:
+        while not exchange_started.is_set():
+            await asyncio.sleep(0.01)
+        loop_ran_during_exchange.set()
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), TokenEndpoint)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("AZURE_AUTHORITY_HOST", f"http://127.0.0.1:{server.server_port}")
     monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
-    monkeypatch.setattr(
-        litellm,
-        "module_level_client",
-        HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(entra_token_endpoint))),
-    )
     monkeypatch.setattr(
         litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(echo_authorization))
     )
-    loop_thread: Final = threading.get_ident()
-    client: Final = BaseAzureLLM().get_azure_openai_client(
-        api_key=None,
-        api_base=f"https://oidc-exchange-{api_version}.openai.azure.com",
-        api_version=api_version,
-        litellm_params={
-            "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
-            "client_id": f"oidc-client-{api_version}",
-            "tenant_id": "oidc-tenant",
-        },
-        _is_async=True,
-    )
-
-    response: Final = await client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+    loop_watcher: Final = asyncio.ensure_future(mark_loop_running_once_exchange_starts())
+    try:
+        client: Final = BaseAzureLLM().get_azure_openai_client(
+            api_key=None,
+            api_base=f"https://oidc-exchange-{api_version}.openai.azure.com",
+            api_version=api_version,
+            litellm_params={
+                "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
+                "client_id": f"oidc-client-{api_version}",
+                "tenant_id": "oidc-tenant",
+            },
+            _is_async=True,
+        )
+        response: Final = await client.chat.completions.create(
+            model="gpt", messages=[{"role": "user", "content": "hi"}]
+        )
+    finally:
+        loop_watcher.cancel()
+        server.shutdown()
+        server.server_close()
 
     assert response.choices[0].message.content == f"Bearer exchanged-{api_version}"
-    assert len(exchange_threads) == 1
-    assert loop_thread not in exchange_threads
+    assert exchanges == [True]
 
 
 @pytest.mark.asyncio
@@ -2301,6 +2324,46 @@ async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(
     response: Final = await client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
 
     assert response.choices[0].message.content == "Bearer async-token"
+
+
+def test_oidc_token_exchange_closes_its_token_endpoint_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed_connections: Final = threading.Semaphore(0)
+
+    class TokenEndpoint(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:
+            form: Final = parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
+            body: Final = json.dumps(
+                {"access_token": f"minted-for-{form['client_assertion'][0]}", "expires_in": 3600}
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def finish(self) -> None:
+            super().finish()
+            closed_connections.release()
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), TokenEndpoint)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("AZURE_AUTHORITY_HOST", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("AZURE_TEST_OIDC_ASSERTION", "workload-jwt")
+    try:
+        token: Final = get_azure_ad_token_from_oidc(
+            azure_ad_token="os.environ/AZURE_TEST_OIDC_ASSERTION",
+            azure_client_id="client",
+            azure_tenant_id="tenant",
+        )
+        connection_closed: Final = closed_connections.acquire(timeout=5)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert token == "minted-for-workload-jwt"
+    assert connection_closed
 
 
 def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):
