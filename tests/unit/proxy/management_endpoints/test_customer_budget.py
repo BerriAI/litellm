@@ -47,6 +47,15 @@ def mock_budget_table():
     return MagicMock(spec=LiteLLM_BudgetTable)
 
 
+def _run_in_locked_transaction(prisma_client: MagicMock) -> None:
+    prisma_client.configure_mock(
+        **{
+            "db.query_raw": AsyncMock(return_value=({"user_id": "test-user"},)),
+            "tx.return_value.__aenter__": AsyncMock(return_value=prisma_client.db),
+        }
+    )
+
+
 @pytest.mark.asyncio
 @patch("litellm.proxy.proxy_server.prisma_client")
 @patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
@@ -69,6 +78,7 @@ async def test_update_customer_with_budget_id(
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
         return_value=mock_existing_customer
     )
+    _run_in_locked_transaction(mock_prisma_client)
 
     mock_updated_user = MagicMock()
     mock_updated_user.model_dump.return_value = {
@@ -125,6 +135,7 @@ async def test_update_customer_creates_budget_with_proper_relations(
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
         return_value=mock_existing_customer
     )
+    _run_in_locked_transaction(mock_prisma_client)
 
     # Mock budget creation
     mock_created_budget = MagicMock()
@@ -183,6 +194,7 @@ async def test_update_customer_creates_budget_with_required_fields(
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
         return_value=mock_existing_customer
     )
+    _run_in_locked_transaction(mock_prisma_client)
 
     # Mock budget creation
     mock_created_budget = MagicMock()
@@ -248,6 +260,7 @@ async def test_update_customer_budget_creation_with_fallback_admin(
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
         return_value=mock_existing_customer
     )
+    _run_in_locked_transaction(mock_prisma_client)
 
     # Mock budget creation
     mock_created_budget = MagicMock()
@@ -281,67 +294,6 @@ async def test_update_customer_budget_creation_with_fallback_admin(
     creation_data = call_args[1]["data"]  # kwargs['data']
     assert creation_data["created_by"] == "admin"  # litellm_proxy_admin_name
     assert creation_data["updated_by"] == "admin"
-
-
-@pytest.mark.asyncio
-@patch("litellm.proxy.proxy_server.prisma_client")
-@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
-async def test_update_customer_with_budget_id_and_creation_fields(
-    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
-):
-    """
-    Test customer update when both budget_id and budget creation fields are provided.
-
-    When both linking (budget_id) and creation fields are provided, the system
-    should prioritize creating a new budget and assign its ID to the customer.
-    """
-    # Arrange
-    mock_existing_customer.model_dump.return_value = {
-        "user_id": "test-user",
-        "blocked": False,
-        "litellm_budget_table": None,
-    }
-
-    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
-        return_value=mock_existing_customer
-    )
-
-    # Mock budget creation
-    mock_created_budget = MagicMock()
-    mock_created_budget.budget_id = "new-budget-combo"
-    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
-        return_value=mock_created_budget
-    )
-
-    # Mock end user update
-    mock_updated_user = MagicMock()
-    mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
-    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
-        return_value=mock_updated_user
-    )
-
-    # Create update request with both budget_id and budget creation fields
-    update_request = UpdateCustomerRequest(
-        user_id="test-user",
-        budget_id="existing-budget-link",  # For linking to existing budget
-        max_budget=300.0,  # This should trigger new budget creation
-        rpm_limit=500,  # Use valid budget field
-    )
-
-    # Act
-    await update_end_user(update_request, mock_user_api_key_dict)
-
-    # Assert
-    # Verify budget creation occurred (because max_budget was provided)
-    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
-
-    # Verify end user update was called
-    mock_prisma_client.db.litellm_endusertable.update.assert_called_once()
-    call_args = mock_prisma_client.db.litellm_endusertable.update.call_args
-
-    # The update data should contain budget_id from the created budget, not the original budget_id
-    update_data = call_args[1]["data"]
-    assert update_data["budget_id"] == "new-budget-combo"  # From created budget
 
 
 def test_new_budget_request_sets_budget_reset_at_when_duration_provided():

@@ -4174,6 +4174,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/customer/bulk_update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Customer Update
+         * @description Update up to 500 customers with the same fields as `/customer/update`. Only proxy admins can call it.
+         *
+         *     Each item runs in its own locked transaction, so a failed item rolls back only its own writes and
+         *     the rest still apply. Results come back in request order with `user_id`, `success`, and either
+         *     `updated_customer` or `error`.
+         *
+         *     Omitted or null permission fields keep their stored values, supplied lists replace that field,
+         *     and empty lists or objects clear it.
+         *
+         *     `max_budget` only updates a budget used by that customer alone. Shared and default budgets must be
+         *     edited through the budget endpoints. Sending both `budget_id` and `max_budget` in any item, even
+         *     as null, fails the whole request with HTTP 422.
+         *
+         *     Example request body:
+         *     ```json
+         *     {
+         *       "customers": [
+         *         {"user_id": "customer-1", "object_permission": {"mcp_toolsets": ["toolset-1"]}},
+         *         {"user_id": "customer-2", "models": ["model-1"]}
+         *       ]
+         *     }
+         *     ```
+         */
+        post: operations["bulk_customer_update_customer_bulk_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/daily/activity": {
         parameters: {
             query?: never;
@@ -4503,12 +4544,13 @@ export interface paths {
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
          *         * mcp_access_groups: List[str] - List of MCP access group names
+         *         * mcp_toolsets: List[str] - List of allowed MCP toolset IDs
          *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
          *         * vector_stores: List[str] - List of allowed vector store IDs
          *         * agents: List[str] - List of allowed agent IDs
          *         * agent_access_groups: List[str] - List of agent access group names
          *         Example: {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}
-         *         IF null or {} then no object-level restrictions apply.
+         *         Omitted permission fields retain their existing values. Supplying null or {} leaves permissions unchanged.
          *
          *     Example curl:
          *     ```
@@ -4852,6 +4894,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/end_user/bulk_update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Customer Update
+         * @description Update up to 500 customers with the same fields as `/customer/update`. Only proxy admins can call it.
+         *
+         *     Each item runs in its own locked transaction, so a failed item rolls back only its own writes and
+         *     the rest still apply. Results come back in request order with `user_id`, `success`, and either
+         *     `updated_customer` or `error`.
+         *
+         *     Omitted or null permission fields keep their stored values, supplied lists replace that field,
+         *     and empty lists or objects clear it.
+         *
+         *     `max_budget` only updates a budget used by that customer alone. Shared and default budgets must be
+         *     edited through the budget endpoints. Sending both `budget_id` and `max_budget` in any item, even
+         *     as null, fails the whole request with HTTP 422.
+         *
+         *     Example request body:
+         *     ```json
+         *     {
+         *       "customers": [
+         *         {"user_id": "customer-1", "object_permission": {"mcp_toolsets": ["toolset-1"]}},
+         *         {"user_id": "customer-2", "models": ["model-1"]}
+         *       ]
+         *     }
+         *     ```
+         */
+        post: operations["bulk_customer_update_end_user_bulk_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/end_user/daily/activity": {
         parameters: {
             query?: never;
@@ -5181,12 +5264,13 @@ export interface paths {
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
          *         * mcp_access_groups: List[str] - List of MCP access group names
+         *         * mcp_toolsets: List[str] - List of allowed MCP toolset IDs
          *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
          *         * vector_stores: List[str] - List of allowed vector store IDs
          *         * agents: List[str] - List of allowed agent IDs
          *         * agent_access_groups: List[str] - List of agent access group names
          *         Example: {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}
-         *         IF null or {} then no object-level restrictions apply.
+         *         Omitted permission fields retain their existing values. Supplying null or {} leaves permissions unchanged.
          *
          *     Example curl:
          *     ```
@@ -28019,6 +28103,25 @@ export interface components {
             /** Data */
             data: components["schemas"]["TeamMemberDeleteResult"][];
         };
+        /** BulkUpdateCustomerRequest */
+        BulkUpdateCustomerRequest: {
+            /**
+             * Customers
+             * @description Customer updates processed independently in request order
+             */
+            customers: components["schemas"]["UpdateCustomerRequest"][];
+        };
+        /** BulkUpdateCustomerResponse */
+        BulkUpdateCustomerResponse: {
+            /** Failed Updates */
+            failed_updates: number;
+            /** Results */
+            results: components["schemas"]["CustomerUpdateResult"][];
+            /** Successful Updates */
+            successful_updates: number;
+            /** Total Requested */
+            total_requested: number;
+        };
         /**
          * BulkUpdateKeyRequest
          * @description Request for bulk key updates
@@ -31244,6 +31347,16 @@ export interface components {
              * @default 0
              */
             spend: number;
+            /** User Id */
+            user_id: string;
+        };
+        /** CustomerUpdateResult */
+        CustomerUpdateResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            updated_customer?: components["schemas"]["CustomerResponse"] | null;
             /** User Id */
             user_id: string;
         };
@@ -56987,6 +57100,39 @@ export interface operations {
             };
         };
     };
+    bulk_customer_update_customer_bulk_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkUpdateCustomerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkUpdateCustomerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_customer_daily_activity_customer_daily_activity_get: {
         parameters: {
             query?: {
@@ -58008,7 +58154,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BlockUsersResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_customer_update_end_user_bulk_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkUpdateCustomerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkUpdateCustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -58393,7 +58572,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["UnblockUsersResponse"];
                 };
             };
             /** @description Validation Error */

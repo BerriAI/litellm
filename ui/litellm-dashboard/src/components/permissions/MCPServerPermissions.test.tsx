@@ -157,6 +157,39 @@ describe("MCPServerPermissions", () => {
     expect(screen.queryByText(/tool/)).not.toBeInTheDocument();
   });
 
+  it("keeps the existing key display for empty tool allowlists", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId1, server_name: mockServerName1, alias: mockServerName1 },
+    ]);
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId1]}
+        mcpToolPermissions={{ [mockServerId1]: [] }}
+        accessToken={mockAccessToken}
+      />,
+    );
+    expect(await screen.findByText(/DW_MCP/)).toBeInTheDocument();
+    expect(screen.queryByText("No tools allowed")).not.toBeInTheDocument();
+  });
+
+  it("labels an empty tool allowlist as allowing no tools", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId1, server_name: mockServerName1, alias: mockServerName1 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[]}
+        mcpToolPermissions={{ [mockServerId1]: [] }}
+        entityType="customer"
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText(/DW_MCP/)).toBeInTheDocument();
+    expect(screen.getByText("No tools allowed")).toBeInTheDocument();
+  });
+
   it("should display access groups correctly", async () => {
     /**
      * Tests that access groups are displayed with the correct styling
@@ -464,6 +497,46 @@ describe("MCPServerPermissions", () => {
       />,
     );
     await waitFor(() => expect(screen.getByText("Blocked")).toHaveAttribute("data-variant", "destructive"));
+    expect(
+      screen.getByText("No MCP servers. This key is blocked from all MCP servers, including its team's servers"),
+    ).toBeInTheDocument();
+  });
+
+  it.each(["server", "tool permission"])("shows no customer access for an unsupported %s sentinel", (source) => {
+    render(
+      <MCPServerPermissions
+        entityType="customer"
+        mcpServers={source === "server" ? [ALL_PROXY_MCP_SERVERS_SENTINEL] : []}
+        mcpToolPermissions={source === "tool permission" ? { [ALL_PROXY_MCP_SERVERS_SENTINEL]: ["read"] } : {}}
+      />,
+    );
+
+    expect(screen.getByText("No MCP access")).toBeInTheDocument();
+    expect(screen.getByText("0")).toBeInTheDocument();
+    expect(screen.queryByText("All")).not.toBeInTheDocument();
+  });
+
+  it.each(["direct", "tool permission"])(
+    "shows the customer's concrete %s grant beside an unsupported sentinel",
+    (source) => {
+      render(
+        <MCPServerPermissions
+          entityType="customer"
+          mcpServers={[ALL_PROXY_MCP_SERVERS_SENTINEL, ...(source === "direct" ? [mockServerId1] : [])]}
+          mcpToolPermissions={source === "tool permission" ? { [mockServerId1]: ["read", "write"] } : {}}
+        />,
+      );
+
+      expect(screen.getByText(mockServerId1)).toBeInTheDocument();
+      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.queryByText("All")).not.toBeInTheDocument();
+      expect(screen.queryByText("No MCP access")).not.toBeInTheDocument();
+    },
+  );
+
+  it("uses customer-specific blocked copy without implying a team relationship", () => {
+    render(<MCPServerPermissions mcpServers={[NO_MCP_SERVERS_SENTINEL]} entityType="customer" />);
+    expect(screen.getByText("No MCP servers. This customer is blocked from all MCP servers")).toBeInTheDocument();
   });
 
   it("lists servers inherited from access groups, counts them, and names the group on hover", async () => {

@@ -20427,3 +20427,114 @@ async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_con
     finally:
         active_mcp_request_ctx_var.reset(request_token)
         legacy_server.active_mcp_session_var.reset(session_token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["manager", "mcp", "rest"])
+@pytest.mark.parametrize("admin", [False, True])
+@pytest.mark.parametrize("permission_state", ["denied", "stale-grants", "unreadable"])
+async def test_customer_denial_blocks_operator_open_servers(
+    monkeypatch: pytest.MonkeyPatch,
+    surface: Literal["manager", "mcp", "rest"],
+    admin: bool,
+    permission_state: Literal["denied", "stale-grants", "unreadable"],
+) -> None:
+    from starlette.requests import Request
+
+    from litellm.models.end_user import LiteLLM_EndUserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager, operations, rest_endpoints
+    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="operator-open", name="operator_open", transport=MCPTransport.http, allow_all_keys=True
+    )
+    manager.config_mcp_servers = {server.server_id: server}
+    permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="customer-denial",
+        mcp_servers=["no-mcp-servers"],
+        mcp_tool_permissions={server.server_id: ["delete"]} if permission_state == "stale-grants" else {},
+        mcp_toolsets=["stale-toolset"] if permission_state == "stale-grants" else [],
+        mcp_access_groups=["stale-group"] if permission_state == "stale-grants" else [],
+    )
+    cache: Final = DualCache()
+    await cache.async_set_cache(
+        key=end_user_cache_key("denied-customer"),
+        value=LiteLLM_EndUserTable(
+            user_id="denied-customer",
+            blocked=False,
+            object_permission_id=permission.object_permission_id,
+            object_permission=None if permission_state == "unreadable" else permission,
+        ),
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key="test-key",
+        end_user_id="denied-customer",
+        user_role=LitellmUserRoles.PROXY_ADMIN if admin else None,
+        object_permission=None if admin else LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-grant", mcp_servers=[server.server_id]
+        ),
+    ).model_copy(update={"via_virtual_key": True})
+    _catalog_database(monkeypatch, AsyncMock(return_value=[]))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+
+    if surface == "manager":
+        assert await manager.get_allowed_mcp_servers(auth) == []
+    elif surface == "mcp":
+        assert await operations._get_allowed_mcp_servers(auth, None) == []
+    else:
+        request: Final = Request({"type": "http", "method": "POST", "path": "/mcp-rest/tools/call", "headers": []})
+        with pytest.raises(HTTPException) as denied:
+            await rest_endpoints._resolve_allowed_mcp_servers_with_ip_filter(request, auth, server.server_id)
+        assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("customer", ["absent", "unrestricted", "empty-group", "limited"])
+@pytest.mark.parametrize("admin", [False, True])
+async def test_customer_without_explicit_deny_keeps_operator_open_servers(
+    monkeypatch: pytest.MonkeyPatch,
+    customer: Literal["absent", "unrestricted", "empty-group", "limited"],
+    admin: bool,
+) -> None:
+    from litellm.models.end_user import LiteLLM_EndUserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="operator-open", name="operator_open", transport=MCPTransport.http, allow_all_keys=True
+    )
+    manager.config_mcp_servers = {server.server_id: server}
+    cache: Final = DualCache()
+    await cache.async_set_cache(
+        key=end_user_cache_key("unrestricted-customer"),
+        value=LiteLLM_EndUserTable(
+            user_id="unrestricted-customer",
+            blocked=False,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="ordinary-customer",
+                mcp_servers=["another-server"] if customer == "limited" else [],
+                mcp_access_groups=["empty-group"] if customer == "empty-group" else [],
+            ),
+        ),
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key="test-key",
+        end_user_id=None if customer == "absent" else "unrestricted-customer",
+        user_role=LitellmUserRoles.PROXY_ADMIN if admin else None,
+    ).model_copy(update={"via_virtual_key": True})
+    _catalog_database(monkeypatch, AsyncMock(return_value=[]))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+
+    assert await manager.get_allowed_mcp_servers(auth) == [server.server_id]

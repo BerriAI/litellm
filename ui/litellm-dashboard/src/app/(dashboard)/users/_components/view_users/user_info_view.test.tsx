@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import UserInfoView from "./user_info_view";
 import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
+import type { MCPServer } from "@/components/mcp_tools/types";
 
 const mockTeamMemberAddCall = vi.fn();
 const mockTeamMemberDeleteCall = vi.fn();
@@ -12,6 +13,7 @@ const mockTeamInfoCall = vi.fn();
 const mockUserUpdateUserCall = vi.fn();
 const mockFetchMCPServers = vi.fn();
 const mockListMCPTools = vi.fn();
+const mockMCPServerCatalog = vi.fn();
 
 const MCP_SERVER = { server_id: "srv-1", server_name: "GitHub MCP", alias: "GitHub MCP" };
 
@@ -69,7 +71,7 @@ vi.mock("@/components/networking", () => {
 });
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
-  useMCPServers: () => ({ data: [MCP_SERVER], isLoading: false }),
+  useMCPServers: () => mockMCPServerCatalog(),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups", () => ({
   useMCPAccessGroups: () => ({ data: ["dev-group"], isLoading: false }),
@@ -107,6 +109,7 @@ describe("UserInfoView", () => {
     mockTeamMemberDeleteCall.mockResolvedValue({});
     mockUserUpdateUserCall.mockResolvedValue({});
     mockFetchMCPServers.mockResolvedValue([MCP_SERVER]);
+    mockMCPServerCatalog.mockReturnValue({ data: [MCP_SERVER], isLoading: false });
     mockListMCPTools.mockResolvedValue({ tools: [{ name: "list_issues", description: "List issues" }] });
   });
 
@@ -330,6 +333,43 @@ describe("UserInfoView", () => {
   });
 
   describe("MCP permissions", () => {
+    it.each([
+      { field: "user_email", label: "Email", value: "renamed@example.com", catalogLoaded: true },
+      { field: "user_alias", label: "User Alias", value: "Renamed user", catalogLoaded: false },
+    ])(
+      "preserves shared-alias grants when only $field changes with catalogLoaded=$catalogLoaded",
+      async ({ field, label, value, catalogLoaded }) => {
+        const servers = [
+          { server_id: "server-a", server_name: "Server A", alias: "shared" },
+          { server_id: "server-b", server_name: "Server B", alias: "shared" },
+        ];
+        const permission = {
+          mcp_servers: ["server-a"],
+          mcp_access_groups: [],
+          mcp_toolsets: [],
+          mcp_tool_permissions: { shared: ["list_issues"] },
+        };
+        mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, object_permission: permission });
+        mockMCPServerCatalog.mockReturnValue({ data: catalogLoaded ? servers : [], isLoading: !catalogLoaded });
+        if (catalogLoaded) mockFetchMCPServers.mockResolvedValue(servers);
+        else mockFetchMCPServers.mockReturnValue(new Promise<MCPServer[]>(() => {}));
+        render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+        fireEvent.change(await screen.findByRole("textbox", { name: label, exact: true }), { target: { value } });
+        await userEvent.click(screen.getByRole("button", { name: "Save Changes", exact: true }));
+        await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalledOnce());
+
+        const [, payload] = mockUserUpdateUserCall.mock.calls[0];
+        expect(payload[field]).toBe(value);
+        expect(payload).not.toHaveProperty("object_permission");
+        await userEvent.click(await screen.findByRole("button", { name: "Edit Settings", exact: true }));
+        expect(await screen.findByRole("textbox", { name: label, exact: true })).toHaveValue(value);
+        await userEvent.click(screen.getByRole("button", { name: "Save Changes", exact: true }));
+        await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(2));
+        expect(mockUserUpdateUserCall.mock.calls[1][1]).not.toHaveProperty("object_permission");
+      },
+    );
+
     it("should render the user's MCP entitlements in read mode", async () => {
       const user = userEvent.setup();
       render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} />);
@@ -347,7 +387,7 @@ describe("UserInfoView", () => {
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
     });
 
-    it("should nest MCP entitlements under object_permission when an admin saves", async () => {
+    it("omits unchanged MCP entitlements when an admin saves", async () => {
       const user = userEvent.setup();
       render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
 
@@ -362,13 +402,7 @@ describe("UserInfoView", () => {
       expect(token).toBe("test-token");
       expect(roleArg).toBeNull();
       expect(payload.user_id).toBe("user-123");
-      const expectedObjectPermission = {
-        mcp_servers: ["srv-1"],
-        mcp_access_groups: ["dev-group"],
-        mcp_toolsets: [],
-        mcp_tool_permissions: { "srv-1": ["list_issues"] },
-      };
-      expect(payload.object_permission).toEqual(expectedObjectPermission);
+      expect(payload).not.toHaveProperty("object_permission");
       expect(payload).not.toHaveProperty("mcp_servers_and_groups");
       expect(payload).not.toHaveProperty("mcp_tool_permissions");
       expect(payload).not.toHaveProperty("mcp_servers");
@@ -417,9 +451,35 @@ describe("UserInfoView", () => {
       });
 
       const [, payload] = mockUserUpdateUserCall.mock.calls[0];
-      expect(payload.object_permission.mcp_tool_permissions).toEqual({
-        "srv-1": ["list_issues"],
-        "srv-via-group": ["read_only"],
+      expect(payload).not.toHaveProperty("object_permission");
+    });
+
+    it("retains an independent tool-only server grant when another server's tools are edited", async () => {
+      const user = userEvent.setup();
+      const servers = [MCP_SERVER, { server_id: "server-b", server_name: "Server B" }];
+      const permission = {
+        mcp_servers: ["srv-1"],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { "srv-1": ["read_direct"], "server-b": ["read_independent"] },
+      };
+      mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, object_permission: permission });
+      mockFetchMCPServers.mockResolvedValue(servers);
+      mockMCPServerCatalog.mockReturnValue({ data: servers, isLoading: false });
+      mockListMCPTools.mockImplementation((_token: string, serverId: string) =>
+        Promise.resolve({ tools: [{ name: serverId === "srv-1" ? "read_direct" : "read_independent" }] }),
+      );
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+      await user.click((await screen.findAllByRole("radio", { name: "Flat List" }))[0]);
+      await user.click(await screen.findByRole("checkbox", { name: "read_direct", exact: true }));
+      await user.click(screen.getByRole("button", { name: "Save Changes", exact: true }));
+      await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalledOnce());
+
+      const [, payload] = mockUserUpdateUserCall.mock.calls[0];
+      expect(payload.object_permission).toEqual({
+        ...permission,
+        mcp_tool_permissions: { "srv-1": [], "server-b": ["read_independent"] },
       });
     });
 
@@ -442,6 +502,12 @@ describe("UserInfoView", () => {
 });
 
 describe("extractMcpEntitlement", () => {
+  const auditFields = {
+    created_at: "2026-01-01",
+    created_by: "test-admin",
+    updated_at: "2026-01-01",
+    updated_by: "test-admin",
+  };
   const CATALOG = [
     { server_id: "srv-1", server_name: "deploy_tracker", alias: "deploy" },
     { server_id: "srv-2", server_name: "issue_tracker", alias: null },
@@ -495,6 +561,29 @@ describe("extractMcpEntitlement", () => {
     expect(result?.mcp_tool_permissions).toEqual({});
   });
 
+  it.each(["server_name", "alias"])("revokes an ID-keyed grant despite another server's matching %s", (field) => {
+    const catalog: MCPServer[] = [
+      { ...auditFields, server_id: "srv-1", server_name: "First Server" },
+      { ...auditFields, server_id: "srv-2", server_name: "Second Server", [field]: "srv-1" },
+    ];
+    const result = extractMcpEntitlement(form({ servers: ["srv-2"] }, { "srv-1": ["read"] }), catalog);
+
+    expect(result?.mcp_tool_permissions).toEqual({});
+  });
+
+  it.each(["server_name", "alias"])("resolves a selected ID before another server's matching %s", (field) => {
+    const catalog: MCPServer[] = [
+      { ...auditFields, server_id: "srv-1", server_name: "First Server" },
+      { ...auditFields, server_id: "srv-2", server_name: "Second Server", [field]: "srv-1" },
+    ];
+    const result = extractMcpEntitlement(
+      form({ servers: ["srv-1"] }, { "srv-1": ["read"], "srv-2": ["write"] }),
+      catalog,
+    );
+
+    expect(result?.mcp_tool_permissions).toEqual({ "srv-1": ["read"] });
+  });
+
   it("prunes nothing when the server catalog has not loaded", () => {
     // Every key is unresolvable without the catalog, and pruning while under-informed is the
     // direction that widens.
@@ -507,22 +596,30 @@ describe("extractMcpEntitlement", () => {
     expect(result?.mcp_tool_permissions).toEqual({ "srv-deleted": ["read"] });
   });
 
-  it.each([
-    ["selected server first", ["srv-shared-a", "srv-shared-b"]],
-    ["deselected server first", ["srv-shared-b", "srv-shared-a"]],
-  ])("keeps a shared-name allowlist while any server it names is granted (%s)", (_label, order) => {
-    // Names are not unique and the gateway unions a name key into EVERY server answering to it, so
-    // this one entry restricts both. Resolving to the first match would drop it whenever the catalog
-    // happened to return the deselected server first, stripping the restriction from the one still
-    // granted, which is a widening that reproduces on one deployment and not another.
-    const catalog = [
-      { server_id: "srv-shared-a", server_name: "shared", alias: null },
-      { server_id: "srv-shared-b", server_name: "shared", alias: null },
-    ] as any;
-    const ordered = order.map((id) => catalog.find((server: any) => server.server_id === id));
+  it.each([false, true])("limits a shared alias to retained servers regardless of catalog order (%s)", (reverse) => {
+    const catalog: MCPServer[] = [
+      { ...auditFields, server_id: "srv-shared-a", server_name: "kept", alias: "shared" },
+      { ...auditFields, server_id: "srv-shared-b", server_name: "removed", alias: "shared" },
+    ];
+    const ordered = reverse ? catalog.toReversed() : catalog;
+    const permissions = {
+      "srv-shared-a": ["read"],
+      kept: ["write"],
+      shared: ["list"],
+      "srv-shared-b": ["delete"],
+      removed: ["admin"],
+    };
+    const result = extractMcpEntitlement(form({ servers: ["srv-shared-a"] }, permissions), ordered);
+    expect(result?.mcp_tool_permissions).toEqual({ "srv-shared-a": ["read", "write", "list"] });
+  });
 
-    const result = extractMcpEntitlement(form({ servers: ["srv-shared-a"] }, { shared: ["read"] }), ordered as any);
-    expect(result?.mcp_tool_permissions).toEqual({ shared: ["read"] });
+  it("keeps shared-alias restrictions on servers retained through access groups", () => {
+    const catalog: MCPServer[] = [
+      { ...auditFields, server_id: "kept", alias: "shared", mcp_access_groups: ["retained"] },
+      { ...auditFields, server_id: "removed", alias: "shared" },
+    ];
+    const result = extractMcpEntitlement(form({ accessGroups: ["retained"] }, { shared: ["*"] }), catalog);
+    expect(result?.mcp_tool_permissions).toEqual({ kept: ["*"] });
   });
 
   it("drops a shared-name allowlist once no server it names is granted", () => {

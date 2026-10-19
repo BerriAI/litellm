@@ -45,7 +45,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
-import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
+import { extractMcpEntitlementUpdate } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
@@ -269,7 +269,12 @@ export default function KeyInfoView({
         delete formValues.vector_stores;
       }
 
-      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers ?? [], allMcpToolsets ?? []);
+      const mcpEntitlement = extractMcpEntitlementUpdate(
+        formValues,
+        currentKeyData.object_permission,
+        allMcpServers ?? [],
+        allMcpToolsets ?? [],
+      );
       if (mcpEntitlement) {
         // Without a catalog the grants an allowlist key still has are unresolvable, so nothing is
         // pruned and a revocation would save as a no-op while reporting success. Refuse instead.
