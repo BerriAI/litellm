@@ -440,7 +440,7 @@ class BaseLLMAIOHTTPHandler:
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
-    ) -> tuple[Any, dict]:
+    ) -> tuple[object, dict]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client()
         else:
@@ -671,7 +671,7 @@ class BaseLLMAIOHTTPHandler:
         status_code: Final = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
         error_text = getattr(e, "text", str(e))
-        error_response: Final = getattr(e, "response", None)
+        error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):

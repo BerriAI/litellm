@@ -344,6 +344,77 @@ async fn feature_betas_join_the_callers_betas_in_one_sorted_header(
 }
 
 #[rstest]
+#[case::anthropic("anthropic", &[AnthropicBeta::DangerousToolUse20260903])]
+#[case::deepseek("deepseek", &[])]
+#[case::minimax("minimax", &[])]
+#[tokio::test]
+async fn safeguards_add_the_dangerous_tool_use_beta_only_where_the_beta_map_has_a_column(
+    call: MessagesCall,
+    #[case] provider: &str,
+    #[case] derived: &[AnthropicBeta],
+) {
+    let upstream = upstream([message_response()]).await;
+    let safeguards = json!([{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}]);
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Anthropic-Beta", "caller-beta-2025-01-01")]),
+            ..call
+        },
+        json!({"safeguards": safeguards}),
+    ))
+    .await;
+
+    let request = only_request(&upstream).await;
+    let expected: BetaSet = derived
+        .iter()
+        .cloned()
+        .chain([AnthropicBeta::Other("caller-beta-2025-01-01".to_string())])
+        .collect();
+    assert_eq!(sent_betas(&request), expected);
+    assert_eq!(
+        request.body_json::<Value>().unwrap()["safeguards"],
+        safeguards
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn null_safeguards_are_dropped_instead_of_sent_without_their_beta(
+    call: MessagesCall,
+    #[values("anthropic", "azure_ai", "bedrock_mantle", "deepseek", "minimax")] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Anthropic-Beta", "caller-beta-2025-01-01")]),
+            ..call
+        },
+        json!({"safeguards": null}),
+    ))
+    .await;
+
+    let request = only_request(&upstream).await;
+    assert_eq!(
+        sent_betas(&request),
+        BetaSet::from_iter([AnthropicBeta::Other("caller-beta-2025-01-01".to_string())])
+    );
+    assert!(
+        !request
+            .body_json::<Map<String, Value>>()
+            .unwrap()
+            .contains_key("safeguards")
+    );
+}
+
+#[rstest]
 #[tokio::test]
 async fn an_oauth_key_sends_the_browser_access_header_and_the_oauth_beta(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
@@ -893,4 +964,39 @@ async fn provider_validation_runs_before_caller_parameter_removal(
         "{error}"
     );
     assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn edenai_preserves_native_thinking_and_strips_billing_and_cache_extensions(
+    call: MessagesCall,
+) {
+    let upstream = upstream([message_response()]).await;
+    let thinking = json!({"type": "enabled", "budget_tokens": 512, "native_field": true});
+    run_message(MessagesCall {
+        custom_llm_provider: Some("edenai".into()),
+        api_base: Some(format!("{}/v3", upstream.uri())),
+        api_key: Some("eden-key".into()),
+        extra_headers: headers([("Anthropic-Beta", "unregistered-native-beta")]),
+        ..with_fields(call, json!({
+            "thinking": thinking, "temperature": 0.25,
+            "system": [{"type": "text", "text": "x-anthropic-billing-header: hidden"},
+                       {"type": "text", "text": "keep", "cache_control": {"type": "ephemeral", "ttl": "1h", "scope": "global"}}],
+        }))
+    }).await;
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.url.path(), "/v3/v1/messages");
+    assert_eq!(sent.header("authorization"), Some("Bearer eden-key"));
+    assert_eq!(
+        sent.header("anthropic-beta"),
+        Some("unregistered-native-beta")
+    );
+    assert_eq!(
+        sent.json(),
+        json!({
+            "model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}],
+            "thinking": thinking, "temperature": 0.25,
+            "system": [{"type": "text", "text": "keep", "cache_control": {"type": "ephemeral"}}],
+        })
+    );
 }
