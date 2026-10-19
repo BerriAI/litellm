@@ -28,6 +28,7 @@ fn call() -> ResponsesCall {
         api_base: None,
         custom_llm_provider: None,
         api_version: None,
+        litellm_params: Default::default(),
         extra_headers: None,
         timeout: None,
     }

@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 
-use crate::routes::inference::InferenceHost;
+use crate::{marshal::project_optional_fields, routes::inference::InferenceHost};
+use litellm_auth::AwsParams;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned, from_py};
 use litellm_inference_responses::{
@@ -9,7 +10,9 @@ use litellm_inference_responses::{
     route::Responses,
     types::ResponsesCall,
 };
+use litellm_router_types::LitellmParams;
 use pyo3::{
+    exceptions::PyValueError,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
@@ -53,6 +56,15 @@ pub(super) fn project(
                 .or(raw("base_url")?),
         ))?
         .extract()?;
+    let litellm_params = litellm_params(
+        py,
+        &call.options.model,
+        call.options.custom_llm_provider.as_deref(),
+        project_optional_fields(
+            AwsParams::fields().chain(["aws_bedrock_project_id"]),
+            |name| host.argument(py, arguments, name),
+        )?,
+    )?;
     let optional_params = call
         .params
         .into_iter()
@@ -89,9 +101,34 @@ pub(super) fn project(
             .argument(py, arguments, "api_version")?
             .map(|value| value.extract())
             .transpose()?,
+        litellm_params,
         extra_headers: call.options.extra_headers,
         timeout: call.options.timeout,
     })
+}
+
+/// The caller's AWS settings plus what Python reads from the model cost map for the provider
+fn litellm_params(
+    py: Python<'_>,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+    fields: serde_json::Map<String, serde_json::Value>,
+) -> PyResult<LitellmParams> {
+    let provider_params: Vec<(String, serde_json::Value)> = from_py(
+        &py.import(super::ROUTE_HOST_MODULE)?
+            .getattr("provider_params")?
+            .call1((model, custom_llm_provider))?,
+    )?;
+    let fields = [(
+        "model".to_owned(),
+        serde_json::Value::String(model.to_owned()),
+    )]
+    .into_iter()
+    .chain(fields)
+    .chain(provider_params)
+    .collect();
+    serde_json::from_value(serde_json::Value::Object(fields))
+        .map_err(|error| PyValueError::new_err(format!("invalid litellm params: {error}")))
 }
 
 /// The provider and deployment Python encodes into the ids it returns: the resolved provider and
