@@ -920,6 +920,85 @@ class TestMistralStripsOutputOnlyFields:
         assert "reasoning_content" not in result[-1]
 
 
+def test_mistral_transform_request_keeps_an_empty_tool_message_after_its_tool_call():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the log"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    result = request["messages"]
+    assert [m.get("role") for m in result] == ["user", "assistant", "tool"]
+    assert result[2].get("tool_call_id") == "call_1"
+
+
+@pytest.mark.parametrize("reply", [{"content": None}, {}], ids=["null", "missing"])
+def test_mistral_transform_request_sends_a_null_tool_reply_as_empty_text(reply):
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the log"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", **reply},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"][2] == {"role": "tool", "tool_call_id": "call_1", "content": ""}
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_no_tool_call_asked_for():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "tool_call_id": "call_9", "content": ""},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.parametrize("role", ["system", "user"])
+def test_mistral_transform_request_drops_a_message_with_null_content(role):
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [{"role": role, "content": None}, {"role": "user", "content": "hi"}],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "hi"}]
+
+
 def test_mistral_transform_request_hoists_tool_message_image():
     """Images inside role:"tool" messages must be moved to a following user
     message (Mistral rejects/ignores non-text tool content), including when
@@ -957,3 +1036,129 @@ def test_mistral_transform_request_hoists_tool_message_image():
         {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_for_a_call_already_answered_earlier():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {"role": "assistant", "content": "It is sunny"},
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "assistant", "user"]
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_when_a_later_reply_carries_the_result():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "user"]
+    assert request["messages"][2]["content"] == "sunny"
+
+
+def test_mistral_transform_request_keeps_an_empty_tool_message_answering_a_call_in_the_first_message():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["assistant", "tool", "user"]
+    assert request["messages"][1]["content"] == ""
+
+
+@pytest.mark.parametrize("placeholder_role", ["assistant", "user"])
+def test_mistral_transform_request_keeps_an_empty_tool_message_after_a_dropped_empty_placeholder(placeholder_role):
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": placeholder_role, "content": ""},
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "user"]
+    assert request["messages"][2]["content"] == ""
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_not_a_string():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the log"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": {"nested": "call_1"}, "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": {"nested": "call_1"}, "content": ""},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant"]

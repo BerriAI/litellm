@@ -617,3 +617,88 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
     assert [block for block in response["content"] if block["type"] == "tool_use"] == [
         {"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": tool_input}
     ]
+
+
+_MIXED_GROUP: Final = "gpt-5.6-mixed"
+_MIXED_AZURE_API_BASE: Final = "https://mixed-group.openai.azure.com"
+_MIXED_AZURE_CHAT_URL: Final = r".*mixed-group\.openai\.azure\.com/openai/deployments/.*/chat/completions.*"
+_MIXED_DEPLOYMENT_IDS: Final = ("mixed-openai-responses-bridge", "mixed-azure-chat-bridge")
+_MIXED_AZURE_CHAT_BODY: Final = {
+    "id": "chatcmpl-mixed",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": _JOKE}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+}
+
+
+def _mixed_openai_azure_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": _MIXED_GROUP,
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
+                "model_info": {"id": _MIXED_DEPLOYMENT_IDS[0]},
+            },
+            {
+                "model_name": _MIXED_GROUP,
+                "litellm_params": {"model": "azure/gpt-5.6", "api_key": "fake-key", "api_base": _MIXED_AZURE_API_BASE},
+                "model_info": {"id": _MIXED_DEPLOYMENT_IDS[1]},
+            },
+        ],
+        num_retries=0,
+    )
+
+
+async def _null_tool_result_text_rejection(router: Router, deployment_id: str) -> litellm.BadRequestError:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await router.aanthropic_messages(
+            model=deployment_id,
+            max_tokens=64,
+            messages=[
+                {"role": "user", "content": "run the build"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_build", "name": "bash", "input": {"cmd": "make"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_build",
+                            "content": [{"type": "text", "text": "build ok"}, {"type": "text", "text": None}],
+                        }
+                    ],
+                },
+            ],
+        )
+    return rejected.value
+
+
+@pytest.mark.asyncio
+async def test_mixed_openai_azure_group_answers_the_same_400_for_a_null_tool_result_text_on_either_deployment(
+    respx_mock,
+):
+    openai_route: Final = respx_mock.post(url__regex=_OPENAI_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=_OPENAI_BODY)
+    )
+    azure_route: Final = respx_mock.post(url__regex=_MIXED_AZURE_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_MIXED_AZURE_CHAT_BODY)
+    )
+    router: Final = _mixed_openai_azure_router()
+
+    rejections: Final = [
+        await _null_tool_result_text_rejection(router, deployment_id) for deployment_id in _MIXED_DEPLOYMENT_IDS
+    ]
+
+    assert [(rejection.status_code, rejection.llm_provider) for rejection in rejections] == [
+        (400, "openai"),
+        (400, "azure"),
+    ]
+    assert {rejection.message.partition("\n\n")[0] for rejection in rejections} == {
+        "litellm.BadRequestError: tool_result toolu_build content.1.text: Input should be a valid string"
+    }
+    assert openai_route.call_count == 0
+    assert azure_route.call_count == 0

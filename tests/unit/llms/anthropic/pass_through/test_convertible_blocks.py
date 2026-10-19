@@ -8,6 +8,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    malformed_tool_result_text_error,
     unconvertible_anthropic_blocks,
     unconvertible_blocks_error,
 )
@@ -190,3 +191,22 @@ def test_an_encrypted_web_search_inference_cannot_send_is_named() -> None:
     error: Final = unconvertible_blocks_error(_replayed_web_search("opaque"), "anthropic")
     assert error is not None
     assert error.endswith("server_tool_use, web_search_tool_result")
+
+
+@pytest.mark.parametrize(
+    ("tool_result", "error"),
+    (
+        (
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": [{"type": "text", "text": None}]},
+            "tool_result toolu_01 content.0.text: Input should be a valid string",
+        ),
+        (
+            {"type": "tool_result", "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": 5}]},
+            "tool_result content.1.text: Input should be a valid string",
+        ),
+    ),
+)
+def test_a_non_string_tool_result_text_is_named_with_or_without_a_tool_use_id(
+    tool_result: Mapping[str, object], error: str
+) -> None:
+    assert malformed_tool_result_text_error([{"role": "user", "content": [tool_result]}]) == error

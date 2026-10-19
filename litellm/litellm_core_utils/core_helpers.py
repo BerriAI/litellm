@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_c
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
@@ -91,6 +92,10 @@ def normalize_drop_params(value: object) -> bool | None:
         return _DROP_PARAMS_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
     except ValidationError:
         return None
+
+
+def drops_unsupported_params(drop_params: object) -> bool:
+    return litellm.drop_params is True or normalize_drop_params(drop_params) is True
 
 
 def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool:

@@ -300,3 +300,67 @@ async def test_a_json_provider_gets_safeguards_and_the_beta_together_unless_drop
     assert sent.headers["anthropic-beta"] == forwarded_beta
     assert "safeguard_results" not in response
     assert response["content"][0]["text"] == "hello"
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_tool_result_content"),
+    [
+        (True, [{"type": "text", "text": "sunny"}]),
+        (None, [{"type": "text", "text": 5}, {"type": "text", "text": "sunny"}]),
+    ],
+    ids=["drop_params", "no_drop_params"],
+)
+def test_drop_params_drops_a_non_string_tool_result_text_on_the_native_request(
+    drop_params, expected_tool_result_content
+):
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [{"type": "text", "text": 5}, {"type": "text", "text": "sunny"}],
+                }
+            ],
+        },
+    ]
+
+    request = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-4-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert request["messages"][2]["content"][0]["content"] == expected_tool_result_content
+
+
+def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_request():
+    tool_result_turn = {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01",
+                "content": [{"type": "text", "text": None}, {"type": "text", "text": "sunny"}],
+            }
+        ],
+    }
+
+    request = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "What is the weather?"}, 7, tool_result_turn],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert request["messages"][1] == 7
+    assert request["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "sunny"}]

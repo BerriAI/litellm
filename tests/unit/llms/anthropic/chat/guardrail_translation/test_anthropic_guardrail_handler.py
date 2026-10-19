@@ -155,6 +155,17 @@ class MockStructuredMaskingGuardrail(CustomGuardrail):
         return masked
 
 
+class MockNumberMaskingGuardrail(MockStructuredMaskingGuardrail):
+    @staticmethod
+    def _mask(text: str) -> str:
+        return (
+            text.replace("bob@example.com", "<EMAIL>")
+            .replace("5", "<NUMBER>")
+            .replace("null", "<NULL>")
+            .replace("山田太郎", "<NAME>")
+        )
+
+
 class TestAnthropicMessagesHandlerStreamingRequestData:
     """Post-call guardrails on streaming /v1/messages receive the response and identity metadata"""
 
@@ -2499,7 +2510,7 @@ class TestStructuredWriteBackKeepsToolResults:
     """A guardrail rewrite must never leave a tool_use without its tool_result (Claude Code ToolSearch, LIT-6103)."""
 
     @staticmethod
-    def _claude_code_tool_search_turns(tool_result_content):
+    def _claude_code_tool_search_turns(tool_result_content, tool_use_id="toolu_01"):
         return [
             {"role": "user", "content": "load WebFetch for bob@example.com"},
             {
@@ -2507,7 +2518,7 @@ class TestStructuredWriteBackKeepsToolResults:
                 "content": [
                     {
                         "type": "tool_use",
-                        "id": "toolu_01",
+                        "id": tool_use_id,
                         "name": "ToolSearch",
                         "input": {"query": "select:WebFetch"},
                     }
@@ -2516,7 +2527,7 @@ class TestStructuredWriteBackKeepsToolResults:
             {
                 "role": "user",
                 "content": [
-                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content},
+                    {"type": "tool_result", "tool_use_id": tool_use_id, "content": tool_result_content},
                     {"type": "text", "text": "Now fetch the page."},
                 ],
             },
@@ -2562,6 +2573,124 @@ class TestStructuredWriteBackKeepsToolResults:
         }
         later_blocks = [b for m in messages[tool_use_index + 1 :] for b in self._blocks(m)]
         assert {"type": "text", "text": "Now fetch the page."} in later_blocks
+
+    @pytest.mark.parametrize(
+        ("tool_result_content", "expected_written_back_content"),
+        [
+            (
+                [{"type": "text", "text": None}, {"type": "text", "text": "log for bob@example.com"}],
+                [{"type": "text", "text": None}, {"type": "text", "text": "log for <EMAIL>"}],
+            ),
+            (
+                [{"type": "text", "text": "log for bob@example.com"}, {"type": "text", "text": 73}],
+                [{"type": "text", "text": "log for <EMAIL>"}, {"type": "text", "text": 73}],
+            ),
+            ([{"type": "text", "text": None}], [{"type": "text", "text": None}]),
+            (
+                [
+                    {"type": "text", "text": None},
+                    {"type": "text", "text": "log for bob@example.com"},
+                    {"type": "text", "text": 5},
+                    {"type": "text", "text": "bob@example.com again"},
+                ],
+                [
+                    {"type": "text", "text": None},
+                    {"type": "text", "text": "log for <EMAIL>"},
+                    {"type": "text", "text": 5},
+                    {"type": "text", "text": "<EMAIL> again"},
+                ],
+            ),
+        ],
+        ids=["null-first", "number-last", "null-only", "interleaved"],
+    )
+    async def test_rewrite_keeps_a_non_string_tool_result_text_in_place(
+        self, tool_result_content, expected_written_back_content
+    ):
+        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert "bob@example.com" not in json.dumps(data["messages"])
+        assert data["messages"][2]["content"][0] == {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": expected_written_back_content,
+        }
+
+    async def test_rewrite_keeps_a_non_string_tool_result_text_whose_tool_use_id_gets_sanitized(self):
+        tool_result_content = [{"type": "text", "text": None}, {"type": "text", "text": "log for bob@example.com"}]
+        data = {
+            "model": "claude-fable-5",
+            "messages": self._claude_code_tool_search_turns(tool_result_content, tool_use_id="functions.get_weather:0"),
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"][2]["content"][0]["content"] == [
+            {"type": "text", "text": None},
+            {"type": "text", "text": "log for <EMAIL>"},
+        ]
+
+    async def test_rewrite_keeps_each_non_string_text_when_two_tool_use_ids_sanitize_alike(self):
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": "check both logs for bob@example.com"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "read:log", "name": "Read", "input": {"path": "a.log"}},
+                        {"type": "tool_use", "id": "read_log", "name": "Read", "input": {"path": "b.log"}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "read:log",
+                            "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": None}],
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "read_log",
+                            "content": [{"type": "text", "text": 5}, {"type": "text", "text": "bob@example.com"}],
+                        },
+                    ],
+                },
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert [block["content"] for block in data["messages"][2]["content"]] == [
+            [{"type": "text", "text": "ok"}, {"type": "text", "text": None}],
+            [{"type": "text", "text": 5}, {"type": "text", "text": "<EMAIL>"}],
+        ]
+
+    @pytest.mark.parametrize(
+        ("text", "masked"),
+        [(5, "<NUMBER>"), (None, "<NULL>"), ({"owner": "山田太郎"}, '{"owner": "<NAME>"}')],
+        ids=["number", "null", "non-ascii-object"],
+    )
+    async def test_guardrail_scans_and_masks_a_non_string_tool_result_text(self, text, masked):
+        tool_result_content = [{"type": "text", "text": text}, {"type": "text", "text": "log for bob@example.com"}]
+        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockNumberMaskingGuardrail()
+        )
+
+        assert data["messages"][2]["content"][0]["content"] == [
+            {"type": "text", "text": masked},
+            {"type": "text", "text": "log for <EMAIL>"},
+        ]
 
 
 class TestAnthropicMessagesHandlerStreamingScanKey:
