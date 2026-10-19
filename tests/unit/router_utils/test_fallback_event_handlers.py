@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from types import MappingProxyType
@@ -16,6 +17,8 @@ from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -1081,6 +1084,68 @@ class TestTriggerCooldownForFailedDeployment:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_called_once()
+
+
+async def _stalled_stream_error() -> Exception:
+    from litellm.router import _aread_first_chunk
+
+    async def _stall(**kwargs: object) -> NoReturn:
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+    stream: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-5.6",
+        logging_obj=Logging(
+            model="gpt-5.6",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=time.time(),
+            litellm_call_id="stalled-fallback",
+            function_id="stalled-fallback",
+        ),
+        custom_llm_provider="openai",
+        make_call=_stall,
+    )
+    try:
+        await _aread_first_chunk(stream)
+    except litellm.Timeout as stalled:
+        return stalled
+    raise AssertionError("a stream that stalls before its first chunk must raise litellm.Timeout")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream_stalled", "cooled"),
+    [(True, ()), (False, ("fallback-deployment",))],
+    ids=["stream-stall", "non-stream-timeout"],
+)
+async def test_a_fallback_deployment_whose_stream_stalled_stays_out_of_cooldown(
+    stream_stalled: bool, cooled: tuple[str, ...]
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                "model_info": {"id": "fallback-deployment"},
+            }
+        ],
+        allowed_fails=0,
+        cooldown_time=60,
+        num_retries=0,
+    )
+    error: Final = (
+        await _stalled_stream_error()
+        if stream_stalled
+        else litellm.Timeout(message="timeout", model="gpt-5.6", llm_provider="openai")
+    )
+    error.failed_deployment_id = "fallback-deployment"
+
+    _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=error)
+
+    active: Final = router.cooldown_cache.get_active_cooldowns(model_ids=["fallback-deployment"], parent_otel_span=None)
+    assert tuple(entry[0] for entry in active) == cooled
 
 
 class TestRunAsyncFallbackTriggersCooldown:

@@ -23,6 +23,8 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 MARKER: Final = re.compile(rb"traceresp-[0-9a-f]{32}")
 TRACERESPONSE: Final = re.compile(r"00-([0-9a-f]{32})-([0-9a-f]{16})-01")
 SERVER: Final = 2

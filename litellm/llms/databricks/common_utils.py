@@ -12,18 +12,44 @@ Authentication priority:
 
 import os
 import re
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict
 
+import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 
 _DEFAULT_M2M_TOKEN_LIFETIME_SECONDS: Final = 3600
 
 
 class DatabricksException(BaseLLMException):
     pass
+
+
+DATABRICKS_ANTHROPIC_MESSAGES_PATH: Final = "/anthropic/v1/messages"
+DATABRICKS_SERVING_ENDPOINTS_MESSAGES_PATH: Final = f"/serving-endpoints{DATABRICKS_ANTHROPIC_MESSAGES_PATH}"
+DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH: Final = "/ai-gateway/anthropic"
+DATABRICKS_AI_GATEWAY_MESSAGES_PATH: Final = f"{DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH}/v1/messages"
+DATABRICKS_WORKSPACE_ROUTE_PREFIXES: Final = (
+    "/serving-endpoints",
+    "/serving-endpoints/anthropic",
+    DATABRICKS_SERVING_ENDPOINTS_MESSAGES_PATH,
+    "/ai-gateway/mlflow/v1",
+    DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH,
+    DATABRICKS_AI_GATEWAY_MESSAGES_PATH,
+)
+DATABRICKS_NATIVE_MESSAGES_MODEL_PREFIXES: Final = ("databricks-claude-", "system.ai.claude-")
+DATABRICKS_ENDPOINT_PATHS: Final = MappingProxyType(
+    {
+        "chat_completions": "/chat/completions",
+        "embeddings": "/embeddings",
+        "anthropic_messages": DATABRICKS_ANTHROPIC_MESSAGES_PATH,
+    }
+)
 
 
 class OAuthM2MToken(BaseModel):
@@ -143,6 +169,47 @@ class DatabricksBase:
                 redacted[key] = value
 
         return redacted
+
+    @staticmethod
+    def resolve_api_key(api_key: str | None) -> str | None:
+        return api_key or litellm.api_key or litellm.databricks_key or get_secret_str("DATABRICKS_API_KEY")
+
+    @staticmethod
+    def resolve_api_base(api_base: str | None) -> str | None:
+        return api_base or litellm.api_base or os.getenv("DATABRICKS_API_BASE")
+
+    @staticmethod
+    def serves_native_anthropic_messages(model: str) -> bool:
+        return model.removeprefix("databricks/").lower().startswith(DATABRICKS_NATIVE_MESSAGES_MODEL_PREFIXES)
+
+    @staticmethod
+    def uses_ai_gateway(model: str) -> bool:
+        return model.removeprefix("databricks/").count(".") >= 2
+
+    @staticmethod
+    def recognizes_workspace_route(api_base: str, model: str) -> bool:
+        route: Final = urlsplit(api_base).path.rstrip("/")
+        return route.endswith(DATABRICKS_WORKSPACE_ROUTE_PREFIXES) or (
+            route == "" and DatabricksBase.uses_ai_gateway(model)
+        )
+
+    @staticmethod
+    def workspace_root(api_base: str) -> str:
+        normalized: Final = api_base.rstrip("/")
+        route_prefix: Final = next(
+            (prefix for prefix in DATABRICKS_WORKSPACE_ROUTE_PREFIXES if normalized.endswith(prefix)), ""
+        )
+        return normalized.removesuffix(route_prefix)
+
+    @staticmethod
+    def configured_user_agent(litellm_params: Mapping[str, object]) -> str | None:
+        configured: Final = (
+            litellm_params.get("user_agent")
+            or litellm_params.get("databricks_user_agent")
+            or os.getenv("LITELLM_USER_AGENT")
+            or os.getenv("DATABRICKS_USER_AGENT")
+        )
+        return configured if isinstance(configured, str) else None
 
     @staticmethod
     def _build_user_agent(custom_user_agent: str | None = None) -> str:
@@ -327,11 +394,11 @@ class DatabricksBase:
         self,
         api_key: str | None,
         api_base: str | None,
-        endpoint_type: Literal["chat_completions", "embeddings"],
+        endpoint_type: Literal["chat_completions", "embeddings", "anthropic_messages"],
         custom_endpoint: bool | None,
         headers: dict | None,
         custom_user_agent: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: becomes the outbound headers
         """
         Validate and configure the Databricks environment.
 
@@ -343,7 +410,7 @@ class DatabricksBase:
         Args:
             api_key: Personal access token (PAT)
             api_base: Databricks workspace URL with /serving-endpoints
-            endpoint_type: Type of endpoint (chat_completions or embeddings)
+            endpoint_type: Type of endpoint (chat_completions, embeddings or anthropic_messages)
             custom_endpoint: Whether using a custom endpoint URL
             headers: Existing headers dict
             custom_user_agent: Optional custom user agent to prefix
@@ -410,9 +477,5 @@ class DatabricksBase:
         # Debug logging with redaction (never log actual tokens)
         verbose_logger.debug("Databricks request headers: %s", self.redact_headers_for_logging(headers))
 
-        if endpoint_type == "chat_completions" and custom_endpoint is not True:
-            api_base = f"{api_base}/chat/completions"
-        elif endpoint_type == "embeddings" and custom_endpoint is not True:
-            api_base = f"{api_base}/embeddings"
-
-        return api_base, headers
+        endpoint_path: Final = "" if custom_endpoint is True else DATABRICKS_ENDPOINT_PATHS[endpoint_type]
+        return f"{api_base}{endpoint_path}", headers

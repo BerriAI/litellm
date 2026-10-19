@@ -5832,7 +5832,8 @@ export interface paths {
         };
         /**
          * Latest Release Info
-         * @description Latest stable LiteLLM GitHub release with its PR count split into new features, bug fixes and other updates.
+         * @description Latest stable LiteLLM GitHub release with the PR count of its whole minor line (e.g. v1.105.0 + v1.105.1)
+         *     split into new features, bug fixes and other updates.
          *     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
@@ -9466,6 +9467,23 @@ export interface paths {
          *     ```
          */
         post: operations["bulk_delete_users_action_management_v1_users_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/users/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Current User */
+        get: operations["get_current_user_management_v1_users_me_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -30261,6 +30279,11 @@ export interface components {
              * @default false
              */
             vector_store_deny_by_default: boolean;
+            /**
+             * Vertex Ai Pass Through Drop Anthropic Betas
+             * @description anthropic-beta header values the Vertex AI pass-through routes (/vertex_ai/* and /vertex-ai/*) remove before calling Vertex, for a beta a Vertex Claude model rejects, whether the client sent them as anthropic-beta or x-pass-anthropic-beta. Every other value the client sent is forwarded unchanged, and the header is left out when no value remains. Unset forwards the header as sent.
+             */
+            vertex_ai_pass_through_drop_anthropic_betas?: string[] | null;
         };
         /** ConfigList */
         ConfigList: {
@@ -31065,6 +31088,14 @@ export interface components {
              * @enum {string}
              */
             source: "db" | "config";
+        };
+        /** CurrentUserResponse */
+        CurrentUserResponse: {
+            /** User Email */
+            user_email: string | null;
+            /** User Id */
+            user_id: string;
+            user_role: components["schemas"]["LitellmUserRoles"] | null;
         };
         /** CustomDimension */
         CustomDimension: {
@@ -46821,9 +46852,17 @@ export interface components {
          * @description Response structure for token count details with modality breakdown.
          *
          *     Example:
-         *         {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+         *         {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+         *          'litellm_count_source': 'provider'}
          */
         TokenCountDetailsResponse: {
+            /** Litellm Count Model */
+            litellm_count_model?: string;
+            /**
+             * Litellm Count Source
+             * @enum {string}
+             */
+            litellm_count_source?: "provider" | "token_count_model" | "local_estimate";
             /** Prompttokensdetails */
             promptTokensDetails: components["schemas"]["PromptTokensDetails"][];
             /** Totaltokens */
@@ -46852,6 +46891,8 @@ export interface components {
         };
         /** TokenCountResponse */
         TokenCountResponse: {
+            /** Count Source */
+            count_source?: ("provider" | "token_count_model" | "local_estimate") | null;
             /**
              * Error
              * @default false
@@ -63729,6 +63770,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_current_user_management_v1_users_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
                 };
             };
         };

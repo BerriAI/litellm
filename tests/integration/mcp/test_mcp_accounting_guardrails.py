@@ -36,6 +36,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 DEFAULT_COST: Final = 0.25
 ADD_COST: Final = 0.5
 FORBIDDEN: Final = "forbidden-integration-word"
