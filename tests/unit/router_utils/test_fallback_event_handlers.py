@@ -25,6 +25,7 @@ from litellm.router_utils.fallback_event_handlers import (
     PRE_ROUTING_SELECTED_MODEL_KEY,
     AttemptedFallbackTargets,
     MidStreamFallbackControls,
+    _is_fallback_target_ocr_capable,
     _trigger_cooldown_for_failed_deployment,
     attempted_retries_for_request,
     carry_over_routed_deployment,
@@ -690,6 +691,36 @@ async def test_run_async_fallback_raises_original_error_when_no_ocr_capable_fall
         )
 
     assert router.attempted_model_groups == []
+
+
+def test_is_fallback_target_ocr_capable_treats_self_reference_as_compatible():
+    """A fallback entry naming the same model_group as the original request is the same
+    deployment that already failed, not a different one being probed for capability, so it
+    is never mode-gated."""
+    router = OcrModeAwareRouter(configured_modes={"primary-ocr-model": "chat"})
+
+    assert _is_fallback_target_ocr_capable(
+        router,
+        "primary-ocr-model",
+        "primary-ocr-model",
+        {"original_function": aocr},
+        attempted=AttemptedFallbackTargets(),
+    )
+
+
+def test_is_fallback_target_ocr_capable_treats_unresolvable_target_as_compatible():
+    """A fallback entry with no resolvable model_group name (e.g. a dict missing `model`)
+    can't be looked up against a configured mode, so it is treated as compatible rather than
+    blocking a fallback the router would otherwise accept."""
+    router = OcrModeAwareRouter(configured_modes={})
+
+    assert _is_fallback_target_ocr_capable(
+        router,
+        {"not_model": "x"},
+        "primary-ocr-model",
+        {"original_function": aocr},
+        attempted=AttemptedFallbackTargets(),
+    )
 
 
 class RecordingFailRouter:
