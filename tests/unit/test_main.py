@@ -4380,6 +4380,8 @@ class _RecordedSpeechSuccess:
     logged_response_cost: float | None
     logged_tokens: tuple[object, object]
     logged_cache_hit: object
+    logged_saved_cache_cost: object
+    logged_cache_key: object
 
 
 def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess:
@@ -4395,6 +4397,8 @@ def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess
         logged_response_cost=logged_cost if isinstance(logged_cost, float) else None,
         logged_tokens=(logged.get("prompt_tokens"), logged.get("completion_tokens")),
         logged_cache_hit=logged.get("cache_hit"),
+        logged_saved_cache_cost=logged.get("saved_cache_cost"),
+        logged_cache_key=logged.get("cache_key"),
     )
 
 
@@ -4529,6 +4533,8 @@ async def test_aspeech_gemini_bridge_logs_a_cached_reply_as_a_free_cache_hit(
     assert first.logged_response_cost is not None and first.logged_response_cost > 0
     assert cached.logged_cache_hit is True
     assert cached.logged_response_cost == 0.0
+    assert cached.logged_saved_cache_cost == pytest.approx(first.logged_response_cost)
+    assert isinstance(cached.logged_cache_key, str) and cached.logged_cache_key
 
 
 def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:
