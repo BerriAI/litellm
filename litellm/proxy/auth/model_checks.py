@@ -272,14 +272,26 @@ def _hydrate_litellm_credential_name(
     return litellm_params
 
 
-def _is_routing_segment(segment: str, provider_model_ids: tuple[str, ...]) -> bool:
-    return "*" not in segment and not any(model_id.startswith(f"{segment}/") for model_id in provider_model_ids)
+def _is_routing_segment(
+    segment: str, provider: str, name_segments: frozenset[str], provider_model_ids: tuple[str, ...]
+) -> bool:
+    return (
+        "*" not in segment
+        and segment != provider
+        and segment not in name_segments
+        and not any(model_id.startswith(f"{segment}/") for model_id in provider_model_ids)
+    )
 
 
-def _without_routing_segments(model_pattern: str, provider_model_ids: tuple[str, ...]) -> str:
+def _without_routing_segments(
+    model_pattern: str, provider: str, name_pattern: str, provider_model_ids: tuple[str, ...]
+) -> str:
     segments: Final = model_pattern.split("/")
+    name_segments: Final = frozenset(name_pattern.split("/")[1:])
     routing_segments: Final = tuple(
-        itertools.takewhile(lambda segment: _is_routing_segment(segment, provider_model_ids), segments[:-1])
+        itertools.takewhile(
+            lambda segment: _is_routing_segment(segment, provider, name_segments, provider_model_ids), segments[:-1]
+        )
     )
     return "/".join(segments[len(routing_segments) :])
 
@@ -292,7 +304,7 @@ def _ids_routing_to_catalog_models(
     provider_id_prefix: Final = f"{provider}/"
     provider_model_ids: Final = tuple(catalog_id.removeprefix(provider_id_prefix) for catalog_id in catalog_ids)
     catalog_pattern: Final = _without_routing_segments(
-        deployment_pattern.removeprefix(provider_id_prefix), provider_model_ids
+        deployment_pattern.removeprefix(provider_id_prefix), provider, name_pattern, provider_model_ids
     )
     deployment_regex: Final = re.compile(
         PatternMatchRouter().pattern_to_regex(f"{provider_id_prefix}{catalog_pattern}")
@@ -300,19 +312,18 @@ def _ids_routing_to_catalog_models(
     catalog_matches: Final = (
         deployment_regex.fullmatch(f"{provider_id_prefix}{model_id}") for model_id in provider_model_ids
     )
-    return tuple(
-        dict.fromkeys(
-            PatternMatchRouter.set_deployment_model_name(
-                matched_pattern=catalog_match, litellm_deployment_litellm_model=name_pattern
-            )
-            for catalog_match in catalog_matches
-            if catalog_match is not None
+    listed_ids: Final = (
+        PatternMatchRouter.set_deployment_model_name(
+            matched_pattern=catalog_match, litellm_deployment_litellm_model=name_pattern
         )
+        for catalog_match in catalog_matches
+        if catalog_match is not None
     )
+    return tuple(dict.fromkeys(listed_id for listed_id in listed_ids if listed_id))
 
 
 def _deployment_pattern_naming_listed_ids(wildcard_suffix: str, litellm_params: LiteLLM_Params | None) -> str | None:
-    if litellm_params is None or not _check_wildcard_routing(litellm_params.model):
+    if litellm_params is None or "/" not in litellm_params.model or not _check_wildcard_routing(litellm_params.model):
         return None
     deployment_suffix: Final = litellm_params.model.partition("/")[2]
     return litellm_params.model if wildcard_suffix != "*" or deployment_suffix != "*" else None
@@ -332,8 +343,6 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
     except ValueError:  # safely fail
         return []
     deployment_pattern_naming_listed_ids: Final = _deployment_pattern_naming_listed_ids(wildcard_suffix, litellm_params)
-    if deployment_pattern_naming_listed_ids is not None and wildcard_model == "*":
-        return []
 
     # Use provider from litellm_params when available, otherwise from wildcard prefix
     # (e.g., "openai" from "openai/*" - needed for BYOK where wildcard isn't in router)

@@ -1312,6 +1312,21 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
         pytest.param(
             "bedrock/*", "bedrock/converse/*", None, {f"bedrock/converse/{_ROUTE_BEDROCK_ID}"}, id="converse-route"
         ),
+        pytest.param(
+            "openai/partial-route-org/*",
+            "openai/partial-route-org/*",
+            None,
+            set(),
+            id="same-name-namespace-the-catalog-lacks",
+        ),
+        pytest.param(
+            "*", "openai/*", "openai/gpt-partial-route-9*", set(), id="provider-prefixed-key-filter-over-catch-all"
+        ),
+        pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
+        pytest.param("*", "gemini/gemini-partial-route-9*", None, {_ROUTE_GEMINI_ID}, id="catch-all-over-partial-id"),
+        pytest.param(
+            "*", "gemini/gemini-partial-route-9-flash*", None, set(), id="catch-all-whose-only-match-is-its-fixed-text"
+        ),
     ],
 )
 def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
@@ -1363,33 +1378,41 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
             for row in expand_wildcard_deployments_for_model_info(
                 [dict(deployment) for deployment in router.get_model_list() or []]
             )
+            if row["model_name"] != model_name
         ]
         listed_v1_models: Final = routed_catalog_ids(v1_models)
         listed_model_info_names: Final = routed_catalog_ids(model_info_names)
 
+    unrouted_ids: Final = [
+        listed_id
+        for listed_id in [*v1_models, *model_info_names]
+        if not router.wildcard_route_deployments(listed_id, None)
+    ]
+    assert unrouted_ids == []
+    assert all(v1_models) and all(model_info_names)
     assert listed_v1_models == sorted(reachable)
     if key_model is None:
         assert listed_model_info_names == sorted(reachable)
 
 
-@pytest.mark.parametrize("deployment_model", ["cloudflare/@cf/*", "gemini/gemini-partial-route-9*"])
-def test_catch_all_over_a_partial_deployment_lists_no_catalog_ids(deployment_model: str) -> None:
+def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm import Router
-    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+    from litellm.proxy.auth.model_checks import get_complete_model_list
 
-    router: Final = Router(model_list=[{"model_name": "*", "litellm_params": {"model": deployment_model}}])
-    deployments: Final = [dict(deployment) for deployment in router.get_model_list() or []]
-    with _registered_chat_models({_ROUTE_CF_ID: "cloudflare", _ROUTE_GEMINI_ID: "gemini"}):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-partial-route-test")
+    router: Final = Router(model_list=[{"model_name": "team-partial-route/*", "litellm_params": {"model": "*"}}])
+    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
         v1_models: Final = get_complete_model_list(
             key_models=[],
             team_models=[],
-            proxy_model_list=["*"],
+            proxy_model_list=["team-partial-route/*"],
             user_model=None,
             infer_model_from_keys=False,
             llm_router=router,
         )
-        model_info_rows: Final = expand_wildcard_deployments_for_model_info(deployments)
 
-    assert v1_models == []
-    assert model_info_rows == deployments
-
+    unrouted_ids: Final = [
+        listed_id for listed_id in v1_models if not router.wildcard_route_deployments(listed_id, None)
+    ]
+    assert f"team-partial-route/{_ROUTE_OPENAI_ID}" in v1_models
+    assert unrouted_ids == []
