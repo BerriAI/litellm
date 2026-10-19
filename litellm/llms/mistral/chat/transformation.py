@@ -598,7 +598,7 @@ class MistralConfig(OpenAIGPTConfig):
 
                         # Process each content block
                         for block in content:
-                            block_type = block.get("type")  # pyright: ignore[reportUnknownVariableType]  # provider content blocks are untyped JSON
+                            block_type = block.get("type")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # provider content blocks are untyped JSON
                             if block_type == "thinking":
                                 thinking_blocks = block.get("thinking", [])
                                 thinking_texts = []
@@ -607,7 +607,7 @@ class MistralConfig(OpenAIGPTConfig):
                                         thinking_texts.append(thinking_block.get("text", ""))
                                 thinking_content = "\n".join(thinking_texts)
                             elif block_type == "text":
-                                text_segments.append(block.get("text", ""))  # pyright: ignore[reportUnknownArgumentType]  # provider content blocks are untyped JSON
+                                text_segments.append(block.get("text", ""))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # provider content blocks are untyped JSON
                             elif block_type == "reference":
                                 has_reference_blocks = True
 
@@ -729,12 +729,12 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                         delta.pop("thinking_blocks", None)
                         delta.pop("reasoning_content", None)
                     if any(
-                        block.get("type") == "reference"
+                        block.get("type") == "reference"  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # provider content blocks are untyped JSON
                         for block in content  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # provider content blocks are untyped JSON
                     ):
                         # citation chunks carry no text; expose them on
                         # provider_specific_fields instead of dropping them
-                        existing_fields = delta.get("provider_specific_fields")
+                        existing_fields = delta.get("provider_specific_fields")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # provider_specific_fields comes from the provider payload, which is untyped JSON
                         if isinstance(existing_fields, dict):
                             # keep whatever the provider already put there
                             existing_fields["mistral_content_blocks"] = content
