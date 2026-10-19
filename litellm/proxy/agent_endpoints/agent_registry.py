@@ -162,7 +162,7 @@ async def _permission_write(
     if existing_id is None:
         created: Final[AgentPermissionWrite] = {"create": prepared.record}
         return created
-    updated: Final[AgentPermissionWrite] = {"update": prepared.record}
+    updated: Final[AgentPermissionWrite] = {"update": prepared.update_record}
     return updated
 
 

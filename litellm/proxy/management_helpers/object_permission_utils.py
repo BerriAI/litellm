@@ -22,6 +22,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.repositories.table_repositories import MCPServerRepository
 
 if TYPE_CHECKING:
@@ -78,19 +79,21 @@ async def attach_object_permission_to_dict(
 class ObjectPermissionUpsert:
     object_permission_id: str
     record: dict[str, object]
+    update_record: Mapping[str, object]
 
 
 async def prepare_object_permission_upsert(
     new_object_permission: Mapping[str, object],
     existing_object_permission_id: str | None,
-    prisma_client: PrismaClient,
+    prisma_client: DatabaseClient,
 ) -> ObjectPermissionUpsert:
     """
     Read-and-merge half of an object permission upsert; performs no writes.
 
     Merges the sent grants over the existing row (looked up by
     ``existing_object_permission_id``, or a fresh uuid when the entity has none) and
-    returns the id plus the full record to upsert. The id is pinned inside the record
+    returns the id, a merged create record, and an update record of only sent grants.
+    The id is pinned inside the create record
     because the column has ``@default(uuid())``, so a create without it would mint a
     different id than the one the caller links. ``mcp_tool_permissions`` is serialized
     to a JSON string to avoid GraphQL parsing issues (e.g. server IDs starting with
@@ -114,9 +117,14 @@ async def prepare_object_permission_upsert(
         existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
         prisma_client=prisma_client,
     )
+    requested_fields: Final = {
+        field: value
+        for field, value in new_object_permission.items()
+        if value is not None and field != "object_permission_id"
+    }
     merged: Final[dict[str, object]] = {
         **existing_fields,
-        **new_object_permission,
+        **requested_fields,
         "object_permission_id": object_permission_id,
     }
     record: Final[dict[str, object]] = {
@@ -127,7 +135,15 @@ async def prepare_object_permission_upsert(
             else {}
         ),
     }
-    return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
+    update_record: Final = {
+        field: safe_dumps(value) if field == "mcp_tool_permissions" else value
+        for field, value in requested_fields.items()
+    }
+    return ObjectPermissionUpsert(
+        object_permission_id=object_permission_id,
+        record=record,
+        update_record=update_record,
+    )
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -181,7 +197,7 @@ async def handle_update_object_permission_common(
         where={"object_permission_id": upsert.object_permission_id},
         data={
             "create": upsert.record,
-            "update": upsert.record,
+            "update": upsert.update_record,
         },
     )
 
@@ -269,7 +285,7 @@ def _mcp_server_identifier_matches(server: object, identifier: str) -> bool:
 
 async def _get_db_mcp_servers_by_identifiers(
     identifiers: AbstractSet[str],
-    prisma_client: PrismaClient | None,
+    prisma_client: DatabaseClient | None,
 ) -> "Sequence[prisma_models.LiteLLM_MCPServerTable]":
     if prisma_client is None or not identifiers:
         return []
@@ -288,7 +304,7 @@ async def _get_db_mcp_servers_by_identifiers(
 
 async def _resolve_mcp_server_identifiers_to_ids(
     identifiers: AbstractSet[str],
-    prisma_client: PrismaClient | None,
+    prisma_client: DatabaseClient | None,
 ) -> dict[str, set[str]]:
     """
     Resolve MCP permission entries written as server_id, alias, or server_name
@@ -345,7 +361,7 @@ def _mcp_tool_permission_entries(raw: object) -> Mapping[str, frozenset[str]]:
 async def reject_ambiguous_mcp_tool_permission_keys(
     new_mcp_tool_permissions: object,
     existing_mcp_tool_permissions: object,
-    prisma_client: PrismaClient | None,
+    prisma_client: DatabaseClient | None,
 ) -> None:
     """
     A name or alias shared by several MCP servers cannot key ``mcp_tool_permissions``:
