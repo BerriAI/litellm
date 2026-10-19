@@ -34,6 +34,7 @@ _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
+_PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
 
 
 def _count_image(block: JsonValue) -> JsonValue:
@@ -141,8 +142,8 @@ class _ChatRequestTranslator(Protocol):
     ) -> _ChatParams: ...
 
 
-def _is_chat_tool_turn(message: Mapping[str, object]) -> bool:
-    return message.get("role") == "tool" or bool(message.get("tool_calls"))
+def _needs_chat_translation(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "tool" or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
 
 
 def _is_chat_tool(tool: Mapping[str, object]) -> bool:
@@ -189,14 +190,17 @@ def _translated_chat_request(
     from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
 
     chat_tools: Final = [dict(chat_tool) for chat_tool in chain.from_iterable(map(chat_completion_tools_for, tools))]
-    mapped_params: Final = {**chat_params, **({"tools": chat_tools} if chat_tools else {})}
+    openai_params: Final = {name: value for name, value in chat_params.items() if name != "drop_params"}
+    mapped_params: Final = {**openai_params, **({"tools": chat_tools} if chat_tools else {})}
     chat_messages: Final = cast(  # cast-ok: chat-shaped request messages, read the way chat inference reads them
         _ChatMessages, copy.deepcopy([*_system_messages(system), *messages])
     )
     return translator.transform_request(
         model=model,
         messages=chat_messages,
-        optional_params=translator.map_openai_params(mapped_params, {}, model, drop_params=False)
+        optional_params=translator.map_openai_params(
+            mapped_params, {}, model, drop_params=chat_params.get("drop_params") is True
+        )
         if mapped_params
         else {},
         litellm_params={},
@@ -213,7 +217,11 @@ def anthropic_fields_for_chat_tool_use(
     chat_params: Mapping[str, object] = MappingProxyType({}),
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
-    if not chat_params and not any(map(_is_chat_tool, counted_tools)) and not any(map(_is_chat_tool_turn, messages)):
+    if (
+        not chat_params
+        and not any(map(_is_chat_tool, counted_tools))
+        and not any(map(_needs_chat_translation, messages))
+    ):
         return None
     from litellm.exceptions import BadRequestError
     from litellm.llms.anthropic.common_utils import AnthropicError

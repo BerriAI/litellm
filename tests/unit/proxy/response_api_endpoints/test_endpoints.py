@@ -4171,10 +4171,15 @@ class TestResponsesInputTokens:
         path: str = "/v1/responses/input_tokens",
         counter: AsyncMock | None = None,
         llm_router: litellm.Router | None = None,
+        response_id_security: object | None = None,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy.response_api_endpoints.endpoints import _proxy_llm_router, _proxy_token_counter
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _proxy_llm_router,
+            _proxy_response_id_security,
+            _proxy_token_counter,
+        )
         from litellm.types.utils import TokenCountResponse
 
         token_counter_mock = (
@@ -4192,6 +4197,8 @@ class TestResponsesInputTokens:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", request_route=path)
         app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
         app.dependency_overrides[_proxy_llm_router] = lambda: llm_router
+        if response_id_security is not None:
+            app.dependency_overrides[_proxy_response_id_security] = lambda: response_id_security
         try:
             client = TestClient(app)
             response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
@@ -4200,6 +4207,7 @@ class TestResponsesInputTokens:
             app.dependency_overrides.pop(user_api_key_auth, None)
             app.dependency_overrides.pop(_proxy_token_counter, None)
             app.dependency_overrides.pop(_proxy_llm_router, None)
+            app.dependency_overrides.pop(_proxy_response_id_security, None)
 
     def test_string_input_returns_openai_input_tokens_shape(self):
         response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "Hello, how are you?"})
@@ -4325,6 +4333,25 @@ class TestResponsesInputTokens:
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools == [{"type": "web_search"}]
         assert counter.await_args.kwargs["responses_request"]["tools"] == [{"type": "web_search"}]
+
+    def test_previous_response_id_reaches_the_counter_authorized_next_to_the_id_the_client_held(self) -> None:
+        from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
+
+        class DecodingSecurity:
+            def authorize_response_id(self, response_id: str, user_api_key_dict: object) -> str:
+                return {"resp_client_form": "resp_raw"}[response_id]
+
+        response, counter = self._post_input_tokens(
+            {"model": "gpt-4o", "input": "hi", "previous_response_id": "resp_client_form"},
+            response_id_security=DecodingSecurity(),
+        )
+
+        assert response.status_code == 200, response.text
+        responses_request: Final = counter.await_args.kwargs["responses_request"]
+        assert (responses_request["previous_response_id"], responses_request[ADDRESSED_RESPONSE_ID_FIELD]) == (
+            "resp_raw",
+            "resp_client_form",
+        )
 
     def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self) -> None:
         router: Final = litellm.Router(

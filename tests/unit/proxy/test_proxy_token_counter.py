@@ -58,6 +58,7 @@ from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_hand
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest
+from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
@@ -78,7 +79,12 @@ from litellm.proxy.proxy_server import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-from litellm.types.utils import SelectTokenizerResponse, TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
+    SelectTokenizerResponse,
+    TokenCountMessagesFormat,
+    TokenCountResponse,
+)
 
 
 def _hugging_face_offline() -> NoReturn:
@@ -3296,3 +3302,151 @@ async def test_responses_count_on_claude_counts_the_chat_request_responses_infer
     assert isinstance(output_config, dict)
     assert output_config["format"] == {"type": "json_schema", "schema": _ANSWER_SCHEMA}
     assert "thinking" in body
+
+
+_WEATHER_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+async def _claude_count(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_params: Mapping[str, JsonValue],
+    responses_request: Mapping[str, object],
+) -> tuple[TokenCountResponse, list[dict[str, JsonValue]]]:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-counted",
+                "litellm_params": {
+                    "model": "anthropic/claude-zeta-9",
+                    "api_key": "test-key",
+                    "api_base": "https://count-tokens.test",
+                    **deployment_params,
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    bodies: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"input_tokens": 77}, request=request)
+
+    with patch.object(
+        anthropic_count_tokens_handler,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+    ):
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="claude-counted", messages=[{"role": "user", "content": "Weather?"}]),
+            call_endpoint=True,
+            responses_request={"model": "claude-counted", **responses_request},
+        )
+    return result, bodies
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "request_params"),
+    [({"drop_params": True}, {}), ({}, {"drop_params": True})],
+    ids=["deployment", "request"],
+)
+async def test_responses_count_on_claude_downgrades_forced_tool_choice_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_params: Mapping[str, JsonValue],
+    request_params: Mapping[str, JsonValue],
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
+
+    result, bodies = await _claude_count(
+        monkeypatch,
+        deployment_params,
+        {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required", **request_params},
+    )
+
+    assert (result.error, result.total_tokens) == (False, 77)
+    (body,) = bodies
+    assert body["tool_choice"] == {"type": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_responses_count_on_claude_rejects_forced_tool_choice_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
+
+    with pytest.raises(ProxyException) as rejected:
+        await _claude_count(
+            monkeypatch, {}, {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required"}
+        )
+
+    assert (rejected.value.code, "forced tool use" in rejected.value.message) == ("400", True)
+
+
+def _texts(message: JsonValue) -> list[str]:
+    assert isinstance(message, dict)
+    content: Final = message["content"]
+    if isinstance(content, str):
+        return [content]
+    assert isinstance(content, list)
+    return [str(block["text"]) for block in content if isinstance(block, dict) and "text" in block]
+
+
+@pytest.mark.asyncio
+async def test_responses_count_on_claude_counts_the_turns_previous_response_id_replays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored_turn: Final = {
+        "request_id": "chatcmpl-stored",
+        "call_type": "aresponses",
+        "session_id": "session-1",
+        "proxy_server_request": {"input": "Who won in 1998?", "model": "claude-counted"},
+        "response": {
+            "id": "chatcmpl-stored",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "The Bulls.",
+                        "reasoning_content": "Chicago beat Utah in six games.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        "status": "success",
+    }
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+        return_value=[stored_turn],
+    ) as spend_logs:
+        result, bodies = await _claude_count(
+            monkeypatch,
+            {},
+            {
+                "input": "And in 1999?",
+                "previous_response_id": "chatcmpl-stored",
+                ADDRESSED_RESPONSE_ID_FIELD: "resp_client_form",
+            },
+        )
+
+    assert (result.error, result.total_tokens) == (False, 77)
+    (body,) = bodies
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    assert list(itertools.chain.from_iterable(map(_texts, messages))) == [
+        "Who won in 1998?",
+        "The Bulls.",
+        "And in 1999?",
+    ]
+    assert [sorted(message) for message in messages if isinstance(message, dict)] == [["content", "role"]] * 3
+    spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))

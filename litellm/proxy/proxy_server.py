@@ -15171,6 +15171,14 @@ def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) ->
     return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
 
 
+def _count_drop_policy(deployment: Mapping[str, object] | None, responses_request: Mapping[str, object]) -> DropPolicy:
+    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+    router_defaults: Final[Mapping[str, object]] = (
+        {} if llm_router is None else _router_default_litellm_params(llm_router)
+    )
+    return drop_policy({**litellm_params, **router_defaults, **responses_request})
+
+
 def _native_responses_count(
     provider_counter: BaseTokenCounter,
     custom_llm_provider: str | None,
@@ -15180,16 +15188,12 @@ def _native_responses_count(
 ) -> Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]] | None:
     if responses_request is None or not isinstance(provider_counter, OpenAITokenCounter):
         return None
-    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
-    router_defaults: Final[Mapping[str, object]] = (
-        {} if llm_router is None else _router_default_litellm_params(llm_router)
-    )
     return partial(
         _try_native_responses_count,
         provider_counter,
         custom_llm_provider,
         responses_request=responses_request,
-        policy=drop_policy({**litellm_params, **router_defaults, **responses_request}),
+        policy=_count_drop_policy(deployment, responses_request),
         deployment=deployment,
         request_model=request_model,
     )
@@ -15299,11 +15303,16 @@ async def count_request_tokens(
     prompt_only: Final = bool(prompt) and conversation_empty
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
     chat_count: Final = (
         None
         if responses_request is None or provider_counter is None or isinstance(provider_counter, OpenAITokenCounter)
-        else chat_count_request(
-            model_to_use, custom_llm_provider, _deployment_api_base(deployment_view), responses_request
+        else await chat_count_request(
+            model_to_use,
+            custom_llm_provider,
+            _deployment_api_base(deployment_view),
+            responses_request,
+            _count_drop_policy(routed_deployment, responses_request),
         )
     )
     if isinstance(chat_count, ChatCountBridgeError):
@@ -15316,7 +15325,7 @@ async def count_request_tokens(
                 provider_counter,
                 custom_llm_provider,
                 responses_request,
-                _ROUTED_DEPLOYMENT.validate_python(deployment),
+                routed_deployment,
                 request.model,
             )
             or partial(

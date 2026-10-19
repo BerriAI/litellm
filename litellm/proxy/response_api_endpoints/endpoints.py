@@ -89,7 +89,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.token_count import TokenCountSourceFields
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, TokenCountResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1431,7 +1431,7 @@ def _with_authorized_previous_response(
         authorized_id: Final = security.authorize_response_id(previous_response_id, user_api_key_dict)
     except HTTPException as e:
         raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
-    return {**data, "previous_response_id": authorized_id}
+    return {**data, "previous_response_id": authorized_id, ADDRESSED_RESPONSE_ID_FIELD: previous_response_id}
 
 
 def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
