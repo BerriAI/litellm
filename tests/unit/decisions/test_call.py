@@ -100,7 +100,7 @@ def test_request_is_logged_even_when_it_is_rejected_before_the_provider_call():
 def test_decisions_request_is_logged_even_when_its_questions_fail_validation():
     logging_obj: Final = _logging_obj("adecisions")
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.BadRequestError):
         _prepare_decisions_call(
             **CONNECTION,
             decision_input="My card was charged twice.",
