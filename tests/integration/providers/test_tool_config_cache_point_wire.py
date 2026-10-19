@@ -4,13 +4,15 @@ from typing import Final
 from urllib.parse import unquote, urlsplit
 
 from integration._support.client import Gateway
-from integration._support.openai_wire import chat_reply
+from integration._support.openai_wire import chat_reply, responses_reply
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _ANTHROPIC_MODEL: Final = "claude-sonnet-4-6"
 _BEDROCK_MODEL: Final = "us.anthropic.claude-sonnet-4-6"
 _OPENAI_MODEL: Final = "gpt-4.1"
+_GEMINI_MODEL: Final = "gemini-3.8-flash"
+_NOVA_MODEL: Final = "us.amazon.nova-pro-v1:0"
 _API_KEY: Final = "synthetic-provider-key"
 _CONTROL: Final = {"type": "ephemeral", "ttl": "1h"}
 _TOOL_CONFIG_POINT: Final = [{"location": "tool_config", "control": _CONTROL}]
@@ -201,4 +203,110 @@ def test_chat_completions_tool_config_point_never_reaches_openai(gateway: Gatewa
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == identity, response.text
+        assert len(wire.drain()) == 1
+
+
+def _gemini_reply() -> bytes:
+    return json.dumps(
+        {
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": "done"}]}, "finishReason": "STOP", "index": 0}
+            ],
+            "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 3, "totalTokenCount": 15},
+            "modelVersion": _GEMINI_MODEL,
+        }
+    ).encode()
+
+
+def test_messages_tool_config_point_never_reaches_openai_through_the_responses_bridge(gateway: Gateway) -> None:
+    identity: Final = f"openai-bridge-tool-config-{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/responses", request.target
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert "cache_control_injection_points" not in body, body
+        return responses_reply(identity, _OPENAI_MODEL, "done", stream=False)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"openai/{_OPENAI_MODEL}",
+            api_base=wire.url,
+            api_key=_API_KEY,
+            cache_control_injection_points=_TOOL_CONFIG_POINT,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": _anthropic_tools(),
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert len(wire.drain()) == 1
+
+
+def test_messages_tool_config_point_never_reaches_gemini_through_the_chat_bridge(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        path: Final = urlsplit(request.target).path
+        assert request.method == "POST" and path == f"/models/{_GEMINI_MODEL}:generateContent", request.target
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert "cache_control_injection_points" not in body, body
+        return Reply(body=_gemini_reply())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"gemini/{_GEMINI_MODEL}",
+            api_base=wire.url,
+            api_key=_API_KEY,
+            cache_control_injection_points=_TOOL_CONFIG_POINT,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": _anthropic_tools(),
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert len(wire.drain()) == 1
+
+
+def test_messages_tool_config_point_appends_a_bedrock_converse_cache_point_through_the_chat_bridge(
+    gateway: Gateway,
+) -> None:
+    def respond(request: Request) -> Reply:
+        path: Final = unquote(urlsplit(request.target).path)
+        assert request.method == "POST" and path == f"/model/{_NOVA_MODEL}/converse", request.target
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert "cache_control_injection_points" not in body, body
+        tools: Final = _TOOL_LIST.validate_python(_JSON_OBJECT.validate_python(body["toolConfig"])["tools"])
+        assert [tuple(tool) for tool in tools] == [("toolSpec",), ("toolSpec",), ("cachePoint",)], tools
+        assert tools[2] == {"cachePoint": {"type": "default"}}, tools
+        return Reply(body=_converse_reply())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"bedrock/{_NOVA_MODEL}",
+            api_base=wire.url,
+            api_key=None,
+            cache_control_injection_points=_TOOL_CONFIG_POINT,
+            **_AWS,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": _anthropic_tools(),
+            },
+        )
+        assert response.status_code == 200, response.text
         assert len(wire.drain()) == 1
