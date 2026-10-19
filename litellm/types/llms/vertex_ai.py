@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
@@ -8,6 +9,7 @@ from typing_extensions import (
 )
 
 from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput
+from litellm.types.token_count import TokenCountSourceFields
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
 # opt-in for combined embeddings — a provider-specific extension of the
@@ -319,12 +321,13 @@ class UsageMetadata(TypedDict, total=False):
     candidatesTokensDetails: list[PromptTokensDetails]  # Alternative key name used in some responses
 
 
-class TokenCountDetailsResponse(TypedDict):
+class TokenCountDetailsResponse(TokenCountSourceFields):
     """
     Response structure for token count details with modality breakdown.
 
     Example:
-        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+         'litellm_count_source': 'provider'}
     """
 
     totalTokens: int
@@ -357,6 +360,7 @@ class RequestBody(TypedDict, total=False):
     cachedContent: str
     labels: dict[str, str]
     serviceTier: str
+    continuationToken: str  # writable-ok: transform_request_body fills the body field by field
 
 
 class CachedContentRequestBody(TypedDict, total=False):
@@ -397,8 +401,9 @@ class Citation(TypedDict):
     publicationDate: Date
 
 
-class CitationMetadata(TypedDict):
-    citations: list[Citation]
+class CitationMetadata(TypedDict, total=False):
+    citations: ReadOnly[Sequence[Citation]]
+    citationSources: ReadOnly[Sequence[Citation]]
 
 
 class SearchEntryPoint(TypedDict, total=False):
@@ -406,10 +411,24 @@ class SearchEntryPoint(TypedDict, total=False):
     sdkBlob: str
 
 
+class GroundingSegment(TypedDict, total=False):
+    partIndex: ReadOnly[int]
+    startIndex: ReadOnly[int]
+    endIndex: ReadOnly[int]
+    text: ReadOnly[str]
+
+
+class GroundingSupport(TypedDict, total=False):
+    segment: ReadOnly[GroundingSegment]
+    groundingChunkIndices: ReadOnly[Sequence[int]]
+    confidenceScores: ReadOnly[Sequence[float]]
+
+
 class GroundingMetadata(TypedDict, total=False):
     webSearchQueries: list[str]
     searchEntryPoint: SearchEntryPoint
     groundingAttributions: list[dict]
+    groundingSupports: ReadOnly[Sequence[GroundingSupport]]
 
 
 class LogprobsCandidate(TypedDict):
@@ -440,6 +459,7 @@ GeminiFinishReason = Literal[
     "FINISH_REASON_UNSPECIFIED",
     "STOP",
     "MAX_TOKENS",
+    "CONTINUATION",
     "SAFETY",
     "RECITATION",
     "LANGUAGE",
@@ -466,11 +486,12 @@ class Candidates(TypedDict, total=False):
     content: HttpxContentType
     finishReason: GeminiFinishReason
     safetyRatings: list[SafetyRatings]
-    citationMetadata: CitationMetadata
-    groundingMetadata: GroundingMetadata
+    citationMetadata: CitationMetadata | tuple[CitationMetadata, ...]
+    groundingMetadata: GroundingMetadata | tuple[GroundingMetadata, ...]
     finishMessage: str
     logprobsResult: LogprobsResult
-    urlContextMetadata: UrlContextMetadata
+    urlContextMetadata: UrlContextMetadata | tuple[UrlContextMetadata, ...]
+    continuationToken: ReadOnly[str]
 
 
 class PromptFeedback(TypedDict):
@@ -581,9 +602,6 @@ class MultimodalPredictions(TypedDict):
 class VertexAICachedContentResponseObject(TypedDict):
     name: str
     model: str
-
-
-VERTEX_AI_CACHE_CREATION_TOKENS_KEY: Final = "vertex_ai_cache_creation_input_tokens"
 
 
 class TaskTypeEnum(Enum):

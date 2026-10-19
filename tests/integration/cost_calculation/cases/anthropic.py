@@ -5,6 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_usage,
     CostTrackingTestCase,
     ExactExpected,
     FailureDetails,
@@ -14,6 +15,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountRates,
     SseResponse,
 )
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
@@ -4000,6 +4002,46 @@ CLAUDE_SONNET_5_PASSTHROUGH_MESSAGES_CACHE_READ: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_SONNET_5_PASSTHROUGH_MESSAGES_STREAM_CACHE_WRITE_ON_MESSAGE_DELTA: Final = CostTrackingTestCase(
+    name="claude-sonnet-5-passthrough-messages_stream_cache_write_on_message_delta",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="claude-sonnet-5",
+    endpoint="/anthropic/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 12,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "cached text", "cache_control": {"type": "ephemeral"}}],
+            }
+        ],
+        "stream": True,
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_$REQUEST_ID","type":"message","role":"assistant","model":"claude-sonnet-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":1}}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"scripted response"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":3,"cache_read_input_tokens":25490,"cache_creation_input_tokens":10553,"output_tokens":12}}',
+            'data: {"type":"message_stop"}',
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.04741075,
+        input_cost=0.04723075,
+        output_cost=0.00018,
+        prompt_tokens=36046,
+        completion_tokens=12,
+        cache_read_cost=0.007647,
+        cache_creation_cost=0.03957375,
+        breakdown_persisted=False,
+        cost_header=False,
+    ),
+)
+
 CLAUDE_SONNET_5_CACHE_CREATION_1H_ABOVE_200K: Final = CostTrackingTestCase(
     name="claude-sonnet-5-cache_creation_1h_above_200k",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -4060,7 +4102,17 @@ CLAUDE_OPUS_5_5_INPUT_TEXT: Final = CostTrackingTestCase(
             "content": [{"type": "text", "text": "Hello."}],
             "stop_reason": "end_turn",
             "stop_sequence": None,
-            "usage": {"input_tokens": 1840, "output_tokens": 412},
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+                "speed": "standard",
+            },
         },
     ),
     expected=ExactExpected(
@@ -4119,6 +4171,7 @@ CLAUDE_SONNET_5_5_INPUT_TEXT: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -4181,6 +4234,7 @@ CLAUDE_SONNET_5_5_STREAM: Final = CostTrackingTestCase(
                         "output_tokens": 1,
                         "service_tier": "standard",
                         "inference_geo": "global",
+                        "speed": "standard",
                     },
                     "diagnostics": None,
                 },
@@ -4263,6 +4317,7 @@ CLAUDE_SONNET_5_5_CACHE_READ: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -4432,6 +4487,39 @@ CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
     ),
 )
 
+
+CLAUDE_SONNET_5_5_MESSAGES_STREAM: Final = CostTrackingTestCase(
+    name="claude-sonnet-5-5-messages_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="claude-sonnet-5-5",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "summarize the attached material in one line"}],
+        "stream": True,
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-sonnet-5-5","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global"},"diagnostics":null}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
+            'event: ping\ndata: {"type":"ping"}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_$REQUEST_ID"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"scripted "}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"response"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":412,"output_tokens_details":{"thinking_tokens":0}}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.01287, input_cost=0.006072, output_cost=0.006798, prompt_tokens=1840, completion_tokens=412
+    ),
+)
 CLAUDE_HAIKU_5_5_INPUT_TEXT: Final = CostTrackingTestCase(
     name="claude-haiku-5-5-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -4482,6 +4570,7 @@ CLAUDE_HAIKU_5_5_INPUT_TEXT: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -4544,6 +4633,7 @@ CLAUDE_HAIKU_5_5_STREAM: Final = CostTrackingTestCase(
                         "output_tokens": 1,
                         "service_tier": "standard",
                         "inference_geo": "global",
+                        "speed": "standard",
                     },
                     "diagnostics": None,
                 },
@@ -4626,6 +4716,7 @@ CLAUDE_HAIKU_5_5_CACHE_READ: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -4795,6 +4886,39 @@ CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
     ),
 )
 
+
+CLAUDE_HAIKU_5_5_MESSAGES_STREAM: Final = CostTrackingTestCase(
+    name="claude-haiku-5-5-messages_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="claude-haiku-5-5",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "summarize the attached material in one line"}],
+        "stream": True,
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-haiku-5-5","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global"},"diagnostics":null}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
+            'event: ping\ndata: {"type":"ping"}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_$REQUEST_ID"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"scripted "}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"response"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":412,"output_tokens_details":{"thinking_tokens":0}}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.00429, input_cost=0.002024, output_cost=0.002266, prompt_tokens=1840, completion_tokens=412
+    ),
+)
 CLAUDE_FABLE_5_INPUT_TEXT: Final = CostTrackingTestCase(
     name="claude-fable-5-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -5208,6 +5332,7 @@ CLAUDE_FABLE_5_1_INPUT_TEXT: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -5270,6 +5395,7 @@ CLAUDE_FABLE_5_1_STREAM: Final = CostTrackingTestCase(
                         "output_tokens": 1,
                         "service_tier": "standard",
                         "inference_geo": "global",
+                        "speed": "standard",
                     },
                     "diagnostics": None,
                 },
@@ -5352,6 +5478,7 @@ CLAUDE_FABLE_5_1_CACHE_READ: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -5521,6 +5648,35 @@ CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
     ),
 )
 
+
+CLAUDE_FABLE_5_1_MESSAGES_STREAM: Final = CostTrackingTestCase(
+    name="claude-fable-5-1-messages_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="claude-fable-5-1",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "summarize the attached material in one line"}],
+        "stream": True,
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-fable-5-1","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global"},"diagnostics":null}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: ping\ndata: {"type":"ping"}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"scripted "}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"response"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":412,"output_tokens_details":{"thinking_tokens":0}}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0624, input_cost=0.02944, output_cost=0.03296, prompt_tokens=1840, completion_tokens=412
+    ),
+)
 CLAUDE_OPUS_5_5_STREAM: Final = CostTrackingTestCase(
     name="claude-opus-5-5-stream",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
@@ -5574,6 +5730,7 @@ CLAUDE_OPUS_5_5_STREAM: Final = CostTrackingTestCase(
                         "output_tokens": 1,
                         "service_tier": "standard",
                         "inference_geo": "global",
+                        "speed": "standard",
                     },
                     "diagnostics": None,
                 },
@@ -5656,6 +5813,7 @@ CLAUDE_OPUS_5_5_CACHE_READ: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -5825,6 +5983,39 @@ CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
     ),
 )
 
+
+CLAUDE_OPUS_5_5_MESSAGES_STREAM: Final = CostTrackingTestCase(
+    name="claude-opus-5-5-messages_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="claude-opus-5-5",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "summarize the attached material in one line"}],
+        "stream": True,
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-opus-5-5","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global"},"diagnostics":null}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
+            'event: ping\ndata: {"type":"ping"}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_$REQUEST_ID"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"scripted "}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"response"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":412,"output_tokens_details":{"thinking_tokens":0}}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0156, input_cost=0.00736, output_cost=0.00824, prompt_tokens=1840, completion_tokens=412
+    ),
+)
 CLAUDE_SONNET_5_5_TOOL_CALL: Final = CostTrackingTestCase(
     name="claude-sonnet-5-5-tool_call",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -5962,6 +6153,7 @@ CLAUDE_SONNET_5_5_THINKING: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -6115,6 +6307,7 @@ CLAUDE_HAIKU_5_5_THINKING: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 3480},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -6414,6 +6607,7 @@ CLAUDE_FABLE_5_1_THINKING: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -6567,6 +6761,7 @@ CLAUDE_OPUS_5_5_THINKING: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 3480},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -6656,7 +6851,185 @@ CLAUDE_OPUS_5_5_INPUT_TEXT_ROLLUPS: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_SONNET_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-sonnet-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-sonnet-5-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-haiku-5-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_FABLE_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-fable-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON: Final = CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-fable-5-1-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-opus-5-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+def _responses_bridged_stream_case(
+    sibling: CostTrackingTestCase, stream_sibling: CostTrackingTestCase, name: str
+) -> CostTrackingTestCase:
+    return sibling.model_copy(
+        update={
+            "name": name,
+            "request": {**sibling.request, "stream": True},
+            "response": stream_sibling.response,
+        }
+    )
+
+
+CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON, CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    "claude-fable-5-1-responses_bridged_stream",
+)
+CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON, CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    "claude-haiku-5-5-responses_bridged_stream",
+)
+CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON, CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    "claude-opus-5-5-responses_bridged_stream",
+)
+CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON, CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    "claude-sonnet-5-5-responses_bridged_stream",
+)
+
+CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = with_usage(
+    CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "claude-haiku-5-5-tiered_input_above_100k",
+    {
+        "input_tokens": 150000,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(spend=0.33528, input_cost=0.33, output_cost=0.00528, prompt_tokens=150000, completion_tokens=480),
+)
+
+CLAUDE_HAIKU_5_5_TIERED_AT_100K_BOUNDARY: Final = with_usage(
+    CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "claude-haiku-5-5-tiered_at_100k_boundary",
+    {
+        "input_tokens": 100000,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(spend=0.11264, input_cost=0.11, output_cost=0.00264, prompt_tokens=100000, completion_tokens=480),
+)
+
+CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K: Final = with_usage(
+    CLAUDE_HAIKU_5_5_CACHE_READ,
+    "claude-haiku-5-5-tiered_cache_read_above_100k",
+    {
+        "input_tokens": 4096,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 110592,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.03862144, input_cost=0.03334144, output_cost=0.00528, prompt_tokens=114688, completion_tokens=480
+    ),
+)
+
+CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_5M_ABOVE_100K: Final = with_usage(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
+    "claude-haiku-5-5-tiered_cache_write_5m_above_100k",
+    {
+        "input_tokens": 4096,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 110592,
+        "cache_creation": {"ephemeral_5m_input_tokens": 110592, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.3184192, input_cost=0.3131392, output_cost=0.00528, prompt_tokens=114688, completion_tokens=480
+    ),
+)
+
+CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_1H_ABOVE_100K: Final = with_usage(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
+    "claude-haiku-5-5-tiered_cache_write_1h_above_100k",
+    {
+        "input_tokens": 4096,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 110592,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 110592},
+    },
+    ExactExpected(
+        spend=0.500896, input_cost=0.495616, output_cost=0.00528, prompt_tokens=114688, completion_tokens=480
+    ),
+)
+
+CLAUDE_SONNET_5_GENERALIZED_ALIAS: Final = CLAUDE_SONNET_5_INPUT_TEXT.model_copy(
+    update={"name": "claude-sonnet-5-generalized_alias", "alias": "claude-sonnet-5-$MARKER"}
+)
+
+CLAUDE_SONNET_5_GENERALIZED_ALIAS_STREAM: Final = CLAUDE_SONNET_5_STREAM.model_copy(
+    update={"name": "claude-sonnet-5-generalized_alias_stream", "alias": "claude-sonnet-5-$MARKER"}
+)
+
+CLAUDE_SONNET_5_SLASH_ALIAS_STREAM: Final = CLAUDE_SONNET_5_STREAM.model_copy(
+    update={"name": "claude-sonnet-5-slash_alias_stream", "alias": "anthropic/claude-sonnet-5-$MARKER"}
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    CLAUDE_SONNET_5_GENERALIZED_ALIAS,
+    CLAUDE_SONNET_5_GENERALIZED_ALIAS_STREAM,
+    CLAUDE_SONNET_5_SLASH_ALIAS_STREAM,
+    CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K,
+    CLAUDE_HAIKU_5_5_TIERED_AT_100K_BOUNDARY,
+    CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K,
+    CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_5M_ABOVE_100K,
+    CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_1H_ABOVE_100K,
+    CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_HAIKU_4_5_INPUT_TEXT,
     CLAUDE_HAIKU_4_5_CACHE_READ,
     CLAUDE_HAIKU_4_5_CACHE_WRITE_5M,
@@ -6728,6 +7101,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_HAIKU_4_5_MESSAGES_INPUT_TEXT,
     CLAUDE_SONNET_5_PASSTHROUGH_MESSAGES,
     CLAUDE_SONNET_5_PASSTHROUGH_MESSAGES_CACHE_READ,
+    CLAUDE_SONNET_5_PASSTHROUGH_MESSAGES_STREAM_CACHE_WRITE_ON_MESSAGE_DELTA,
     CLAUDE_SONNET_5_CACHE_CREATION_1H_ABOVE_200K,
     CLAUDE_OPUS_5_5_INPUT_TEXT,
     CLAUDE_SONNET_5_5_INPUT_TEXT,
@@ -6736,12 +7110,14 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
     CLAUDE_SONNET_5_5_CACHE_WRITE_1H,
     CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_MESSAGES_STREAM,
     CLAUDE_HAIKU_5_5_INPUT_TEXT,
     CLAUDE_HAIKU_5_5_STREAM,
     CLAUDE_HAIKU_5_5_CACHE_READ,
     CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
     CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
     CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
     CLAUDE_FABLE_5_INPUT_TEXT,
     CLAUDE_FABLE_5_STREAM,
     CLAUDE_FABLE_5_CACHE_READ,
@@ -6754,11 +7130,13 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
     CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
     CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_MESSAGES_STREAM,
     CLAUDE_OPUS_5_5_STREAM,
     CLAUDE_OPUS_5_5_CACHE_READ,
     CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
     CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
     CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_STREAM,
     CLAUDE_SONNET_5_5_TOOL_CALL,
     CLAUDE_SONNET_5_5_THINKING,
     CLAUDE_HAIKU_5_5_TOOL_CALL,
@@ -6774,6 +7152,18 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(
+        plain=CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM
+    ),
     StreamParityTestCase(plain=CLAUDE_HAIKU_4_5_INPUT_TEXT, streamed=CLAUDE_HAIKU_4_5_STREAM),
     StreamParityTestCase(
         plain=CLAUDE_HAIKU_4_5_RESPONSE_MODEL_OVERRIDE, streamed=CLAUDE_HAIKU_4_5_STREAM_RESPONSE_MODEL_OVERRIDE
@@ -6797,4 +7187,36 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=CLAUDE_FABLE_5_INPUT_TEXT, streamed=CLAUDE_FABLE_5_STREAM),
     StreamParityTestCase(plain=CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=CLAUDE_FABLE_5_1_STREAM),
     StreamParityTestCase(plain=CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=CLAUDE_OPUS_5_5_STREAM),
+    StreamParityTestCase(plain=CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, streamed=CLAUDE_OPUS_5_5_MESSAGES_STREAM),
+    StreamParityTestCase(plain=CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT, streamed=CLAUDE_SONNET_5_5_MESSAGES_STREAM),
+    StreamParityTestCase(plain=CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT, streamed=CLAUDE_HAIKU_5_5_MESSAGES_STREAM),
+    StreamParityTestCase(plain=CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT, streamed=CLAUDE_FABLE_5_1_MESSAGES_STREAM),
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (
+            CLAUDE_SONNET_5_MESSAGES_INPUT_TEXT,
+            CLAUDE_SONNET_5_MESSAGES_CACHE_READ,
+            CLAUDE_SONNET_5_MESSAGES_STREAM,
+            CLAUDE_SONNET_5_MESSAGES_STREAM_CACHE_READ,
+        ),
+        ("/v1/responses", "/v1/chat/completions"),
+    ),
+    BridgeCostParityTestCase(
+        native=CLAUDE_SONNET_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(native=CLAUDE_FABLE_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON),
+    BridgeCostParityTestCase(
+        native=CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT, bridged=CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON
+    ),
 )

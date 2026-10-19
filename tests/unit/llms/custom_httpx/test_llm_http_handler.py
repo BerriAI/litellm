@@ -476,6 +476,42 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
     assert client.post.call_args.kwargs["json"]["stream"] is True
 
 
+@pytest.mark.asyncio
+async def test_async_response_api_handler_validates_environment_off_the_event_loop() -> None:
+    def validate_environment(**_kwargs: object) -> dict[str, str]:
+        return {"validated-on-thread": str(threading.get_ident()), "x-override": "provider"}
+
+    config: Final = Mock()
+    config.validate_environment.side_effect = validate_environment
+    config.get_complete_url.return_value = "https://responses.example.com/v1/responses"
+    config.async_transform_responses_api_request = AsyncMock(return_value={"model": "model", "input": "hi"})
+    config.sign_request.return_value = ({}, None)
+    client: Final = AsyncMock(spec=AsyncHTTPHandler)
+    client.post.return_value = httpx.Response(
+        200,
+        request=httpx.Request("POST", "https://responses.example.com/v1/responses"),
+    )
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = None
+
+    await BaseLLMHTTPHandler().async_response_api_handler(
+        model="model",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="test",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        client=client,
+        extra_headers={"x-override": "caller"},
+    )
+
+    validated_headers: Final = config.async_transform_responses_api_request.await_args.kwargs["headers"]
+    assert validated_headers["validated-on-thread"] != str(threading.get_ident())
+    assert validated_headers["x-override"] == "caller"
+    client.post.assert_awaited_once()
+
+
 _CHATGPT_SSE_BODY = (
     "event: response.output_item.done\n"
     'data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", '
@@ -1892,6 +1928,71 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     assert "MUTATED" in second_sent  # ... the mutated body
 
 
+_BOUND_THINKING_ERROR: Final = (
+    '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: '
+    'Invalid `signature` in `thinking` block. The block is bound to a different conversation."}}'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prefix_mismatch_behavior", "expected_posts"),
+    (("error", 1), ("drop_block", 2)),
+)
+async def test_anthropic_post_skips_the_thinking_strip_retry_when_block_binding_errors(
+    prefix_mismatch_behavior: str, expected_posts: int
+) -> None:
+    """A caller that pinned ``prefix_mismatch_behavior: error`` asked for the 400,
+    so the handler must surface it instead of stripping the bound blocks and retrying."""
+    from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
+
+    handler = BaseLLMHTTPHandler()
+    thinking_block = {"type": "thinking", "thinking": "", "signature": "sig"}
+    request_body = {
+        "model": "claude-opus-5-5",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [thinking_block, {"type": "text", "text": "hello"}]},
+        ],
+        "thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": prefix_mismatch_behavior}},
+    }
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    http_client = Mock()
+    http_client.post = AsyncMock(
+        side_effect=[
+            httpx.Response(400, request=request, text=_BOUND_THINKING_ERROR),
+            httpx.Response(200, request=request, json={"type": "message", "content": []}),
+        ]
+    )
+    logging_obj: Final = Mock(baseline_cache_context=None)
+    logging_obj.model_call_details = {}
+
+    async def _post() -> httpx.Response:
+        return await handler._async_post_anthropic_messages_with_http_error_retry(
+            async_httpx_client=http_client,
+            request_url="https://api.anthropic.com/v1/messages",
+            headers={},
+            signed_json_body=None,
+            request_body=request_body,
+            stream=False,
+            logging_obj=logging_obj,
+            provider_config=AnthropicMessagesConfig(),
+            litellm_params=GenericLiteLLMParams(),
+            api_key="k",
+            model="claude-opus-5-5",
+        )
+
+    if expected_posts == 1:
+        with pytest.raises(BaseLLMException) as raised:
+            await _post()
+        assert raised.value.status_code == 400
+        assert "bound to a different conversation" in raised.value.message
+        assert request_body["messages"][1]["content"][0] == thinking_block
+    else:
+        assert (await _post()).status_code == 200
+    assert http_client.post.await_count == expected_posts
+
+
 def test_base_responses_config_sign_request_is_noop_by_default():
     """Default responses sign_request must be a no-op: unchanged headers, no signed body.
 
@@ -2666,6 +2767,62 @@ def test_sync_retrieve_file_content_raises_on_http_error():
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_handle_error_surfaces_provider_error_raised_while_aiohttp_streams_the_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    message: Final = "Batch input file line 3 is not valid JSON: Expecting value at column 1"
+
+    async def read_until_client_hangs_up(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read()
+        writer.close()
+
+    async def body_with_bad_third_row():
+        yield b'{"custom_id": "r1"}\n'
+        raise VertexAIError(status_code=400, message=message)
+
+    server: Final = await asyncio.start_server(read_until_client_hangs_up, "127.0.0.1", 0)
+    port: Final = server.sockets[0].getsockname()[1]
+    handler: Final = AsyncHTTPHandler()
+    try:
+        async with server:
+            with pytest.raises(httpx.HTTPError) as sent:
+                await handler.post(f"http://127.0.0.1:{port}/upload", content=body_with_bad_third_row())
+    finally:
+        await handler.close()
+
+    with pytest.raises(VertexAIError) as surfaced:
+        BaseLLMHTTPHandler()._handle_error(e=sent.value, provider_config=VertexAIFilesConfig())
+
+    assert surfaced.value.status_code == 400
+    assert surfaced.value.message == message
+
+
+def _runtime_error_caused_by(cause: Exception) -> RuntimeError:
+    try:
+        raise RuntimeError("upload bookkeeping failed") from cause
+    except RuntimeError as outer:
+        return outer
+
+
+def test_handle_error_reports_its_own_failure_when_it_is_not_a_transport_error():
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    outer: Final = _runtime_error_caused_by(VertexAIError(status_code=400, message="inner provider error"))
+
+    with pytest.raises(VertexAIError) as surfaced:
+        BaseLLMHTTPHandler()._handle_error(e=outer, provider_config=VertexAIFilesConfig())
+
+    assert surfaced.value.status_code == 500
+    assert "upload bookkeeping failed" in surfaced.value.message
 
 
 _FILE_CONTENT_WIF_ENV = {
@@ -4228,6 +4385,54 @@ async def test_completion_streams_after_the_async_transform_request():
     assert "".join(chunk.choices[0].delta.content or "" for chunk in collected) == "async"
 
 
+class _IteratorRecordingConfig(_TransformRecordingConfig):
+    def __init__(self):
+        super().__init__(transform_async=False)
+        self.iterator_requests = []
+
+    def get_model_response_iterator(self, streaming_response, sync_stream, json_mode=False):
+        self.iterator_requests.append({"sync_stream": sync_stream, "json_mode": json_mode})
+        return super().get_model_response_iterator(streaming_response, sync_stream, json_mode)
+
+
+def _json_mode_stream(config, **transport):
+    return BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_streaming_logging_obj(),
+        optional_params={"json_mode": True},
+        timeout=10.0,
+        litellm_params={},
+        stream=True,
+        provider_config=config,
+        **transport,
+    )
+
+
+def _streamed_text(chunks):
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_request_hook_only_when_sync():
+    config = _IteratorRecordingConfig()
+    sync_client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_sse_echoing_transformed_by)))
+    async_client = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_sse_echoing_transformed_by))
+
+    sync_chunks = list(_json_mode_stream(config, acompletion=False, client=sync_client))
+    async_chunks = [chunk async for chunk in await _json_mode_stream(config, acompletion=True, client=async_client)]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
+    assert config.iterator_requests == [
+        {"sync_stream": True, "json_mode": True},
+        {"sync_stream": False, "json_mode": False},
+    ]
+
+
 class _ImageEditRecordingConfig(BaseImageEditConfig):
     def __init__(self):
         self.transform_calls = []
@@ -5144,3 +5349,45 @@ async def test_retrieve_file_rejects_unverified_bedrock_range_error(
                 )
         finally:
             sync_client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_its_beta() -> None:
+    received: Final[list[httpx.Request]] = []
+
+    def anthropic_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_dropped_safeguards",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(anthropic_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-sonnet-4-6",
+            api_key="sk-ant-test",
+            safeguards=({"type": "dangerous_tool_use"},),
+            additional_drop_params=["safeguards"],
+            client=upstream,
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1, received
+    sent: Final = received[0]
+    assert "safeguards" not in json.loads(sent.content)
+    assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)
