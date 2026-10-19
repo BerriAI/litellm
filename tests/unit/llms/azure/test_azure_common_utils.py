@@ -223,6 +223,7 @@ def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
         is_async=False,
     )
 
+    assert result["azure_ad_token_provider"]() == "mock-oidc-token"
     setup_mocks["oidc_token"].assert_called_once_with(
         azure_ad_token="oidc/test-token",
         azure_client_id=None,
@@ -230,8 +231,6 @@ def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
         scope="https://cognitiveservices.azure.com/.default",
     )
 
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
 
 
 def test_initialize_with_oidc_token_and_client_params(setup_mocks):
@@ -251,6 +250,7 @@ def test_initialize_with_oidc_token_and_client_params(setup_mocks):
     )
 
     # Verify that get_azure_ad_token_from_oidc was called with the correct parameters
+    assert result["azure_ad_token_provider"]() == "mock-oidc-token"
     setup_mocks["oidc_token"].assert_called_once_with(
         azure_ad_token="oidc/test-token",
         azure_client_id="test-client-id",
@@ -258,8 +258,6 @@ def test_initialize_with_oidc_token_and_client_params(setup_mocks):
         scope="test-azure-scope",
     )
 
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
 
 
 def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
@@ -280,6 +278,7 @@ def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
     )
 
     # Verify that get_azure_ad_token_from_oidc was called with environment variables
+    assert result["azure_ad_token_provider"]() == "mock-oidc-token"
     setup_mocks["oidc_token"].assert_called_once_with(
         azure_ad_token="oidc/test-token",
         azure_client_id="env-client-id",
@@ -287,8 +286,6 @@ def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
         scope="https://cognitiveservices.azure.com/.default",
     )
 
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
 
 
 def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
@@ -2215,6 +2212,69 @@ async def test_non_v1_azure_token_refresh_does_not_block_the_event_loop():
         assert next(ticks) > 0
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_request(monkeypatch, api_version):
+    import threading
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    exchange_threads: Final[list[int]] = []
+
+    def entra_token_endpoint(request: httpx.Request) -> httpx.Response:
+        exchange_threads.append(threading.get_ident())
+        assert b"client_assertion=federated-oidc-token" in request.content
+        return httpx.Response(200, json={"access_token": f"exchanged-{api_version}", "expires_in": 3600})
+
+    def echo_authorization(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": request.headers["authorization"]},
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
+    monkeypatch.setattr(
+        litellm,
+        "module_level_client",
+        HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(entra_token_endpoint))),
+    )
+    monkeypatch.setattr(
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(echo_authorization))
+    )
+    loop_thread: Final = threading.get_ident()
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=None,
+        api_base=f"https://oidc-exchange-{api_version}.openai.azure.com",
+        api_version=api_version,
+        litellm_params={
+            "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
+            "client_id": f"oidc-client-{api_version}",
+            "tenant_id": "oidc-tenant",
+        },
+        _is_async=True,
+    )
+
+    response: Final = await client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == f"Bearer exchanged-{api_version}"
+    assert len(exchange_threads) == 1
+    assert loop_thread not in exchange_threads
 
 
 @pytest.mark.asyncio

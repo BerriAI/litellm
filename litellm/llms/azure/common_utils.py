@@ -4,7 +4,7 @@ import json
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping
-from functools import lru_cache
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, cast
 
@@ -703,12 +703,14 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
             verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
-            azure_ad_token = get_azure_ad_token_from_oidc(
+            azure_ad_token_provider = partial(
+                get_azure_ad_token_from_oidc,
                 azure_ad_token=azure_ad_token,
                 azure_client_id=client_id,
                 azure_tenant_id=tenant_id,
                 scope=scope,
             )
+            azure_ad_token = None
         elif not api_key and azure_ad_token_provider is None and litellm.enable_azure_ad_token_refresh is True:
             verbose_logger.debug(
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
