@@ -63,6 +63,8 @@ def _cost_map(*entries: tuple[str, object]) -> dict[str, object]:
         (1.4, 1.4e-06),
         (0.2424, 2.424e-07),
         (0, 0.0),
+        (0.30000000000000004, 3e-07),
+        (0.0001234, 1.234e-10),
     ],
 )
 def test_per_token_normalizes_float_artifacts(per_million: float, expected: float) -> None:
@@ -204,6 +206,35 @@ def test_entry_writes_the_catalog_audio_second_price() -> None:
 
     assert entry["input_cost_per_audio_per_second"] == 2.5e-06
     assert "input_cost_per_audio_per_second" not in sync.entry_for(model)
+
+
+def test_sync_skips_models_with_non_text_output_instead_of_registering_them_as_chat() -> None:
+    image_model = _model("image-maker", outputs=("image",))
+    outcome = sync.compute_sync({}, [_model(), image_model])
+
+    assert outcome.added == ("cortecs/some-model",)
+    assert "cortecs/image-maker" not in outcome.cost_map
+    assert any("image-maker" in warning for warning in outcome.warnings)
+
+
+def test_every_field_the_sync_can_write_is_refreshed_and_cleared_on_update() -> None:
+    everything = _model(
+        inputs=("text", "image", "audio", "file", "video"),
+        features=("tools", "reasoning"),
+        cached_read=0.3,
+        cached_write=3.75,
+    )
+    everything = everything.model_copy(
+        update={"pricing": everything.pricing.model_copy(update={"audio_cost": 2.5e-06})}
+    )
+    full_entry = sync.entry_for(everything)
+    stale_entry = {field: "stale" for field in full_entry}
+
+    refreshed = sync.compute_sync({"cortecs/some-model": stale_entry}, [everything]).cost_map["cortecs/some-model"]
+    cleared = sync.compute_sync({"cortecs/some-model": full_entry}, [_model()]).cost_map["cortecs/some-model"]
+
+    assert refreshed == full_entry
+    assert set(cleared) == set(sync.entry_for(_model()))
 
 
 def test_sync_warns_about_prices_it_does_not_write() -> None:

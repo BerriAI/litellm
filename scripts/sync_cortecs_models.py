@@ -12,6 +12,8 @@ Policy highlights:
 - Modality and feature flags come from ``input_modalities`` / ``supported_features``, and a flag is only
   written when the catalog advertises it. Terms with no registry field are surfaced as warnings instead of
   being guessed at.
+- Only text-output models are written, as chat entries. Models with any other output modality are reported and
+  skipped, because a chat entry would price them with the wrong contract.
 - A cortecs entry the catalog no longer lists is reported, never deleted: delisting is a human call.
 - Fields the sync does not own (anything a human added by hand) are preserved across updates.
 """
@@ -23,6 +25,7 @@ import json
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
@@ -133,7 +136,7 @@ class _Splice:
 
 
 def per_token(usd_per_million: float) -> float:
-    return float(f"{usd_per_million / 1e6:.6g}")
+    return float(Decimal(f"{usd_per_million:.12g}") / 1_000_000)
 
 
 def _flags(model: CatalogModel) -> Mapping[str, bool]:
@@ -226,8 +229,8 @@ def _warnings(catalog: Sequence[CatalogModel], stale: tuple[str, ...]) -> tuple[
         ),
         *(
             (
-                f"the catalog reports non-text output for {list(non_text_output)}; output modality flags are not "
-                "derived by this sync",
+                f"the catalog reports non-text output for {list(non_text_output)}; those models are skipped because "
+                "this sync only writes chat entries",
             )
             if non_text_output
             else ()
@@ -237,7 +240,7 @@ def _warnings(catalog: Sequence[CatalogModel], stale: tuple[str, ...]) -> tuple[
 
 def compute_sync(cost_map: Mapping[str, object], catalog: Sequence[CatalogModel]) -> SyncOutcome:
     desired: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
-        {f"{PREFIX}{model.id}": entry_for(model) for model in catalog}
+        {f"{PREFIX}{model.id}": entry_for(model) for model in catalog if model.output_modalities == ("text",)}
     )
     existing: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
         {key: entry for key, entry in cost_map.items() if key.startswith(PREFIX) and isinstance(entry, Mapping)}
