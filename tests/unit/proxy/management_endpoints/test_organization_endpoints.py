@@ -2,7 +2,7 @@ import asyncio
 import json
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Mapping, Optional, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from fastapi import HTTPException
@@ -647,6 +647,7 @@ async def test_organization_member_add_budget_omission_and_null_leave_budget_uns
     from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 
     user = LiteLLM_UserTable(user_id="user-1", user_role="internal_user")
+
     async def create_membership(data):
         return LiteLLM_OrganizationMembershipTable(
             user_id="user-1",
@@ -1573,6 +1574,82 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
     assert jwt_table.rows == (kept_row,)
+
+
+def _org_spend_counter_cache(monkeypatch: pytest.MonkeyPatch, *, lost_write: Exception | None = None) -> MagicMock:
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache = InMemoryCache()
+    spend_counter_cache.in_memory_cache.set_cache(key="spend:org:org-1", value=4.2)
+    spend_counter_cache.in_memory_cache.set_cache(key="spend_db_floor:spend:org:org-1", value=4.2)
+    spend_counter_cache.redis_cache.reset_fence_key = lambda key: f"{{{key}}}:reset_fence"
+    spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls = AsyncMock(return_value=lost_write)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", spend_counter_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.publish_auth_cache_invalidations", AsyncMock())
+    return spend_counter_cache
+
+
+@pytest.mark.asyncio
+async def test_legacy_update_with_spend_sets_the_org_counter_and_its_floor_on_every_pod(monkeypatch):
+    """A direct spend write must SET the cross-pod counter and its floor marker: a pod that cached the old floor
+    would otherwise repair a deleted-and-reseeded counter back up, and the org stays at the stale value until
+    the counter expires."""
+    from litellm.proxy import proxy_server
+
+    spend_counter_cache = _org_spend_counter_cache(monkeypatch)
+
+    await _run_legacy_update_organization(
+        monkeypatch, body={"organization_id": "org-1", "spend": 1.5}, existing_budget_id="budget-1"
+    )
+
+    spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.assert_awaited_once_with(
+        (
+            ("{spend:org:org-1}:reset_fence", 1, proxy_server.SPEND_RESET_FENCE_TTL_SECONDS),
+            ("spend:org:org-1", 1.5, proxy_server.spend_counter_redis_ttl()),
+        )
+    )
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-1") == 1.5
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:org:org-1") == 1.5
+    assert proxy_server.publish_auth_cache_invalidations.await_args_list == [
+        call(("spend_db_floor:spend:org:org-1",), new_value=1.5, ttl=proxy_server.SPEND_DB_FLOOR_CACHE_TTL_SECONDS),
+        call(("spend:org:org-1",), new_value=1.5, ttl=60),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_update_with_spend_answers_500_when_the_redis_counter_write_is_lost(monkeypatch):
+    """The row is saved either way, but a lost counter write leaves the other pods enforcing the old spend
+    for up to the counter TTL, so the admin hears about it and retries instead of reading success."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+
+    spend_counter_cache = _org_spend_counter_cache(monkeypatch, lost_write=RedisConnectionError("redis down"))
+
+    with pytest.raises(ProxyException) as raised:
+        await _run_legacy_update_organization(
+            monkeypatch, body={"organization_id": "org-1", "spend": 1.5}, existing_budget_id="budget-1"
+        )
+
+    assert raised.value.code == "500"
+    assert raised.value.message.startswith("The organization spend was saved, but the cached spend counters")
+    proxy_server.prisma_client.db.litellm_organizationtable.update.assert_awaited_once()
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-1") == 1.5
+    assert proxy_server.publish_auth_cache_invalidations.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_update_without_spend_keeps_the_org_spend_counter(monkeypatch):
+    spend_counter_cache = _org_spend_counter_cache(monkeypatch)
+
+    await _run_legacy_update_organization(
+        monkeypatch, body={"organization_id": "org-1", "organization_alias": "renamed"}, existing_budget_id="budget-1"
+    )
+
+    spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.assert_not_awaited()
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-1") == 4.2
 
 
 @pytest.mark.asyncio
