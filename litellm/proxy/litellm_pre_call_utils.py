@@ -40,6 +40,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    TRACE_ID_SOURCE_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
     VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
@@ -54,6 +55,14 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
 )
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.session_context import (
+    LITELLM_TRACE_CONTROL_METADATA_FIELDS,
+    caller_body_session_id,
+    caller_trace_field,
+    normalize_header_keys,
+    resolve_session_context,
+    session_header_id,
+)
 from litellm.litellm_core_utils.url_utils import (
     is_url_destination_allowed_by_host,
     provider_url_destination_candidates,
@@ -95,112 +104,15 @@ _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
 
-# Matches any header of the form x-<something>-session-id (case-insensitive).
-# Excludes the two explicit litellm headers which are handled with higher priority.
-_GENERIC_SESSION_ID_HEADER_RE: Final = re.compile(r"^x-.+-session-id$", re.IGNORECASE)
-_EXPLICIT_SESSION_HEADERS: Final = frozenset({"x-litellm-trace-id", "x-litellm-session-id"})
-# Codex carries its conversation uuid in unprefixed headers, so the
-# x-<vendor>-session-id convention above never matches it. Current builds send
-# ``session-id``/``thread-id``; builds before the codex-api split sent
-# ``session_id``/``conversation_id``. Ordered session before thread.
-_CODEX_SESSION_ID_HEADERS: Final = ("session-id", "session_id", "thread-id", "conversation_id")
-# Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
-# (covers UUIDs and most common session-id formats).
-_SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
-
-# W3C Trace Context traceparent header: https://www.w3.org/TR/trace-context/
-# e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-_TRACEPARENT_RE: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
-
-
-def _trace_id_from_traceparent(traceparent: str) -> str | None:
-    """Extract the trace-id from a W3C Trace Context traceparent header, e.g.
-    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" -> the 32-hex
-    trace-id in the middle. An all-zero trace-id is invalid per spec and is
-    rejected, matching how the OpenTelemetry SDK itself treats it."""
-    match: Final = _TRACEPARENT_RE.match(traceparent.strip())
-    if not match:
-        return None
-    trace_id: Final = match.group(1).lower()
-    return trace_id if trace_id != "0" * 32 else None
-
-
-def _trace_id_from_otel_span(span: "OtelSpan | None") -> str | None:
-    if span is None:
-        return None
-    try:
-        span_context: Final = span.get_span_context()
-        is_valid: Final = span_context.is_valid
-        trace_id: Final = cast(object, span_context.trace_id)  # cast-ok: trace_id is int at runtime; tests mock it
-    except AttributeError:
-        return None
-    if not is_valid or not isinstance(trace_id, int):
-        return None
-    return format(trace_id, "032x")
-
-
-def add_otel_trace_id_to_request(
-    data: dict[str, object], _metadata_variable_name: str, parent_otel_span: "OtelSpan | None"
-) -> None:
-    if data.get("litellm_trace_id"):
-        return
-    metadata: Final = data.get(_metadata_variable_name)
-    requester_metadata: Final = data.get("metadata")
-    if any(isinstance(m, dict) and m.get("trace_id") for m in (metadata, requester_metadata)):
-        return
-    trace_id: Final = _trace_id_from_otel_span(parent_otel_span)
-    if trace_id is None:
-        return
-    data["litellm_trace_id"] = trace_id  # rebind-ok: data is an out-param
-    if isinstance(metadata, dict):
-        metadata["trace_id"] = trace_id
-
-
-def _session_id_from_baggage(baggage: str) -> str | None:
-    """Extract a session.id entry from a W3C Baggage header
-    (https://www.w3.org/TR/baggage/), e.g. "session.id=abc-123,user.id=42"."""
-    for pair in baggage.split(","):
-        key, _, value = pair.strip().partition("=")
-        if key.strip() == "session.id" and value.strip():
-            return value.strip()
-    return None
-
-
-def _caller_trace_field(data: Mapping[str, object], metadata_variable_name: str, field: str) -> str | None:
-    """The caller's value for a trace-control field, counted only when it is a
-    usable id: a non-empty string. An explicitly empty/unusable value on the
-    active metadata container still shadows the promoted requester value, but
-    neither ever counts as "the caller supplied this field" on its own, so a
-    numeric session id or an empty string cannot suppress the W3C header
-    fallback or satisfy a missing-session-id policy."""
-    active: Final = data.get(metadata_variable_name)
-    if isinstance(active, Mapping) and field in active:
-        active_map: Final = cast(Mapping[str, object], active)  # cast-ok: isinstance above, free-form JSON values
-        active_value: Final = active_map[field]
-        return active_value if isinstance(active_value, str) and active_value else None
-    promoted: Final = metadata_variable_name == "litellm_metadata" and field in LITELLM_TRACE_CONTROL_METADATA_FIELDS
-    requester: Final = data.get("metadata")
-    if not promoted or not isinstance(requester, Mapping):
-        return None
-    requester_map: Final = cast(Mapping[str, object], requester)  # cast-ok: isinstance above, free-form JSON values
-    requester_value: Final = requester_map.get(field)
-    return requester_value if isinstance(requester_value, str) and requester_value else None
-
-
-def _caller_body_session_id(data: Mapping[str, object], metadata_variable_name: str) -> str | None:
-    top_level: Final = data.get("litellm_session_id")
-    if isinstance(top_level, str) and top_level:
-        return top_level
-    return _caller_trace_field(data, metadata_variable_name, "session_id")
 
 
 def _caller_session_beside_trace_header(
     normalized_headers: Mapping[str, str], data: Mapping[str, object], metadata_variable_name: str
 ) -> str | None:
     session_headers: Final = {key: value for key, value in normalized_headers.items() if key != "x-litellm-trace-id"}
-    return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
+    return session_header_id(session_headers) or caller_body_session_id(data, metadata_variable_name)
 
 
 def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
@@ -209,8 +121,11 @@ def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
             metadata.pop(CALLER_SESSION_ID_METADATA_KEY, None)
 
 
+_PROXY_ONLY_METADATA_KEYS: Final = frozenset({CALLER_SESSION_ID_METADATA_KEY, TRACE_ID_SOURCE_METADATA_KEY})
+
+
 def _requester_metadata_snapshot(metadata: Mapping[str, object]) -> Mapping[str, object]:
-    return copy.deepcopy({key: value for key, value in metadata.items() if key != CALLER_SESSION_ID_METADATA_KEY})
+    return copy.deepcopy({key: value for key, value in metadata.items() if key not in _PROXY_ONLY_METADATA_KEYS})
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -225,9 +140,6 @@ def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     if api_key == LITELLM_PROXY_MASTER_KEY_ALIAS or _SHA256_HEX_RE.fullmatch(api_key):
         return api_key
     return None
-
-
-_ANTHROPIC_SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
 def _sanitize_for_log(value: object) -> str:
@@ -315,19 +227,6 @@ LITELLM_METADATA_ROUTES: Final = (
     "files",
 )
 
-LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
-    {
-        "mask_input",
-        "mask_output",
-        "session_id",
-        "trace_id",
-        "trace_metadata",
-        "trace_name",
-        "trace_release",
-        "trace_user_id",
-        "trace_version",
-    }
-)
 
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "weights",
@@ -751,75 +650,6 @@ def _promoted_trace_control_fields(
     )
 
 
-def _extract_generic_session_id_from_headers(
-    normalized: dict[str, str],
-) -> str | None:
-    """
-    Scan a normalised (lower-cased keys) header dict for any header that looks
-    like ``x-<vendor>-session-id`` and whose value is a plausible session/trace
-    identifier (alphanumeric + hyphens/underscores, at least 8 chars).
-
-    The two explicit LiteLLM headers (``x-litellm-trace-id`` /
-    ``x-litellm-session-id``) are excluded here because they are handled with
-    higher priority by the caller.
-
-    Example: ``x-claude-code-session-id: e96634a3-fa28-4083-b354-55542e2dca01``
-    """
-    for key, value in normalized.items():
-        if (
-            key not in _EXPLICIT_SESSION_HEADERS
-            and _GENERIC_SESSION_ID_HEADER_RE.match(key)
-            and isinstance(value, str)
-            and _SESSION_ID_VALUE_RE.match(value)
-        ):
-            return value
-    return None
-
-
-def _extract_codex_session_id_from_headers(
-    normalized: Mapping[str, str],
-) -> str | None:
-    """
-    Read Codex's conversation uuid off one of ``_CODEX_SESSION_ID_HEADERS``.
-
-    Codex sends no request metadata the Anthropic path could parse and no
-    ``x-``-prefixed session header, so without this every turn of a Codex session
-    falls through to a freshly generated per-call trace id and lands as its own
-    row in the logs instead of grouping.
-
-    Unprefixed names like ``session-id`` are generic enough that another client
-    could send one meaning something unrelated, and colliding values across
-    callers would merge their traces, so this only applies to callers that
-    identify as Codex.
-    """
-    user_agent: Final = normalized.get("user-agent")
-    if not isinstance(user_agent, str) or not is_codex_user_agent(user_agent):
-        return None
-    return next(
-        (
-            value
-            for value in (normalized.get(header) for header in _CODEX_SESSION_ID_HEADERS)
-            if isinstance(value, str) and _SESSION_ID_VALUE_RE.match(value)
-        ),
-        None,
-    )
-
-
-def _extract_bare_session_id_from_headers(
-    normalized: Mapping[str, str],
-) -> str | None:
-    """
-    Read a vendor-less ``x-session-id`` header (opencode sends ``X-Session-Id``
-    alongside ``x-session-affinity`` on every turn of a session). Checked after
-    the ``x-<vendor>-session-id`` scan so a more specific header such as
-    opencode's ``x-parent-session-id`` on subagent calls keeps winning.
-    """
-    value: Final = normalized.get("x-session-id")
-    if isinstance(value, str) and _SESSION_ID_VALUE_RE.match(value):
-        return value
-    return None
-
-
 def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     Extract chain id for call chaining from request headers.
@@ -831,6 +661,11 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
     4. Codex's unprefixed ``session-id`` / ``thread-id``, for Codex callers only.
     5. A vendor-less ``x-session-id`` header (e.g. opencode), same value rules.
+    6. ``x-session-affinity`` (pi-ai, opencode), which also allows ``:`` and ``.``.
+
+    Same order as request setup (``resolve_session_context``). W3C ``traceparent`` and
+    ``baggage`` are never a chain id, so a bare traceparent cannot satisfy a team's or
+    agent's ``require_trace_id`` check on pass-through, MCP and agent routes.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -840,38 +675,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     if not headers:
         return None
-    normalized: Final = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
-    return (
-        normalized.get("x-litellm-trace-id")
-        or normalized.get("x-litellm-session-id")
-        or _extract_generic_session_id_from_headers(normalized)
-        or _extract_codex_session_id_from_headers(normalized)
-        or _extract_bare_session_id_from_headers(normalized)
-    )
-
-
-def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
-    if not isinstance(metadata, dict):
-        return None
-
-    user_id: Final = metadata.get("user_id")
-    if isinstance(user_id, dict):
-        session_id = user_id.get("session_id")
-        if isinstance(session_id, str) and _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
-            return session_id
-        return None
-    if not isinstance(user_id, str):
-        return None
-
-    session_marker: Final = "_session_"
-    session_marker_index: Final = user_id.rfind(session_marker)
-    if session_marker_index == -1:
-        return None
-
-    session_id = user_id[session_marker_index + len(session_marker) :]
-    if not session_id or not _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
-        return None
-    return session_id
+    return session_header_id(normalize_header_keys(headers))
 
 
 def _is_llm_inference_route(request: Request) -> bool:
@@ -909,7 +713,7 @@ def apply_missing_session_id_policy(
         ):
             metadata["session_id"] = body_session_id
         return
-    caller_session_id: Final = _caller_trace_field(data, _metadata_variable_name, "session_id")
+    caller_session_id: Final = caller_trace_field(data, _metadata_variable_name, "session_id")
     if caller_session_id is not None:
         # Consumers that read the root field (router fallbacks, spend logs,
         # sandbox reuse) otherwise see no session and mint a uuid4 per request.
@@ -922,7 +726,7 @@ def apply_missing_session_id_policy(
         case "generate":
             session_id: Final = str(
                 data.get("litellm_trace_id")
-                or _caller_trace_field(data, _metadata_variable_name, "trace_id")
+                or caller_trace_field(data, _metadata_variable_name, "trace_id")
                 or uuid.uuid4()
             )
             data["litellm_session_id"] = session_id  # rebind-ok: data is an out-param
@@ -1642,6 +1446,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         data: dict,
         _metadata_variable_name: str,
+        parent_otel_span: "OtelSpan | None" = None,
     ) -> dict:
         """
         Add litellm metadata from request headers
@@ -1661,86 +1466,39 @@ class LiteLLMProxyRequestSetup:
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
 
-        normalized_headers: Final = MappingProxyType(
-            {k.lower(): v for k, v in headers.items() if isinstance(k, str) and isinstance(v, str)}
-        )
         agent_id_from_header: Final = headers.get("x-litellm-agent-id")
-        # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
-        chain_id: Final = get_chain_id_from_headers(dict(headers))
-
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
             verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
+        normalized_headers: Final = normalize_header_keys(headers)
+        context: Final = resolve_session_context(
+            normalized_headers, request_body, _metadata_variable_name, parent_otel_span
+        )
         spend_log_session_id: Final = (
             _caller_session_beside_trace_header(normalized_headers, request_body, _metadata_variable_name)
-            if litellm.request_correlation_in_logs
-            and chain_id is not None
-            and chain_id == normalized_headers.get("x-litellm-trace-id")
+            if litellm.request_correlation_in_logs and context.session_source == "trace_header"
             else None
         )
-        if chain_id:
-            metadata_from_headers["trace_id"] = chain_id
-            metadata_from_headers["session_id"] = chain_id
-            data["litellm_session_id"] = chain_id
-            data["litellm_trace_id"] = chain_id
-            verbose_proxy_logger.debug("Extracted chain_id from header (trace-id/session-id): %s", chain_id)
-        else:
+        if context.session_id:
+            metadata_from_headers["session_id"] = context.session_id
+            data["litellm_session_id"] = context.session_id
+            verbose_proxy_logger.debug("Resolved session_id from %s", context.session_source)
+        if context.trace_id:
+            metadata_from_headers["trace_id"] = context.trace_id
+            data["litellm_trace_id"] = context.trace_id
+        if context.session_source == "anthropic_metadata":
             body_metadata: Final = data.get("metadata")
-            session_id: Final = _get_anthropic_session_id_from_metadata(body_metadata)
-            if session_id:
-                metadata_from_headers["session_id"] = session_id
-                data["litellm_session_id"] = session_id
-                if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
-                    body_metadata["user_id"] = session_id
-                verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
-
-        # Last-resort fallback: the W3C standards for trace/session propagation
-        # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
-        # Lower priority than everything above - only fires when neither the
-        # explicit litellm headers, the Anthropic-metadata path, nor the
-        # caller's own request metadata set the field to a DIFFERENT usable id
-        # - but lets a caller's existing traceparent/baggage headers (from
-        # real OTel instrumentation) correlate with litellm's own logs instead
-        # of generating an unrelated trace_id.
-        if "litellm_trace_id" not in data:
-            traceparent: Final = normalized_headers.get("traceparent")
-            if isinstance(traceparent, str):
-                trace_id_from_traceparent: Final = _trace_id_from_traceparent(traceparent)
-                # The caller's metadata wins over the header fallback unless
-                # both carry the same id: stamping the root field then claims
-                # nothing the caller did not already ask for, and keeps the
-                # W3C-correlated root trace id instead of a generated uuid4.
-                caller_trace_id: Final = _caller_trace_field(
-                    cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
-                    _metadata_variable_name,
-                    "trace_id",
-                )
-                if trace_id_from_traceparent and (
-                    caller_trace_id is None or caller_trace_id == trace_id_from_traceparent
-                ):
-                    metadata_from_headers["trace_id"] = trace_id_from_traceparent
-                    data["litellm_trace_id"] = trace_id_from_traceparent  # rebind-ok: data is an out-param
-                    verbose_proxy_logger.debug(
-                        "Extracted trace_id from W3C traceparent header: %s", trace_id_from_traceparent
-                    )
-        if "litellm_session_id" not in data:
-            baggage: Final = normalized_headers.get("baggage")
-            if isinstance(baggage, str):
-                session_id_from_baggage: Final = _session_id_from_baggage(baggage)
-                caller_session_id: Final = _caller_trace_field(request_body, _metadata_variable_name, "session_id")
-                if session_id_from_baggage and (
-                    caller_session_id is None or caller_session_id == session_id_from_baggage
-                ):
-                    metadata_from_headers["session_id"] = session_id_from_baggage
-                    data["litellm_session_id"] = session_id_from_baggage  # rebind-ok: data is an out-param
-                    verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
+            if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
+                body_metadata["user_id"] = context.session_id
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(
-                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: spend_log_session_id}
-                if spend_log_session_id
-                else metadata_from_headers
+                {
+                    **metadata_from_headers,
+                    **({TRACE_ID_SOURCE_METADATA_KEY: context.trace_source} if context.trace_source else {}),
+                    **({CALLER_SESSION_ID_METADATA_KEY: spend_log_session_id} if spend_log_session_id else {}),
+                }
             )
         return data
 
@@ -2315,10 +2073,6 @@ async def add_litellm_data_to_request(
 
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
-        data=data,
-        _metadata_variable_name=_metadata_variable_name,
-    )
-    add_otel_trace_id_to_request(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
         parent_otel_span=user_api_key_dict.parent_otel_span

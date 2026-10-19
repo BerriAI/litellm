@@ -161,6 +161,7 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitErro
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
+    resolve_session_context,
 )
 from litellm.types.mcp import (
     DEFAULT_CREDENTIAL_HEADER,
@@ -3089,10 +3090,14 @@ async def _execute_mcp_server_tool_call(
         # Create a body date for logging
         body_data: Final = {"name": params.name, "arguments": params.arguments}
         # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
-        chain_id: Final = get_chain_id_from_headers(raw_headers)
-        if chain_id:
-            body_data["litellm_trace_id"] = chain_id
-            body_data["litellm_session_id"] = chain_id
+        session_context: Final = resolve_session_context(
+            raw_headers or {},
+            parent_otel_span=user_api_key_auth.parent_otel_span if user_api_key_auth is not None else None,
+        )
+        if session_context.trace_id:
+            body_data["litellm_trace_id"] = session_context.trace_id
+        if session_context.session_id:
+            body_data["litellm_session_id"] = session_context.session_id
 
         request: Final = build_synthetic_mcp_request(
             path="/mcp/tools/call",
