@@ -47,6 +47,20 @@ describe("MCPServerSelector no-mcp-servers option", () => {
     setupMcpMocks();
   });
 
+  it("focuses the selector when its form label is clicked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <label htmlFor="mcp-access">MCP Access</label>
+        <MCPServerSelector id="mcp-access" accessToken="tok" onChange={vi.fn()} />
+      </>,
+    );
+
+    await user.click(screen.getByText("MCP Access"));
+
+    expect(screen.getByLabelText("MCP Access")).toHaveFocus();
+  });
+
   it("hides the No MCP Servers option by default", async () => {
     const user = userEvent.setup();
     renderWithProviders(
@@ -242,5 +256,44 @@ describe("MCPServerSelector scoping", () => {
     await openSelector(user);
 
     expect(optionByLabel("Wiki A")).toBeDefined();
+  });
+});
+
+describe("MCPServerSelector name collisions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseMCPServers.mockReturnValue({
+      data: [
+        { server_id: "shared", server_name: "Shared" },
+        { server_id: "srv-x", server_name: "Other" },
+      ],
+      isLoading: false,
+    } as any);
+    mockUseMCPAccessGroups.mockReturnValue({ data: ["shared", "alias-a"], isLoading: false } as any);
+    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false } as any);
+  });
+
+  it.each(["shared", "alias-a"])(
+    "keeps the stored server %s a server when it matches an access group name",
+    async (server) => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderWithProviders(
+        <MCPServerSelector accessToken="tok" onChange={onChange} value={{ servers: [server], accessGroups: [] }} />,
+      );
+
+      await openSelector(user);
+      await user.click(optionByLabel("Other")!);
+
+      expect(onChange).toHaveBeenCalledWith({ servers: [server, "srv-x"], accessGroups: [], toolsets: [] });
+    },
+  );
+
+  it("shows a stored server alias by its name", () => {
+    renderWithProviders(
+      <MCPServerSelector accessToken="tok" onChange={vi.fn()} value={{ servers: ["alias-a"], accessGroups: [] }} />,
+    );
+
+    expect(screen.getByLabelText("alias-a")).toBeInTheDocument();
   });
 });

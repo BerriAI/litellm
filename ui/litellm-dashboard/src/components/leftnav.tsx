@@ -34,6 +34,7 @@ import {
   Boxes,
   ChevronRight,
   Code2,
+  Contact,
   Database,
   ExternalLink,
   FileText,
@@ -350,6 +351,7 @@ const menuGroups: MenuGroup[] = [
         roles: [...projectReaderRoles],
       },
       { key: "users", page: "users", label: "Internal Users", icon: <User {...ICON} />, roles: all_admin_roles },
+      { key: "customers", page: "customers", label: "Customers", icon: <Contact {...ICON} />, roles: all_admin_roles },
       {
         key: "organizations",
         page: "organizations",

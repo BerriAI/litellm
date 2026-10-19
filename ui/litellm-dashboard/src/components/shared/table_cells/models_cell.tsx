@@ -9,21 +9,22 @@ import { CellTooltip } from "./cell_tooltip";
 interface ModelsCellProps {
   models: string[] | null | undefined;
   maxVisible?: number;
+  unrestrictedLabel?: string;
   allowedRoutes?: string[] | null;
   keyType?: string | null;
 }
 
 const WILDCARD_MODEL = "all-proxy-models";
 
-const formatModel = (model: string): string => {
-  if (model === WILDCARD_MODEL) {
-    return "All Proxy Models";
+const formatModel = (model: string, unrestrictedLabel?: string): string => {
+  if (model === WILDCARD_MODEL || (model === "*" && unrestrictedLabel !== undefined)) {
+    return unrestrictedLabel ?? "All Proxy Models";
   }
   const name = getModelDisplayName(model);
   return name.length > 30 ? `${name.slice(0, 30)}...` : name;
 };
 
-export function ModelsCell({ models, maxVisible = 3, allowedRoutes, keyType }: ModelsCellProps) {
+export function ModelsCell({ models, maxVisible = 3, unrestrictedLabel, allowedRoutes, keyType }: ModelsCellProps) {
   if (!Array.isArray(models) || models.length === 0) {
     const scope = deriveKeyModelScope(allowedRoutes, keyType);
     if (!scope.hasModelAccess) {
@@ -38,7 +39,7 @@ export function ModelsCell({ models, maxVisible = 3, allowedRoutes, keyType }: M
         />
       );
     }
-    return <Badge variant="secondary">All Proxy Models</Badge>;
+    return <Badge variant="secondary">{unrestrictedLabel ?? "All Proxy Models"}</Badge>;
   }
 
   const visible = models.slice(0, maxVisible);
@@ -48,7 +49,7 @@ export function ModelsCell({ models, maxVisible = 3, allowedRoutes, keyType }: M
     <div className="flex flex-wrap items-center gap-1">
       {visible.map((model, index) => (
         <Badge key={index} variant={model === WILDCARD_MODEL ? "secondary" : "outline"}>
-          {formatModel(model)}
+          {formatModel(model, unrestrictedLabel)}
         </Badge>
       ))}
       {overflow.length > 0 && (
@@ -56,7 +57,7 @@ export function ModelsCell({ models, maxVisible = 3, allowedRoutes, keyType }: M
           content={
             <div className="flex max-w-[280px] flex-col gap-0.5">
               {overflow.map((model, index) => (
-                <span key={index}>{formatModel(model)}</span>
+                <span key={index}>{formatModel(model, unrestrictedLabel)}</span>
               ))}
             </div>
           }

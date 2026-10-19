@@ -3693,6 +3693,14 @@ class MCPServerManager:
         )
 
         try:
+            customer_access: Final = (
+                access or await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)
+                if user_api_key_auth and user_api_key_auth.end_user_id
+                else None
+            )
+            if customer_access is not None and customer_access.end_user_denies_mcp:
+                return []
+
             # Admin view with no explicit object permission and no entitlement ceiling resolves the
             # whole registry, for keys AND admitted session subjects alike (one predicate owns the
             # question). Seeded into the union rather than returned early so the session resource
@@ -3701,7 +3709,7 @@ class MCPServerManager:
             resolved_access: Final = (
                 MCPServerAccess(server_ids=())
                 if admin_unscoped
-                else access or await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)
+                else customer_access or access or await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)
             )
             resolved_server_ids: Final = (
                 set(self.get_registry().keys()) if admin_unscoped else set(resolved_access.server_ids)
