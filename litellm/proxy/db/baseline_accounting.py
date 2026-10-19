@@ -58,6 +58,9 @@ class DailyBaselineAttribution(LiteLLMBaseModel):
     model_group: str | None = None
     endpoint: str | None = None
     mcp_namespaced_tool_name: str | None = None
+    # The request's team, for the team-scoped tag rows. Defaulted so records stored before
+    # the column existed still validate; they land under "" like any pre-upgrade tag spend.
+    team_id: str = ""
     targets: tuple[DailyBaselineTarget, ...] = ()
 
     def adjustment(self, target: DailyBaselineTarget, savings_delta: float, request_id: str) -> SpendRow:
@@ -71,6 +74,7 @@ class DailyBaselineAttribution(LiteLLMBaseModel):
                 "model_group": self.model_group,
                 "endpoint": self.endpoint,
                 "mcp_namespaced_tool_name": self.mcp_namespaced_tool_name,
+                **({"team_id": self.team_id} if table.team_scoped else {}),
                 table.entity_id_column: target.entity_id,
                 "request_id": request_id,
                 "autorouter_savings_spend": savings_delta,
