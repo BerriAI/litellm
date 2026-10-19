@@ -9,6 +9,10 @@ from litellm.integrations.otel.mappers.base import AttributeMap
 from litellm.integrations.otel.mappers.utils import drop_none_pairs
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
 from litellm.integrations.otel.plumbing.context import request_root_span
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.redact_messages import (
+    should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # the helper types its argument as a bare dict
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -77,9 +81,19 @@ class RootIOOpenTelemetryV2(OpenTelemetryV2):
         raise NotImplementedError
 
 
+def _redacts_messages(logger: OpenTelemetryV2, data: Mapping[str, object]) -> bool:
+    """Whether the request's logged messages are redacted, as they are on its LLM span."""
+    if logger.message_logging is not True:
+        return True
+    logging_obj: Final = data.get("litellm_logging_obj")
+    return should_redact_message_logging(
+        logging_obj.model_call_details if isinstance(logging_obj, Logging) else {"litellm_params": dict(data)}
+    )
+
+
 class OpenInferenceRootIOOpenTelemetryV2(RootIOOpenTelemetryV2):
     """Stamps the request root's OpenInference kind, input and output, which Arize AX and Phoenix show as the
-    trace's, on a root this logger's provider started.
+    trace's, on a root this logger's provider started, unless the request's logged messages are redacted.
 
     The proxy runs a callback's pre-call hook only when the callback's own class defines it, so this class repeats
     the inherited one that seeds the request's metadata baggage.
@@ -102,6 +116,10 @@ class OpenInferenceRootIOOpenTelemetryV2(RootIOOpenTelemetryV2):
     ) -> "AsyncGenerator[ModelResponseStream, None]":
         async for chunk in self._relay_stream(response, request_data):
             yield chunk
+
+    def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
+        if not _redacts_messages(self, data):
+            super()._stamp_root_io(data, render_output)
 
     def _stamps_root(self, root: "Span") -> bool:
         return isinstance(root, ReadableSpan) and root.resource is self.tracer_provider.resource

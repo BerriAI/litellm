@@ -4,6 +4,7 @@ Arize AX and Phoenix show as the trace's, when this logger's provider started th
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime
 from typing import Final
 
 import pytest
@@ -23,7 +24,7 @@ from litellm.integrations.otel.plumbing import context as otel_context  # noqa: 
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import set_request_root_span  # noqa: E402
 from litellm.integrations.otel.root_io_logger import OpenInferenceRootIOOpenTelemetryV2  # noqa: E402
-from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2  # noqa: E402
+from litellm.litellm_core_utils.litellm_logging import Logging, _maybe_construct_otel_v2  # noqa: E402
 from litellm.proxy._types import UserAPIKeyAuth  # noqa: E402
 from litellm.proxy.utils import ProxyLogging  # noqa: E402
 from litellm.types.llms.openai import ResponsesAPIResponse  # noqa: E402
@@ -215,6 +216,62 @@ def test_content_on_destination_stamps_the_root_when_global_capture_is_off():
         otel_context.reset_request_destinations(token)
 
     assert json.loads(_root_attrs(exporter)["input.value"]) == [{"role": "user", "content": "ping"}]
+
+
+def _logging_obj(dynamic_params: dict) -> Logging:
+    logging_obj = Logging(
+        model="gpt-5.4-mini",
+        messages=CHAT_DATA["messages"],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="root-io",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    logging_obj.model_call_details["standard_callback_dynamic_params"] = dynamic_params
+    return logging_obj
+
+
+def test_root_io_is_withheld_when_message_logging_is_turned_off(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger()
+
+    _run_request(logger, CHAT_DATA, "acompletion", PONG)
+
+    assert set(ROOT_IO_ATTRS).isdisjoint(_root_attrs(exporter))
+
+
+def test_root_io_is_withheld_when_the_request_header_asks_for_redaction():
+    logger, exporter = _logger()
+    data: Final = {**CHAT_DATA, "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}
+    chunks: Final = (_chat_chunk("po"), _chat_chunk("ng"), _chat_chunk(None, finish_reason="stop"))
+    root = _start_root(logger)
+
+    relayed: Final = asyncio.run(_relay(logger, chunks, data))
+    root.end()
+
+    assert [id(chunk) for chunk in relayed] == [id(chunk) for chunk in chunks]
+    assert set(ROOT_IO_ATTRS).isdisjoint(_root_attrs(exporter))
+
+
+@pytest.mark.parametrize(("turn_off", "stamped"), [(True, False), (False, True)], ids=["redacted", "not-redacted"])
+def test_root_io_follows_the_request_redaction_setting_on_its_logging_object(turn_off: bool, stamped: bool):
+    logger, exporter = _logger()
+    data: Final = {**CHAT_DATA, "litellm_logging_obj": _logging_obj({"turn_off_message_logging": turn_off})}
+
+    _run_request(logger, data, "acompletion", PONG)
+
+    assert ("input.value" in _root_attrs(exporter)) is stamped
+
+
+def test_root_io_is_withheld_for_a_logger_with_message_logging_off():
+    logger, exporter = _logger()
+    logger.message_logging = False
+
+    _run_request(logger, CHAT_DATA, "acompletion", PONG)
+
+    assert set(ROOT_IO_ATTRS).isdisjoint(_root_attrs(exporter))
 
 
 @pytest.mark.parametrize(

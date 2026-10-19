@@ -31,6 +31,7 @@ from _openinference_support import (
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, Wire
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from pydantic import JsonValue
 
 _ROOT_IO_KEYS: Final = frozenset(
     {"openinference.span.kind", "input.value", "input.mime_type", "output.value", "output.mime_type"}
@@ -96,7 +97,9 @@ def _request_trace(destination: Wire, marker: str) -> tuple[_Span, _Span]:
     return collect((), time.monotonic() + 30)
 
 
-def _chat_request(proxy: Gateway, model: str, marker: str, *, stream: bool = False) -> httpx.Response:
+def _chat_request(
+    proxy: Gateway, model: str, marker: str, *, stream: bool = False, headers: Mapping[str, str] | None = None
+) -> httpx.Response:
     return proxy.request(
         "POST",
         "/v1/chat/completions",
@@ -107,6 +110,7 @@ def _chat_request(proxy: Gateway, model: str, marker: str, *, stream: bool = Fal
             "cache": {"no-cache": True},
             **({"stream": True, "stream_options": {"include_usage": True}} if stream else {}),
         },
+        headers=headers,
     )
 
 
@@ -264,3 +268,40 @@ def test_root_is_left_alone(
 
     _assert_root_left_alone(root)
     assert llm.parent_span_id, llm
+
+
+@pytest.mark.parametrize(
+    ("litellm_settings", "headers", "stream"),
+    [
+        ({"turn_off_message_logging": True}, None, False),
+        ({"turn_off_message_logging": True}, None, True),
+        (None, {"x-litellm-enable-message-redaction": "true"}, False),
+    ],
+    ids=["turn-off-message-logging", "turn-off-message-logging-stream", "redaction-header"],
+)
+def test_root_is_left_alone_when_the_request_messages_are_redacted(
+    litellm_settings: Mapping[str, JsonValue] | None,
+    headers: Mapping[str, str] | None,
+    stream: bool,
+    gateway: Gateway,
+    tmp_path: Path,
+) -> None:
+    marker: Final = "root-io-redacted-" + uuid.uuid4().hex
+    reply: Final = (
+        _chat_stream_response(marker, (_chat_tool_call(marker),)) if stream else _chat_plain_response(marker, marker)
+    )
+
+    with _rig(
+        gateway,
+        tmp_path,
+        lambda _request: reply,
+        callbacks=("arize_phoenix",),
+        callback_settings=_COLLECTOR,
+        litellm_settings=litellm_settings,
+    ) as rig:
+        response: Final = _chat_request(rig.proxy, rig.model, marker, stream=stream, headers=headers)
+        assert response.status_code == 200, response.text
+        root, llm = _request_trace(rig.destination, marker)
+
+    _assert_root_left_alone(root)
+    assert _json_messages(llm.attributes["input.value"]) == [{"role": "user", "content": "redacted-by-litellm"}], llm
