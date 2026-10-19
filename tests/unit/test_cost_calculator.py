@@ -9856,6 +9856,7 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
             }
         }
     )
+    litellm.register_model({model: {"supports_function_calling": True, "input_cost_per_token": None}})
     response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
 
     assert completion_cost(
@@ -9864,6 +9865,15 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
         custom_llm_provider="bedrock",
         optional_params={"model_id": f"us.{model}"},
     ) == pytest.approx(15 * rate)
+
+    updated_rate: Final = rate + 0.002
+    litellm.register_model({model: {"input_cost_per_token": str(updated_rate)}})
+    assert completion_cost(
+        completion_response=response,
+        model=f"bedrock/converse/{model}",
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": f"us.{model}"},
+    ) == pytest.approx(10 * updated_rate + 5 * rate)
 
 
 def test_bedrock_converse_profile_ignores_registered_capabilities_without_prices(
