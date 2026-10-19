@@ -210,7 +210,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Nvidia NIM rerank")
 
-        top_n: Final = optional_rerank_params.get("top_n")
+        top_n: object = optional_rerank_params.get("top_n")
         if top_n is not None:
             if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
                 raise ValueError(f"top_n must be a positive integer, got: {top_n!r}")
@@ -356,7 +356,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
         # The hosted /v1/retrieval/{model}/reranking API rejects top_k.
         # Sort before limiting in case the provider returns unsorted rankings.
-        top_n: Final = optional_params.get("top_n") or self._client_side_top_n
+        top_n: Final[int | None] = self._client_side_top_n
         if top_n is not None and response.results is not None and len(response.results) > top_n:
             response.results = sorted(
                 response.results,
