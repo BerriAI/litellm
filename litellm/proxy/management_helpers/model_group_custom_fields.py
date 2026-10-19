@@ -1,4 +1,3 @@
-"""Merge the admin-defined `custom_tags` and `custom_metadata` from a model group's deployment `model_info`."""
 
 import math
 from collections.abc import Iterator, Mapping, Sequence
