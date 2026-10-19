@@ -915,13 +915,25 @@ FORWARD_PROVIDER_AUTH_HEADERS: Final = {
             {
                 "provider_specific_header": {
                     "custom_llm_provider": "anthropic",
-                    "extra_headers": {"anthropic-beta": "x"},
+                    "extra_headers": {"x-caller-trace": "x"},
                 }
             },
             {},
             {},
             ("provider_specific_header",),
         ),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"anthropic-version": "2023-06-01", "anthropic-beta": "tools-2024-04-04"},
+                }
+            },
+            {},
+            {},
+            (),
+        ),
+        ({"headers": {"Anthropic-Version": "2023-06-01"}}, {}, {}, ()),
         ({"organization": "org-caller"}, {}, {}, ("organization",)),
         ({"headers": "authorization", "provider_specific_header": "x-api-key"}, {}, {}, ()),
         (
@@ -930,7 +942,8 @@ FORWARD_PROVIDER_AUTH_HEADERS: Final = {
             {},
             ("api_key", "headers"),
         ),
-        ({}, {"anthropic-beta": "tools-2024-04-04"}, {}, ("provider_specific_header",)),
+        ({}, {"anthropic-beta": "tools-2024-04-04"}, {}, ()),
+        ({}, {"anthropic-version": "2023-06-01", "anthropic-beta": "tools-2024-04-04"}, {}, ()),
         ({}, {"openai-organization": "org-caller"}, {"forward_openai_org_id": True}, ("organization",)),
         (
             {},
@@ -961,10 +974,13 @@ FORWARD_PROVIDER_AUTH_HEADERS: Final = {
         "credential-in-provider-specific-header",
         "credential-in-one-provider-specific-header-entry",
         "plain-provider-specific-header",
+        "anthropic-version-and-beta-in-provider-specific-header",
+        "anthropic-version-in-headers",
         "organization",
         "malformed-header-fields",
         "api-key-and-credential-headers",
         "proxy-forwarded-anthropic-beta",
+        "proxy-forwarded-anthropic-sdk-headers",
         "proxy-forwarded-openai-organization",
         "proxy-forwarded-anthropic-oauth-token",
         "proxy-forwarded-provider-auth-header",

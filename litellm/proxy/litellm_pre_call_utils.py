@@ -272,8 +272,8 @@ _DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset({CAPTURE_MESS
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}
 )
-_PROXY_USER_INFORMATION_HEADERS: Final = frozenset(
-    f"x-litellm-{key}" for key in StandardLoggingUserAPIKeyMetadata.__annotations__
+_HEADERS_THAT_CANNOT_CHANGE_PROVIDER_AUTH: Final = frozenset(
+    {*(f"x-litellm-{key}" for key in StandardLoggingUserAPIKeyMetadata.__annotations__), *ANTHROPIC_API_HEADERS}
 )
 service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
 # Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
@@ -1347,14 +1347,14 @@ def _request_entries(value: object) -> tuple[object, ...]:
 
 
 def _carries_a_caller_header(headers: object) -> bool:
-    return any(name.lower() not in _PROXY_USER_INFORMATION_HEADERS for name in _request_fields(headers))
+    return any(name.lower() not in _HEADERS_THAT_CANNOT_CHANGE_PROVIDER_AUTH for name in _request_fields(headers))
 
 
 def _caller_credential_fields(data: Mapping[str, object]) -> tuple[str, ...]:
     """Names of the request fields through which the caller can change how the provider authenticates the call:
     ``api_key``, ``organization``, and ``headers``, ``extra_headers`` or a ``provider_specific_header`` entry's
     ``extra_headers`` that carry any header besides the key and user details the proxy adds under
-    ``add_user_information_to_llm_headers``."""
+    ``add_user_information_to_llm_headers`` and the ``anthropic-version`` and ``anthropic-beta`` headers."""
     carried: Final = {
         "api_key": "api_key" in data,
         "extra_headers": _carries_a_caller_header(data.get("extra_headers")),

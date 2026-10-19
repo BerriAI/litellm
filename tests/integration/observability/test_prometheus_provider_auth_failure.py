@@ -262,6 +262,7 @@ def config(directory: Path, upstream: Wire) -> Path:
         deployment("rate-limited", RATE_LIMITS, api_base),
         deployment("recovers", RECOVERS, api_base),
         anthropic_deployment("anthropic-own-key", upstream.url),
+        anthropic_deployment("anthropic-sdk-own-key", upstream.url),
         anthropic_deployment("caller-oauth", upstream.url),
         *(keyless_anthropic_deployment(cell, upstream.url) for cell in KEYLESS_CELLS),
         bedrock_deployment(
@@ -750,16 +751,26 @@ def test_a_provider_401_on_an_organization_the_caller_sends_stays_out_of_a_healt
     assert_kept_out_of_the_deployment_metrics(rig, cell)
 
 
-def test_a_provider_401_on_an_anthropic_deployments_own_key_is_recorded(rig: Rig) -> None:
+@pytest.mark.parametrize(
+    ("cell", "headers"),
+    [
+        ("anthropic-own-key", {}),
+        ("anthropic-sdk-own-key", {"anthropic-version": "2023-06-01", "anthropic-beta": "tools-2024-04-04"}),
+    ],
+    ids=["no-client-headers", "anthropic-sdk-headers"],
+)
+def test_a_provider_401_on_an_anthropic_deployments_own_key_is_recorded(
+    rig: Rig, cell: str, headers: dict[str, str]
+) -> None:
     with rig.gateway.scenario() as scenario:
-        key: Final = scenario.key(models=[name("anthropic-own-key")])
+        key: Final = scenario.key(models=[name(cell)])
         rig.upstream.drain()
-        response: Final = anthropic_messages(rig.gateway, "anthropic-own-key", key, {})
+        response: Final = anthropic_messages(rig.gateway, cell, key, headers)
         assert response.status_code == 401, response.text
         assert [request.headers.get("x-api-key") for request in rig.upstream.drain()] == [
-            "sk-ant-api03-deployment-credential-anthropic-own-key"
+            f"sk-ant-api03-deployment-credential-{cell}"
         ]
-        assert_recorded_as_a_deployment_failure(rig, "anthropic-own-key", "401")
+        assert_recorded_as_a_deployment_failure(rig, cell, "401")
 
 
 def test_a_provider_401_on_an_anthropic_oauth_token_the_caller_sent_stays_out_of_the_deployment_metrics(
