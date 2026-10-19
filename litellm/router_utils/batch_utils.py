@@ -1,6 +1,8 @@
 import io
 import json
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from os import PathLike
 from typing import Final
 
@@ -11,6 +13,11 @@ from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 from litellm.types.utils import CallTypes
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
+_DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(Mapping[str, object])
+
+BATCH_ENDPOINT: Final = "/v1/batch"
+
+_batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
 
 
 class InMemoryFile(io.BytesIO):
@@ -63,6 +70,32 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
             raise e
 
     return json_objects
+
+
+@contextmanager
+def batch_create_routing() -> Generator[None, None, None]:
+    token: Final = _batch_create_routing.set(True)
+    try:
+        yield
+    finally:
+        _batch_create_routing.reset(token)
+
+
+def is_batch_create_routing() -> bool:
+    return _batch_create_routing.get()
+
+
+def is_batch_deployment(deployment: Mapping[str, object]) -> bool:
+    return _DEPLOYMENT_MODEL_INFO.validate_python(deployment.get("model_info") or {}).get("mode") == "batch"
+
+
+def deployment_supported_endpoints(
+    declared_endpoints: Sequence[str] | None, deployment: Mapping[str, object]
+) -> tuple[str, ...]:
+    declared: Final = tuple(declared_endpoints or ())
+    if is_batch_deployment(deployment) and BATCH_ENDPOINT not in declared:
+        return (*declared, BATCH_ENDPOINT)
+    return declared
 
 
 def should_replace_model_in_jsonl(

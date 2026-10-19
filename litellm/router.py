@@ -187,7 +187,11 @@ from litellm.router_utils.auto_router_model_naming import (
     count_capability_routers,
 )
 from litellm.router_utils.batch_utils import (
+    batch_create_routing,
+    deployment_supported_endpoints,
     get_router_metadata_variable_name,
+    is_batch_create_routing,
+    is_batch_deployment,
     is_batch_retrieve_call_type,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
@@ -7119,12 +7123,13 @@ class Router:
         try:
             verbose_router_logger.debug("Inside _acreate_batch()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self.async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "files-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with batch_create_routing():
+                deployment: Final = await self.async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "files-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -12178,6 +12183,17 @@ class Router:
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
 
+            model_group_info.supported_endpoints = (
+                tuple(
+                    dict.fromkeys(
+                        (
+                            *(model_group_info.supported_endpoints or ()),
+                            *deployment_supported_endpoints(model_info.get("supported_endpoints"), model),
+                        )
+                    )
+                )
+                or None
+            )
             model_group_info.supports_fast_mode = model_group_info.supports_fast_mode and (
                 AnthropicModelInfo.supports_fast_mode(litellm_model, llm_provider)
             )
@@ -14166,7 +14182,13 @@ class Router:
                 model
             ]  # update the model to the actual value if an alias has been passed in
 
-        return model, self._drop_strategy_markers(model, healthy_deployments)
+        selectable_deployments: Final = self._drop_strategy_markers(model, healthy_deployments)
+        if not is_batch_create_routing():
+            return model, selectable_deployments
+        batch_deployments: Final = [
+            deployment for deployment in selectable_deployments if is_batch_deployment(deployment)
+        ]
+        return model, batch_deployments or selectable_deployments
 
     def _drop_strategy_markers(
         self, model: str, deployments: Sequence[DeploymentTypedDict]
