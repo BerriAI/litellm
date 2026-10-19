@@ -16,6 +16,7 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaita
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import accumulate, count, pairwise
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
@@ -30,6 +31,7 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -91,6 +93,10 @@ class _JsonResponse(Protocol):
 
 async def _json_body(response: _JsonResponse) -> object:
     return await response.json()
+
+
+def _write_attribute(target: object, name: str, value: object) -> None:
+    setattr(target, name, value)
 
 
 _LoopSemaphores = dict[asyncio.AbstractEventLoop, asyncio.Semaphore]
@@ -175,6 +181,59 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
     yield pending
     async for chunk in stream:
         yield chunk
+
+
+@dataclass(frozen=True, slots=True)
+class _Detection:
+    entity_type: str
+    start: int
+    end: int
+    score: float
+
+
+def _strictly_contains(outer: _Detection, inner: _Detection) -> bool:
+    return (
+        outer.start <= inner.start and inner.end <= outer.end and (outer.start, outer.end) != (inner.start, inner.end)
+    )
+
+
+def _collapse_run(run: Sequence[_Detection]) -> _Detection:
+    label: Final = max(
+        (detection for detection in run if not any(_strictly_contains(other, detection) for other in run)),
+        key=lambda detection: (detection.score, detection.end - detection.start, detection.entity_type),
+    )
+    return _Detection(label.entity_type, run[0].start, max(detection.end for detection in run), label.score)
+
+
+def _to_detection(item: PresidioAnalyzeResponseItem) -> _Detection:
+    return _Detection(
+        str(item.get("entity_type")),
+        int(item.get("start") or 0),
+        int(item.get("end") or 0),
+        float(item.get("score") or 0.0),
+    )
+
+
+def _resolve_overlapping_spans(analyze_results: Sequence[PresidioAnalyzeResponseItem]) -> tuple[_Detection, ...]:
+    """
+    Collapse each run of overlapping detections into one detection covering the whole run.
+
+    The run takes its entity type from its highest-scoring detection that no other
+    detection in the run strictly contains, the same containment rule Presidio's
+    anonymizer applies, so a phone number with a date-shaped fragment inside it stays
+    a PHONE_NUMBER. Runs come back sorted by start and never overlap.
+    """
+    detections: Final = sorted(
+        (detection for detection in map(_to_detection, analyze_results) if detection.start < detection.end),
+        key=lambda detection: detection.start,
+    )
+    run_ends: Final = tuple(accumulate((detection.end for detection in detections), max))
+    boundaries: Final = (
+        0,
+        *(index for index in range(1, len(detections)) if detections[index].start >= run_ends[index - 1]),
+        len(detections),
+    )
+    return tuple(_collapse_run(detections[first:last]) for first, last in pairwise(boundaries) if first < last)
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -817,31 +876,25 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"] = {}
         if "pii_tokens" not in request_data["metadata"]:
             request_data["metadata"]["pii_tokens"] = {}
-        pii_tokens: Final = request_data["metadata"]["pii_tokens"]
+        pii_tokens: Final = cast("dict[str, str]", request_data["metadata"]["pii_tokens"])  # cast-ok: this hook's map
 
-        # Assign sequence numbers in forward (left-to-right) order so
-        # that <PERSON_1> is the first entity in the text, etc.
-        sorted_forward: Final = sorted(analyze_results, key=lambda x: x["start"])
-        seq_map: Final = {}
-        for idx, ar in enumerate(sorted_forward, start=1):
-            seq_map[(ar["start"], ar["end"])] = idx
+        runs: Final = _resolve_overlapping_spans(analyze_results)
+        # Every message and content part numbers its runs from 1 into this one map, so a
+        # token another part already holds for a different value takes a spare number.
+        # No token in the map is numbered above its size, so spares start above both.
+        spare_numbers: Final = count(max(len(pii_tokens), len(runs)) + 1)
 
-        # Apply replacements in reverse order by start position so
-        # that replacing later spans first does not shift earlier
-        # coordinates in the original text.
-        for ar in reversed(sorted_forward):
-            start = ar["start"]
-            end = ar["end"]
-            entity_type = ar["entity_type"]
-            replacement = f"<{entity_type}>"
-            seq = seq_map[(start, end)]
-            if replacement.endswith(">"):
-                replacement = f"{replacement[:-1]}_{seq}>"
-            else:
-                replacement = f"{replacement}_{seq}"
-            pii_tokens[replacement] = text[start:end]
-            new_text = new_text[:start] + replacement + new_text[end:]
-            masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
+        for seq, run in reversed(tuple(enumerate(runs, start=1))):
+            original = text[run.start : run.end]
+            numbered = f"<{run.entity_type}_{seq}>"
+            replacement = (
+                numbered
+                if pii_tokens.get(numbered, original) == original
+                else f"<{run.entity_type}_{next(spare_numbers)}>"
+            )
+            pii_tokens[replacement] = original
+            new_text = new_text[: run.start] + replacement + new_text[run.end :]
+            masked_entity_count[run.entity_type] = masked_entity_count.get(run.entity_type, 0) + 1
         return new_text
 
     async def anonymize_text(
@@ -1373,37 +1426,41 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
 
             # 2. Process tool calls
-            tool_calls = getattr(message, "tool_calls", None)
-            if tool_calls:
-                for tool_call in tool_calls:
-                    function = getattr(tool_call, "function", None)
-                    if function and hasattr(function, "arguments"):
-                        args = function.arguments
-                        if isinstance(args, str):
-                            if mode == "unmask":
-                                function.arguments = self._unmask_pii_text(args, pii_tokens)
-                            elif mode == "mask":
-                                function.arguments = await self.check_pii(
-                                    text=args,
-                                    output_parse_pii=False,
-                                    presidio_config=presidio_config,
-                                    request_data=request_data,
-                                )
-
-            # 3. Process legacy function calls
-            function_call = getattr(message, "function_call", None)
-            if function_call and hasattr(function_call, "arguments"):
-                args = function_call.arguments
+            for tool_call in attribute_items(message, "tool_calls"):
+                function = attribute_or_none(tool_call, "function")
+                args = attribute_or_none(function, "arguments") if function else None
                 if isinstance(args, str):
                     if mode == "unmask":
-                        function_call.arguments = self._unmask_pii_text(args, pii_tokens)
+                        _write_attribute(function, "arguments", self._unmask_pii_text(args, pii_tokens))
                     elif mode == "mask":
-                        function_call.arguments = await self.check_pii(
-                            text=args,
+                        _write_attribute(
+                            function,
+                            "arguments",
+                            await self.check_pii(
+                                text=args,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=request_data,
+                            ),
+                        )
+
+            # 3. Process legacy function calls
+            function_call = attribute_or_none(message, "function_call")
+            legacy_args = attribute_or_none(function_call, "arguments") if function_call else None
+            if isinstance(legacy_args, str):
+                if mode == "unmask":
+                    _write_attribute(function_call, "arguments", self._unmask_pii_text(legacy_args, pii_tokens))
+                elif mode == "mask":
+                    _write_attribute(
+                        function_call,
+                        "arguments",
+                        await self.check_pii(
+                            text=legacy_args,
                             output_parse_pii=False,
                             presidio_config=presidio_config,
                             request_data=request_data,
-                        )
+                        ),
+                    )
         return response
 
     async def _mask_output_response(
@@ -1523,7 +1580,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
         if model_response_text(assembled) == original_text:
             return chunks
-        return anthropic_sse_chunks_from_response(assembled)
+        return anthropic_sse_chunks_from_response(assembled, chunks)
 
     @staticmethod
     def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:

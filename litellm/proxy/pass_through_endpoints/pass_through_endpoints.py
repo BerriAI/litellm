@@ -8,7 +8,7 @@ from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import count, groupby
+from itertools import chain, count, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
@@ -48,7 +48,11 @@ from litellm.constants import (
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    guardrail_request_data_with_streaming,
+    without_server_streaming_classification,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
@@ -62,6 +66,7 @@ from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.anthropic.common_utils import is_anthropic_messages_url
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
@@ -115,6 +120,11 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.route_priority import (
+    builtin_pass_through_routes_first,
+    configured_pass_through_routes_first,
+    shadowed_by_builtin_claim,
+)
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -149,7 +159,14 @@ router: Final = APIRouter()
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
+_DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
+_PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
+
+
+def _is_mergeable_client_metadata(key: str, value: object) -> bool:
+    return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
+
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -403,7 +420,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             or ("streamRawPredict") in url
         ):
             return EndpointType.VERTEX_AI
-        elif parsed_url.hostname == "api.anthropic.com":
+        elif is_anthropic_messages_url(url):
             return EndpointType.ANTHROPIC
         elif (
             parsed_url.hostname == "api.openai.com"
@@ -603,6 +620,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         from litellm.proxy.proxy_server import llm_router
 
         _parsed_body = _parsed_body or {}
+        parsed_body_typed: Final[Mapping[str, object]] = cast(Mapping[str, object], _parsed_body)  # cast-ok: json
+        server_marker_free_body: Final = without_server_streaming_classification(parsed_body_typed)
+        # The marker-free body must propagate through the caller's request dict, so
+        # downstream guardrail scans and snapshots never observe the server streaming marker.
+        _parsed_body.clear()
+        _parsed_body.update(server_marker_free_body)
         managed_model: Final = get_model_from_request(
             request_data=_parsed_body,
             route=get_request_route(request),
@@ -616,8 +639,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
         )
+        kept_out_of_litellm_params: Final = (
+            _KEPT_OUT_OF_LITELLM_PARAMS
+            if _key_or_team_allows_client_pricing_override(user_api_key_dict)
+            else _KEPT_OUT_OF_LITELLM_PARAMS | _PRICING_MODEL_OVERRIDE_PARAMS
+        )
         litellm_params_in_body: Final = MappingProxyType(
-            {k: v for k, v in litellm_keys_in_body.items() if k not in _KEPT_OUT_OF_LITELLM_PARAMS}
+            {k: v for k, v in litellm_keys_in_body.items() if k not in kept_out_of_litellm_params}
         )
 
         _metadata = dict(
@@ -628,7 +656,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         metadata: Final = litellm_keys_in_body.get("metadata")
         for client_metadata in (litellm_metadata, metadata):
             if isinstance(client_metadata, dict):
-                _metadata.update({k: v for k, v in client_metadata.items() if not k.startswith("user_api_key_")})
+                _metadata.update(
+                    {
+                        k: v
+                        for k, v in cast(Mapping[str, object], client_metadata).items()  # cast-ok: json
+                        if _is_mergeable_client_metadata(k, v)
+                    }
+                )
 
         _metadata = _apply_key_team_project_controls(user_api_key_dict=user_api_key_dict, metadata=_metadata)
         _metadata = _update_metadata_with_tags_in_header(
@@ -661,6 +695,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
             _metadata["user_api_key_team_model_max_budget"] = user_api_key_dict.team_model_max_budget
             _metadata["user_api_key_user_model_max_budget"] = user_api_key_dict.user_model_max_budget
+            _metadata["user_api_key_team_member_model_max_budget"] = user_api_key_dict.team_member_model_max_budget
             _metadata["user_api_key_end_user_model_max_budget"] = user_api_key_dict.end_user_model_max_budget
         else:
             for field in (
@@ -828,7 +863,7 @@ def _build_passthrough_failure_request_payload(
     error response. Spend tracking only attributes a recovered cost when it
     comes paired with a usage object, so both keys are written together.
     """
-    request_payload: Final[dict] = dict(parsed_body or {})
+    request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
         request_payload.update(kwargs)
     if logging_obj is not None:
@@ -1069,6 +1104,10 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
+def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return headers
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1084,6 +1123,7 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1104,9 +1144,11 @@ async def pass_through_request(
         guardrails_config: Optional field - guardrails configuration for passthrough endpoint
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
+        upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
         PassthroughGuardrailHandler,
     )
@@ -1130,13 +1172,15 @@ async def pass_through_request(
     #########################################################
     try:
         url = httpx.URL(target)
-        headers = custom_headers
-        headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+        forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request_headers=safe_get_request_headers(request).copy(),
-            headers=headers,
+            headers=custom_headers,
             forward_headers=forward_headers,
         )
-        upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
+        upstream_headers: Final = _with_trace_context(
+            upstream_headers_filter(forwarded_headers),
+            parent_span=user_api_key_dict.parent_otel_span,
+        )
 
         requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
@@ -1149,7 +1193,7 @@ async def pass_through_request(
         # parsed dict (hooks mutate it, breaking the signature / Content-Length).
         # Tolerate request objects without `state` (test fixtures) and only honor
         # values httpx accepts for `content=`.
-        _request_state: Final = getattr(request, "state", None)
+        _request_state: Final[object] = getattr(request, "state", None)
         state_raw_body: str | bytes | None = (
             getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
             if _request_state is not None
@@ -1163,7 +1207,7 @@ async def pass_through_request(
         is_multipart: Final = HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
 
         if custom_body:
-            _parsed_body = custom_body
+            _parsed_body = dict(custom_body)
         elif is_multipart:
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
             _parsed_body = {}
@@ -1212,6 +1256,7 @@ async def pass_through_request(
             proxy_config=proxy_config,
             route_description="pass_through_endpoint",
         )
+        litellm_trace_id: Final[str | None] = get_chain_id_from_headers(dict(request.headers))
         logging_obj = Logging(
             model=passthrough_model,
             messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
@@ -1219,6 +1264,7 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
             start_time=start_time,
             litellm_call_id=litellm_call_id,
+            litellm_trace_id=litellm_trace_id,
             function_id="1245",
             dynamic_success_callbacks=team_callbacks.success_callbacks,
             dynamic_failure_callbacks=team_callbacks.failure_callbacks,
@@ -1232,6 +1278,14 @@ async def pass_through_request(
         if _parsed_body is None:
             _parsed_body = {}
         _parsed_body["litellm_logging_obj"] = logging_obj
+        is_streaming_pass_through: Final = bool(
+            HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+                parsed_body=_parsed_body,
+                stream=stream,
+            )
+        )
+        typed_body: Final[Mapping[str, object]] = cast(Mapping[str, object], _parsed_body)  # cast-ok: json
+        _parsed_body = guardrail_request_data_with_streaming(typed_body, is_streaming=is_streaming_pass_through)
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(
@@ -2076,6 +2130,7 @@ def create_pass_through_route(
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2215,6 +2270,7 @@ def create_pass_through_route(
                         custom_llm_provider=custom_llm_provider,
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
+                        upstream_headers_filter=upstream_headers_filter,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
@@ -2294,7 +2350,7 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     if setup_model_rewriter is None:
         return text_data
     try:
-        message: Final = json.loads(text_data)
+        message: Final[object] = _DECODED_JSON.validate_python(json.loads(text_data))
     except json.JSONDecodeError:
         return text_data
     if not isinstance(message, dict):
@@ -2329,7 +2385,9 @@ def _resolved_vertex_live_setup(
 
 def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
     try:
-        decoded: Final = json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+        decoded: Final[object] = _DECODED_JSON.validate_python(
+            json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+        )
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return decoded if isinstance(decoded, dict) else None
@@ -2518,10 +2576,10 @@ async def websocket_passthrough_request(
     )
 
     ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-    websocket_data: dict[str, object] = {}
-    websocket_data = await proxy_logging_obj.pre_call_hook(
+    websocket_hook_data: Final = guardrail_request_data_with_streaming(MappingProxyType({}), is_streaming=True)
+    await proxy_logging_obj.pre_call_hook(
         user_api_key_dict=user_api_key_dict,
-        data=websocket_data,
+        data=websocket_hook_data,
         call_type="pass_through_endpoint",
     )
 
@@ -2558,7 +2616,7 @@ async def websocket_passthrough_request(
                                     endpoint,
                                 )
                                 try:
-                                    client_message = json.loads(text_data)
+                                    client_message = _DECODED_JSON.validate_python(json.loads(text_data))
                                     if isinstance(client_message, dict) and "setup" in client_message:
                                         setup_data = client_message["setup"]
                                         verbose_proxy_logger.debug(
@@ -2816,9 +2874,16 @@ async def websocket_passthrough_request(
             await websocket.close()
 
 
+def _content_type_header(response: httpx.Response) -> str:
+    try:
+        return response.headers["content-type"]
+    except KeyError:
+        return ""
+
+
 def _is_streaming_response(response: httpx.Response) -> bool:
-    _content_type: Final = response.headers.get("content-type")
-    if _content_type is not None and "text/event-stream" in _content_type:
+    _content_type: Final[str] = _content_type_header(response)
+    if "text/event-stream" in _content_type:
         return True
     return False
 
@@ -2866,7 +2931,7 @@ def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
     """
     if response.status_code >= 400:
         return True
-    content_type_header: Final[str] = response.headers.get("content-type", "")
+    content_type_header: Final[str] = _content_type_header(response)
     media_type: Final = content_type_header.split(";")[0].strip().lower()
     return (
         media_type in ("", "application/json")
@@ -2987,6 +3052,41 @@ class SafeRouteAdder:
         return any(id(route) not in lazy_owned for route in SafeRouteAdder._colliding_routes(app, path, methods))
 
     @staticmethod
+    def remove_unregistered_routes(app: FastAPI) -> None:
+        def registered_route_path(route_info: Mapping[str, object]) -> str | None:
+            path: Final = route_info.get("path")
+            if not isinstance(path, str):
+                return None
+            route_type: Final = route_info.get("type")
+            if route_type == "exact":
+                return path
+            if route_type == "subpath":
+                return f"{path}/{{subpath:path}}"
+            return None
+
+        def registered_route_methods(
+            route_info: Mapping[str, str | bool | Sequence[str] | Mapping[str, object]],
+        ) -> tuple[tuple[str, str], ...]:
+            starlette_path: Final = registered_route_path(route_info)
+            methods: Final = route_info.get("methods")
+            if starlette_path is None or not isinstance(methods, (list, tuple)):
+                return ()
+            return tuple((starlette_path, method.upper()) for method in methods)
+
+        registered: Final = frozenset(
+            chain.from_iterable(map(registered_route_methods, _registered_pass_through_routes.values()))
+        )
+        app.router.routes[:] = [  # rebind-ok: the app owns its route table
+            route
+            for route in app.router.routes
+            if not (
+                isinstance(route, Route)
+                and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+                and not any((route.path, method) in registered for method in (route.methods or ()))
+            )
+        ]
+
+    @staticmethod
     def add_api_route_if_not_exists(
         app: FastAPI,
         path: str,
@@ -3026,6 +3126,15 @@ class SafeRouteAdder:
             app.router.routes[:] = _placed_ahead(  # rebind-ok: the app owns its route table
                 app.router.routes, app.router.routes[-1], shadowed[0]
             )
+        lazy_routes: Final[Mapping[str, tuple[BaseRoute, ...]] | None] = getattr(
+            getattr(app, "state", None), "lazy_routes", None
+        )
+        if lazy_routes is not None and not builtin_pass_through_routes_first():
+            builtin: Final = tuple(chain.from_iterable(lazy_routes.values()))
+            if shadowed_by_builtin_claim(path, builtin):
+                app.router.routes[:] = configured_pass_through_routes_first(  # rebind-ok: the app owns its route table
+                    app.router.routes, builtin
+                )
         verbose_proxy_logger.debug(
             "Successfully added route: %s with methods %s",
             path,
@@ -3516,6 +3625,8 @@ async def initialize_pass_through_endpoints(
     for endpoint_key in registered_pass_through_endpoints:
         if endpoint_key not in visited_endpoints:
             _registered_pass_through_routes.pop(endpoint_key, None)
+    if not builtin_pass_through_routes_first():
+        SafeRouteAdder.remove_unregistered_routes(app)
 
 
 def _get_pass_through_endpoints_from_config() -> list[PassThroughGenericEndpoint]:
@@ -3889,7 +4000,7 @@ async def create_pass_through_endpoints(
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
-    if response.field_value is None:
+    if _config_field_endpoints(response) is None:
         response.field_value = [data_dict]
     elif isinstance(response.field_value, list):
         response.field_value.append(data_dict)
@@ -3963,6 +4074,7 @@ async def delete_pass_through_endpoints(
     Returns - the deleted endpoint
     """
     from litellm.proxy.proxy_server import (
+        app,
         get_config_general_settings,
         update_config_general_settings,
     )
@@ -3978,7 +4090,7 @@ async def delete_pass_through_endpoints(
 
     ## Update field by removing endpoint
     pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
-    if response.field_value is None or pass_through_endpoint_data is None:
+    if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=400,
             detail={"error": "There are no pass-through endpoints setup."},
@@ -4013,6 +4125,8 @@ async def delete_pass_through_endpoints(
 
     # Remove routes from registry
     InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
+    if not builtin_pass_through_routes_first():
+        SafeRouteAdder.remove_unregistered_routes(app)
 
     ## Update db
     updated_data: Final = ConfigFieldUpdate(

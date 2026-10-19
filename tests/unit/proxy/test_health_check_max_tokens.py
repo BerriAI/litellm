@@ -1,7 +1,11 @@
+import asyncio
+import copy
 import json
 import logging
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -29,6 +33,22 @@ async def test_update_litellm_params_max_tokens_default(monkeypatch):
     updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated_params["max_tokens"] == 16
+
+
+def test_update_litellm_params_for_health_check_drops_model_capability_flags():
+    probe_params: Final = update_litellm_params_for_health_check(
+        model_info={},
+        litellm_params={
+            "model": "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "aws_region_name": "us-west-2",
+            "supports_max_reasoning_effort": False,
+            "supports_system_message": False,
+        },
+    )
+
+    assert "supports_max_reasoning_effort" not in probe_params
+    assert probe_params["aws_region_name"] == "us-west-2"
+    assert probe_params["supports_system_message"] is False
 
 
 @pytest.mark.asyncio
@@ -588,6 +608,101 @@ async def test_run_model_health_check_honors_an_explicit_chat_mode_on_mantle_cla
     assert fake_ahealth_check.call_args.kwargs["mode"] == "chat"
 
 
+_MANTLE_GPT_CHAT_REPLY: Final = {
+    "id": "chatcmpl-health",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "openai.gpt-5.6-terra",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+_MANTLE_GPT_RESPONSES_REPLY: Final = {
+    "id": "resp_health",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "openai.gpt-5.6-terra",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_health",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "probed_api"),
+    (({"mode": "chat"}, "chat"), ({}, "responses")),
+    ids=("chat-pin", "unpinned"),
+)
+async def test_run_model_health_check_probes_the_api_a_mantle_gpt_deployment_sends_chat_to(
+    monkeypatch, model_info, probed_api
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/chat/completions$"
+        ).respond(json=_MANTLE_GPT_CHAT_REPLY)
+        responses_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/responses$"
+        ).respond(json=_MANTLE_GPT_RESPONSES_REPLY)
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "litellm_params": {
+                    "model": "bedrock_mantle/openai.gpt-5.6-terra",
+                    "api_key": "test-bearer",
+                    "aws_region_name": "us-east-2",
+                },
+                "model_info": model_info,
+            }
+        )
+
+    assert "error" not in result, result
+    assert {"chat": chat_route.call_count, "responses": responses_route.call_count} == {
+        "chat": int(probed_api == "chat"),
+        "responses": int(probed_api == "responses"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_health_probe_of_a_custom_priced_chat_pin_leaves_plain_calls_on_responses(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    params: Final = {
+        "model": "bedrock_mantle/openai.gpt-5.6-terra",
+        "api_key": "test-bearer",
+        "aws_region_name": "us-east-2",
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/chat/completions$"
+        ).respond(json=_MANTLE_GPT_CHAT_REPLY)
+        responses_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/responses$"
+        ).respond(json=_MANTLE_GPT_RESPONSES_REPLY)
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "litellm_params": {**params, "input_cost_per_token": 2e-05, "output_cost_per_token": 8e-05},
+                "model_info": {"mode": "chat"},
+            }
+        )
+        await litellm.acompletion(messages=[{"role": "user", "content": "Say ok"}], **params)
+
+    assert "error" not in result, result
+    assert (chat_route.call_count, responses_route.call_count) == (1, 1)
+
+
 def test_autodetected_embedding_skips_reasoning_effort():
     """reasoning_effort must not leak into an embedding probe whose mode is auto-detected.
 
@@ -1131,3 +1246,199 @@ def test_transitive_probe_expansion_terminates_on_a_router_cycle():
     probes = hc_module._dependency_deployments_to_probe(a_only, router.model_list, router)
 
     assert {d["model_info"]["id"] for d in probes} == {"b-1"}
+
+
+@pytest.mark.asyncio
+async def test_background_audio_speech_health_check_uses_model_info_voice(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = respx_mock.post("https://speech.example/v1/audio/speech").respond(
+        content=b"audio",
+        headers={"content-type": "audio/mpeg"},
+    )
+
+    healthy, unhealthy, _ = await hc_module.perform_health_check(
+        [
+            {
+                "litellm_params": {
+                    "model": "openai/tts-1",
+                    "api_key": "fake-key",
+                    "api_base": "https://speech.example/v1",
+                },
+                "model_info": {"id": "speech", "mode": "audio_speech", "health_check_voice": "nova"},
+            }
+        ],
+        max_concurrency=1,
+    )
+
+    assert len(healthy) == 1
+    assert unhealthy == []
+    assert upstream.called
+    assert json.loads(upstream.calls.last.request.content)["voice"] == "nova"
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_observes_the_concurrency_limit_and_queue(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    request_started: Final = asyncio.Queue[None]()
+    release: Final = asyncio.Event()
+
+    async def complete_request(_: httpx.Request) -> httpx.Response:
+        request_started.put_nowait(None)
+        await release.wait()
+        return httpx.Response(
+            200,
+            content=b"audio",
+            headers={"content-type": "audio/mpeg"},
+        )
+
+    upstream: Final = respx_mock.post("https://health.example/v1/audio/speech").mock(side_effect=complete_request)
+    model_list: Final = [
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://health.example/v1",
+            },
+            "model_info": {"id": f"audio-{index}", "mode": "audio_speech"},
+        }
+        for index in range(10)
+    ]
+    tasks_before: Final = len(asyncio.all_tasks())
+    perform_task: Final = asyncio.create_task(hc_module.perform_health_check(model_list, max_concurrency=2))
+
+    try:
+        await asyncio.wait_for(request_started.get(), timeout=1)
+        await asyncio.wait_for(request_started.get(), timeout=1)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        extra_requests_started: Final = request_started.qsize()
+        tasks_while_blocked: Final = len(asyncio.all_tasks()) - tasks_before
+    finally:
+        release.set()
+    healthy, unhealthy, _ = await perform_task
+
+    assert extra_requests_started == 0
+    assert tasks_while_blocked <= 5
+    assert upstream.call_count == 10
+    assert len(healthy) == 10
+    assert unhealthy == []
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_timeout_marks_a_blocked_provider_unhealthy(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    never_release: Final = asyncio.Event()
+    request_started: Final = asyncio.Event()
+
+    async def blocked_response(_: httpx.Request) -> httpx.Response:
+        request_started.set()
+        await never_release.wait()
+        return httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+
+    respx_mock.post("https://health.example/v1/audio/speech").mock(side_effect=blocked_response)
+    model_list: Final = [
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://health.example/v1",
+            },
+            "model_info": {"id": "blocked", "mode": "audio_speech", "health_check_timeout": 2},
+        }
+    ]
+
+    healthy, unhealthy, _ = await asyncio.wait_for(
+        hc_module.perform_health_check(model_list),
+        timeout=4,
+    )
+
+    assert request_started.is_set()
+    assert unhealthy[0]["error"] == "Timeout exceeded"
+    assert healthy == []
+    assert len(unhealthy) == 1
+    assert unhealthy[0]["model"] == "openai/tts-1"
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_timeout_does_not_cancel_a_sibling(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    never_release: Final = asyncio.Event()
+    slow_request_started: Final = asyncio.Event()
+
+    async def blocked_response(_: httpx.Request) -> httpx.Response:
+        slow_request_started.set()
+        await never_release.wait()
+        return httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+
+    respx_mock.post("https://slow.example/v1/audio/speech").mock(side_effect=blocked_response)
+    fast_upstream: Final = respx_mock.post("https://fast.example/v1/audio/speech").respond(
+        content=b"audio",
+        headers={"content-type": "audio/mpeg"},
+    )
+    model_list: Final = [
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://slow.example/v1",
+            },
+            "model_info": {"id": "slow", "mode": "audio_speech", "health_check_timeout": 1},
+        },
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://fast.example/v1",
+            },
+            "model_info": {"id": "fast", "mode": "audio_speech", "health_check_timeout": 2},
+        },
+    ]
+
+    healthy, unhealthy, _ = await asyncio.wait_for(
+        hc_module.perform_health_check(model_list, max_concurrency=1),
+        timeout=4,
+    )
+    healthy_model_ids: Final = {endpoint["model_id"] for endpoint in healthy}
+    unhealthy_model_ids: Final = {endpoint["model_id"] for endpoint in unhealthy}
+
+    assert slow_request_started.is_set()
+    assert fast_upstream.called
+    assert healthy_model_ids == {"fast"}
+    assert unhealthy_model_ids == {"slow"}
+
+
+@pytest.mark.asyncio
+async def test_a_failing_health_probe_leaves_the_deployment_serving_requests(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    deployment: Final = {
+        "model_name": "probe-group",
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "test-key",
+            "api_base": "https://probe.example/v1",
+        },
+        "model_info": {"id": "probe-deployment", "mode": "chat"},
+    }
+    router: Final = litellm.Router(model_list=[deployment])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.post("https://probe.example/v1/chat/completions").mock(
+            side_effect=(
+                httpx.Response(404, json={"error": {"message": "model not found", "type": "invalid_request_error"}}),
+                httpx.Response(200, json={**_MANTLE_GPT_CHAT_REPLY, "model": "gpt-4o-mini"}),
+            )
+        )
+        probe: Final = await hc_module._run_model_health_check(copy.deepcopy(deployment))
+        reply: Final = await router.acompletion(model="probe-group", messages=[{"role": "user", "content": "Say ok"}])
+
+    assert "error" in probe
+    assert reply.choices[0].message.content == "ok"

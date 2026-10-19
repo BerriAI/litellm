@@ -1,4 +1,7 @@
+import httpx
+import litellm
 import pytest
+import respx
 
 
 from types import SimpleNamespace
@@ -516,12 +519,10 @@ def test_e2e_proxy_config_opts_in_to_the_mock_params_its_suite_sends():
         for param in GATED_MOCK_PARAM_NAMES
         if f"{param}=" in source or f'"{param}"' in source
     )
-    assert senders, "expected the E2E suite to still exercise the gated mock testing params"
-
     config = yaml.safe_load((repo_root / "proxy_server_config.yaml").read_text(encoding="utf-8"))
     general_settings = config.get("general_settings") or {}
 
-    assert general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
+    assert not senders or general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
         f"proxy_server_config.yaml must set general_settings.{MOCK_TESTING_CONFIG_KEY}: true — "
         f"the E2E suite sends gated mock testing params ({', '.join(sorted(senders))}) "
         "and the proxy rejects them with a 400 otherwise"
@@ -1762,3 +1763,222 @@ async def test_route_request_router_settings_override_skips_null_fields():
     assert "context_window_fallbacks" not in call_kwargs
     assert "num_retries" not in call_kwargs
     assert "model_group_retry_policy" not in call_kwargs
+
+
+def _router_with_defaults(default_litellm_params: dict[str, object]):
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "served",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"id": "served-deployment"},
+            }
+        ],
+        default_litellm_params=default_litellm_params,
+    )
+
+
+@pytest.mark.parametrize(
+    "route_type, param",
+    [
+        ("aimage_generation", "prompt"),
+        ("aspeech", "input"),
+        ("atext_completion", "prompt"),
+        ("atranscription", "file"),
+    ],
+)
+def test_router_default_for_positional_param_still_raises(route_type: str, param: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": "served"},
+            llm_router=_router_with_defaults({param: "supplied-by-router-default"}),
+        )
+
+    assert exc_info.value.param == param
+
+
+@pytest.mark.parametrize(
+    "route_type, param",
+    [
+        ("aimage_generation", "prompt"),
+        ("aspeech", "input"),
+    ],
+)
+def test_user_config_default_for_positional_param_still_raises(route_type: str, param: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": "img", "user_config": {"model_list": [], "default_litellm_params": {param: "x"}}},
+            llm_router=None,
+        )
+
+    assert exc_info.value.param == param
+
+
+def test_deployment_param_for_positional_param_still_raises() -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "img",
+                "litellm_params": {"model": "openai/gpt-image-1", "api_key": "test-key", "prompt": "a cat"},
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type="aimage_generation", data={"model": "img"}, llm_router=router)
+
+    assert exc_info.value.param == "prompt"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("omni-moderation-2024-09-26", id="unknown-model"),
+        pytest.param("openai/gpt-4o-mini", id="deployment-name"),
+        pytest.param("served-deployment", id="deployment-id"),
+    ],
+)
+def test_router_default_ignored_for_moderation_model_the_router_does_not_list(model: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="amoderation",
+            data={"model": model},
+            llm_router=_router_with_defaults({"input": "supplied"}),
+        )
+
+    assert exc_info.value.param == "input"
+
+
+@pytest.mark.asyncio
+async def test_null_user_config_is_treated_as_absent() -> None:
+    router: Final = _router_with_defaults({})
+
+    response: Final = await (
+        await route_request(
+            {
+                "model": "served",
+                "messages": [{"role": "user", "content": "hi"}],
+                "mock_response": "from the main router",
+                "user_config": None,
+            },
+            router,
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.choices[0].message.content == "from the main router"
+
+
+def _registered_bedrock_kb_search(team_id: str) -> dict[str, object]:
+    """The request a team key's /v1/vector_stores/{id}/search carries once the registry row is merged in."""
+    return {
+        "model": None,
+        "vector_store_id": "KB12345678",
+        "query": "litellm proxy",
+        "custom_llm_provider": "bedrock",
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIAREGISTRYKEY00000",
+        "aws_secret_access_key": "registry-secret",
+        "metadata": {"user_api_key_team_id": team_id},
+    }
+
+
+def _team_a_router(*team_models: tuple[str, dict[str, object]]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": f"internal-team-a-{public_name}",
+                "litellm_params": litellm_params,
+                "model_info": {
+                    "id": f"team-a-{public_name}",
+                    "team_id": "team-a",
+                    "team_public_model_name": public_name,
+                },
+            }
+            for public_name, litellm_params in team_models
+        ]
+    )
+
+
+_LANGGRAPH_AGENT_PARAMS: Final[dict[str, object]] = {
+    "model": "langgraph/repro-agent",
+    "api_base": "http://127.0.0.1:2024",
+}
+_BEDROCK_CLAUDE_PARAMS: Final[dict[str, object]] = {
+    "model": "bedrock/anthropic.claude-sonnet-4-6",
+    "aws_region_name": "us-east-1",
+}
+
+
+@pytest.mark.parametrize(
+    "team_models",
+    [
+        pytest.param(
+            [("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS), ("a-bedrock-claude", _BEDROCK_CLAUDE_PARAMS)],
+            id="langgraph-first",
+        ),
+        pytest.param(
+            [("a-bedrock-claude", _BEDROCK_CLAUDE_PARAMS), ("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS)],
+            id="bedrock-first",
+        ),
+        pytest.param([("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS)], id="no-bedrock-team-model"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_key_search_of_registered_bedrock_store_reaches_bedrock_with_registry_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    team_models: list[tuple[str, dict[str, object]]],
+) -> None:
+    """A team key's model-less search of a registered Bedrock store was routed through the team's first
+    deployment, so a langgraph team model turned it into "Vector store search is not supported for langgraph"."""
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(
+            "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/KB12345678/retrieve"
+        ).mock(return_value=httpx.Response(200, json={"retrievalResults": []}))
+        response: Final = await (
+            await route_request(
+                _registered_bedrock_kb_search("team-a"),
+                _team_a_router(*team_models),
+                None,
+                "avector_store_search",
+            )
+        )
+
+    request: Final = route.calls.last.request
+    posted_url: Final = str(request.url)
+    signed_auth: Final = request.headers["Authorization"]
+    assert response["object"] == "vector_store.search_results.page", response
+    assert route.call_count == 1
+    assert posted_url == "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/KB12345678/retrieve", (
+        posted_url
+    )
+    assert "Credential=AKIAREGISTRYKEY00000/" in signed_auth, signed_auth

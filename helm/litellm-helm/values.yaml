@@ -376,6 +376,30 @@ db:
   endpoint: localhost
   database: litellm
   url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
+  # Authenticate with a short-lived token instead of a password. useIAMAuth is
+  # AWS RDS / Aurora IAM database authentication (the pod needs AWS credentials,
+  # e.g. IRSA or EKS Pod Identity, and the database user needs GRANT rds_iam);
+  # useAzureEntraAuth is Azure Database for PostgreSQL with a Microsoft Entra ID
+  # identity (workload identity). Mutually exclusive, and both need
+  # useExisting: true with deployStandalone: false. The chart then sets
+  # IAM_TOKEN_DB_AUTH or AZURE_POSTGRESQL_AUTH, emits DATABASE_HOST, DATABASE_PORT,
+  # DATABASE_USERNAME and DATABASE_NAME and skips DATABASE_PASSWORD and db.url:
+  # the proxy, the migrations job and the collector sidecar each mint their own
+  # token and build DATABASE_URL from those parts. Set DATABASE_SSLMODE /
+  # DATABASE_SSLROOTCERT under envVars for TLS options you would otherwise put
+  # in db.url.
+  useIAMAuth: false
+  useAzureEntraAuth: false
+  # Postgres port, used to build the token-auth URL (password auth takes the
+  # port from db.url)
+  port: 5432
+  # Postgres schema for the LiteLLM tables, rendered as DATABASE_SCHEMA under
+  # token auth only (password auth carries it as ?schema= in db.url)
+  schema: ""
+  # Database user as a plain value. Empty means read it from
+  # db.secret.usernameKey. With token auth the user name is the only credential
+  # the chart needs, so setting it here removes the need for db.secret entirely.
+  username: ""
   secret:
     name: postgres
     usernameKey: username
@@ -440,10 +464,10 @@ db:
 # Prefer the native /health/drain preStop hook over a fixed `sleep`: it marks
 # the pod NotReady and blocks only until in-flight requests actually finish
 # (bounded by GRACEFUL_SHUTDOWN_TIMEOUT, default 30s), instead of always
-# waiting the worst-case duration. The drain runs once (the preStop hook and
-# the SIGTERM handler share it), so set terminationGracePeriodSeconds a few
-# seconds above GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before
-# SIGKILL.
+# waiting the worst-case duration. After SIGTERM the server waits up to
+# GRACEFUL_SHUTDOWN_TIMEOUT again for connections still open and then cancels
+# them, so set terminationGracePeriodSeconds a few seconds above twice
+# GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before SIGKILL.
 #
 # /health/drain is off by default; enable it with
 # general_settings.enable_drain_endpoint: true. The kubelet calls preStop
@@ -653,12 +677,28 @@ serviceMonitor:
     matchNames: []
     # - test-namespace
 
+lens:
+  library: true
+
 lensWorker:
+  retainResources: false
+  mode: ""
+  externalUrl: ""
+  externalServiceName: ""
+  gateway:
+    secretName: ""
+    secretKey: gateway-secret
+  standaloneUrl: ""
+  adminTokenSecret:
+    name: ""
+    key: admin-token
+  extraEnv: []
+  extraEnvFrom: []
   enabled: false
   replicaCount: 1
   image:
-    repository: ghcr.io/berriai/litellm-lens-worker
-    tag: ""
+    repository: ghcr.io/berriai/lens
+    tag: "0.1.0-dev.0"
     digest: ""
     pullPolicy: IfNotPresent
   tokenSecret:
@@ -669,7 +709,7 @@ lensWorker:
     key: service-token
   clickhouse:
     enabled: true
-    image: clickhouse/clickhouse-server:26.9.6.6
+    image: clickhouse/clickhouse-server:26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e
     storage: 20Gi
     storageClassName: null
     resources:
@@ -689,6 +729,7 @@ lensWorker:
     annotations: {}
   ingress:
     enabled: false
+    path: /v1/
     className: ""
     host: ""
     annotations: {}

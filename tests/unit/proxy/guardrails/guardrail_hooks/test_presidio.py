@@ -8,13 +8,19 @@ import copy
 import json
 import os
 import re
+from collections.abc import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
+import aiohttp
 from aiohttp import web
+from aiohttp.client_proto import ResponseHandler
 from aiohttp.test_utils import TestServer
 import pytest
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 
 import litellm
@@ -27,6 +33,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
 from litellm.exceptions import BlockedPiiEntityError
 
@@ -3782,6 +3789,246 @@ async def test_output_parse_pii_numbered_tokens_across_chunks():
     assert pii_tokens["<CREDIT_CARD_2>"] == CHUNK_MARKER_TWO
 
 
+@pytest.mark.parametrize(
+    ("text", "analyze_results", "expected_text", "expected_tokens", "expected_counts"),
+    [
+        pytest.param(
+            "Repeat exactly: my number is 4251234567",
+            [
+                {"entity_type": "PHONE_NUMBER", "start": 29, "end": 39, "score": 0.75},
+                {"entity_type": "US_BANK_NUMBER", "start": 29, "end": 39, "score": 0.05},
+                {"entity_type": "US_DRIVER_LICENSE", "start": 29, "end": 39, "score": 0.01},
+            ],
+            "Repeat exactly: my number is <PHONE_NUMBER_1>",
+            {"<PHONE_NUMBER_1>": "4251234567"},
+            {"PHONE_NUMBER": 1},
+            id="same-span",
+        ),
+        pytest.param(
+            "contact john.smith@example.com today",
+            [
+                {"entity_type": "EMAIL_ADDRESS", "start": 8, "end": 30, "score": 1.0},
+                {"entity_type": "DATE_TIME", "start": 31, "end": 36, "score": 0.85},
+                {"entity_type": "URL", "start": 8, "end": 15, "score": 0.5},
+                {"entity_type": "URL", "start": 19, "end": 30, "score": 0.5},
+            ],
+            "contact <EMAIL_ADDRESS_1> <DATE_TIME_2>",
+            {"<EMAIL_ADDRESS_1>": "john.smith@example.com", "<DATE_TIME_2>": "today"},
+            {"EMAIL_ADDRESS": 1, "DATE_TIME": 1},
+            id="nested",
+        ),
+        pytest.param(
+            "her phone is +33 1 42 68 53 00.",
+            [
+                {"entity_type": "DATE_TIME", "start": 25, "end": 30, "score": 0.85},
+                {"entity_type": "PHONE_NUMBER", "start": 13, "end": 30, "score": 0.75},
+            ],
+            "her phone is <PHONE_NUMBER_1>.",
+            {"<PHONE_NUMBER_1>": "+33 1 42 68 53 00"},
+            {"PHONE_NUMBER": 1},
+            id="container-outranks-higher-scored-fragment",
+        ),
+        pytest.param(
+            "ids ab0123456789 and cd0123456789",
+            [
+                {"entity_type": "AAA", "start": 4, "end": 16, "score": 0.5},
+                {"entity_type": "BBB", "start": 21, "end": 29, "score": 0.5},
+                {"entity_type": "CCC", "start": 25, "end": 33, "score": 0.9},
+            ],
+            "ids <AAA_1> and <CCC_2>",
+            {"<AAA_1>": "ab0123456789", "<CCC_2>": "cd0123456789"},
+            {"AAA": 1, "CCC": 1},
+            id="partial-overlap-in-second-run",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 3, "end": 15, "score": 0.5},
+                {"entity_type": "BBB", "start": 3, "end": 8, "score": 0.9},
+            ],
+            "id <AAA_1>",
+            {"<AAA_1>": "ab0123456789"},
+            {"AAA": 1},
+            id="container-sharing-start-outranks-fragment",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 3, "end": 10, "score": 0.9},
+                {"entity_type": "BBB", "start": 7, "end": 15, "score": 0.5},
+            ],
+            "id <AAA_1>",
+            {"<AAA_1>": "ab0123456789"},
+            {"AAA": 1},
+            id="earlier-higher-scored-detection-labels-the-whole-run",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 6, "end": 15, "score": 0.5},
+                {"entity_type": "BBB", "start": 3, "end": 8, "score": 0.5},
+            ],
+            "id <AAA_1>",
+            {"<AAA_1>": "ab0123456789"},
+            {"AAA": 1},
+            id="score-tie-goes-to-the-longer-detection",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 3, "end": 9, "score": 0.5},
+                {"entity_type": "BBB", "start": 9, "end": 15, "score": 0.5},
+            ],
+            "id <AAA_1><BBB_2>",
+            {"<AAA_1>": "ab0123", "<BBB_2>": "456789"},
+            {"AAA": 1, "BBB": 1},
+            id="touching-detections-stay-separate",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 3, "end": 15, "score": 0.5},
+                {"entity_type": "BBB", "start": 3, "end": 15, "score": 0.5},
+            ],
+            "id <BBB_1>",
+            {"<BBB_1>": "ab0123456789"},
+            {"BBB": 1},
+            id="identical-spans-with-equal-scores-label-the-same-in-any-order",
+        ),
+        pytest.param(
+            "My name is John Smith, phone +1 415 555 2671, please check the order.",
+            [
+                {"entity_type": "EMPTY", "start": 25, "end": 25, "score": 0.99},
+                {"entity_type": "INVERTED", "start": 40, "end": 30, "score": 0.99},
+                {"entity_type": "PERSON", "start": 11, "end": 21, "score": 0.9},
+                {"entity_type": "PHONE_NUMBER", "start": 29, "end": 44, "score": 0.85},
+                {"entity_type": "UK_NHS", "start": 32, "end": 44, "score": 0.6},
+            ],
+            "My name is <PERSON_1>, phone <PHONE_NUMBER_2>, please check the order.",
+            {"<PERSON_1>": "John Smith", "<PHONE_NUMBER_2>": "+1 415 555 2671"},
+            {"PERSON": 1, "PHONE_NUMBER": 1},
+            id="empty-and-inverted-spans-are-ignored",
+        ),
+        pytest.param(
+            "Code ABC-12345-XYZ is valid.",
+            [
+                {"entity_type": "GENERIC_ID", "start": 5, "end": 14, "score": 0.5},
+                {"entity_type": "SECRET_KEY", "start": 9, "end": 18, "score": 0.95},
+            ],
+            "Code <SECRET_KEY_1> is valid.",
+            {"<SECRET_KEY_1>": "ABC-12345-XYZ"},
+            {"SECRET_KEY": 1},
+            id="later-higher-scored-detection-labels-the-whole-run",
+        ),
+    ],
+)
+@pytest.mark.parametrize("order", ["analyzer", "reversed"])
+def test_numbered_tokens_collapse_overlapping_detections_into_one_token_per_run(
+    text: str,
+    analyze_results: list[PresidioAnalyzeResponseItem],
+    expected_text: str,
+    expected_tokens: dict[str, str],
+    expected_counts: dict[str, int],
+    order: Literal["analyzer", "reversed"],
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    request_data: Final = {"metadata": {}}
+    masked_entity_count: Final = {}
+    ordered: Final = analyze_results if order == "analyzer" else analyze_results[::-1]
+
+    masked: Final = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text, ordered, request_data, masked_entity_count
+    )
+
+    assert masked == expected_text
+    assert request_data["metadata"]["pii_tokens"] == expected_tokens
+    assert masked_entity_count == expected_counts
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(masked, expected_tokens) == text
+
+
+@pytest.mark.parametrize(
+    ("parts", "expected_masked", "expected_tokens"),
+    [
+        pytest.param(
+            (
+                (
+                    "My number is 4251234567.",
+                    [
+                        {"entity_type": "PHONE_NUMBER", "start": 13, "end": 23, "score": 0.75},
+                        {"entity_type": "US_BANK_NUMBER", "start": 13, "end": 23, "score": 0.05},
+                        {"entity_type": "US_DRIVER_LICENSE", "start": 13, "end": 23, "score": 0.01},
+                    ],
+                ),
+                (
+                    "Also call +1 (206) 555-0199.",
+                    [{"entity_type": "PHONE_NUMBER", "start": 10, "end": 27, "score": 0.4}],
+                ),
+            ),
+            ("My number is <PHONE_NUMBER_1>.", "Also call <PHONE_NUMBER_2>."),
+            {"<PHONE_NUMBER_1>": "4251234567", "<PHONE_NUMBER_2>": "+1 (206) 555-0199"},
+            id="overlapping-run-then-plain-detection",
+        ),
+        pytest.param(
+            (
+                ("Call John Smith.", [{"entity_type": "PERSON", "start": 5, "end": 15, "score": 0.85}]),
+                ("Again John Smith.", [{"entity_type": "PERSON", "start": 6, "end": 16, "score": 0.85}]),
+            ),
+            ("Call <PERSON_1>.", "Again <PERSON_1>."),
+            {"<PERSON_1>": "John Smith"},
+            id="same-value-keeps-its-token",
+        ),
+        pytest.param(
+            (
+                ("Call John Smith.", [{"entity_type": "PERSON", "start": 5, "end": 15, "score": 0.85}]),
+                (
+                    "Ann Lee and Bob Ray.",
+                    [
+                        {"entity_type": "PERSON", "start": 0, "end": 7, "score": 0.85},
+                        {"entity_type": "PERSON", "start": 12, "end": 19, "score": 0.85},
+                    ],
+                ),
+            ),
+            ("Call <PERSON_1>.", "<PERSON_3> and <PERSON_2>."),
+            {"<PERSON_1>": "John Smith", "<PERSON_2>": "Bob Ray", "<PERSON_3>": "Ann Lee"},
+            id="bump-skips-every-claimed-number",
+        ),
+        pytest.param(
+            (
+                (
+                    "Ann Lee and Bob Ray.",
+                    [
+                        {"entity_type": "PERSON", "start": 0, "end": 7, "score": 0.85},
+                        {"entity_type": "PERSON", "start": 12, "end": 19, "score": 0.85},
+                    ],
+                ),
+                ("Call John Smith.", [{"entity_type": "PERSON", "start": 5, "end": 15, "score": 0.85}]),
+            ),
+            ("<PERSON_1> and <PERSON_2>.", "Call <PERSON_3>."),
+            {"<PERSON_1>": "Ann Lee", "<PERSON_2>": "Bob Ray", "<PERSON_3>": "John Smith"},
+            id="spare-number-starts-above-every-earlier-part",
+        ),
+    ],
+)
+def test_numbered_tokens_stay_unique_across_parts_of_one_request(
+    parts: tuple[tuple[str, list[PresidioAnalyzeResponseItem]], ...],
+    expected_masked: tuple[str, ...],
+    expected_tokens: dict[str, str],
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    request_data: Final = {"metadata": {}}
+
+    masked: Final = tuple(
+        guardrail._finalize_presidio_anonymize_numbered_tokens(text, results, request_data, {})
+        for text, results in parts
+    )
+
+    assert masked == expected_masked
+    assert request_data["metadata"]["pii_tokens"] == expected_tokens
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(" | ".join(masked), expected_tokens) == " | ".join(
+        text for text, _ in parts
+    )
+
+
 @pytest.mark.asyncio
 async def test_analyze_text_chunked_failure_stays_fail_closed():
     """If one chunk still fails, the chunked path raises exactly like a single
@@ -4575,3 +4822,251 @@ async def test_presidio_language_configuration_with_per_request_override():
 
     assert analyze_request_default["language"] == "de"
     assert analyze_request_default["text"] == test_text
+
+
+_CARD_NUMBER: Final = "4111-1111-1111-1111"
+_EMAIL: Final = "test@example.com"
+_BLOCK_CARD_MASK_EMAIL: Final = {
+    PiiEntityType.CREDIT_CARD: PiiAction.BLOCK,
+    PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
+}
+
+
+class _PresidioAnonymizeRequest(TypedDict):
+    text: ReadOnly[str]
+
+
+class _PresidioAnonymizeReply(TypedDict):
+    text: ReadOnly[str]
+    items: ReadOnly[tuple[()]]
+
+
+_ANALYZE_REQUEST: Final = TypeAdapter(PresidioAnalyzeRequest)
+_ANONYMIZE_REQUEST: Final = TypeAdapter(_PresidioAnonymizeRequest)
+
+
+def _card_and_email_spans(text: str) -> tuple[PresidioAnalyzeResponseItem, ...]:
+    return tuple(
+        PresidioAnalyzeResponseItem(
+            entity_type=entity_type,
+            start=text.index(value),
+            end=text.index(value) + len(value),
+            score=1.0,
+            analysis_explanation=None,
+        )
+        for entity_type, value in (("CREDIT_CARD", _CARD_NUMBER), ("EMAIL_ADDRESS", _EMAIL))
+        if value in text
+    )
+
+
+class _InMemoryPresidioTransport(asyncio.Transport):
+    def __init__(self, protocol: ResponseHandler, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
+        super().__init__()
+        self._protocol: Final = protocol
+        self._analyzed: Final = analyzed
+        self._received = b""
+        self._closing = False
+
+    def write(self, data: bytes | bytearray | memoryview) -> None:
+        self._received += bytes(data)
+        head, separator, body = self._received.partition(b"\r\n\r\n")
+        if not separator:
+            return
+        request_line, *header_lines = head.decode().split("\r\n")
+        headers: Final = {name.lower(): value.strip() for name, _, value in (line.partition(":") for line in header_lines)}
+        if len(body) < int(headers.get("content-length", "0")):
+            return
+        self._received = b""
+        reply: Final = json.dumps(self._reply(request_line.split(" ")[1], body)).encode()
+        response: Final = (
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
+            + f"Content-Length: {len(reply)}\r\n\r\n".encode()
+            + reply
+        )
+        asyncio.get_running_loop().call_soon(self._protocol.data_received, response)
+
+    def _reply(self, path: str, body: bytes) -> tuple[PresidioAnalyzeResponseItem, ...] | _PresidioAnonymizeReply:
+        if path == "/analyze":
+            analyze_request: Final = _ANALYZE_REQUEST.validate_json(body)
+            self._analyzed.put_nowait(analyze_request)
+            return _card_and_email_spans(analyze_request.get("text") or "")
+        assert path == "/anonymize", path
+        return _PresidioAnonymizeReply(text=_ANONYMIZE_REQUEST.validate_json(body)["text"], items=())
+
+    def writelines(self, list_of_data: Iterable[bytes | bytearray | memoryview]) -> None:
+        self.write(b"".join(bytes(chunk) for chunk in list_of_data))
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+    def close(self) -> None:
+        if not self._closing:
+            self._closing = True
+            asyncio.get_running_loop().call_soon(self._protocol.connection_lost, None)
+
+    def abort(self) -> None:
+        self.close()
+
+    def get_extra_info(self, name: str, default: object = None) -> object:
+        return default
+
+    def can_write_eof(self) -> bool:
+        return False
+
+    def get_write_buffer_size(self) -> int:
+        return 0
+
+    def pause_reading(self) -> None:
+        return None
+
+    def resume_reading(self) -> None:
+        return None
+
+
+class _InMemoryPresidioConnector(aiohttp.BaseConnector):
+    def __init__(self, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
+        super().__init__()
+        self._analyzed: Final = analyzed
+
+    async def _create_connection(  # pyright: ignore[reportImplicitOverride]  # aiohttp's connector extension point
+        self, req: aiohttp.ClientRequest, traces: Sequence[object], timeout: aiohttp.ClientTimeout
+    ) -> ResponseHandler:
+        protocol: Final = ResponseHandler(asyncio.get_running_loop())
+        protocol.connection_made(_InMemoryPresidioTransport(protocol, self._analyzed))
+        return protocol
+
+
+def _drain(analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> tuple[PresidioAnalyzeRequest, ...]:
+    return tuple(analyzed.get_nowait() for _ in range(analyzed.qsize()))
+
+
+def _guardrail_with_in_memory_presidio(
+    analyzed: asyncio.Queue[PresidioAnalyzeRequest],
+) -> OPTIONAL_PresidioPIIMasking:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        pii_entities_config=_BLOCK_CARD_MASK_EMAIL,
+        presidio_analyzer_api_base="http://presidio-analyzer.test/",
+        presidio_anonymizer_api_base="http://presidio-anonymizer.test/",
+    )
+    guardrail._http_session = aiohttp.ClientSession(connector=_InMemoryPresidioConnector(analyzed))
+    return guardrail
+
+
+@pytest.mark.asyncio
+async def test_check_pii_raises_blocked_entity_for_card() -> None:
+    text: Final = f"My credit card number is {_CARD_NUMBER} and my email is {_EMAIL}"
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed)
+    try:
+        with pytest.raises(BlockedPiiEntityError) as excinfo:
+            await guardrail.check_pii(text=text, output_parse_pii=True, presidio_config=None, request_data={})
+    finally:
+        await guardrail._close_http_session()
+
+    analyze_requests: Final = _drain(analyzed)
+    assert len(analyze_requests) == 1
+    assert analyze_requests[0].get("text") == text
+    assert set(analyze_requests[0].get("entities") or ()) == set(_BLOCK_CARD_MASK_EMAIL)
+    assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
+    assert excinfo.value.guardrail_name == guardrail.guardrail_name
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_raises_blocked_entity_for_card_message(
+    mock_user_api_key: UserAPIKeyAuth, mock_cache: DualCache
+) -> None:
+    user_text: Final = f"My credit card is {_CARD_NUMBER} and my email is {_EMAIL}."
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed)
+    try:
+        with pytest.raises(BlockedPiiEntityError) as excinfo:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key,
+                cache=mock_cache,
+                data={
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": user_text},
+                    ],
+                    "model": "gpt-5-mini",
+                },
+                call_type="completion",
+            )
+    finally:
+        await guardrail._close_http_session()
+
+    analyze_requests: Final = _drain(analyzed)
+    assert user_text in [payload.get("text") for payload in analyze_requests]
+    assert all(set(payload.get("entities") or ()) == set(_BLOCK_CARD_MASK_EMAIL) for payload in analyze_requests)
+    assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
+    assert excinfo.value.guardrail_name == guardrail.guardrail_name
+
+
+@pytest.mark.asyncio
+async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PRESIDIO_ANALYZER_API_BASE", "http://localhost:5002")
+    monkeypatch.setenv("PRESIDIO_ANONYMIZER_API_BASE", "http://localhost:5001")
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    guardrails_config: Final = [
+        {
+            "pii_masking": {
+                "callbacks": ["presidio"],
+                "default_on": True,
+                "logging_only": True,
+            }
+        }
+    ]
+    assert len(litellm.guardrail_name_config_map) == 0
+    initialize_guardrails(
+        guardrails_config=guardrails_config,
+        premium_user=True,
+        config_file_path="",
+        litellm_settings={"guardrails": guardrails_config},
+    )
+    assert len(litellm.guardrail_name_config_map) == 1
+
+    pii_masking_obj: Final = next(
+        (c for c in litellm.callbacks if isinstance(c, OPTIONAL_PresidioPIIMasking)),
+        None,
+    )
+    assert pii_masking_obj is not None
+    assert hasattr(pii_masking_obj, "logging_only")
+    assert pii_masking_obj.event_hook == GuardrailEventHooks.logging_only
+    assert pii_masking_obj.should_run_guardrail(
+        data={}, event_type=GuardrailEventHooks.logging_only
+    )
+
+
+async def _one_session(guardrail: OPTIONAL_PresidioPIIMasking) -> aiohttp.ClientSession:
+    async with guardrail._get_session_iterator() as session:
+        return session
+
+
+@pytest.mark.asyncio
+async def test_get_session_iterator_reuses_one_session_on_main_thread(
+    presidio_guardrail: OPTIONAL_PresidioPIIMasking,
+) -> None:
+    sessions: Final = tuple([await _one_session(presidio_guardrail) for _ in range(10)])
+    assert all(session is sessions[0] for session in sessions)
+    assert sessions[0] is presidio_guardrail._http_session
+    await presidio_guardrail._close_http_session()
+
+
+def test_get_session_iterator_reuses_one_session_per_background_loop(
+    presidio_guardrail: OPTIONAL_PresidioPIIMasking,
+) -> None:
+    async def collect_and_close() -> tuple[aiohttp.ClientSession, ...]:
+        collected: Final = tuple([await _one_session(presidio_guardrail) for _ in range(10)])
+        await collected[0].close()
+        return collected
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        sessions: Final = pool.submit(asyncio.run, collect_and_close()).result()
+    assert len(sessions) == 10
+    assert all(session is sessions[0] for session in sessions)
+    assert presidio_guardrail._http_session is None

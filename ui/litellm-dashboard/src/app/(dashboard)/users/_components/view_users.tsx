@@ -17,7 +17,7 @@ import {
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { all_admin_roles, isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -298,6 +298,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       isLoading={userListQuery.isLoading || userListQuery.isPlaceholderData}
       possibleUIRoles={possibleUIRoles}
       teams={teams}
+      canViewUserUsage={all_admin_roles.includes(userRole ?? "")}
       sorting={sorting}
       onSortingChange={handleSortingChange}
       pagination={pagination}
