@@ -113,14 +113,84 @@ impl ContentBlock {
 #[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct CacheControl {
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub cache_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ttl: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
+    #[serde(
+        rename = "type",
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_with::rust::double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<CacheControlType>"))]
+    pub cache_type: Option<Option<CacheControlType>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_with::rust::double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<CacheControlTtl>"))]
+    pub ttl: Option<Option<CacheControlTtl>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_with::rust::double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub scope: Option<Option<String>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::Display,
+    strum::EnumString,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
+pub enum CacheControlType {
+    #[strum(serialize = "ephemeral")]
+    Ephemeral,
+    #[strum(default, transparent)]
+    Other(String),
+}
+
+impl From<String> for CacheControlType {
+    fn from(value: String) -> Self {
+        value.parse().unwrap_or_else(|never| match never {})
+    }
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::Display,
+    strum::EnumString,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
+pub enum CacheControlTtl {
+    #[strum(serialize = "5m")]
+    FiveMinutes,
+    #[strum(serialize = "1h")]
+    OneHour,
+    #[strum(default, transparent)]
+    Other(String),
+}
+
+impl From<String> for CacheControlTtl {
+    fn from(value: String) -> Self {
+        value.parse().unwrap_or_else(|never| match never {})
+    }
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -399,9 +469,92 @@ mod tests {
 
     use serde_json::{Map, Value};
 
+    #[rstest]
+    #[case::known(
+        json!({"type": "ephemeral", "ttl": "1h"}),
+        Some(CacheControlType::Ephemeral),
+        Some(CacheControlTtl::OneHour)
+    )]
+    #[case::five_minutes(
+        json!({"type": "ephemeral", "ttl": "5m"}),
+        Some(CacheControlType::Ephemeral),
+        Some(CacheControlTtl::FiveMinutes)
+    )]
+    #[case::unknown_values_pass_through(
+        json!({"type": "persistent", "ttl": "future"}),
+        Some(CacheControlType::Other("persistent".into())),
+        Some(CacheControlTtl::Other("future".into()))
+    )]
+    #[case::variant_name_is_not_a_wire_value(
+        json!({"ttl": "FiveMinutes"}),
+        None,
+        Some(CacheControlTtl::Other("FiveMinutes".into()))
+    )]
+    #[case::empty_strings(json!({"type": "", "ttl": ""}), Some(CacheControlType::Other("".into())), Some(CacheControlTtl::Other("".into())))]
+    #[case::absent(json!({}), None, None)]
+    fn cache_control_types_known_values_and_keeps_unknown_ones(
+        #[case] input: Value,
+        #[case] cache_type: Option<CacheControlType>,
+        #[case] ttl: Option<CacheControlTtl>,
+    ) {
+        let control: CacheControl = serde_json::from_value(input.clone()).unwrap();
+
+        assert_eq!(
+            (control.cache_type.clone(), control.ttl.clone()),
+            (cache_type.map(Some), ttl.map(Some))
+        );
+        assert_eq!(serde_json::to_value(control).unwrap(), input);
+    }
+
+    #[rstest]
+    #[case::null_type(json!({"type": null}))]
+    #[case::null_ttl(json!({"type": "ephemeral", "ttl": null}))]
+    #[case::null_scope(json!({"scope": null}))]
+    #[case::all_null(json!({"type": null, "ttl": null, "scope": null}))]
+    fn cache_control_preserves_explicit_null_fields(#[case] input: Value) {
+        let control: CacheControl = serde_json::from_value(input.clone()).unwrap();
+
+        assert_eq!(serde_json::to_value(control).unwrap(), input);
+    }
+
+    #[rstest]
+    #[case::number_type(json!({"type": 42}))]
+    #[case::object_type(json!({"type": {"nested": true}}))]
+    #[case::boolean_type(json!({"type": true}))]
+    #[case::number_ttl(json!({"ttl": 300}))]
+    #[case::object_ttl(json!({"ttl": {"nested": true}}))]
+    #[case::boolean_ttl(json!({"ttl": false}))]
+    fn cache_control_rejects_non_string_type_and_ttl(#[case] input: Value) {
+        assert!(serde_json::from_value::<CacheControl>(input).is_err());
+    }
+
     fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(value: &Value) -> Value {
         let parsed: T = serde_json::from_value(value.clone()).unwrap();
         serde_json::to_value(parsed).unwrap()
+    }
+
+    #[rstest]
+    fn malformed_cache_control_strings_are_rejected(
+        #[values("type", "ttl")] field: &str,
+        #[values(json!(42), json!(true), json!([]), json!({"seconds": 300}))] value: Value,
+    ) {
+        let request = json!({
+            "model": "claude-test", "max_tokens": 16,
+            "messages": [{"role": "user", "content": [{
+                "type": "text", "text": "prompt", "cache_control": {field: value}
+            }]}]
+        });
+
+        assert!(serde_json::from_value::<MessagesRequest>(request).is_err());
+    }
+
+    #[cfg(feature = "schema")]
+    #[rstest]
+    #[case::cache_type(schemars::schema_for!(CacheControlType).to_value())]
+    #[case::ttl(schemars::schema_for!(CacheControlTtl).to_value())]
+    fn cache_control_enum_schema_accepts_unknown_strings(#[case] schema: Value) {
+        assert_eq!(schema.get("type"), Some(&json!("string")));
+        assert!(schema.get("enum").is_none());
     }
 
     #[rstest]

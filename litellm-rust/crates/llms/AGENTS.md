@@ -41,7 +41,7 @@
 
 ## Python pairs
 
-- Python paths identify counterparts but do not dictate Rust module names or class hierarchy. Preserve behavior and concepts, not structure
+- Prefer mirroring Python's outer module and class structure, following the workspace's Python porting guideline. Preserve behavior while designing function internals freely
 - Keep operation and parameter names when responsibilities match. Rust types keep the Python name with Rust acronym casing (`BaseOCRConfig` -> `BaseOcrConfig`). Private Python helpers drop the leading underscore
 - Give Rust-only helpers distinct responsibility names instead of reusing trait method names
 - Use trait defaults for unchanged inherited behavior and explicit delegation for shared provider behavior. Config traits represent real provider contracts, so do not recreate inheritance with extra traits

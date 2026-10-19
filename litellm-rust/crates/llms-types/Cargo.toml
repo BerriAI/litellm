@@ -16,6 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true
 strum.workspace = true
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 
 [dev-dependencies]
 rstest.workspace = true
