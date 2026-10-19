@@ -10749,10 +10749,12 @@ def get_requester_metadata(metadata: Mapping[str, object]):
         return None
 
     requester_metadata: Final = metadata.get("requester_metadata")
-    if isinstance(requester_metadata, dict):
-        cleaned_metadata = add_openai_metadata(requester_metadata)
-        if cleaned_metadata:
-            return cleaned_metadata
+    if "requester_metadata" in metadata:
+        # The proxy-populated requester snapshot is authoritative. Falling back
+        # to the outer dictionary would expose auth fields such as
+        # user_api_key_hash when the snapshot has no forwardable strings.
+        cleaned_metadata = add_openai_metadata(requester_metadata) if isinstance(requester_metadata, dict) else None
+        return cleaned_metadata if cleaned_metadata else None
 
     cleaned_metadata = add_openai_metadata(metadata)
     if cleaned_metadata:

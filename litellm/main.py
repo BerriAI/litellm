@@ -2678,9 +2678,12 @@ def _complete_custom_openai(
     if extra_headers is not None and not use_base_llm_http_handler:
         optional_params["extra_headers"] = extra_headers
 
-    # OpenAI accepts request metadata independently of preview features. Keep this
-    # limited to the OpenAI provider; compatible providers may reject the field.
-    if custom_llm_provider == "openai" and metadata is not None:
+    # OpenAI accepts request metadata independently of preview features. Other
+    # providers keep the existing preview gate because compatible providers may
+    # reject the field.
+    if metadata is not None and (
+        custom_llm_provider == "openai" or litellm.enable_preview_features
+    ):
         openai_metadata: Final = get_requester_metadata(metadata)
         if openai_metadata is not None:
             optional_params["metadata"] = openai_metadata
