@@ -79,8 +79,12 @@ class ChargeCapture:
     async def capture_success(
         self, details: Mapping[str, object], response: object, start_time: datetime, end_time: datetime
     ) -> CommittedCharge | FailedCharge:
+        event: Final = project_spend_event(details, response, start_time, end_time, store_bodies=False)
         return await self.capture_event(
-            project_spend_event(details, response, start_time, end_time, store_bodies=False), details
+            SpendEventBuildError("unpriced_charge")
+            if isinstance(event, SpendEvent) and event.response_cost == 0 and details.get("response_cost") is None
+            else event,
+            details,
         )
 
     async def capture_failure(

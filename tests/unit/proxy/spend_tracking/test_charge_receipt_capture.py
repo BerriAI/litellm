@@ -79,7 +79,14 @@ async def test_invalid_price_is_unconfirmed_not_a_zero_dollar_receipt(amount: fl
     query: Final = ScriptedQuery()
     runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
     capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash))
-    assert isinstance(await capture.capture_event(priced_event(amount=amount)), FailedCharge)
+    details: Final = {
+        "model": RECEIPT.model,
+        "litellm_params": {},
+        "response_cost": amount,
+        "standard_logging_object": {"response_cost": 0 if amount is None else amount},
+    }
+    result: Final = await capture.capture_success(details, None, STAMP, STAMP)
+    assert isinstance(result, FailedCharge)
     assert not await capture.wait() and not query.calls
 
 

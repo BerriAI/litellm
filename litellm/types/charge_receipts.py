@@ -50,9 +50,11 @@ def inherited_charge_capture(params: Mapping[str, object]) -> RequiredChargeCapt
             metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) or metadata.get("semantic-cache-embedding")
         ):
             continue
-        if isinstance(source := metadata.get("user_api_key_auth"), ChargeCaptureSource):
-            if (capture := source.new_charge_capture()) is not None:
-                return capture
+        if (
+            isinstance(source := metadata.get("user_api_key_auth"), ChargeCaptureSource)
+            and (capture := source.new_charge_capture()) is not None
+        ):
+            return capture
     return None
 
 
