@@ -364,3 +364,30 @@ def test_compact_previous_response_id_reaches_the_provider_as_the_raw_id(
             "previous_response_id": raw_id,
             "input": input_items,
         }, compact_response.http_response.text
+
+
+def test_azure_compact_on_a_dated_api_version_reaches_the_v1_route(gateway: Gateway) -> None:
+    compacted_id: Final = f"resp_azure_compact_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        return Reply(
+            body=json.dumps(
+                {"id": compacted_id, "object": "response.compaction", "created_at": 1, "output": []}
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"azure/{_MODEL}", api_key=_API_KEY, api_base=wire.url, api_version="2024-10-21"
+        )
+        wait_for_worker_readiness(scenario.gateway, model, 1, _PROXY_WORKERS)
+        client: Final = openai.OpenAI(base_url=f"{gateway.client.base_url}/v1", api_key=gateway.key, max_retries=0)
+        compacted: Final = client.responses.compact(
+            model=model,
+            input=[{"role": "user", "content": [{"type": "input_text", "text": "Summarize the patch so far."}]}],
+        )
+
+        assert same_response(compacted.id, compacted_id), compacted.model_dump_json()
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", "/openai/v1/responses/compact")
+        ]
