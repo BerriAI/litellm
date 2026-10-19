@@ -37,6 +37,7 @@ import pytest
 
 
 import litellm
+from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS  # noqa: E402
 from litellm.llms.vertex_ai.batches.handler import (  # noqa: E402
     VertexAIBatchPrediction,
 )
@@ -1082,3 +1083,130 @@ async def test_vertex_async_create_batch_logs_error_body_on_http_error():
 
         assert exc_info.value.response.status_code == 400
         assert "gemini-2.0-flash" in exc_info.value.response.text
+
+
+VERTEX_BATCH_JOBS_URL = (
+    f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}/locations/{LOCATION}/batchPredictionJobs"
+)
+SEVEN_SECONDS = {"connect": 7.0, "read": 7.0, "write": 7.0, "pool": 7.0}
+# The cached client's own default: 600s, with a 5s connect timeout
+CLIENT_DEFAULT = {"connect": 5.0, "read": 600.0, "write": 600.0, "pool": 600.0}
+
+BATCH_OPERATIONS = [
+    pytest.param(
+        "create_batch",
+        {"completion_window": "24h", "endpoint": "/v1/chat/completions", **CREATE_DATA},
+        [("POST", "/batchPredictionJobs")],
+        id="create",
+    ),
+    pytest.param(
+        "create_batch",
+        {"completion_window": "24h", "endpoint": "/v1/chat/completions", **ENDPOINT_CREATE_DATA},
+        [("GET", f"/endpoints/{ENDPOINT_ID}"), ("POST", "/batchPredictionJobs")],
+        id="create_from_fine_tuned_endpoint",
+    ),
+    pytest.param(
+        "retrieve_batch", {"batch_id": BATCH_ID}, [("GET", f"/batchPredictionJobs/{BATCH_ID}")], id="retrieve"
+    ),
+    pytest.param("list_batches", {}, [("GET", "/batchPredictionJobs")], id="list"),
+    pytest.param(
+        "cancel_batch",
+        {"batch_id": BATCH_ID},
+        [("POST", f"/batchPredictionJobs/{BATCH_ID}:cancel"), ("GET", f"/batchPredictionJobs/{BATCH_ID}")],
+        id="cancel",
+    ),
+]
+
+
+@pytest.fixture
+def vertex_batch_api(respx_mock, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    # respx answers for the Google host, so skip the DNS based SSRF rewrite to an IP
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(
+        VertexAIBatchPrediction,
+        "_ensure_access_token",
+        lambda self, credentials, project_id, custom_llm_provider: (TOKEN, PROJECT),
+    )
+    # Running, so the success logger has no output file to fetch
+    running = _vertex_job_response(state="JOB_STATE_RUNNING")
+    respx_mock.post(VERTEX_BATCH_JOBS_URL).mock(return_value=httpx.Response(200, json=running))
+    respx_mock.post(f"{VERTEX_BATCH_JOBS_URL}/{BATCH_ID}:cancel").mock(return_value=httpx.Response(200, json={}))
+    respx_mock.get(f"{VERTEX_BATCH_JOBS_URL}/{BATCH_ID}").mock(return_value=httpx.Response(200, json=running))
+    respx_mock.get(
+        f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}"
+    ).mock(return_value=httpx.Response(200, json={"deployedModels": [{"model": TUNED_MODEL_RESOURCE}]}))
+    respx_mock.get(VERTEX_BATCH_JOBS_URL).mock(
+        return_value=httpx.Response(200, json={"batchPredictionJobs": [running], "nextPageToken": ""})
+    )
+    return respx_mock
+
+
+async def _call_batch_api(operation, kwargs, sync_mode):
+    call_kwargs = {**kwargs, "custom_llm_provider": "vertex_ai", "vertex_project": PROJECT, "vertex_location": LOCATION}
+    if sync_mode:
+        getattr(litellm, operation)(**call_kwargs)
+    else:
+        await getattr(litellm, f"a{operation}")(**call_kwargs)
+
+
+def _sent_requests(router):
+    return [(call.request.method, call.request.url.path) for call in router.calls]
+
+
+def _sent_timeouts(router):
+    return [call.request.extensions["timeout"] for call in router.calls]
+
+
+@pytest.mark.parametrize("operation, kwargs, expected_requests", BATCH_OPERATIONS)
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+async def test_batch_requests_send_the_callers_timeout(
+    vertex_batch_api, operation, kwargs, expected_requests, sync_mode
+):
+    await _call_batch_api(operation, {**kwargs, "timeout": 7.0}, sync_mode)
+
+    assert _sent_requests(vertex_batch_api) == [
+        (method, f"/v1/projects/{PROJECT}/locations/{LOCATION}{path}") for method, path in expected_requests
+    ]
+    assert _sent_timeouts(vertex_batch_api) == [SEVEN_SECONDS] * len(expected_requests)
+
+
+@pytest.mark.parametrize("operation, kwargs, expected_requests", BATCH_OPERATIONS)
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+async def test_batch_requests_without_a_timeout_keep_the_client_default(
+    vertex_batch_api, monkeypatch, operation, kwargs, expected_requests, sync_mode
+):
+    # No global timeout configured, so a REQUEST_TIMEOUT in the environment cannot move the default
+    monkeypatch.setattr(litellm, "request_timeout", DEFAULT_REQUEST_TIMEOUT_SECONDS)
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
+
+    await _call_batch_api(operation, kwargs, sync_mode)
+
+    assert len(_sent_requests(vertex_batch_api)) == len(expected_requests)
+    assert _sent_timeouts(vertex_batch_api) == [CLIENT_DEFAULT] * len(expected_requests)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+async def test_batch_requests_without_a_timeout_use_the_configured_request_timeout(
+    vertex_batch_api, monkeypatch, sync_mode
+):
+    monkeypatch.setattr(litellm, "request_timeout", 30.0)
+
+    await _call_batch_api("retrieve_batch", {"batch_id": BATCH_ID}, sync_mode)
+
+    assert _sent_timeouts(vertex_batch_api) == [{"connect": 5.0, "read": 30.0, "write": 30.0, "pool": 30.0}]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+async def test_batch_requests_send_the_legacy_request_timeout(vertex_batch_api, sync_mode):
+    await _call_batch_api("retrieve_batch", {"batch_id": BATCH_ID, "request_timeout": 7.0}, sync_mode)
+
+    assert _sent_timeouts(vertex_batch_api) == [SEVEN_SECONDS]
