@@ -8,6 +8,15 @@ For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of 
 
 Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `str::parse`) with no `as_str`/`parse` wrapper that only delegates, and spell each variant with explicit `#[strum(serialize = "...")]` instead of `serialize_all`
 
+## Existing helpers
+
+Before writing a small helper that reproduces Python behaviour or inspects JSON, look for it where it belongs and reuse it:
+
+- `litellm-python-compat` for Python semantics over plain data: type names (`Value::type_name`), truthiness (`truthy`), `repr`/`str`, `json.dumps`/`json.loads` (`json::from_json` turns a `serde_json::Value` into a Python `Value`), `ast.literal_eval` and pickle
+- `litellm-core-utils` (`core_helpers`) for small utilities shared across crates, such as `json_type_name` and `unix_now`
+
+If a helper you need is missing, add it to the owning crate instead of writing a private copy in a provider module
+
 ## Test placement
 
 - Never create a `tests.rs` (or `test.rs`) file under `src/`, and never `#[path = "tests.rs"] mod tests;`
