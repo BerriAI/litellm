@@ -27,7 +27,7 @@ const sampleResponse: SystemOneResponse = {
 };
 
 describe("ResponseView integration", () => {
-  it("shows OpenAI Decisions answer cards in Form view and the complete response in JSON view", async () => {
+  it("shows OpenAI Decisions answer cards in Form view and the complete response in cURL view", async () => {
     const response: OpenAIDecisionsResponse = {
       model: "jev-latest",
       answers: [
@@ -71,7 +71,7 @@ describe("ResponseView integration", () => {
     expect(screen.queryByRole("region", { name: "Decisions response JSON" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Raw response" }));
     expect(screen.getByRole("region", { name: "Decisions response JSON" })).toHaveTextContent("keep-extra-fields");
-    rerender(<ResponseView response={response} isLoading={false} view="json" />);
+    rerender(<ResponseView response={response} isLoading={false} view="curl" />);
     expect(screen.queryByRole("meter")).not.toBeInTheDocument();
     expect(JSON.parse(screen.getByRole("region", { name: "Decisions response JSON" }).textContent ?? "")).toEqual(
       response,
@@ -80,8 +80,8 @@ describe("ResponseView integration", () => {
     expect(screen.getByRole("meter", { name: "false probability" })).toHaveAttribute("aria-valuenow", "80");
   });
 
-  it("shows System One raw response instead of cards in JSON view", () => {
-    render(<ResponseView response={sampleResponse} isLoading={false} view="json" />);
+  it("shows System One raw response instead of cards in cURL view", () => {
+    render(<ResponseView response={sampleResponse} isLoading={false} view="curl" />);
     expect(screen.queryByRole("meter")).not.toBeInTheDocument();
     expect(JSON.parse(screen.getByRole("region", { name: "Decisions response JSON" }).textContent ?? "")).toEqual(
       sampleResponse,
@@ -106,7 +106,7 @@ describe("ResponseView integration", () => {
     expect(screen.getByText("99% yes")).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "Yes probability" })).toHaveAttribute("aria-valuenow", "99");
     expect(screen.getByRole("meter", { name: "2: angry probability" })).toBeInTheDocument();
-    expect(screen.getByText("378 input / 63 output tokens")).toBeInTheDocument();
+    expect(screen.getByText("378 in / 63 out")).toBeInTheDocument();
   });
 
   it("selects the score level nearest a fractional calibrated score", () => {

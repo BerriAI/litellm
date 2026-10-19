@@ -102,7 +102,7 @@ mod tests {
     use litellm_llms_types::formats::messages::streaming::MessagesContentBlockDelta;
 
     use super::*;
-    use crate::base_llm::messages::streaming::anthropic_sse_event_stream;
+    use crate::base_llm::messages::streaming;
 
     fn in_pieces(wire: &[u8]) -> ByteStream {
         let pieces: Vec<Bytes> = wire.chunks(3).map(Bytes::copy_from_slice).collect();
@@ -147,7 +147,7 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
-        let from_sse = anthropic_sse_event_stream(in_pieces(sse.as_bytes()))
+        let from_sse = streaming::event_stream(in_pieces(sse.as_bytes()))
             .try_collect::<Vec<_>>()
             .await
             .unwrap();

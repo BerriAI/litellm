@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
@@ -16,7 +18,10 @@ from litellm.proxy.pass_through_endpoints.streaming_handler import (
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    EndpointType,
+    PassthroughStandardLoggingPayload,
+)
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -201,6 +206,65 @@ async def test_handle_logging_runs_async_handler_for_passthrough():
 
     mock_async.assert_awaited_once()
     mock_sync.assert_not_called()
+
+
+@pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
+@pytest.mark.asyncio
+async def test_unhandled_route_passes_passthrough_payload_to_custom_logger():
+    class _PayloadLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.payload: PassthroughStandardLoggingPayload | None = None
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime,
+            end_time: datetime,
+        ) -> None:
+            self.payload = TypeAdapter(PassthroughStandardLoggingPayload).validate_python(
+                kwargs["passthrough_logging_payload"]
+            )
+
+    start_time: Final = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    end_time: Final = datetime(2025, 1, 2, 3, 4, 9, tzinfo=timezone.utc)
+    url: Final = "https://upstream.example/v1/moderations"
+    request_body: Final = {"model": "omni-moderation-latest", "input": "check this"}
+    response_body: Final = {"id": "moderation-1", "results": [{"flagged": False}]}
+    payload: Final = PassthroughStandardLoggingPayload(
+        url=url,
+        request_body=request_body,
+        request_method="POST",
+        response_body=response_body,
+    )
+    logger: Final = _PayloadLogger()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="omni-moderation-latest",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start_time,
+        litellm_call_id="moderation-1",
+        function_id="moderations",
+        dynamic_async_success_callbacks=[logger],
+    )
+    response: Final = httpx.Response(200, request=httpx.Request("POST", url), json=response_body)
+
+    await PassThroughEndpointLogging().pass_through_async_success_handler(
+        httpx_response=response,
+        response_body=response_body,
+        logging_obj=logging_obj,
+        url_route="/v1/moderations",
+        result="",
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=False,
+        request_body=request_body,
+        passthrough_logging_payload=payload,
+    )
+
+    assert logger.payload == payload
 
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")

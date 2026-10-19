@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from openai import Timeout as SDKTimeout
-from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictInt, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -43,6 +43,7 @@ from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
 from .utils import (
+    CooldownDeploymentInfo,
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     ModelResponse,
@@ -54,6 +55,17 @@ from .utils import (
 )
 
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
+
+
+class FallbackSkipReason(str, enum.Enum):
+    NOT_AUTHORIZED = "not_authorized"
+    OVER_BUDGET = "over_budget"
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedFallbackTarget:
+    target: str
+    reason: FallbackSkipReason
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -188,6 +200,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     weights: RouterWeights | None = None
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
+    fallback_on_unsupported_params: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -238,6 +251,10 @@ class ModelAccessWindow(LiteLLMBaseModel):
         return self
 
 
+def _whole_float_as_int(value: object) -> object:
+    return int(value) if isinstance(value, float) and value.is_integer() else value
+
+
 class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -276,6 +293,7 @@ class ModelInfo(MirroredPricingParams):
     cost_per_ptu_per_hour: float | None = None
     ptu_effective_from: datetime.datetime | None = None
     ptu_effective_to: datetime.datetime | None = None
+    ptu_shares: Mapping[str, Annotated[StrictInt, BeforeValidator(_whole_float_as_int)]] | None = None
 
     # when tag-based routing's "!" or "&" constraints eliminate every deployment
     # in this model group, fall back to the default-tagged pool instead of
@@ -479,12 +497,17 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
+    responses_api_version: str | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
-    stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
+    stream_timeout: float | str | None = None
+    # per service_tier overrides of timeout / stream_timeout, used when the request's service_tier matches a key
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
@@ -686,8 +709,11 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     api_key: str | None
     api_base: str | None
     api_version: str | None
+    responses_api_version: ReadOnly[str | None]
     timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
+    timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
+    stream_timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
     max_retries: int | None
     organization: list | str | None  # for openai orgs
     provider_affinity_header: ReadOnly[str | None]
@@ -700,6 +726,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     use_chat_completions_api: bool | None
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
+    kubernetes_pod_discovery: ReadOnly[bool | None]
     litellm_credential_name: str | None
     ## UNIFIED PROJECT/REGION ##
     region_name: str | None
@@ -722,6 +749,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: float | None
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
+    input_cost_per_text_message: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
@@ -951,6 +979,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     api_base: str | None
     timeout: float | str | httpx.Timeout | None
     max_retries: int | None
+    input_cost_per_query: ReadOnly[float | None]
 
 
 class SearchToolInfoTypedDict(TypedDict, total=False):
@@ -1065,6 +1094,8 @@ class RouterRateLimitErrorBasic(ValueError):
     Raise a basic error inside helper functions.
     """
 
+    status_code: Final = 429
+
     def __init__(
         self,
         model: str,
@@ -1080,6 +1111,9 @@ class RouterErrorTypes(str, enum.Enum):
 
 
 class RouterRateLimitError(ValueError):
+    status_code: Final = 429
+    cooldown_deployments: tuple[CooldownDeploymentInfo, ...] | None = None
+
     def __init__(
         self,
         model: str,
@@ -1087,11 +1121,13 @@ class RouterRateLimitError(ValueError):
         enable_pre_call_checks: bool,
         cooldown_list: list,
         model_ids: Sequence[str] = (),
+        cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
+        self.cooldown_deployments = None if cooldown_deployments is None else tuple(cooldown_deployments)
         self.all_deployments_in_cooldown = bool(model_ids) and frozenset(model_ids) <= frozenset(cooldown_list)
         self.type = (
             RouterErrorTypes.all_deployments_in_cooldown.value
@@ -1377,8 +1413,9 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     This lives here rather than under ``litellm.proxy`` so the router can call it on a
     post-authentication merge without core importing from the proxy package.
     """
+    submitted_names: Final = frozenset(key.removesuffix("[]") for key in body)
     for param in _server_owned_wif_litellm_params:
-        if param in body:
+        if param in submitted_names:
             raise ValueError(
                 f"Rejected Request: {param} is a server-owned workload identity federation or OAuth token exchange "
                 "parameter "

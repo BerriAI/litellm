@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import re
-import signal
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -19,7 +18,6 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 from integration._support.client import eventually, object_value, string_value
 from integration._support.process import owned_gateway_image, setup_only_proxy_run
@@ -255,10 +253,10 @@ def test_killed_worker_is_replaced_by_one_that_reads_the_same_admissions(tmp_pat
         plans: Final = _plans(extra)
         with ThreadPoolExecutor(max_workers=1) as pool:
             burst: Final = pool.submit(_burst, rig, plans, True)
-            victim: Final = psutil.Process(workers[0])
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            served: Final = burst.result()
+            with rig.proxy.replacing_worker(workers[0]) as kill:
+                kill.freeze()
+                kill()
+                served: Final = burst.result()
         answered: Final = tuple(item for item in served if item.status == 200)
         assert answered, [(item.status, item.text[:200]) for item in served]
         assert all(item.call.answer in item.text for item in answered)

@@ -9,6 +9,10 @@ from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
 )
+from litellm.llms.github_copilot.per_user_auth import (
+    GITHUB_COPILOT_USER_SESSION_KWARG_KEY,
+    GithubCopilotUserSession,
+)
 
 
 @pytest.mark.parametrize(
@@ -143,6 +147,26 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_context_
     assert validated_headers["x-interaction-type"] == "messages-proxy"
     assert "anthropic-beta" in validated_headers
     assert "context-management-2025-06-27" in validated_headers["anthropic-beta"]
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_github_copilot_safeguards_do_not_derive_the_dangerous_tool_use_beta() -> None:
+    session: Final = GithubCopilotUserSession(token="gh.test-key", api_base="https://api.githubcopilot.com")
+
+    validated_headers, _ = GithubCopilotAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-haiku-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "safeguards": ({"type": "dangerous_tool_use"},),
+            "context_management": {"edits": ({"type": "clear_tool_uses_20250919"},)},
+        },
+        litellm_params={GITHUB_COPILOT_USER_SESSION_KWARG_KEY: session},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert validated_headers["anthropic-beta"] == "context-management-2025-06-27"
 
 
 def test_github_copilot_anthropic_messages_validate_environment_auth_error():
