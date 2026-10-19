@@ -69,6 +69,8 @@ impl ChatCompletionsRoute {
                 custom_llm_provider: call.custom_llm_provider.as_deref(),
                 extra_headers: call.extra_headers,
                 timeout: call.timeout,
+                drop_params: call.drop_params,
+                model_info: call.model_info,
             };
             self.run(request, cache_options, interceptors, observers)
                 .await

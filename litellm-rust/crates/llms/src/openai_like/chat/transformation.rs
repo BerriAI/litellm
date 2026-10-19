@@ -16,9 +16,13 @@ use crate::{
     Error,
     base_llm::{
         auth::AuthScheme,
-        chat::transformation::{
-            BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-            ValidatedEnvironment,
+        chat::{
+            params::ChatRequestContext,
+            streaming::StreamShape,
+            transformation::{
+                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                ValidatedEnvironment,
+            },
         },
     },
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
@@ -90,6 +94,7 @@ impl BaseConfig for OpenAILikeChatConfig {
         model: &str,
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
+        _context: &ChatRequestContext<'_>,
     ) -> Result<ProviderChatRequestData, Error> {
         let mut params = Map::from_iter(
             optional_params
@@ -113,6 +118,7 @@ impl BaseConfig for OpenAILikeChatConfig {
         Ok(ProviderChatRequestData {
             body: Value::Object(body),
             stream_shape: Default::default(),
+            headers: Vec::new(),
         })
     }
 
@@ -120,6 +126,7 @@ impl BaseConfig for OpenAILikeChatConfig {
         &self,
         model: &str,
         response: ProviderChatResponseData,
+        _shape: &StreamShape,
     ) -> Result<ChatCompletionsResponse, Error> {
         let mut body = response.body;
         sanitize_usage(&mut body);
@@ -266,6 +273,7 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
                 .unwrap_or("assistant")
                 .to_string(),
             content: content.and_then(Value::as_str).map(str::to_string),
+            ..ChatCompletionsChoiceMessage::default()
         },
         finish_reason: choice
             .get("finish_reason")
@@ -310,14 +318,17 @@ mod tests {
 
     fn transform(model: &str, msgs: Value, opts: Value) -> Value {
         OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
-            .transform_request(model, messages(msgs), params(opts))
+            .transform_request(model, messages(msgs), params(opts), &Default::default())
             .expect("request transforms")
             .body
     }
 
     fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
-        OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
-            .transform_response("some-model", ProviderChatResponseData { body })
+        OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG.transform_response(
+            "some-model",
+            ProviderChatResponseData { body },
+            &Default::default(),
+        )
     }
 
     fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {

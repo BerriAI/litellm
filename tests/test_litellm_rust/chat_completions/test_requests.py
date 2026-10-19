@@ -18,7 +18,8 @@ _OBJECT: Final = TypeAdapter(dict[str, object])
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True))
 async def test_positional_parameters_reach_the_wire(server: RecordingServer, asynchronous: bool) -> None:
-    temperature: Final = 0.35
+    # The model takes no sampling params but temperature=1, as Python itself rules.
+    temperature: Final = 1.0
     arguments: Final = (
         (MESSAGES_MODEL, list(MESSAGES), None, None, 12.0, temperature)
         if asynchronous
