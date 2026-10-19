@@ -3134,9 +3134,7 @@ class TestExtraBodyCannotOverrideModel:
                 }
             ]
 
-        untouched = litellm.get_optional_params(
-            model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools()
-        )
+        untouched = litellm.get_optional_params(model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools())
         assert untouched["tools"][0]["function"]["custom_marker"] == "LEAK", untouched
 
         result = litellm.get_optional_params(
@@ -4516,7 +4514,13 @@ _SUCCESS_RESPONSES_BY_CALL_TYPE: Final = (
     pytest.param(EmbeddingResponse(model="text-embedding-3-small"), CallTypes.aembedding, id="embedding"),
     pytest.param(
         ResponsesAPIResponse(
-            id="resp_abc", created_at=1, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[], model="gpt-5.6"
+            id="resp_abc",
+            created_at=1,
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            model="gpt-5.6",
         ),
         CallTypes.aresponses,
         id="responses",
@@ -4544,7 +4548,9 @@ async def test_success_deployment_hook_raising_keeps_response_and_runs_later_hoo
 
     assert result is response
     assert second_hook.seen_responses == (response,)
-    failure_logs: Final = tuple(r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message)
+    failure_logs: Final = tuple(
+        r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message
+    )
     assert len(failure_logs) == 1
     assert "_ChatShapedSuccessDeploymentHook" in failure_logs[0].message
     assert str(call_type) in failure_logs[0].message
@@ -6353,3 +6359,18 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
+    """LIT-9880: the hook hands a tool_config point on for the provider step, and OpenAI has no
+    step that consumes it, so it must not ride along in extra_body and 400 at OpenAI."""
+    optional_params = litellm.utils.get_optional_params(
+        model="gpt-4.1",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True}
+    assert "cache_control_injection_points" not in optional_params
