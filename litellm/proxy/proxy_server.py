@@ -8286,7 +8286,7 @@ class ProxyConfig:
         )
         verbose_proxy_logger.info("Spend log size check rescheduled with trigger: %s", size_trigger)
 
-    def _spend_log_size_check_trigger(self) -> BaseTrigger | None:
+    def _spend_log_size_check_trigger(self) -> object | None:
         return self._staggered_interval_trigger(
             _SPEND_LOG_SIZE_CHECK_JOB_ID,
             "maximum_spend_logs_size_check_interval",
@@ -8294,7 +8294,7 @@ class ProxyConfig:
         )
 
     @staticmethod
-    def _staggered_interval_trigger(job_id: str, setting_name: str, interval: object) -> BaseTrigger | None:
+    def _staggered_interval_trigger(job_id: str, setting_name: str, interval: object) -> object | None:
         if not isinstance(interval, str):
             verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
             return None
@@ -8313,7 +8313,7 @@ class ProxyConfig:
             verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
             return None
 
-    def _spend_log_cleanup_trigger(self) -> BaseTrigger | None:
+    def _spend_log_cleanup_trigger(self) -> object | None:
         cleanup_cron: Final[object] = general_settings.get("maximum_spend_logs_cleanup_cron")
         if cleanup_cron:
             from apscheduler.triggers.cron import CronTrigger
