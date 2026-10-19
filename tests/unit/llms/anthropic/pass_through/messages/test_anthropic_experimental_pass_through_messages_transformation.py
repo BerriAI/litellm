@@ -300,3 +300,93 @@ async def test_a_json_provider_gets_safeguards_and_the_beta_together_unless_drop
     assert sent.headers["anthropic-beta"] == forwarded_beta
     assert "safeguard_results" not in response
     assert response["content"][0]["text"] == "hello"
+
+
+def _tool_choice_request(
+    model: str,
+    tool_choice: Mapping[str, object],
+    litellm_params: GenericLiteLLMParams | None = None,
+) -> Mapping[str, object]:
+    return AnthropicMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transform returns an untyped provider dict
+        model=model,
+        messages=[{"role": "user", "content": "What's the weather in Paris?"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 64,
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "description": "Get the weather for a city",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                }
+            ],
+            "tool_choice": tool_choice,
+        },
+        litellm_params=litellm_params or GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+def test_forced_tool_choice_downgraded_to_auto_with_drop_params(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression test for #46074: /v1/messages forwarded a forced tool_choice verbatim to
+    models flagged supports_forced_tool_use: false (Opus/Sonnet 5.5) and 400ed, while the
+    chat path downgraded it. The pass-through now applies the same gate."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    result: Final = _tool_choice_request(
+        model="claude-opus-5-5",
+        tool_choice={"type": "tool", "name": "get_weather"},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+    )
+
+    assert result["tool_choice"] == {"type": "auto"}
+
+
+def test_forced_tool_choice_downgrade_keeps_disable_parallel_tool_use(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    result: Final = _tool_choice_request(
+        model="claude-opus-5-5",
+        tool_choice={"type": "any", "disable_parallel_tool_use": True},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+    )
+
+    assert result["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+
+
+def test_forced_tool_choice_raises_clean_error_without_drop_params(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="forced tool use"):
+        _tool_choice_request(
+            model="claude-opus-5-5",
+            tool_choice={"type": "tool", "name": "get_weather"},
+        )
+
+
+def test_forced_tool_choice_forwarded_on_models_that_support_it(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    tool_choice: Final[Mapping[str, object]] = {"type": "tool", "name": "get_weather"}
+
+    result: Final = _tool_choice_request(model="claude-sonnet-4-6", tool_choice=tool_choice)
+
+    assert result["tool_choice"] == tool_choice
+
+
+def test_non_forced_tool_choice_forwarded_on_opus_5_5(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    result: Final = _tool_choice_request(model="claude-opus-5-5", tool_choice={"type": "auto"})
+
+    assert result["tool_choice"] == {"type": "auto"}

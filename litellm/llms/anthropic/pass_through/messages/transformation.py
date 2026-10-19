@@ -678,6 +678,21 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             if transformed_context_management is not None:
                 anthropic_messages_optional_request_params["context_management"] = transformed_context_management
 
+        # Downgrade a forced tool_choice for models flagged supports_forced_tool_use: false
+        # (e.g. claude-opus-5-5), matching the chat path's AnthropicConfig.map_openai_params;
+        # otherwise /v1/messages 400s where /chat/completions downgrades to auto (or raises
+        # the clean UnsupportedParamsError without drop_params).
+        tool_choice_param: Final = anthropic_messages_optional_request_params.get("tool_choice")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # the request params arrive as a bare dict
+        if isinstance(tool_choice_param, dict) and tool_choice_param.get("type") in ("any", "tool"):  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+            gated_tool_choice: Final = AnthropicModelInfo._apply_forced_tool_choice(  # pyright: ignore[reportPrivateUsage]  # the same gate the chat path applies from AnthropicConfig
+                model=model,
+                tool_choice=tool_choice_param,  # pyright: ignore[reportArgumentType]  # the request params arrive as a bare dict
+                drop_params=litellm_params.drop_params is True,
+            )
+            anthropic_messages_optional_request_params["tool_choice"] = (  # rebind-ok: write the gated value back
+                gated_tool_choice
+            )
+
         ####### get required params for all anthropic messages requests ######
         # Lazy %s: the f-string previously stringified the entire messages
         # payload on every request regardless of log level (a full scan of the
