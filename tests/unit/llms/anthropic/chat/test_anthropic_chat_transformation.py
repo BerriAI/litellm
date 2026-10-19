@@ -9653,3 +9653,24 @@ def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> Non
     )
     provider_specific_fields = result.choices[0].message.provider_specific_fields or {}
     assert "stop_details" not in provider_specific_fields
+
+
+def test_transform_request_keeps_code_execution_tool_for_lone_container_upload():
+    config = AnthropicConfig()
+    result = config.transform_request(
+        model="claude-sonnet-4-5-20250929",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this file?"},
+                    {"type": "file", "file": {"file_id": "file_123"}},
+                ],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert result["messages"][0]["content"][1] == {"type": "container_upload", "file_id": "file_123"}
+    assert result["tools"] == [{"name": "code_execution", "type": "code_execution_20250522"}]
