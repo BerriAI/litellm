@@ -2203,6 +2203,28 @@ def test_get_spend_routes_false_permission_denies_internal_user(route):
     assert "Only proxy admin" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "permissions, expected",
+    [
+        ({"get_spend_routes": True}, True),
+        ({"get_spend_routes": False}, False),
+        ({}, False),
+        (["get_spend_routes"], True),
+        (("get_spend_routes",), True),
+        ({"get_spend_routes"}, True),
+        (["other"], False),
+        (None, False),
+        ("get_spend_routes", False),
+    ],
+)
+def test_has_truthy_permission_shapes(permissions, expected):
+    """Cover dict / sequence / invalid shapes for the shared helper (#47112)."""
+    assert (
+        RouteChecks._has_truthy_permission(permissions, "get_spend_routes")
+        is expected
+    )
+
+
 @pytest.mark.parametrize("route", ["/audit", "/audit/some-log-id"])
 def test_proxy_admin_viewer_can_access_audit_logs(route):
     """
