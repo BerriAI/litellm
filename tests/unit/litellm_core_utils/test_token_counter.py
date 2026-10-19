@@ -857,6 +857,27 @@ class TestTokenizerSelection(unittest.TestCase):
             monkeypatch.undo()
 
 
+@pytest.mark.parametrize("rust", ["true", "false"])
+@pytest.mark.parametrize(
+    "model",
+    ["azure_ai/DeepSeek-V4-Flash-0731", "deepseek/deepseek-v4-pro", "fireworks_ai/deepseek-v4p1-flash"],
+)
+def test_token_counter_counts_deepseek_v4_with_the_packaged_deepseek_tokenizer(
+    model: str, rust: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("LITELLM_RUST", rust)
+    deepseek_tokenizer: Final = Tokenizer.from_str(
+        importlib.resources.files("litellm.litellm_core_utils.tokenizers")
+        .joinpath("deepseek_v4_tokenizer.json")
+        .read_text(encoding="utf-8")
+    )
+    sample: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
+    expected: Final = len(deepseek_tokenizer.encode(sample).ids)
+
+    assert expected != len(tiktoken.get_encoding("cl100k_base").encode(sample))
+    assert litellm.token_counter(model=model, text=sample) == expected
+
+
 def test_token_counter_with_anthropic_tool_use():
     """
     Test that _count_anthropic_content() correctly handles tool_use blocks.

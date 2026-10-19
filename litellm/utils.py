@@ -2506,7 +2506,7 @@ def uses_anthropic_tokenizer(model: str) -> bool:
     return model in litellm.anthropic_models and "claude-3" not in model
 
 
-HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "llama2", "llama3"]
+HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "deepseek_v4", "llama2", "llama3"]
 
 
 def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
@@ -2515,6 +2515,8 @@ def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
         return "cohere"
     if uses_anthropic_tokenizer(model):
         return "anthropic"
+    if "deepseek-v4" in model.lower():
+        return "deepseek_v4"
     if "llama-2" in model.lower() or "replicate" in model.lower():
         return "llama2"
     if "llama-3" in model.lower():
@@ -2540,6 +2542,12 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
             return tokenizer_dispatch.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         case "anthropic":
             return tokenizer_dispatch.anthropic()
+        case "deepseek_v4":
+            return tokenizer_dispatch.from_str(
+                resources.files("litellm.litellm_core_utils.tokenizers")
+                .joinpath("deepseek_v4_tokenizer.json")
+                .read_text(encoding="utf-8")
+            )
         case "llama2":
             return tokenizer_dispatch.from_pretrained("hf-internal-testing/llama-tokenizer")
         case "llama3":
