@@ -63,7 +63,7 @@ export function DataTableSortHeader<TData, TValue>({
             }
           />
           <Menu.Portal>
-            <Menu.Positioner side="bottom" align="start" sideOffset={4} className="isolate z-50">
+            <Menu.Positioner side="bottom" align="start" sideOffset={4} className="isolate z-popup">
               <Menu.Popup className="min-w-[9rem] rounded-md bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden">
                 <Menu.Item className={MENU_ITEM_CLASS} onClick={() => column.toggleSorting(false)}>
                   <ChevronUp className="size-3.5" /> Ascending
@@ -167,7 +167,7 @@ export function DataTableMultiSortHeader<TData>({ table, fields, className }: Da
           }
         />
         <Menu.Portal>
-          <Menu.Positioner side="bottom" align="start" sideOffset={4} className="isolate z-50">
+          <Menu.Positioner side="bottom" align="start" sideOffset={4} className="isolate z-popup">
             <Menu.Popup className="min-w-[9rem] rounded-md bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden">
               {options.map((option) => {
                 const isActive = activeField?.id === option.id && activeField.desc === option.desc;

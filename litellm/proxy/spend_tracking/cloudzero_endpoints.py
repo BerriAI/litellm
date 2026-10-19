@@ -1,5 +1,11 @@
 import json
-from typing import Final
+from collections.abc import Mapping
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # the config repository's table protocol omits find_first
+)
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -11,8 +17,12 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.cloudzero_endpoints import (
     CloudZeroExportRequest,
     CloudZeroExportResponse,
@@ -22,11 +32,26 @@ from litellm.types.proxy.cloudzero_endpoints import (
     CloudZeroSettingsView,
 )
 
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import PrismaClient
+
 router: Final = APIRouter()
 
 
 # Initialize the sensitive data masker for API key masking
 _sensitive_masker: Final = SensitiveDataMasker()
+
+
+class _CloudZeroConfigRow(Protocol):
+    """The ``LiteLLM_Config`` row holding ``cloudzero_settings``, as this module reads it."""
+
+    @property
+    def param_value(self) -> str | Mapping[str, str] | None: ...
+
+
+def _config_table(prisma_client: "PrismaClient") -> TableActions[_CloudZeroConfigRow]:
+    repository_table: Final = ConfigRepository(prisma_client).table
+    return cast(TableActions[_CloudZeroConfigRow], repository_table)  # cast-ok: repo protocol omits find_first
 
 
 async def _set_cloudzero_settings(api_key: str, connection_id: str, timezone: str):
@@ -82,9 +107,7 @@ async def _get_cloudzero_settings():
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    cloudzero_config: Final = await ConfigRepository(prisma_client).table.find_first(
-        where={"param_name": "cloudzero_settings"}
-    )
+    cloudzero_config: Final = await _config_table(prisma_client).find_first(where={"param_name": "cloudzero_settings"})
     if cloudzero_config is None or cloudzero_config.param_value is None:
         return {}
 
@@ -129,7 +152,7 @@ async def get_cloudzero_settings(
     Only admin users (Proxy Admin or Admin Viewer) can view CloudZero settings.
     """
     # Validation — Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -268,7 +291,7 @@ async def is_cloudzero_setup_in_db() -> bool:
             return False
 
         # Check for CloudZero settings in database
-        cloudzero_config: Final = await ConfigRepository(prisma_client).table.find_first(
+        cloudzero_config: Final = await _config_table(prisma_client).find_first(
             where={"param_name": "cloudzero_settings"}
         )
 
@@ -530,7 +553,7 @@ async def delete_cloudzero_settings(
             )
 
         # Check if CloudZero settings exist
-        cloudzero_config: Final = await ConfigRepository(prisma_client).table.find_first(
+        cloudzero_config: Final = await _config_table(prisma_client).find_first(
             where={"param_name": "cloudzero_settings"}
         )
 

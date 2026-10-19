@@ -63,11 +63,11 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   };
 
   const renderControl = (setting: AlertingSetting) => {
-    if (setting.field_type === "Integer") {
+    if (setting.field_type === "Integer" || setting.field_type === "Float") {
       return (
         <Input
           type="number"
-          step={1}
+          step={setting.field_type === "Integer" ? 1 : "any"}
           value={setting.field_value ?? ""}
           onChange={(event) => handleNumericChange(setting, event.target.value)}
         />

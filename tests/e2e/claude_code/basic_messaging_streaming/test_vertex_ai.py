@@ -16,6 +16,7 @@ The (feature, provider) for this cell is inferred from the file path by
 from __future__ import annotations
 
 import pytest
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 VERTEX_AI_MODELS = [
@@ -26,6 +27,15 @@ VERTEX_AI_MODELS = [
 
 
 @pytest.mark.covers("llm.messages.vertex.basic.stream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.VERTEX_AI,),
+        models=tuple(VERTEX_AI_MODELS),
+        mode=Mode.STREAM,
+    )
+)
 def test_basic_messaging_streaming_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty streamed reply (one row per Claude tier).

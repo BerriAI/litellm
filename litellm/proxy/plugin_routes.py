@@ -67,7 +67,7 @@ def _configured_key_header_names() -> frozenset[str]:
     except Exception:
         return frozenset()
     general_settings: Final = getattr(proxy_server, "general_settings", None)
-    if not isinstance(general_settings, dict):
+    if not isinstance(general_settings, Mapping):
         return frozenset()
     name: Final[object] = general_settings.get("litellm_key_header_name")
     return frozenset({name.lower()}) if isinstance(name, str) and name else frozenset()
@@ -296,8 +296,8 @@ async def plugin_proxy(
     # Forward caller identity so the plugin can enforce its own access control.
     # The plugin MUST NOT trust these as credentials — they are informational.
     # The plugin_key above is the only authentication mechanism.
-    user_id: Final = getattr(user_api_key_dict, "user_id", None)
-    user_role: Final = getattr(user_api_key_dict, "user_role", None)
+    user_id: Final[object] = getattr(user_api_key_dict, "user_id", None)
+    user_role: Final[object] = getattr(user_api_key_dict, "user_role", None)
     if user_id:
         forward_headers["x-litellm-user-id"] = str(user_id)
     if user_role:

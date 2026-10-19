@@ -33,7 +33,8 @@ class ScimTransformations:
 
         # Get user's teams/groups
         groups: Final = []
-        for team_id in user.teams or []:
+        team_ids: Final[list[str]] = user.teams or []  # mutable-ok: scim reads the user row's team ids
+        for team_id in team_ids:
             team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             if team:
                 team_alias = getattr(team, "team_alias", team.team_id)
@@ -198,15 +199,8 @@ class ScimTransformations:
 
     @staticmethod
     def _get_scim_member_value(member: Member) -> str:
-        """
-        Get the SCIM member value. Use user_email if available, otherwise use user_id.
-        SCIM member value should be the unique identifier for the user.
-        """
-        if hasattr(member, "user_email") and member.user_email:
-            return member.user_email
-        elif hasattr(member, "user_id"):
-            return member.user_id or ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
-        return ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
+        """The member's SCIM resource id, which LiteLLM serves as user_id (RFC 7643 §8.7.1)."""
+        return member.user_id or ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
 
     @staticmethod
     def _get_scim_member_display(member: Member) -> str:

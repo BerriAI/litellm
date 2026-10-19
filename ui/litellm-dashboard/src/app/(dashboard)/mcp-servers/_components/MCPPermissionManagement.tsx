@@ -16,7 +16,7 @@ import {
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
 import { requiredRule } from "@/components/common_components/formRules";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { invertedSwitchControl, switchControl, tagsControl, textControl } from "./mcpFieldRules";
 import { listControl } from "./mcpFormStore";
 
@@ -217,12 +217,12 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
             <div>
               <span className="text-sm font-medium text-foreground flex items-center">
                 Internal network only
-                <SimpleTooltip content="When on, only requests from within your internal network are accepted. Turn off to allow external clients (other clusters, ChatGPT, etc). API key authentication is always required regardless of this setting.">
+                <SimpleTooltip content="When on, requests must come from your internal network unless the server ID is explicitly published in public_mcp_servers. Turn off to allow public IPs. Authentication and access permissions still apply.">
                   <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                 </SimpleTooltip>
               </span>
               <p className="text-sm text-muted-foreground mt-1">
-                Turn on to restrict access to callers within your internal network only.
+                Turn on to restrict public IPs. Explicitly published server IDs remain accessible from public IPs.
               </p>
             </div>
             <MountedFormField name="available_on_public_internet" defaultValue={true} className="mb-0">

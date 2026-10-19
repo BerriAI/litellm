@@ -43,10 +43,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     queryKey: [MEMORY_LIST_KEY, debouncedSearch, pagination.pageIndex, pagination.pageSize],
     queryFn: () => {
       if (!accessToken) throw new Error("Access token required");
-      // Prefix search matches the Redis-style mental model (namespace scan):
-      // typing "user:" finds "user:profile", "user:prefs", etc.
       return fetchMemoryList(accessToken, {
-        keyPrefix: debouncedSearch || undefined,
+        search: debouncedSearch || undefined,
         page: pagination.pageIndex + 1,
         pageSize: pagination.pageSize,
       });

@@ -46,6 +46,7 @@ const IndexesTable: React.FC<IndexesTableProps> = ({
   return (
     <DataTable
       data={data}
+      paginationMode="client"
       columns={columns}
       getRowId={(row, index) => row.id || String(index)}
       sortingMode="client"

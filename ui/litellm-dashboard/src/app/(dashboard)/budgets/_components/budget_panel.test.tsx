@@ -85,6 +85,14 @@ describe("Budget Panel", () => {
     respondWith(DEFAULT_ROWS, 1);
   });
 
+  it("renders the standard page header with the sidebar's Budgets icon", async () => {
+    const { container } = renderPanel();
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Budgets" })).toBeInTheDocument();
+    expect(screen.getByText("Spend, TPM and RPM limits you can assign to customers.")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-wallet")).not.toBeNull();
+  });
+
   it("loads the first page of budgets, newest first", async () => {
     renderPanel();
     await waitFor(() => expect(getMock).toHaveBeenCalled());

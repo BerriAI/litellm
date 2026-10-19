@@ -1,6 +1,6 @@
 import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import { ClassificationRubric } from "./ComplexityRouterConfig";
 vi.mock(
@@ -26,7 +26,7 @@ beforeEach(() => {
 
 interface OpenEditorOptions {
   systemPrompt?: string;
-  onChange?: ReturnType<typeof vi.fn>;
+  onChange?: Mock;
   contextWindowSize?: number;
   tierLabels?: Record<string, string>;
   classificationRubric?: ClassificationRubric;
@@ -81,6 +81,14 @@ describe("ClassifierPromptEditor", () => {
     await openEditor();
     expect(screen.getByText("Proceed with caution")).toBeInTheDocument();
     expect(screen.getByText(/entire system role/)).toBeInTheDocument();
+  });
+
+  it("warns that this mode freezes the tier definitions into the operator's text", async () => {
+    // The whole point of the derived prompt is that a tier rename reaches the classifier. An
+    // operator staying on this editor has to be told their text will not follow one.
+    await openEditor({ systemPrompt: "Grade data sensitivity" });
+    expect(screen.getByText(/legacy whole-prompt mode/)).toBeInTheDocument();
+    expect(screen.getByText(/renaming a tier or changing the rubric will not update it/)).toBeInTheDocument();
   });
 
   it("saves an edited prompt as an override", async () => {
