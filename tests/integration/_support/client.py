@@ -4,6 +4,7 @@ import os
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -15,6 +16,7 @@ from pydantic import JsonValue, TypeAdapter
 from tests.integration._support.database import read_rows
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+DEPLOYMENT_IDS: Final = TypeAdapter(dict[str, list[str]])
 GATEWAY_LIMITS: Final = httpx.Limits(keepalive_expiry=2)
 T = TypeVar("T")
 
@@ -96,6 +98,7 @@ class Gateway:
     key: str
     upstream_url: str
     database_url: str | None = None
+    workers: int = 1
 
     def rows(self, query: str, parameters: tuple[str, ...]) -> list[dict[str, JsonValue]]:
         return read_rows(query, parameters, database_url=self.database_url)
@@ -294,7 +297,35 @@ class Scenario:
         )
         identity: Final = string_value(object_value(created["model_info"])["id"])
         self.cleanups.callback(self.delete_model, identity)
+        if self.gateway.workers > 1:
+            self._await_every_worker(name, identity)
         return name
+
+    def _await_every_worker(self, name: str, identity: str) -> None:
+        from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
+
+        eventually(
+            lambda: self._deployment_ids_by_worker(name),
+            lambda answers: len({pid for pid, _ in answers}) >= self.gateway.workers
+            and all(identity in model_ids for _, model_ids in answers),
+            seconds=2 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+        )
+
+    def _deployment_ids_by_worker(self, name: str) -> tuple[tuple[str, frozenset[str]], ...]:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            return tuple(pool.map(lambda _: self._deployment_ids_on_a_worker(name), range(16)))
+
+    def _deployment_ids_on_a_worker(self, name: str) -> tuple[str, frozenset[str]]:
+        response: Final = self.gateway.request(
+            "GET",
+            "/health/integration-deployment-ids",
+            params={"model_name": name},
+            headers={"connection": "close"},
+        )
+        assert response.status_code == 200, f"Deployment ids on a worker: {response.status_code} {response.text}"
+        return response.headers["x-integration-worker-pid"], frozenset(
+            DEPLOYMENT_IDS.validate_json(response.content)["model_ids"]
+        )
 
 
 @contextmanager

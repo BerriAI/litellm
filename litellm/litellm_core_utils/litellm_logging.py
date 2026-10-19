@@ -43,6 +43,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     EMPTY_MAPPING,
     INTERNAL_CALLBACK_NAMES,
+    KUBERNETES_POD_ROUTING_KEY,
     PROVIDER_REQUEST_ID_HEADERS,
     REDACTED_BY_LITELLM,
 )
@@ -75,6 +76,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 from litellm.litellm_core_utils.core_helpers import (
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
+    proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
     set_response_cost_in_hidden_params,
@@ -149,6 +151,7 @@ from litellm.types.llms.openai import (
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
+from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     CachingDetails,
@@ -298,7 +301,9 @@ else:
     _GENERIC_API_LOGGER_CLS: Final = GenericAPILogger
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
-_STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token", "usage_object"))
+_STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(
+    ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY)
+)
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
 )
@@ -634,15 +639,15 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         model: str,
         messages,
-        stream,
+        stream: bool | None,
         call_type,
         start_time: datetime.datetime,
         litellm_call_id: str,
         function_id: str,
         litellm_trace_id: str | None = None,
         dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = None,
-        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None,
-        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None,
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
+        dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
         dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
         applied_guardrails: list[str] | None = None,
@@ -718,8 +723,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
-        self.dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = dynamic_success_callbacks
-        self.dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = (
+        self.dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
+            dynamic_success_callbacks
+        )
+        self.dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_success_callbacks
         )
         self.dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = dynamic_failure_callbacks
@@ -786,6 +793,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.defer_async_logging: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
+        self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -985,6 +993,16 @@ class Logging(LiteLLMLoggingBaseClass):
             if model_id is not None:
                 return model_id
         return None
+
+    def _routed_deployment_model(self) -> str | None:
+        litellm_params: Final = self._model_call_details_view.get("litellm_params")
+        metadata: Final = (
+            StandardLoggingPayloadSetup.merge_litellm_metadata(_LITELLM_PARAMS.validate_python(litellm_params))
+            if isinstance(litellm_params, dict)
+            else {}
+        )
+        deployment: Final = metadata.get("deployment")
+        return deployment if isinstance(deployment, str) else None
 
     def get_deployment_model_for_cost(self) -> str | None:
         """The provider-qualified model to price against.
@@ -2253,6 +2271,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.agenerate_content.value, False) is not True
             and litellm_params.get(CallTypes.agenerate_content_stream.value, False) is not True
             and litellm_params.get(CallTypes.arealtime.value, False) is not True
+            and litellm_params.get(CallTypes.aresponses_websocket.value, False) is not True
         )
 
     _is_sync_litellm_request = is_sync_litellm_request
@@ -2318,7 +2337,7 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
-        if not self._should_run_sync_callbacks_for_async_calls():
+        if not self.stream or not self._should_run_sync_callbacks_for_async_calls():
             return
 
         executor.submit(
@@ -2446,7 +2465,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
     ) -> None:
-        if self.stream is not None and self.stream is True and event_type in ["async_success", "sync_success"]:
+        if self.stream is True and event_type in ["async_success", "sync_success"]:
             """
             Ignore check on stream, as there can be multiple chunks
             """
@@ -2508,7 +2527,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
             logging_result = ResponsesWebSocketTokenUsageProcessor.create_logging_object(
-                results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                litellm_model_name=self._routed_deployment_model(),
             )
 
         elif self.relays_llm_passthrough and isinstance(result, Response):
@@ -2943,6 +2963,8 @@ class Logging(LiteLLMLoggingBaseClass):
         discarded as a duplicate of the in-progress create.
         """
         self.model_call_details.pop("has_logged_async_success", None)
+        self.model_call_details.pop("has_logged_sync_success", None)
+        self._sync_success_scheduled = False
         litellm_params = self.model_call_details.get("litellm_params")
         if not isinstance(litellm_params, dict):
             return
@@ -3131,6 +3153,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
                 global_callbacks=litellm.success_callback,
             )
+            delivery_callbacks: Final = (
+                self._get_completed_success_callbacks(asynchronous=False)
+                if for_async_request and not self.stream
+                else callbacks
+            )
 
             ## REDACT MESSAGES ##
             result = redact_message_input_output_from_logging(
@@ -3138,7 +3165,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 result=result,
             )
             ## LOGGING HOOK ##
-            for callback in callbacks:
+            hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
+            for callback in hook_callbacks:
                 if isinstance(callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -3168,7 +3196,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             call_details_view: Final = MappingProxyType[str, object](call_details)
             self.mark_logging_complete(event_type="sync_success")
-            for callback in callbacks:
+            for callback in delivery_callbacks:
                 try:
                     should_run = self.should_run_callback(
                         callback=callback,
@@ -3440,7 +3468,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                     if (
                         isinstance(callback, CustomLogger)
-                        and is_sync_request
+                        and (is_sync_request or (for_async_request and not self.stream))
+                        and not (
+                            for_async_request
+                            and self.stream
+                            and callback in (self.dynamic_async_success_callbacks or ())
+                        )
                         and self.call_type
                         != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
                     ):  # custom logger class
@@ -3457,7 +3490,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = call_details_view["complete_response"]
 
                             callback.log_success_event(
-                                kwargs=call_details,
+                                kwargs=callback.redact_standard_logging_payload_from_model_call_details(call_details),
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
@@ -3699,6 +3732,9 @@ class Logging(LiteLLMLoggingBaseClass):
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
         )
+        delivery_callbacks: Final = (
+            self._get_completed_success_callbacks(asynchronous=True) if not self.stream else callbacks
+        )
 
         result = redact_message_input_output_from_logging(
             model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
@@ -3707,7 +3743,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## LOGGING HOOK ##
 
-        for callback in callbacks:
+        hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
+        for callback in hook_callbacks:
             try:
                 if isinstance(callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
@@ -3745,7 +3782,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.mark_logging_complete(event_type="async_success")
 
-        for callback in callbacks:
+        for callback in delivery_callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
             should_run = self.should_run_callback(
@@ -3880,6 +3917,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     traceback.format_exc(),
                 )
                 self._handle_callback_failure(callback=callback)
+        if not self.stream:
+            try:
+                self.handle_sync_success_callbacks_for_async_calls(
+                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+                )
+            except RuntimeError:
+                verbose_logger.exception("Could not schedule synchronous success callbacks")
         await flush_post_call_redis_batches()
 
     def _handle_callback_failure(self, callback: object):
@@ -4303,6 +4347,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
+        if not self.stream and self._sync_success_scheduled:
+            return
+        if not self.stream:
+            self._sync_success_scheduled = True
         executor.submit(
             self.success_handler,
             result,
@@ -4321,11 +4369,57 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
+    def _get_completed_success_callbacks(
+        self, *, asynchronous: bool
+    ) -> tuple[str | Callable[..., object] | CustomLogger, ...]:
+        sync_callbacks: Final = self.get_combined_callback_list(
+            self.dynamic_success_callbacks, litellm.success_callback
+        )
+        async_callbacks: Final = self.get_combined_callback_list(
+            self.dynamic_async_success_callbacks,
+            litellm._async_success_callback,  # pyright: ignore[reportPrivateUsage]  # shared logging registry
+        )
+        legacy_sync_callbacks: Final = self._remove_internal_litellm_callbacks(
+            self._remove_internal_custom_logger_callbacks(sync_callbacks)
+        )
+        selected: Final = async_callbacks if asynchronous else sync_callbacks
+        other: Final = sync_callbacks if asynchronous else async_callbacks
+        return tuple(
+            callback
+            for callback in self.get_combined_callback_list(selected, other)
+            if (
+                (
+                    (
+                        getattr(callback.async_log_success_event, "__func__", callback.async_log_success_event)
+                        is not CustomLogger.async_log_success_event
+                    )
+                    == asynchronous
+                    and (
+                        asynchronous
+                        or getattr(callback.log_success_event, "__func__", callback.log_success_event)
+                        is not CustomLogger.log_success_event
+                    )
+                )
+                if isinstance(callback, CustomLogger)
+                else callback in selected
+                and (
+                    asynchronous
+                    or (
+                        callback not in async_callbacks
+                        and callback in legacy_sync_callbacks
+                        and not (isinstance(callback, str) and callback in INTERNAL_CALLBACK_NAMES)
+                    )
+                )
+            )
+        )
+
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
         """
         Returns:
             - bool: True if sync callbacks should be run for async calls. eg. `langfuse`, `s3`
         """
+        if not self.stream:
+            return bool(self._get_completed_success_callbacks(asynchronous=False))
         _combined_sync_callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_success_callbacks,
             global_callbacks=litellm.success_callback,
@@ -4355,7 +4449,11 @@ class Logging(LiteLLMLoggingBaseClass):
         _filtered_failure_callbacks = self._remove_internal_litellm_callbacks(_filtered_failure_callbacks)
         return len(_filtered_failure_callbacks) > 0
 
-    def get_combined_callback_list(self, dynamic_success_callbacks: list | None, global_callbacks: list) -> list:
+    def get_combined_callback_list(
+        self,
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
+        global_callbacks: list[str | Callable[..., object] | CustomLogger],
+    ) -> list[str | Callable[..., object] | CustomLogger]:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
         return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
@@ -6182,7 +6280,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_standard_logging_metadata(
         metadata: Mapping[str, object] | None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         prompt_integration: str | None = None,
         applied_guardrails: list[str] | None = None,
         mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = None,
@@ -6222,6 +6320,8 @@ class StandardLoggingPayloadSetup:
                     prompt_integration=prompt_integration,
                 )
 
+        kubernetes_pod_routing: Final = proxy_stamped_kubernetes_pod_routing(metadata, litellm_params)
+
         # Initialize with default values
         clean_metadata = StandardLoggingMetadata(
             user_api_key_hash=None,
@@ -6258,6 +6358,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_auth_metadata=None,
             team_alias=None,
             team_id=None,
+            kubernetes_pod_routing=kubernetes_pod_routing,
             used_client_oauth_token=resolve_used_client_oauth_token(
                 proxy_stamped_used_client_oauth_token(metadata, litellm_params),
                 custom_llm_provider,
@@ -6370,6 +6471,7 @@ class StandardLoggingPayloadSetup:
         custom_llm_provider: str | None,
         init_response_obj: object,
         api_base: str | None = None,
+        router_model_id: str | None = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name: Final = select_model_name_for_cost_calc(
             model=base_model if custom_pricing else None,
@@ -6377,12 +6479,23 @@ class StandardLoggingPayloadSetup:
             base_model=base_model,
             custom_pricing=custom_pricing,
         )
+        pricing_model_name: Final = (
+            select_model_name_for_cost_calc(
+                model=base_model if custom_pricing else None,
+                completion_response=init_response_obj,
+                base_model=base_model,
+                custom_pricing=custom_pricing,
+                router_model_id=router_model_id,
+            )
+            if router_model_id is not None
+            else model_cost_name
+        )
         if model_cost_name is None:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
             try:
                 _model_cost_information: Final = litellm.get_model_info(
-                    model=model_cost_name,
+                    model=pricing_model_name or model_cost_name,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
                 )
@@ -6592,6 +6705,7 @@ class StandardLoggingPayloadSetup:
         rate_limit_category: Final = validate_rate_limit_category(getattr(original_exception, "category", None))
         rate_limit_type: Final = validate_rate_limit_type(getattr(original_exception, "rate_limit_type", None))
         budget_error: Final = original_exception if isinstance(original_exception, BudgetExceededError) else None
+        router_error: Final = original_exception if isinstance(original_exception, RouterRateLimitError) else None
         provider_request_id: Final = _get_provider_request_id(original_exception) if original_exception else None
 
         return StandardLoggingPayloadErrorInformation(
@@ -6607,6 +6721,7 @@ class StandardLoggingPayloadSetup:
             error_budget_entity_id=budget_error.entity_id if budget_error else None,
             error_budget_limit=budget_error.max_budget if budget_error else None,
             error_budget_spend=budget_error.current_cost if budget_error else None,
+            error_cooldown_deployments=router_error.cooldown_deployments if router_error else None,
             normalized_error=normalize_error(original_exception, error_status, error_message),
         )
 
@@ -7090,6 +7205,7 @@ def get_standard_logging_object_payload(
             custom_llm_provider=kwargs.get("custom_llm_provider"),
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
+            router_model_id=logging_obj.get_router_model_id(),
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
@@ -7325,6 +7441,7 @@ def get_standard_logging_metadata(
         user_api_key_auth_metadata=None,
         team_alias=None,
         team_id=None,
+        kubernetes_pod_routing=None,
         used_client_oauth_token=None,
     )
     if isinstance(metadata, dict):
@@ -7398,6 +7515,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         requester_ip_address="127.0.0.1",
         requester_metadata=None,
         user_api_key_end_user_id="test_end_user",
+        kubernetes_pod_routing=None,
     )
 
     hidden_params: Final = StandardLoggingHiddenParams(

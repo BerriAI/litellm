@@ -43,6 +43,7 @@ from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
 from .utils import (
+    CooldownDeploymentInfo,
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     ModelResponse,
@@ -504,6 +505,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
     stream_timeout: float | str | None = None
+    # per service_tier overrides of timeout / stream_timeout, used when the request's service_tier matches a key
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
@@ -708,6 +712,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     responses_api_version: ReadOnly[str | None]
     timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
+    timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
+    stream_timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
     max_retries: int | None
     organization: list | str | None  # for openai orgs
     provider_affinity_header: ReadOnly[str | None]
@@ -720,6 +726,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     use_chat_completions_api: bool | None
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
+    kubernetes_pod_discovery: ReadOnly[bool | None]
     litellm_credential_name: str | None
     ## UNIFIED PROJECT/REGION ##
     region_name: str | None
@@ -1105,6 +1112,7 @@ class RouterErrorTypes(str, enum.Enum):
 
 class RouterRateLimitError(ValueError):
     status_code: Final = 429
+    cooldown_deployments: tuple[CooldownDeploymentInfo, ...] | None = None
 
     def __init__(
         self,
@@ -1113,11 +1121,13 @@ class RouterRateLimitError(ValueError):
         enable_pre_call_checks: bool,
         cooldown_list: list,
         model_ids: Sequence[str] = (),
+        cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
+        self.cooldown_deployments = None if cooldown_deployments is None else tuple(cooldown_deployments)
         self.all_deployments_in_cooldown = bool(model_ids) and frozenset(model_ids) <= frozenset(cooldown_list)
         self.type = (
             RouterErrorTypes.all_deployments_in_cooldown.value

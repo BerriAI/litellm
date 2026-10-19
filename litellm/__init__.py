@@ -7,6 +7,7 @@ _apply_process_defaults()
 ### INIT VARIABLES #########################
 import threading
 import os
+import datetime
 
 from collections.abc import Iterable, Mapping, Sequence
 from typing import (
@@ -62,7 +63,6 @@ from litellm.constants import (
     modelscope_models,
     empower_models,
     together_ai_models,
-    baseten_models,
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -628,6 +628,7 @@ bedrock_models: Set[str] = set()
 bedrock_converse_models: Set[str] = set(BEDROCK_CONVERSE_MODELS)
 fal_ai_models: Set[str] = set()
 fireworks_ai_models: Set[str] = set()
+baseten_models: Set[str] = set()
 fireworks_ai_embedding_models: Set[str] = set()
 deepinfra_models: Set[str] = set()
 perplexity_models: Set[str] = set()
@@ -746,6 +747,16 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
+def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
+    deprecation_date: Final = value.get("deprecation_date")
+    if not isinstance(deprecation_date, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
+    except ValueError:
+        return False
+
+
 def _provider_model_set(key: str, value: Mapping[str, object]) -> Optional[Tuple[Set[str], str]]:
     provider: Final = value.get("litellm_provider")
     if provider == "openai" and not is_openai_finetune_model(key):
@@ -835,6 +846,8 @@ def _provider_model_set(key: str, value: Mapping[str, object]) -> Optional[Tuple
         # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
         if "-to-" not in key and "fireworks-ai-default" not in key:
             return fireworks_ai_models, key
+    if provider == "baseten":
+        return None if _is_past_deprecation_date(value) else (baseten_models, key)
     if provider == "fireworks_ai-embedding-models":
         # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
         if "-to-" not in key:
@@ -1004,6 +1017,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
     for key, value in tuple(model_cost_map.items()):
         if (membership := _provider_model_set(key, value)) is not None:
             membership[0].add(membership[1])
+        elif value.get("litellm_provider") == "baseten":
+            baseten_models.discard(key)
 
 
 def add_known_models(model_cost_map: Optional[Dict] = None):

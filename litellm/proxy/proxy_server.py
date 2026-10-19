@@ -368,6 +368,11 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    deployment_drops_params,
+    drop_non_string_tool_result_texts,
+    malformed_tool_result_count_error,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
@@ -945,6 +950,7 @@ from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -1237,6 +1243,19 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         )
     except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
+
+
+async def _flush_spend_on_shutdown() -> None:
+    await flush_spend_counters_on_shutdown()
+    await _flush_spend_logs_queue_on_shutdown()
+
+
+async def _flush_spend_around_logging_drain_on_shutdown(
+    flush_spend: Callable[[], Awaitable[None]] = _flush_spend_on_shutdown,
+) -> None:
+    await flush_spend()
+    await drain_logging_tasks()
+    await flush_spend()
 
 
 async def _drain_audit_tasks_on_shutdown() -> None:
@@ -1843,9 +1862,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-            await flush_spend_counters_on_shutdown()
-
-            await _flush_spend_logs_queue_on_shutdown()
+            await _flush_spend_around_logging_drain_on_shutdown()
 
             await proxy_config.stop_config_sync_subscriber()
 
@@ -7048,7 +7065,11 @@ class ProxyConfig:
             MappingProxyType(
                 {
                     name: typed_general_settings[name]
-                    for name in ("vector_store_deny_by_default", "search_tool_deny_by_default")
+                    for name in (
+                        "vector_store_deny_by_default",
+                        "search_tool_deny_by_default",
+                        "vertex_ai_pass_through_drop_anthropic_betas",
+                    )
                     if name in typed_general_settings
                 }
             )
@@ -14700,6 +14721,32 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+_DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _deployment_with_request_drop_params(
+    deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
+    drop_params: object,
+) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
+    if drop_params is None:
+        return deployment
+    resolved_deployment: Final = deployment or {}
+    litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
+    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+
+
+def _counted_request_messages(
+    messages: Sequence[dict[str, object]] | None,  # mutable-ok: TokenCountRequest.messages is typed list[dict]
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> list[dict[str, object]] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes list messages
+    if messages is None:
+        return None
+    if messages_format != "anthropic":
+        return list(messages)
+    return list(drop_non_string_tool_result_texts(messages, deployment_drops_params(deployment)))
+
+
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
@@ -15066,11 +15113,6 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 )
 
 
-def _drops_params(deployment: Mapping[str, object] | None) -> bool:
-    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
-    return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
-
-
 _ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
 
 
@@ -15079,7 +15121,7 @@ def _estimable_contents(contents: Sequence[Mapping[str, object]]) -> bool:
     return all(set(as_str_mapping(part) or ()) <= _ESTIMABLE_GOOGLE_PART_KEYS for part in parts)
 
 
-def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
+def _router_default_litellm_params(router: Router | None) -> Mapping[str, object]:
     defaults: Final[Mapping[str, object] | None] = getattr(router, "default_litellm_params", None)
     if defaults is None:
         return {}
@@ -15200,8 +15242,10 @@ async def count_request_tokens(
         if _model is not None:
             model_to_use = _model
 
+    sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
+    count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
     conversation_empty: Final = not messages and not contents
-    if prompt and not conversation_empty and not _drops_params(deployment):
+    if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(
             message="prompt cannot be sent with messages or contents. Set drop_params to count them without the prompt",
             type="invalid_request_error",
@@ -15209,6 +15253,7 @@ async def count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     ladder: Final = (
@@ -15219,9 +15264,9 @@ async def count_request_tokens(
                 _try_provider_token_count,
                 provider_counter,
                 custom_llm_provider,
-                messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
+                messages=[{"role": "user", "content": prompt}] if prompt_as_message else request_messages,
                 contents=None if prompt_as_message else contents,
-                deployment=deployment,
+                deployment=count_deployment,
                 request_model=request.model,
                 tools=tools,
                 system=system,
@@ -15236,6 +15281,10 @@ async def count_request_tokens(
     )
     if isinstance(ladder, TokenCountResponse):
         return ladder
+
+    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
+    if local_count_error is not None:
+        raise ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
@@ -15257,7 +15306,7 @@ async def count_request_tokens(
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else messages),
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
