@@ -12,6 +12,7 @@ machines.
 | `summarize` | Merges result files and prints proxy overhead (observed minus planned time) by stage, class and context size. |
 | `procmon` | Samples the gateway process's CPU, RSS, fds and TCP connections from `/proc`. |
 | `verify` | Checks what each gateway recorded for a run against what loadgen sent: spend logs, key/team/user/member spend, daily tables, Prometheus counters, S3 request logs and the headers the provider received. See [Full-feature runs](#full-feature-runs). |
+| `chatparity` | Sends the same chat completions requests through the Python proxy and the gateway, both pointed at its recording mock provider, and reports every difference in what the provider was sent and what the client got. See [Chat parity](#chat-parity). |
 | `s3stub` | In-memory path-style S3 (PUT, GET, ListObjectsV2) for the `s3_v2` logs of a full-feature run. |
 
 Workloads live in `workloads/`: `smoke`, `realistic-ramp`, `long-streams`, `large-context`,
@@ -185,3 +186,49 @@ carry static dummy AWS keys, so every request is SigV4-signed, and mockllm answe
 `/model/<id>/invoke` and `/invoke-with-response-stream` with AWS event-stream framing that the
 gateway re-encodes as Anthropic SSE. Bedrock hits show up as `bedrock-<g>-<i>` in the mock's `/stats`.
 
+## Chat parity
+
+`scripts/chat-parity.sh` checks the gateway's `/v1/chat/completions` against the Python proxy's.
+It writes one config, starts both proxies on it, and sends every case through each one in turn.
+Both talk to `chatparity`'s mock, which answers like each provider's API (OpenAI-compatible, Azure,
+Anthropic, Bedrock Converse, Gemini, Vertex Gemini and Vertex Claude) and records every request it
+receives.
+
+```sh
+scripts/chat-parity.sh                      # every case, report in out/chat-parity/report.md
+FILTER=bedrock-env/ scripts/chat-parity.sh  # one deployment, scenario or mode
+GATEWAY=<built binary> PYTHON=<venv>/bin/python scripts/chat-parity.sh
+```
+
+A case is one deployment, one request scenario and one mode (`<deployment>/<scenario>/<unary|stream>`).
+There are 19 deployments (every chat provider the gateway serves natively) and 15 scenarios: plain
+text, multi-turn with a system message, tools, a tool result round trip, `response_format`
+(JSON schema and JSON object), inline and remote images, `reasoning_effort`, `cache_control`,
+unsupported params refused and then dropped, `max_completion_tokens`, and streams with and without
+`include_usage`. The mock gives both proxies the same answer for the same request (text, a tool
+call, thinking or JSON, picked by a `[[parity reply=...]]` marker in the prompt), so any difference
+in what the client gets comes from the proxies.
+
+For each case it compares:
+
+- **upstream**: the method, path, query, headers and JSON body the provider received. Transport
+  headers (user agent, content length, SDK telemetry) are ignored, and a SigV4 signature is reduced
+  to its region and service.
+- **response**: the status, content type and JSON body the client got. Ids and timestamps the
+  proxies generate are compared by prefix only (`chatcmpl-*`). For a stream, this is what a client
+  library would assemble: content, reasoning, tool calls, finish reasons, usage, the models named,
+  whether one id spans the stream, and `[DONE]`.
+- **chunks**: the stream chunk by chunk. This is informational only, since the same content can be
+  split into chunks differently.
+
+`out/chat-parity/report.md` lists every open difference, and `cases/<case>.json` holds the request,
+both responses and everything each proxy sent upstream. Once a difference has been reviewed and
+accepted, add it to `cmd/chatparity/known.json` (`{"case": "*/stream", "where": "upstream", "path":
+"*.accept", "reason": "..."}`, where `*` matches anything). The run fails only on differences that
+aren't listed there.
+
+The Python side needs the proxy and `google-auth` installed (`uv pip install -e '.[proxy]'
+google-auth`). Both price from the repo's `model_prices_and_context_window.json`, so parameter
+support and defaults come from the same data. `bedrock` carries its AWS settings in the config;
+`bedrock-env` uses `api_base` with credentials from the environment, which the script sets to dummy
+values that only ever reach the mock.
