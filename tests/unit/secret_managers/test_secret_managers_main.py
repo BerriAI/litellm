@@ -322,6 +322,15 @@ def test_oidc_file_success(tmp_path, monkeypatch):
     assert result == "file_token"
 
 
+def test_oidc_file_reads_a_token_under_a_directory_named_oidc(tmp_path, monkeypatch):
+    token_dir: Final = tmp_path / "oidc"
+    token_dir.mkdir()
+    (token_dir / "token").write_text("nested_token")
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+
+    assert get_secret(f"oidc/file/{token_dir}/token") == "nested_token"
+
+
 def test_oidc_file_rejects_path_outside_allowlist(tmp_path, monkeypatch):
     outside_file = tmp_path / "outside.txt"
     outside_file.write_text("should_not_read")
