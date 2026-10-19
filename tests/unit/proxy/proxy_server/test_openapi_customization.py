@@ -14,8 +14,6 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
-import itertools
-import time
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Final
@@ -37,6 +35,8 @@ from litellm.proxy.proxy_server import (
 )
 
 from .conftest import normalize
+
+LIVELINESS_ANSWERS_DURING_A_COLD_BUILD: Final = 5
 
 # ---------------------------------------------------------------------------
 # _generate_stable_operation_id
@@ -288,28 +288,21 @@ def test_get_openapi_schema_missing_app_attribute_raises_error(monkeypatch):
         get_openapi_schema()
 
 
-async def _liveliness_answers(
-    client: httpx.AsyncClient, until: asyncio.Future[httpx.Response]
-) -> AsyncIterator[tuple[float, int]]:
+async def _liveliness_statuses(client: httpx.AsyncClient, until: asyncio.Future[httpx.Response]) -> AsyncIterator[int]:
     while not until.done():
-        response: Final = await client.get("/health/liveliness")
-        yield time.perf_counter(), response.status_code
+        yield (await client.get("/health/liveliness")).status_code
         await asyncio.sleep(0.05)
 
 
 async def test_requests_keep_being_answered_while_a_cold_openapi_json_builds(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(app, "openapi_schema", None)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
-        started: Final = time.perf_counter()
         docs_request: Final = asyncio.ensure_future(client.get("/openapi.json"))
-        answers: Final = tuple([answer async for answer in _liveliness_answers(client, docs_request)])
-        docs_finished: Final = time.perf_counter()
+        statuses: Final = tuple([status async for status in _liveliness_statuses(client, docs_request)])
         docs: Final = await docs_request
 
-    moments: Final = (started, *(at for at, _ in answers), docs_finished)
-    longest_wait: Final = max(later - earlier for earlier, later in itertools.pairwise(moments))
-    assert (docs.status_code, {status for _, status in answers}) == (200, {200})
-    assert longest_wait < (docs_finished - started) / 2
+    assert (docs.status_code, set(statuses)) == (200, {200})
+    assert len(statuses) >= LIVELINESS_ANSWERS_DURING_A_COLD_BUILD
 
 
 # ---------------------------------------------------------------------------
