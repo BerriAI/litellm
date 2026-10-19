@@ -433,15 +433,12 @@ def _inherited_constraint_sets(
     return frozenset(inherited_required), frozenset(inherited_excluded)
 
 
-def _tags_that_route(
-    request_tags: Sequence[str], rewritten_tags: Sequence[str], policy_tags: frozenset[str], routing_prefix: str
-) -> tuple[str, ...]:
+def _tags_that_route(request_tags: Sequence[str], metadata: object, routing_prefix: str) -> tuple[str, ...]:
     if not routing_prefix:
-        return tuple(rewritten_tags)
+        return tuple(request_tags)
+    policy_tags: Final = frozenset(_tags_in_metadata(metadata, key="inherited_tags"))
     return tuple(
-        rewritten
-        for original, rewritten in zip(request_tags, rewritten_tags, strict=True)
-        if original.startswith(routing_prefix) or original in policy_tags
+        tag.removeprefix(routing_prefix) for tag in request_tags if tag.startswith(routing_prefix) or tag in policy_tags
     )
 
 
@@ -538,18 +535,12 @@ async def get_deployments_for_tag(
 
         # A tag_routing_prefix-marked tag is stripped before matching -- everything
         # downstream (_split_tags, deployment matching) works off the unprefixed
-        # value, exactly as if the caller had sent it unprefixed -- and its
-        # post-strip value is remembered in routing_confirmed as an explicit,
-        # caller-declared routing directive, exempt from the "maybe foreign to this
-        # group" heuristics below.
-        rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags or [], routing_prefix)
+        # value -- and its post-strip value is remembered in routing_confirmed as an
+        # explicit, caller-declared routing directive, exempt from the "maybe
+        # foreign to this group" heuristics below.
+        routing_confirmed: Final = _strip_routing_prefix(request_tags or [], routing_prefix)[1]
         required_tags, positive_tags, excluded_patterns = _split_tags(
-            _tags_that_route(
-                request_tags or (),
-                rewritten_tags,
-                frozenset(_tags_in_metadata(metadata, key="inherited_tags")),
-                routing_prefix,
-            )
+            _tags_that_route(request_tags or (), metadata, routing_prefix)
         )
         inherited_required_set, inherited_excluded_set = _inherited_constraint_sets(
             metadata.get("inherited_tags"), routing_prefix

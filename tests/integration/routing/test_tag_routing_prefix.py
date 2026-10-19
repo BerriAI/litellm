@@ -155,6 +155,14 @@ def _team_key(scenario: Scenario, tags: Sequence[str]) -> str:
     return scenario.key(team_id=scenario.team(tags=list(tags)))
 
 
+def _policy_key(scenario: Scenario, owner: Literal["key", "team"], tags: Sequence[str]) -> str:
+    match owner:
+        case "key":
+            return scenario.key(metadata={"tags": list(tags)})
+        case "team":
+            return _team_key(scenario, tags)
+
+
 @pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
 def test_an_unprefixed_caller_tag_does_not_refuse_a_group_with_untagged_deployments(
@@ -177,18 +185,19 @@ def test_a_prefixed_caller_tag_routes_next_to_an_ignored_unprefixed_one(
 
 
 @pytest.mark.parametrize(
-    ("team_tag", "backend"), [("&region:eu", "eu-backend"), ("!region:eu", "us-backend")], ids=["require", "exclude"]
+    ("policy_tag", "backend"), [("&region:eu", "eu-backend"), ("!region:eu", "us-backend")], ids=["require", "exclude"]
 )
+@pytest.mark.parametrize("owner", ["key", "team"])
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-def test_an_unprefixed_team_tag_still_constrains_routing(
-    prefixed: Gateway, upstream: Wire, endpoint: Endpoint, team_tag: str, backend: str
+def test_an_unprefixed_key_or_team_tag_still_constrains_routing(
+    prefixed: Gateway, upstream: Wire, endpoint: Endpoint, owner: Literal["key", "team"], policy_tag: str, backend: str
 ) -> None:
     with prefixed.scenario() as scenario:
-        key: Final = _team_key(scenario, [team_tag])
-        routed: Final = tuple(_send(prefixed, upstream, endpoint, REGIONAL, ["user_id:234"], key=key) for _ in range(4))
+        key: Final = _policy_key(scenario, owner, [policy_tag])
+        routed: Final = tuple(_send(prefixed, upstream, endpoint, REGIONAL, ["user_id:234"], key=key) for _ in range(8))
 
-    assert [response.status_code for response, _ in routed] == [200] * 4, [r.text for r, _ in routed]
-    assert [backends for _, backends in routed] == [(backend,)] * 4
+    assert [response.status_code for response, _ in routed] == [200] * 8, [r.text for r, _ in routed]
+    assert [backends for _, backends in routed] == [(backend,)] * 8
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
