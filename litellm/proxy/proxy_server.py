@@ -788,6 +788,7 @@ from litellm.proxy.plugin_routes import (
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
+from litellm.proxy.spend_tracking.charge_receipts import ChargeReceiptCapabilities
 from litellm.proxy.spend_tracking.spend_event_producer import (
     CollectorSettings,
     SpendEventProducer,
@@ -1688,6 +1689,18 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         redis_usage_cache=redis_usage_cache,
     )
 
+    from litellm.proxy.spend_tracking.charge_receipt_request import (
+        configured_charge_receipts,
+    )
+
+    receipt_runtime: Final = await configured_charge_receipts(prisma_client)
+    match receipt_runtime:
+        case str() as receipt_configuration_error:
+            raise RuntimeError(receipt_configuration_error)
+        case _:
+            pass
+    proxy_logging_obj.charge_receipts = receipt_runtime
+
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     worker_heartbeat: Final = (
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
@@ -1812,6 +1825,8 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     GracefulShutdownManager.start_shutdown()
                     await GracefulShutdownManager.wait_for_drain()
         finally:
+            if receipt_runtime is not None:
+                await receipt_runtime.close()
             # Shutdown event - close shared aiohttp session
             if shared_aiohttp_session is not None:
                 try:
@@ -10485,13 +10500,16 @@ async def async_data_generator(
     *,
     responses_stream_errors: bool = False,
 ):
+    from litellm.proxy.common_utils.charge_receipt_stream import ChargeReceiptStream
+    from litellm.proxy.spend_tracking.charge_receipt_request import await_charge_receipt, request_charge_capture
+
     verbose_proxy_logger.debug("inside generator")
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
     ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
-    stream_iterator: Final = _object_stream(
+    original_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -10500,8 +10518,16 @@ async def async_data_generator(
         if needs_iterator_wrap
         else response
     )
+    receipt_capture: Final = request_charge_capture(request)
+    receipt_stream: Final = (
+        ChargeReceiptStream(original_iterator, lambda: close_guarded_stream(original_iterator))
+        if receipt_capture is not None
+        else None
+    )
+    stream_iterator: Final = receipt_stream if receipt_stream is not None else original_iterator
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
     stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
+    deferred_charge_terminal: object | None = None  # rebind-ok: retain only the terminal envelope until commit
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -10613,6 +10639,9 @@ async def async_data_generator(
 
             if error_state is not None:
                 error_state.observe_chunk(chunk)
+            if receipt_capture is not None and error_state is not None and error_state.pending_completion:
+                deferred_charge_terminal = chunk
+                continue
             raw_passthrough = False
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
@@ -10670,6 +10699,21 @@ async def async_data_generator(
             # still flush their post-stream logging.
             ProxyLogging.fire_deferred_stream_logging(request_data)
 
+        if receipt_capture is not None and error_message is not None:
+            raise HTTPException(502, "The upstream stream failed before charge finalization.")
+        await await_charge_receipt(request)
+        if deferred_charge_terminal is not None:
+            if error_state is not None:
+                error_state.observe_chunk(deferred_charge_terminal)
+            terminal_frame: Final = _format_streaming_sse_chunk(
+                chunk=(
+                    _serialize_streaming_chunk(deferred_charge_terminal)
+                    if isinstance(deferred_charge_terminal, BaseModel)
+                    else deferred_charge_terminal
+                )
+            )
+            yield error_state.mark_emitted(terminal_frame) if error_state is not None else terminal_frame
+
         if raw_sse_buffer:
             yield (raw_sse_buffer if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS) else raw_sse_buffer + "\n\n")
 
@@ -10689,6 +10733,20 @@ async def async_data_generator(
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
             client_disconnected = True
+        if receipt_stream is not None and receipt_capture is not None and not stream_completed:
+            with anyio.CancelScope(shield=True):
+                try:
+                    with anyio.fail_after(receipt_capture.runtime.settings.drain_timeout_seconds):
+                        await receipt_stream.drain()
+                        ProxyLogging.fire_deferred_stream_logging(
+                            as_str_mapping(_UNTYPED_VALUE.validate_python(request_data))
+                        )
+                        await await_charge_receipt(request)
+                        stream_completed = True  # rebind-ok: the disconnected provider stream reached EOF
+                except Exception:  # noqa: BLE001  # provider failure must still close the disconnected stream
+                    verbose_proxy_logger.warning("Disconnected receipt stream ended before confirmed charge capture")
+                finally:
+                    await receipt_stream.aclose()
         for guarded_layer in (stream_source, stream_iterator):
             if guarded_layer is not response:
                 await close_guarded_stream(guarded_layer)
@@ -12281,6 +12339,20 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
     if not isinstance(listed_name, str):
         return False
     return listed_name in await _names_hidden_by_listing_callbacks(user_api_key_dict, (listed_name,))
+
+
+@router.get("/billing/receipts/capabilities", tags=["spend tracking"])
+async def charge_receipt_capabilities(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ChargeReceiptCapabilities:
+    from litellm.proxy.spend_tracking.charge_receipt_request import receipt_runtime, required_receipt_key
+
+    runtime: Final = receipt_runtime(proxy_logging_obj)
+    required: Final = required_receipt_key(user_api_key_dict, runtime) is not None
+    return ChargeReceiptCapabilities(
+        required=required,
+        gateway_scope=runtime.settings.gateway_scope if required and runtime is not None else None,
+    )
 
 
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])

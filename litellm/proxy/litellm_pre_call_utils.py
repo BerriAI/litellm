@@ -91,7 +91,7 @@ _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialH
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _DECODED_JSON: Final = TypeAdapter(object)
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
-    {"cookie", "proxy-authorization"}
+    {"cookie", "proxy-authorization", "x-litellm-billing-context"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
 
@@ -1299,6 +1299,8 @@ def clean_headers(
     for header, value in headers.items():
         header_lower = header.lower()
 
+        if header_lower == "x-litellm-billing-context":
+            continue
         if header_lower == "authorization" and is_anthropic_oauth_key(value):
             if authenticated_with_header is None or authenticated_with_header.lower() != "authorization":
                 clean_headers[header] = value
@@ -1434,6 +1436,8 @@ class LiteLLMProxyRequestSetup:
         """
         forwarded_headers: Final = {}
         for header, value in headers.items():
+            if header.lower() == "x-litellm-billing-context":
+                continue
             if (
                 header.lower().startswith("x-")
                 and not header.lower().startswith("x-stainless")

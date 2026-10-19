@@ -48,6 +48,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/indexes",
     "/v1/models",
     "/models",
+    "/billing/receipts/capabilities",
     "/openai/",
     "/engines/",
     # Anthropic / agentic data-plane surface

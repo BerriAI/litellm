@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
@@ -37,6 +37,7 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metad
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
+    SpendEvent,
     SpendEventBuildError,
     SpendEventDecodeError,
     build_spend_event,
@@ -56,6 +57,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
+from litellm.types.charge_receipts import CommittedCharge, FailedCharge, charge_outcome
 from litellm.types.utils import (
     CallTypes,
     LiteLLMBatch,
@@ -65,6 +67,7 @@ from litellm.types.utils import (
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
+    from litellm.proxy.spend_tracking.charge_receipt_capture import ChargeCapture
     from litellm.proxy.utils import ProxyLogging
 
 _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
@@ -153,6 +156,10 @@ def _proxy_spend_writer() -> DBSpendUpdateWriter:
     return proxy_logging_obj.db_spend_update_writer
 
 
+_CHARGE_DETAILS: Final = TypeAdapter(dict[str, object])
+_CHARGE_COST: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
+
+
 class _ProxyDBLogger(CustomLogger):
     def __init__(
         self,
@@ -169,6 +176,8 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
+        if charge_outcome(kwargs) is not None:
+            return
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return
@@ -184,6 +193,13 @@ class _ProxyDBLogger(CustomLogger):
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return
         await self.spend_event_producer.publish(event)
+
+    async def finalize_required_charge(
+        self, details: Mapping[str, object], event: SpendEvent, charge: "ChargeCapture"
+    ) -> None:
+        await self._PROXY_track_cost_callback(
+            dict(details), event.response, event.start_time, event.end_time, charge=charge
+        )
 
     async def run_spend_event(self, line: bytes) -> None:
         """Run the unchanged cost pipeline on a serialized spend event (sidecar consumer and in-process fallback)."""
@@ -201,21 +217,16 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
     ) -> None:
-        try:
-            await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
-        except Exception:
-            verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
-            try:
-                await _invalidate_budget_reservation_counters(budget_reservation=user_api_key_dict.budget_reservation)
-                if user_api_key_dict.budget_reservation is not None:
-                    user_api_key_dict.budget_reservation["finalized"] = True
-            except Exception:
-                verbose_proxy_logger.exception(
-                    "Failed to invalidate budget reservation counters after failure release failed"
-                )
+        from litellm.proxy.spend_tracking.charge_receipt_request import logging_charge_capture
+
+        capture: Final = logging_charge_capture(
+            _CHARGE_DETAILS.validate_python(request_data).get("litellm_logging_obj")
+        )
+        if capture is None:
+            await _release_failed_budget_reservation(user_api_key_dict.budget_reservation)
 
         request_route: Final = user_api_key_dict.request_route
-        if (
+        track_error: Final = not (
             ProxyDBLogger._should_track_errors_in_db() is False
             or request_route is not None
             and not (
@@ -223,7 +234,8 @@ class _ProxyDBLogger(CustomLogger):
             )
             or request_route is not None
             and RouteChecks.is_dashboard_session_info_route(request_route, user_api_key_dict.team_id)
-        ):
+        )
+        if not track_error and capture is None:
             return
 
         _metadata = dict(
@@ -270,8 +282,7 @@ class _ProxyDBLogger(CustomLogger):
             if guardrail_info is not None:
                 existing_metadata["standard_logging_guardrail_information"] = guardrail_info
 
-        if "litellm_params" not in request_data:
-            request_data["litellm_params"] = {}
+        request_data.setdefault("litellm_params", {})
 
         existing_litellm_params: Final = request_data.get("litellm_params", {})
         existing_litellm_metadata: Final = existing_litellm_params.get("metadata", {}) or {}
@@ -330,6 +341,19 @@ class _ProxyDBLogger(CustomLogger):
             existing_metadata.get("standard_logging_guardrail_information"),
         )
 
+        if capture is not None:
+            outcome: Final = await capture.capture_failure(
+                _CHARGE_DETAILS.validate_python(request_data),
+                recovered_response_cost,
+                actual_start_time,
+                datetime.now(timezone.utc),
+            )
+            if isinstance(outcome, CommittedCharge) or recovered_response_cost > 0:
+                return
+            await _release_failed_budget_reservation(user_api_key_dict.budget_reservation)
+        if not track_error:
+            return
+
         await self._spend_writer().update_database(
             token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
             response_cost=recovered_response_cost,
@@ -352,8 +376,10 @@ class _ProxyDBLogger(CustomLogger):
         self,
         kwargs,  # kwargs to completion
         completion_response: litellm.ModelResponse | object | None,  # response from completion
-        start_time=None,
-        end_time=None,  # start/end time for completion
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        *,
+        charge: "ChargeCapture | None" = None,
     ):
         from litellm.proxy.proxy_server import (
             increment_spend_counters,
@@ -405,8 +431,12 @@ class _ProxyDBLogger(CustomLogger):
             key_alias: Final = cast(str | None, metadata.get("user_api_key_alias", None))
             end_user_max_budget: Final = metadata.get("user_api_end_user_max_budget", None)
             sl_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
-            response_cost: Final = (
-                sl_object.get("response_cost", None) if sl_object is not None else kwargs.get("response_cost", None)
+            response_cost: Final = _CHARGE_COST.validate_python(
+                charge.receipt.amount_usd
+                if charge is not None and charge.receipt is not None
+                else sl_object.get("response_cost", None)
+                if sl_object is not None
+                else kwargs.get("response_cost", None)
             )
             tags: Final = _get_request_tags_for_cost_tracking(
                 sl_object=sl_object,
@@ -419,7 +449,9 @@ class _ProxyDBLogger(CustomLogger):
             )
 
             if response_cost is not None:
-                user_api_key: Final = metadata.get("user_api_key", None)
+                user_api_key: Final = (
+                    charge.context.key_hash if charge is not None else metadata.get("user_api_key", None)
+                )
                 verbose_proxy_logger.debug(
                     "user_api_key %s, user_id %s, team_id %s, end_user_id %s",
                     user_api_key,
@@ -461,6 +493,7 @@ class _ProxyDBLogger(CustomLogger):
                             tags=tags,
                             response_cost=response_cost,
                         ),
+                        charge=charge,
                     )
                     if not charged:
                         return
@@ -764,6 +797,7 @@ class _IncrementSpendCounters(Protocol):
         tags: list[str] | None = None,
         request_started_at: datetime | None = None,
         model_access_groups: Sequence[str] | None = None,
+        project_id: str | None = None,
     ) -> None: ...
 
 
@@ -785,6 +819,7 @@ async def _update_database_and_spend_counters(
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
     update_cache_read_keys: Sequence[str] = (),
+    charge: "ChargeCapture | None" = None,
 ) -> bool:
     """The reservation is reconciled before the spend is persisted, from its own read. One spend counter batch then
     spans the database write and the counter update, so the post-call counters are read with a single MGET after the
@@ -827,6 +862,7 @@ async def _update_database_and_spend_counters(
             model_access_groups=model_access_groups,
             project_id=project_id,
             update_cache_read_keys=update_cache_read_keys,
+            charge=charge,
         )
 
 
@@ -848,8 +884,45 @@ async def _update_database_and_spend_counters_in_batch(
     model_access_groups: Sequence[str] | None,
     project_id: str | None,
     update_cache_read_keys: Sequence[str],
+    charge: "ChargeCapture | None" = None,
 ) -> bool:
     from litellm.proxy.proxy_server import arm_update_cache_read
+
+    async def apply_counters() -> None:
+        await arm_update_cache_read(update_cache_read_keys)
+        try:
+            await increment_spend_counters(
+                token=user_api_key,
+                team_id=team_id,
+                user_id=user_id,
+                response_cost=response_cost,
+                org_id=org_id,
+                budget_reservation=budget_reservation,
+                end_user_id=end_user_id,
+                tags=request_tags,
+                request_started_at=start_time,
+                model_access_groups=model_access_groups,
+                project_id=project_id,
+            )
+        except Exception:
+            if budget_reservation is not None:
+                try:
+                    await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+                except Exception:
+                    verbose_proxy_logger.exception(
+                        "Failed to invalidate budget reservation counters after spend counter update failed"
+                    )
+                finally:
+                    budget_reservation["finalized"] = True
+            raise
+
+    if charge is not None:
+        try:
+            await apply_counters()
+        except Exception:  # noqa: BLE001  # counter outages must not discard the durable charge
+            verbose_proxy_logger.warning("Spend counters unavailable during required charge settlement")
+        if isinstance(await charge.persist(), FailedCharge):
+            return False
 
     try:
         charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
@@ -864,6 +937,7 @@ async def _update_database_and_spend_counters_in_batch(
             end_time=end_time,
             org_id=org_id,
             project_id=project_id,
+            **({"key_spend_committed": True} if charge is not None else {}),
         )
     except Exception:
         if budget_reservation is not None:
@@ -882,32 +956,8 @@ async def _update_database_and_spend_counters_in_batch(
         await _release_budget_reservation(budget_reservation=budget_reservation)
         return False
 
-    await arm_update_cache_read(update_cache_read_keys)
-    try:
-        await increment_spend_counters(
-            token=user_api_key,
-            team_id=team_id,
-            user_id=user_id,
-            response_cost=response_cost,
-            org_id=org_id,
-            budget_reservation=budget_reservation,
-            end_user_id=end_user_id,
-            tags=request_tags,
-            request_started_at=start_time,
-            model_access_groups=model_access_groups,
-            project_id=project_id,
-        )
-    except Exception:
-        if budget_reservation is not None:
-            try:
-                await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
-            except Exception:
-                verbose_proxy_logger.exception(
-                    "Failed to invalidate budget reservation counters after spend counter update failed"
-                )
-            finally:
-                budget_reservation["finalized"] = True
-        raise
+    if charge is None:
+        await apply_counters()
     return True
 
 
@@ -935,6 +985,23 @@ async def _reconcile_budget_reservation_before_db_update(
             )
         finally:
             budget_reservation["finalized"] = True  # rebind-ok: stamps the caller's shared dict for the counter update
+
+
+async def _release_failed_budget_reservation(
+    budget_reservation: dict[str, object] | None,
+) -> None:
+    try:
+        await _release_budget_reservation(budget_reservation=budget_reservation)
+    except Exception:
+        verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
+        try:
+            await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+            if budget_reservation is not None:
+                budget_reservation["finalized"] = True  # rebind-ok: prevent retrying an already invalidated reservation
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Failed to invalidate budget reservation counters after failure release failed"
+            )
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:

@@ -50,6 +50,32 @@ from tests._master_key import MASTER_KEY
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", (True, False))
+async def test_charge_receipt_capability_reports_only_the_authenticated_key_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    selected: bool,
+) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.spend_tracking.charge_receipt_capture import ChargeReceiptRuntime
+    from litellm.proxy.spend_tracking.charge_receipts import ChargeReceiptStore
+    from litellm.proxy.utils import ProxyLogging
+    from tests.unit.proxy.spend_tracking._charge_receipt_cases import RECEIPT, SETTINGS, ScriptedQuery
+
+    logging: Final = ProxyLogging(UserApiKeyCache())
+    logging.charge_receipts = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(ScriptedQuery()))
+    monkeypatch.setattr(proxy_server_module, "proxy_logging_obj", logging)
+    result: Final = await proxy_server_module.charge_receipt_capabilities(
+        UserAPIKeyAuth(api_key=RECEIPT.key_hash if selected else "c" * 64),
+    )
+    assert result.model_dump() == {
+        "version": 1,
+        "required": selected,
+        "gateway_scope": RECEIPT.gateway_scope if selected else None,
+    }
+
+
 example_embedding_result = {
     "object": "list",
     "data": [
@@ -1789,9 +1815,7 @@ class _DatabaseWithOneStoredCredential:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)]
-)
+@pytest.mark.parametrize("encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)])
 async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values_under_the_unsafe_key(
     monkeypatch, tmp_path, encrypted_with, asks_to_migrate
 ):
@@ -1874,9 +1898,7 @@ async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monke
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
 
-    config_path, announced = _boot_with_general_settings(
-        monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY}
-    )
+    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY})
 
     with pytest.raises(UnsafeMasterKeyError):
         async with proxy_startup_event(FastAPI()):
@@ -6283,7 +6305,9 @@ async def test_tag_cache_update_multiple_tags():
 
             assert await asyncio.wait_for(set_cache_called.wait(), timeout=5)
 
-            mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False)
+            mock_get_cache.assert_awaited_once_with(
+                keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False
+            )
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -8236,10 +8260,18 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
     request.headers = {}
     request.query_params = {}
 
-    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch("litellm.proxy.proxy_server.master_key", MASTER_KEY)  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch(
+        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
+    )  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
+    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch(
+        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
+    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch(
+        "litellm.proxy.proxy_server.master_key", MASTER_KEY
+    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 

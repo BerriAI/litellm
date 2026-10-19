@@ -158,6 +158,7 @@ _NO_LITELLM_PARAMS: Final[_LitellmParams] = {}
 _SUCCESS_KWARGS: Final = TypeAdapter(_SuccessKwargs)
 _OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
 _COMPACT_RESPONSE: Final = TypeAdapter(CompactResponse)
+_COMPACT_RESPONSE_FIELDS: Final = frozenset({"id", "model", "usage", "usage_info", "status", "background"})
 
 
 class SpendEvent(LiteLLMBaseModel):
@@ -299,7 +300,11 @@ def _tool_call_choice(names: Sequence[str]) -> _ToolCallChoice:
 
 def _compact_response(response_obj: object) -> CompactResponse | None:
     """Usage, identity and tool calls of the response, in chat-completions shape, without the content."""
-    dumped: Final = response_obj.model_dump() if isinstance(response_obj, BaseModel) else _mapping_or_none(response_obj)
+    dumped: Final = (
+        response_obj.model_dump(include=dict.fromkeys(_COMPACT_RESPONSE_FIELDS, True))
+        if isinstance(response_obj, BaseModel)
+        else _mapping_or_none(response_obj)
+    )
     if dumped is None:
         return None
     scalars: Final = _COMPACT_RESPONSE.validate_python(_drop_keys(dumped, frozenset({"choices"})))
@@ -342,10 +347,9 @@ def _function_tool(name: str) -> _FunctionTool:
     return tool
 
 
-def build_spend_event(
+def project_spend_event(
     raw_kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime, store_bodies: bool
-) -> bytes | SpendEventBuildError:
-    """Validate the success callback's kwargs and serialize the event once, as a single JSON line."""
+) -> SpendEvent | SpendEventBuildError:
     try:
         kwargs: Final = _SUCCESS_KWARGS.validate_python(raw_kwargs)
     except ValidationError as error:
@@ -379,7 +383,18 @@ def build_spend_event(
         realtime_tool_calls=kwargs.get("realtime_tool_calls"),
         request_tool_names=_request_tool_names(kwargs),
     )
-    return event.model_dump_json(fallback=_json_fallback).encode() + b"\n"
+    return event
+
+
+def build_spend_event(
+    raw_kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime, store_bodies: bool
+) -> bytes | SpendEventBuildError:
+    event: Final = project_spend_event(raw_kwargs, response_obj, start_time, end_time, store_bodies)
+    return (
+        event
+        if isinstance(event, SpendEventBuildError)
+        else event.model_dump_json(fallback=_json_fallback).encode() + b"\n"
+    )
 
 
 def decode_spend_event(line: bytes) -> SpendEvent | SpendEventDecodeError:

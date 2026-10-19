@@ -554,6 +554,7 @@ class LiteLLMRoutes(enum.Enum):
     )
     llm_api_routes_without_mcp = sorted(set(llm_api_routes) - set(mcp_inference_routes))
     info_routes = [
+        "/billing/receipts/capabilities",
         "/key/info",
         "/key/health",
         "/team/info",

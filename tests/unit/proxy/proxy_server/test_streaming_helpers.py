@@ -1239,7 +1239,8 @@ _UPSTREAM_BODY: Final = {
             litellm.AuthenticationError(
                 message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra"
             ),
-            "authentication_error", id="authentication_error",
+            "authentication_error",
+            id="authentication_error",
         ),
         pytest.param(
             "upstream_failure",
@@ -1248,26 +1249,35 @@ _UPSTREAM_BODY: Final = {
                 request=httpx.Request("POST", "https://streaming.example/v1/responses"),
                 body={"code": {"reason": "overloaded"}, "type": {"unexpected": "object"}},
             ),
-            "server_error", id="structured_provider_error_fields",
+            "server_error",
+            id="structured_provider_error_fields",
         ),
         pytest.param(
             "upstream_failure",
             litellm.InternalServerError(
                 message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra", body=_UPSTREAM_BODY
             ),
-            "cyber_policy", id="upstream_body_code_and_message",
+            "cyber_policy",
+            id="upstream_body_code_and_message",
         ),
         pytest.param(
             "upstream_failure", RuntimeError("Upstream rejected request"), "server_error", id="builtin_exception"
         ),
         *(
             pytest.param(
-                "upstream_failure", HTTPException(status_code=status, detail="Upstream rejected request"),
-                code, id=f"http_{status}",
+                "upstream_failure",
+                HTTPException(status_code=status, detail="Upstream rejected request"),
+                code,
+                id=f"http_{status}",
             )
             for status, code in (
-                (400, "invalid_request_error"), (403, "permission_error"), (404, "not_found_error"),
-                (408, "request_timeout"), (422, "invalid_request_error"), (500, "server_error"), (503, "server_error"),
+                (400, "invalid_request_error"),
+                (403, "permission_error"),
+                (404, "not_found_error"),
+                (408, "request_timeout"),
+                (422, "invalid_request_error"),
+                (500, "server_error"),
+                (503, "server_error"),
             )
         ),
     ],
@@ -1298,8 +1308,11 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         {"type": "response.completed", "sequence_number": 2, "response": response}
     )
     tool_delta: Final = ToolDelta(
-        type="response.function_call_arguments.delta", sequence_number=1, item_id="fc_stream_error",
-        output_index=0, delta='{"path":"partial',
+        type="response.function_call_arguments.delta",
+        sequence_number=1,
+        item_id="fc_stream_error",
+        output_index=0,
+        delta='{"path":"partial',
     )
     original_status: Final = (
         upstream_error.status_code if isinstance(upstream_error, (HTTPException, litellm.AuthenticationError)) else None
@@ -1312,7 +1325,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
             raise upstream_error
         yield (
             UnserializableTerminal(type="response.completed", sequence_number=2, response=response, invalid=object())
-            if terminal == "serialization_failure" else completed
+            if terminal == "serialization_failure"
+            else completed
         )
         if terminal == "failure_after_completed":
             raise litellm.APIError(
@@ -1331,8 +1345,7 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
     decoded: Final = tuple(frame.decode() if isinstance(frame, bytes) else frame for frame in frames)
     event_frames: Final = tuple(frame for frame in decoded if frame != "data: [DONE]\n\n")
     payloads: Final = tuple(
-        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
-        for frame in event_frames
+        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: "))) for frame in event_frames
     )
 
     assert decoded[-1] == "data: [DONE]\n\n"
@@ -2441,3 +2454,66 @@ async def test_async_data_generator_lets_other_tasks_run_during_a_stream_that_ne
 
     assert "other" in order[:-1], order
     assert order.index("other") >= 3, order
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_fails", (False, True))
+async def test_receipt_stream_finishes_charge_capture_after_client_closes(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_fails: bool,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.spend_tracking.charge_receipt_capture import BillingContext, ChargeReceiptRuntime
+    from litellm.proxy.spend_tracking.charge_receipts import ChargeReceiptStore
+    from litellm.proxy.utils import ProxyLogging
+    from tests.unit.proxy.spend_tracking._charge_receipt_cases import (
+        RECEIPT,
+        SETTINGS,
+        STAMP,
+        ScriptedQuery,
+        acknowledged,
+        priced_event,
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(ps, "llm_router", None)
+    monkeypatch.setattr(ps, "proxy_logging_obj", ProxyLogging(UserApiKeyCache()))
+    query: Final = ScriptedQuery()
+    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
+    capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id, key_hash=RECEIPT.key_hash))
+    expected: Final = RECEIPT.model_copy(update={"event_id": capture.event_id})
+    query.replies = (acknowledged(expected),)
+    request: Final = Request({"type": "http"})
+    request.state.required_charge_capture = capture
+    closed: Final = asyncio.Event()
+
+    async def provider() -> AsyncIterator[ModelResponseStream]:
+        try:
+            yield _simple_chunk(model=RECEIPT.model, content="first text")
+            if provider_fails:
+                await capture.capture_failure({}, 0, STAMP, STAMP)
+                raise ConnectionError("provider disconnected before final usage")
+            yield _simple_chunk(model=RECEIPT.model, content="remaining text")
+            await capture.capture_event(priced_event())
+        finally:
+            closed.set()
+
+    stream: Final = async_data_generator(
+        response=provider(),
+        user_api_key_dict=UserAPIKeyAuth(api_key=RECEIPT.key_hash),
+        request_data={"model": RECEIPT.model},
+        request=request,
+    )
+    try:
+        first: Final = await anext(stream)
+        assert "first text" in (first.decode() if isinstance(first, bytes) else first)
+        assert not query.calls
+    finally:
+        await stream.aclose()
+    assert closed.is_set() and await capture.wait() is not provider_fails
+    if provider_fails:
+        assert not query.calls
+    else:
+        assert json.loads(str(query.calls[0].parameters[2])) == expected.model_dump()
