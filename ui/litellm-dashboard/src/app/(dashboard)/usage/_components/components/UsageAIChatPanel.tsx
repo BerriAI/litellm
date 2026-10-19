@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { MessageSquare, Sparkles, X } from "lucide-react";
@@ -106,6 +107,7 @@ const MarkdownContent: React.FC<{ content: string }> = ({ content }) => (
 );
 
 const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, accessToken }) => {
+  const term = useTerminology();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -250,7 +252,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
         <div className="min-w-0">
           <h3 className="flex items-center gap-2 text-sm leading-5 font-medium text-foreground">
             <Sparkles aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
-            Ask AI
+            {term("Ask AI")}
           </h3>
           <p className="mt-0.5 text-xs text-muted-foreground">Ask about your spend, models, keys, and trends</p>
         </div>

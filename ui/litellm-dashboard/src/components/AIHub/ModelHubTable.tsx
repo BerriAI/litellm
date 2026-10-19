@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentHubTableColumns";
 import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
 import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
@@ -105,6 +106,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   canOpenPlayground,
   canAddModels,
 }) => {
+  const term = useTerminology();
   const syntaxTheme = useSyntaxTheme(prism);
   // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
   // cannot toggle public visibility (write).
@@ -446,7 +448,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           {/* Header with Title, Description and URL */}
           <div className="flex justify-between items-center mb-6">
             <div className="flex flex-col items-start">
-              <h2 className="text-center text-xl font-semibold">AI Hub</h2>
+              <h2 className="text-center text-xl font-semibold">{term("AI Hub")}</h2>
               {isAdminRole(userRole || "") ? (
                 <p className="text-sm text-muted-foreground">
                   Make models, agents, and MCP servers public for developers to know what&apos;s available.

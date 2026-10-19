@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React from "react";
 import { usePathname } from "next/navigation";
 import {
@@ -20,10 +21,15 @@ function isRoute(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function activeLabelFor(isChatRoute: boolean, isMoyaiRoute: boolean, pluginLabel: string | undefined): string {
+function activeLabelFor(
+  isChatRoute: boolean,
+  isMoyaiRoute: boolean,
+  pluginLabel: string | undefined,
+  gatewayLabel: string,
+): string {
   if (isChatRoute) return "Chat";
   if (isMoyaiRoute) return "Moyai";
-  return pluginLabel ?? "AI Gateway";
+  return pluginLabel ?? gatewayLabel;
 }
 
 interface ViewSwitcherItem {
@@ -34,6 +40,7 @@ interface ViewSwitcherItem {
 }
 
 export default function ViewSwitcher() {
+  const term = useTerminology();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
@@ -46,10 +53,16 @@ export default function ViewSwitcher() {
   const isMoyaiRoute = isRoute(normalizedPathname, uiHref(MOYAI));
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
 
-  const activeLabel = activeLabelFor(isChatRoute, isMoyaiRoute, plugins.find((p) => p.name === mode)?.display_name);
+  const gatewayLabel = term("AI Gateway");
+  const activeLabel = activeLabelFor(
+    isChatRoute,
+    isMoyaiRoute,
+    plugins.find((p) => p.name === mode)?.display_name,
+    gatewayLabel,
+  );
 
   const modeEntries = [
-    { key: GATEWAY, label: "AI Gateway" },
+    { key: GATEWAY, label: gatewayLabel },
     ...plugins.map((p) => ({ key: p.name, label: p.display_name })),
   ];
 

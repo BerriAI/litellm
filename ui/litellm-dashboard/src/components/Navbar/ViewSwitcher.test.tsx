@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import ViewSwitcher from "./ViewSwitcher";
 
 const { mockUsePluginMode, mockUseUISettings, mockUsePathname, state } = vi.hoisted(() => {
@@ -30,6 +31,9 @@ const { mockUsePluginMode, mockUseUISettings, mockUsePathname, state } = vi.hois
 vi.mock("@/contexts/PluginModeContext", () => ({ usePluginMode: mockUsePluginMode }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
 vi.mock("next/navigation", () => ({ usePathname: mockUsePathname }));
+vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
+  useUIConfig: () => ({ data: { use_si_terminology: true } }),
+}));
 // Deterministic hrefs so navigation assertions don't depend on server_root_path.
 vi.mock("@/utils/uiHref", () => ({ uiHref: (seg: string) => `/ui/${seg}` }));
 
@@ -70,6 +74,23 @@ describe("ViewSwitcher", () => {
     });
     expect(assignSpy).not.toHaveBeenCalled();
     expect(state.setMode).not.toHaveBeenCalled();
+  });
+
+  it("labels the gateway SI Gateway when the proxy asks for SI terminology", async () => {
+    state.plugins = [{ name: "obs", display_name: "Observability", url: "http://localhost:9000" }];
+    render(
+      <TerminologyProvider>
+        <ViewSwitcher />
+      </TerminologyProvider>,
+    );
+
+    const button = screen.getByRole("button");
+    expect(button).toHaveTextContent("SI Gateway");
+    act(() => {
+      fireEvent.click(button);
+    });
+    expect(await screen.findByText("Observability")).toBeInTheDocument();
+    expect(screen.queryByText("AI Gateway")).not.toBeInTheDocument();
   });
 
   it("labels the button from the active plugin and lists AI Gateway + each plugin", async () => {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useMemo, useState } from "react";
 import { ArrowRight, Bot } from "lucide-react";
 import { StackedUsageChart } from "@/components/shared/charts";
@@ -98,6 +99,7 @@ function AgentItem({
   color: string | undefined;
   onOpen?: (agent: AgentRow) => void;
 }) {
+  const term = useTerminology();
   return (
     <li className="group grid grid-cols-[1.5rem_auto_minmax(0,1fr)_auto] items-center gap-3 py-2.5">
       <span className="text-sm tabular-nums text-muted-foreground">{rank}.</span>
@@ -123,7 +125,7 @@ function AgentItem({
             <ArrowRight aria-hidden="true" className="size-3 transition-transform group-hover:translate-x-0.5" />
           </button>
         ) : (
-          <span className="block truncate text-xs text-muted-foreground">{agent.description}</span>
+          <span className="block truncate text-xs text-muted-foreground">{term(agent.description)}</span>
         )}
       </span>
       <span className="text-right">

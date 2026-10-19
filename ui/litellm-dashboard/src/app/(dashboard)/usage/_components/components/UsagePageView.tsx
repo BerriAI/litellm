@@ -6,6 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { Download, Link2, Search, Sparkles, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
@@ -102,6 +103,7 @@ interface UsagePageProps {
 }
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
+  const term = useTerminology();
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
@@ -459,7 +461,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="sm" onClick={() => setIsAiChatOpen(true)}>
                       <Sparkles />
-                      Ask AI
+                      {term("Ask AI")}
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
                       <Download />

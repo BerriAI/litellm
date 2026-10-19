@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { ChevronDown } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -22,6 +23,7 @@ export default function PageVisibilitySettings({
   isUpdating,
   onUpdate,
 }: PageVisibilitySettingsProps) {
+  const term = useTerminology();
   const isPageVisibilitySet = enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined;
   const availablePages = useMemo(() => getAvailablePages(), []);
   const pagesByGroup = useMemo(() => {
@@ -99,8 +101,8 @@ export default function PageVisibilitySettings({
                           onCheckedChange={(checked) => togglePage(page.page, checked === true)}
                         />
                         <span className="space-y-0.5">
-                          <span className="block text-sm text-foreground">{page.label}</span>
-                          <span className="block text-xs text-muted-foreground">{page.description}</span>
+                          <span className="block text-sm text-foreground">{term(page.label)}</span>
+                          <span className="block text-xs text-muted-foreground">{term(page.description)}</span>
                         </span>
                       </label>
                     );
