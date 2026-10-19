@@ -58,6 +58,8 @@ _LONG_LIVED: Final = 3600
 _NEAR_EXPIRY: Final = 60
 _PROBE_SECONDS: Final = 2.0
 _TOKEN_PATH: Final = "/oauth2/v2.0/token"
+_FEDERATED_ASSERTION_ENV: Final = "SCRIPTED_FEDERATED_ASSERTION"
+_FEDERATED_ASSERTION: Final = "scripted-federated-assertion"
 _AZURE_ENVIRONMENT: Final = (
     "AZURE_API_KEY",
     "AZURE_OPENAI_API_KEY",
@@ -254,6 +256,7 @@ def entra(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Entra]:
                 "no_proxy": "127.0.0.1,localhost",
                 "SSL_CERT_FILE": str(certificate[0]),
                 "REQUESTS_CA_BUNDLE": str(certificate[0]),
+                _FEDERATED_ASSERTION_ENV: _FEDERATED_ASSERTION,
             }
         )
         yield Entra(Authority(wire, holds), environment, certificate)
@@ -593,6 +596,31 @@ def test_an_oidc_token_beside_a_client_secret_is_the_credential_sent_on_every_ap
         answers: Final = tuple(_chat_authorization(service_gateway, model) for model in models)
 
     oidc: Final = f"Bearer {_exchanged_token(_secret_token(audience))}"
+    assert answers == (oidc, oidc)
+
+
+def test_an_oidc_token_beside_a_username_and_password_is_the_credential_sent_on_every_api_version(
+    user_gateway: Gateway, azure: Wire
+) -> None:
+    username: Final = _username("oidc-beside-user")
+    with user_gateway.scenario() as scenario:
+        models: Final = tuple(
+            scenario.model(
+                model=f"azure/{_DEPLOYMENT}",
+                api_base=azure.url,
+                api_key=None,
+                api_version=api_version,
+                azure_ad_token=f"oidc/env/{_FEDERATED_ASSERTION_ENV}",
+                tenant_id=_TENANT,
+                client_id=_PUBLIC_CLIENT,
+                azure_username=username,
+                azure_password="user-password",
+            )
+            for api_version in (_LEGACY_API_VERSION, "v1")
+        )
+        answers: Final = tuple(_chat_authorization(user_gateway, model) for model in models)
+
+    oidc: Final = f"Bearer {_exchanged_token(_FEDERATED_ASSERTION)}"
     assert answers == (oidc, oidc)
 
 
