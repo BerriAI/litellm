@@ -34,6 +34,10 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    ChatTemplateToolSection,
+    chat_template_tool_section,
+)
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -343,6 +347,9 @@ EXTRAPOLATION_SAMPLES: Final = 16
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
+_ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
+    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming")
+)
 
 
 def _count_offload_limiter_for_this_loop() -> anyio.CapacityLimiter:
@@ -400,6 +407,7 @@ class _MessageCountParams:
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
+        self.tool_section = chat_template_tool_section(model)
 
 
 def token_counter(
@@ -463,7 +471,9 @@ def token_counter(
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
             includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
-            num_tokens += _count_extra(params.count_function, tools, tool_choice, includes_system_message)
+            num_tokens += _count_extra(
+                params.count_function, tools, tool_choice, includes_system_message, params.tool_section
+            )
 
     else:
         raise ValueError("Either text or messages must be provided")
@@ -557,6 +567,7 @@ def _count_extra(
     tools: list[ChatCompletionToolParam] | None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None,
     includes_system_message: bool,
+    tool_section: ChatTemplateToolSection | None,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.
     Args:
@@ -564,26 +575,56 @@ def _count_extra(
         tools (Optional[List[ChatCompletionToolParam]]): The available tools.
         tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice.
         includes_system_message (bool): Whether the messages include a system message.
+        tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
     """
+    reply_primer_tokens: Final = 3
+    tool_choice_tokens: Final = 0 if tool_section is not None else _count_tool_choice(count_function, tool_choice)
+    return (
+        reply_primer_tokens
+        + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
+        + tool_choice_tokens
+    )
 
-    num_tokens = 3  # every reply is primed with <|start|>assistant<|message|>
 
-    if tools:
-        num_tokens += count_function(_format_function_definitions(tools))
-        num_tokens += 9  # Additional tokens for function definition of tools
-    # If there's a system message and tools are present, subtract four tokens
-    if tools and includes_system_message:
-        num_tokens -= 4
-    # If tool_choice is 'none', add one token.
-    # If it's an object, add 4 + the number of tokens in the function name.
-    # If it's undefined or 'auto', don't add anything.
+def _count_tool_definitions(
+    count_function: TokenCounterFunction,
+    tools: Sequence[object] | None,
+    includes_system_message: bool,
+    tool_section: ChatTemplateToolSection | None,
+) -> int:
+    if not tools:
+        return 0
+    if tool_section is not None:
+        return _count_chat_template_tools(count_function, tools, includes_system_message, tool_section)
+    system_message_discount: Final = 4 if includes_system_message else 0
+    return count_function(_format_function_definitions(tools)) + 9 - system_message_discount
+
+
+def _count_tool_choice(
+    count_function: TokenCounterFunction,
+    tool_choice: ChatCompletionNamedToolChoiceParam | None,
+) -> int:
     if tool_choice == "none":
-        num_tokens += 1
-    elif isinstance(tool_choice, dict):
-        num_tokens += 7
-        num_tokens += count_function(str(tool_choice["function"]["name"]))
+        return 1
+    if isinstance(tool_choice, dict):
+        return 7 + count_function(str(tool_choice["function"]["name"]))
+    return 0
 
-    return num_tokens
+
+def _count_chat_template_tools(
+    count_function: TokenCounterFunction,
+    tools: Sequence[object],
+    includes_system_message: bool,
+    tool_section: ChatTemplateToolSection,
+) -> int:
+    functions: Final = tuple(
+        function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name")
+    )
+    if not functions:
+        return 0
+    system_turn_tokens: Final = 0 if includes_system_message else tool_section.implicit_system_turn_tokens
+    schemas: Final = tool_section.render_tool_schemas(functions)
+    return tool_section.preamble_tokens + system_turn_tokens + count_function(schemas)
 
 
 def _get_extrapolating_count_function(
@@ -1000,13 +1041,29 @@ def _format_function_definitions(tools: Sequence[object]) -> str:
     lines: Final = []
     lines.append("namespace functions {")
     lines.append("")
-    for tool in tools:
-        if not isinstance(tool, Mapping):
-            continue
-        for function in _function_definitions_for_tool(cast(Mapping[str, object], tool)):
-            lines.extend(_format_single_function_definition(function))
+    for function in _function_definitions(tools):
+        lines.extend(_format_single_function_definition(function))
     lines.append("} // namespace functions")
     return "\n".join(lines)
+
+
+def _tools_sent_as_functions(tools: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(tool for tool in _tool_mappings(tools) if not _is_anthropic_web_search_tool(tool))
+
+
+def _is_anthropic_web_search_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("name") == "web_search" and "input_schema" not in tool and tool.get("type") != "function"
+
+
+def _tool_mappings(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+    for tool in tools:
+        if isinstance(tool, Mapping):
+            yield cast(Mapping[str, object], tool)
+
+
+def _function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+    for tool in _tool_mappings(tools):
+        yield from _function_definitions_for_tool(tool)
 
 
 def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mapping[str, object]]:
@@ -1020,12 +1077,21 @@ def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mappi
             if isinstance(declaration, Mapping):
                 yield declaration
         return
-    parameters: Final = tool.get("input_schema") or tool.get("parameters") or {}
+    input_schema: Final = tool.get("input_schema")
+    parameters: Final = input_schema or tool.get("parameters") or {}
     normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
+    unmapped_anthropic_keys: Final = (
+        {key: value for key, value in tool.items() if key not in _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE}
+        if input_schema is not None
+        else {}
+    )
+    description: Final = tool.get("description")
+    strict: Final = tool.get("strict")
     yield {
         "name": tool.get("name"),
-        "description": tool.get("description"),
-        "parameters": normalized_parameters,
+        "parameters": {**normalized_parameters, **unmapped_anthropic_keys},
+        **({"description": description} if description is not None else {}),
+        **({"strict": bool(strict)} if strict is not None else {}),
     }
 
 
