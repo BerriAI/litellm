@@ -349,10 +349,20 @@ def _burst_call(client: httpx.Client, label: str, path: str, body: Mapping[str, 
 
 
 def _burst(
-    client: httpx.Client, happy_model: str, happy_key: str, open_key: str, during: Callable[[], None]
+    client: httpx.Client,
+    oversized_model: str,
+    happy_model: str,
+    happy_key: str,
+    open_key: str,
+    during: Callable[[], None],
 ) -> tuple[_BurstResult, ...]:
-    crafted: Final = tuple(
-        (f"crafted-{path}-{index}", path, _body(path, CRAFTED_MODEL, uuid.uuid4().hex, stream=index % 2 == 1), open_key)
+    oversized: Final = tuple(
+        (
+            f"oversized-{path}-{index}",
+            path,
+            _body(path, oversized_model, uuid.uuid4().hex, stream=index % 2 == 1),
+            open_key,
+        )
         for path in (CHAT, MESSAGES, RESPONSES)
         for index in range(4)
     )
@@ -367,7 +377,7 @@ def _burst(
         httpx.Client(base_url=client.base_url, timeout=client.timeout, trust_env=False) as fresh,
     ):
         first: Final = tuple(
-            pool.submit(_burst_call, client, label, path, body, key) for label, path, body, key in crafted + happy
+            pool.submit(_burst_call, client, label, path, body, key) for label, path, body, key in oversized + happy
         )
         wait(first, return_when=FIRST_COMPLETED)
         during()
@@ -375,6 +385,12 @@ def _burst(
             pool.submit(_burst_call, fresh, label, path, body, key) for label, path, body, key in late
         )
         return tuple(future.result() for future in first + second)
+
+
+def _slowest_oversized_refusal(results: tuple[_BurstResult, ...]) -> float:
+    refused: Final = tuple(result for result in results if result.label.startswith("oversized") and result.status)
+    assert refused and all(result.status == 400 for result in refused), refused
+    return max(result.seconds for result in refused)
 
 
 def _assert_rows_land_exactly_once(results: tuple[_BurstResult, ...], prefix: str) -> None:
@@ -405,20 +421,21 @@ def test_killing_one_worker_mid_burst_leaves_the_other_serving_crafted_and_happy
     ):
         model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
         key: Final = scenario.key(models=[model])
+        open_key: Final = scenario.key()
         workers: Final = owned.worker_pids()
         assert len(workers) == 2, workers
         victim: Final = min(workers)
+        control: Final = _slowest_oversized_refusal(
+            _burst(client, BENIGN_288KB_MODEL, model, key, open_key, lambda: None)
+        )
 
         with owned.replacing_worker(victim) as kill:
-            results: Final = _burst(client, model, key, scenario.key(), kill)
+            results: Final = _burst(client, CRAFTED_MODEL, model, key, open_key, kill)
             dropped: Final = tuple(result for result in results if result.status is None)
             assert len(dropped) < len(results), results
-            crafted: Final = tuple(
-                result for result in results if result.label.startswith("crafted") and result.status
+            assert_within_factor_of_control(
+                _slowest_oversized_refusal(results), control=control, factor=CRAFTED_SLOWDOWN_FACTOR
             )
-            assert crafted and all(
-                result.status == 400 and result.seconds < FAST_SECONDS for result in crafted
-            ), crafted
             late: Final = tuple(result for result in results if result.label.startswith("late"))
             assert all(result.status == 200 for result in late), late
             _assert_rows_land_exactly_once(results, "late")
@@ -446,7 +463,12 @@ def test_upstream_returning_503_mid_burst_logs_every_failure_with_its_own_cluste
     ):
         model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
         key: Final = scenario.key(models=[model])
-        results: Final = _burst(client, model, key, scenario.key(), lambda: None)
+        open_key: Final = scenario.key()
+        control: Final = _slowest_oversized_refusal(
+            _burst(client, BENIGN_288KB_MODEL, model, key, open_key, lambda: None)
+        )
+        wire.drain()
+        results: Final = _burst(client, CRAFTED_MODEL, model, key, open_key, lambda: None)
         assert all(result.status is not None for result in results), results
         happy: Final = tuple(result for result in results if result.label.startswith("happy"))
         assert all(result.status == 503 for result in happy), happy
@@ -456,13 +478,16 @@ def test_upstream_returning_503_mid_burst_logs_every_failure_with_its_own_cluste
         assert all(any(f"normalized error audit {result.label}" in body for body in seen) for result in happy + late), (
             seen
         )
-        crafted: Final = tuple(result for result in results if result.label.startswith("crafted"))
-        assert all(result.status == 400 and result.seconds < FAST_SECONDS for result in crafted), crafted
+        assert_within_factor_of_control(
+            _slowest_oversized_refusal(results), control=control, factor=CRAFTED_SLOWDOWN_FACTOR
+        )
         codes: Final = {
             result.label: _error_information(string_value(result.call_id))["normalized_error"] for result in results
         }
         assert all(code == "503_PROVIDER_OVERLOADED" for label, code in codes.items() if label.startswith("happy")), (
             codes
         )
-        assert all(code == "400_INVALID_REQUEST" for label, code in codes.items() if label.startswith("crafted")), codes
+        assert all(code == "400_INVALID_REQUEST" for label, code in codes.items() if label.startswith("oversized")), (
+            codes
+        )
         assert client.get("/health/liveliness").status_code == 200
