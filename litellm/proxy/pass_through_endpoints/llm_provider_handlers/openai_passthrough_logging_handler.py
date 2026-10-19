@@ -30,7 +30,10 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import SETTLES_BACKGROUND_RESPONSE_KWARG
+from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
@@ -549,7 +552,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
             logging_obj.model_call_details["response_cost"] = response_cost
             logging_obj.model_call_details[SETTLES_BACKGROUND_RESPONSE_KWARG] = (  # rebind-ok: spend rows read it here
-                responses_billing == "background_settlement"
+                BackgroundResponseSettlement.SETTLES if responses_billing == "background_settlement" else None
             )
 
             endpoint_type: Final = (
@@ -722,9 +725,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
 
             settles_background_response: Final = (
-                terminal_response is not None
+                BackgroundResponseSettlement.SETTLES
+                if terminal_response is not None
                 and is_background_response(terminal_response)
                 and terminal_response.usage is not None
+                else None
             )
 
             # Preserve existing litellm_params to maintain metadata tags

@@ -6,6 +6,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
+from enum import Enum
 from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
@@ -309,6 +310,10 @@ BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
 SETTLES_BACKGROUND_RESPONSE_KWARG: Final = "settles_background_response"
 
 
+class BackgroundResponseSettlement(str, Enum):
+    SETTLES = "settles"
+
+
 def _cost_row_request_id_suffix(
     call_type: str, metadata: Mapping[str, object], settles_background_response: bool
 ) -> str:
@@ -336,7 +341,9 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
-    settles_background_response: Final = kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is True
+    settles_background_response: Final = (
+        kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES
+    )
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, settles_background_response)}"
 
 
