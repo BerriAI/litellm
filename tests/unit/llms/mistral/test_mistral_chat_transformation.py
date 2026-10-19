@@ -1162,3 +1162,41 @@ def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_
     )
 
     assert [m.get("role") for m in request["messages"]] == ["user", "assistant"]
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("mistral-large-latest", "mistral"),
+        ("mistral-large-4", "mistral"),
+        ("a-mistral-model-missing-from-the-cost-map", "mistral"),
+        ("codestral-latest", "codestral"),
+    ],
+)
+def test_prompt_cache_key_reaches_the_mistral_request_body(local_model_cost_map, model, custom_llm_provider):
+    import litellm
+
+    optional_params = litellm.get_optional_params(
+        model=model, custom_llm_provider=custom_llm_provider, prompt_cache_key="session-1"
+    )
+    request = MistralConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["prompt_cache_key"] == "session-1"
+
+
+def test_prompt_cache_key_stays_unsupported_for_vertex_hosted_mistral(local_model_cost_map):
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.get_optional_params(model="mistral-medium-3", custom_llm_provider="vertex_ai", prompt_cache_key="s")
+
+    dropped = litellm.get_optional_params(
+        model="mistral-medium-3", custom_llm_provider="vertex_ai", prompt_cache_key="s", drop_params=True
+    )
+    assert "prompt_cache_key" not in dropped

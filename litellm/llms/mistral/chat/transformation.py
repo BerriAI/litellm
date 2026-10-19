@@ -122,6 +122,7 @@ class MistralConfig(OpenAIGPTConfig):
         accepts_reasoning_effort: Final = is_magistral or supports_reasoning(
             model=model, custom_llm_provider=self.custom_llm_provider
         )
+        accepts_prompt_cache_key: Final = self.custom_llm_provider == "mistral"
         return [
             "stream",
             "temperature",
@@ -136,6 +137,7 @@ class MistralConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
             *(("thinking",) if is_magistral else ()),
             *(("reasoning_effort",) if accepts_reasoning_effort else ()),
+            *(("prompt_cache_key",) if accepts_prompt_cache_key else ()),
         ]
 
     def _map_tool_choice(self, tool_choice: str) -> str:
@@ -207,8 +209,8 @@ class MistralConfig(OpenAIGPTConfig):
             if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
-            if param == "parallel_tool_calls":
-                optional_params["parallel_tool_calls"] = value
+            if param in ("parallel_tool_calls", "prompt_cache_key"):
+                optional_params[param] = value
         return optional_params
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
