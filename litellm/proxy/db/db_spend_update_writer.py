@@ -918,6 +918,7 @@ class DBSpendUpdateWriter:
             model_group=base.get("model_group"),
             endpoint=base.get("endpoint"),
             mcp_namespaced_tool_name=base.get("mcp_namespaced_tool_name"),
+            team_id=payload.get("team_id") or "",
             targets=tuple(
                 DailyBaselineTarget(entity=entity, entity_id=identity)
                 for entity, values in bases
@@ -3034,13 +3035,16 @@ class DBSpendUpdateWriter:
             return
 
         request_tags: Final = daily_spend_entity_ids(payload, "tag")
+        team_id: Final = payload.get("team_id") or ""
         for tag in request_tags:
             if tag is None:
                 continue
             endpoint_str = base_daily_transaction.get("endpoint") or ""
-            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
+            # team_id is part of the key so the queue never folds two teams' spend on one tag
+            # into a single entry before the upsert can keep them apart.
+            daily_transaction_key = f"{tag}_{team_id}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
             daily_transaction = DailyTagSpendTransaction(
-                tag=tag, **base_daily_transaction, request_id=payload["request_id"]
+                tag=tag, team_id=team_id, **base_daily_transaction, request_id=payload["request_id"]
             )
 
             await self.daily_tag_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
