@@ -4,14 +4,19 @@ import base64
 import io
 import math
 import struct
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from typing import Final, Literal, cast
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from itertools import accumulate
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
 from typing_extensions import ParamSpec, TypeVar
+
+if TYPE_CHECKING:
+    from pypdf import PageObject, PdfReader
+    from pypdf.generic import IndirectObject
 
 import litellm
 from litellm import verbose_logger
@@ -784,23 +789,102 @@ def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
     return math.ceil(min(float(ANTHROPIC_IMAGE_MAX_PIXELS), area_at_max_edge) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
 
 
+_PDF_MAX_INPUT_BYTES: Final = 32 * 1024 * 1024
+_PDF_MAX_PAGES: Final = 100
+_PDF_MAX_OBJECTS: Final = 2048
+_PDF_MAX_STREAM_BYTES: Final = 1024 * 1024
+_PDF_MAX_TOTAL_STREAM_BYTES: Final = 4 * 1024 * 1024
+
+
+class _PdfTextBudget:
+    def __init__(self) -> None:
+        self.operations_left: int = 100_000
+        self.external_objects_left: int = 16
+        self.exceeded: bool = False
+
+    def visit(self, operator: bytes, _operands: Sequence[object], _cm: Sequence[float], _tm: Sequence[float]) -> None:
+        from pypdf.errors import LimitReachedError
+
+        self.operations_left -= 1
+        self.external_objects_left -= int(operator == b"Do")
+        if self.operations_left < 0 or self.external_objects_left < 0:
+            self.exceeded = True
+            raise LimitReachedError("PDF text extraction exceeds the counting budget")
+
+
+def _pdf_page_tokens(page: "PageObject", count_function: TokenCounterFunction) -> int | None:
+    budget: Final = _PdfTextBudget()
+    text: Final = page.extract_text(visitor_operand_before=budget.visit)
+    if budget.exceeded:
+        return None
+    return count_function(text or "") + _anthropic_rendered_page_image_tokens(
+        float(page.mediabox.width), float(page.mediabox.height)
+    )
+
+
+def _pdf_references(reader: "PdfReader") -> Iterator["IndirectObject"]:
+    from pypdf.generic import IndirectObject
+
+    for generation, identifiers in reader.xref.items():
+        for identifier in identifiers:
+            if identifier:
+                yield IndirectObject(identifier, generation, reader)
+    for identifier in reader.xref_objStm:
+        yield IndirectObject(identifier, 0, reader)
+
+
+def _pdf_stream_sizes(reader: "PdfReader") -> Iterator[int]:
+    from pypdf.generic import StreamObject
+
+    for reference in _pdf_references(reader):
+        value: Final = reader.get_object(reference)
+        if isinstance(value, StreamObject):
+            yield len(value.get_data())
+
+
 def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
     if not data_url.startswith(PDF_DATA_URL_PREFIX):
         return None
-    try:
-        from pypdf import PdfReader
-    except ImportError:
-        verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
+    encoded_length: Final = len(data_url) - len(PDF_DATA_URL_PREFIX)
+    if encoded_length > 4 * ((_PDF_MAX_INPUT_BYTES + 2) // 3):
         return None
     try:
-        reader: Final = PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
-        return sum(
-            count_function(page.extract_text() or "")
-            + _anthropic_rendered_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
-            for page in reader.pages
-        )
+        from pypdf import PdfReader, apply_configuration
+    except ImportError:
+        verbose_logger.debug("A bounded pypdf parser is unavailable, so the PDF document is priced like one image")
+        return None
+    try:
+        decoded: Final = base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :], validate=True)
+        if len(decoded) > _PDF_MAX_INPUT_BYTES:
+            return None
+        with apply_configuration(
+            maximum_declared_stream_length=_PDF_MAX_INPUT_BYTES,
+            array_based_stream_maximum_output_length=_PDF_MAX_STREAM_BYTES,
+            zlib_maximum_output_length=_PDF_MAX_STREAM_BYTES,
+            zlib_maximum_recovery_input_length=_PDF_MAX_STREAM_BYTES,
+            lzw_maximum_output_length=_PDF_MAX_STREAM_BYTES,
+            run_length_maximum_output_length=_PDF_MAX_STREAM_BYTES,
+            jbig2_maximum_output_length=_PDF_MAX_STREAM_BYTES,
+            image_maximum_buffer_size=_PDF_MAX_STREAM_BYTES,
+            page_tree_maximum_entries=2 * _PDF_MAX_PAGES + 1,
+            page_tree_maximum_depth=16,
+            xform_maximum_invocations_per_extraction=16,
+            jbig2dec_binary=None,
+        ):
+            reader: Final = PdfReader(io.BytesIO(decoded), strict=True)
+            object_count: Final = sum(len(identifiers) for identifiers in reader.xref.values()) + len(
+                reader.xref_objStm
+            )
+            if object_count > _PDF_MAX_OBJECTS or len(reader.pages) > _PDF_MAX_PAGES:
+                return None
+            if not all(size <= _PDF_MAX_TOTAL_STREAM_BYTES for size in accumulate(_pdf_stream_sizes(reader))):
+                return None
+            page_counts: Final = tuple(_pdf_page_tokens(page, count_function) for page in reader.pages)
+            return None if None in page_counts else sum(count for count in page_counts if count is not None)
     except Exception as e:
-        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
+        verbose_logger.debug(
+            "Could not read the PDF document within counting limits (%s), so it is priced like one image", e
+        )
         return None
 
 

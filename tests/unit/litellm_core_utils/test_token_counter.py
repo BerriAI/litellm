@@ -3,12 +3,14 @@
 import asyncio
 import base64
 import importlib
+import io
 import json
 import os
 import subprocess
 import sys
 import threading
 import time
+import zlib
 from collections.abc import Mapping
 from concurrent.futures import Future, wait
 from itertools import accumulate, chain
@@ -1448,16 +1450,25 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, by_id]) == _count_user_content([prompt])
 
     named = {"type": "file", "file": {"file_id": "file-abc123", "filename": "report.pdf"}}
-    assert _count_user_content([prompt, named]) == _count_user_content(
-        [prompt, {"type": "text", "text": "report.pdf"}]
-    )
+    assert _count_user_content([prompt, named]) == _count_user_content([prompt, {"type": "text", "text": "report.pdf"}])
 
 
-def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> str:
+def _pdf_base64(
+    pages: tuple[str, ...],
+    width: int = 612,
+    height: int = 792,
+    *,
+    padding: int = 0,
+    compressed: bool = False,
+    unused_objects: int = 0,
+    unused_bytes: int = 0,
+) -> str:
     def page_objects(index: int, text: str) -> tuple[bytes, bytes]:
         escaped: Final = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-        stream: Final = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
-        content: Final = f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
+        raw_stream: Final = b" " * padding + f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
+        stream: Final = zlib.compress(raw_stream) if compressed else raw_stream
+        filter_field: Final = " /Filter /FlateDecode" if compressed else ""
+        content: Final = f"<< /Length {len(stream)}{filter_field} >>\nstream\n".encode() + stream + b"\nendstream"
         page: Final = (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
             f"/Resources << /Font << /F1 3 0 R >> >> /Contents {4 + 2 * index} 0 R >>"
@@ -1470,6 +1481,8 @@ def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> 
         f"<< /Type /Pages /Count {len(pages)} /Kids [ {kids} ] >>".encode(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         *chain.from_iterable(page_objects(index, text) for index, text in enumerate(pages)),
+        *(b"0" for _ in range(unused_objects)),
+        *((b"(" + b" " * unused_bytes + b")",) if unused_bytes else ()),
     )
     header: Final = b"%PDF-1.4\n"
     objects: Final = tuple(
@@ -1490,6 +1503,107 @@ def _pdf_source(pdf_base64: str) -> dict[str, str]:
     return {"type": "base64", "media_type": "application/pdf", "data": pdf_base64}
 
 
+@pytest.mark.parametrize("case", ("pages", "compressed_stream", "total_streams", "objects", "input_bytes"))
+def test_pdf_counting_over_budget_preserves_legacy_image_estimate(case: str):
+    from litellm.litellm_core_utils.token_counter import (
+        _PDF_MAX_INPUT_BYTES,
+        _PDF_MAX_OBJECTS,
+        _PDF_MAX_PAGES,
+        _PDF_MAX_STREAM_BYTES,
+        _PDF_MAX_TOTAL_STREAM_BYTES,
+    )
+
+    pdf: Final = {
+        "pages": lambda: _pdf_base64(("Count this",) * (_PDF_MAX_PAGES + 1)),
+        "compressed_stream": lambda: _pdf_base64(("Count this",), padding=_PDF_MAX_STREAM_BYTES, compressed=True),
+        "total_streams": lambda: _pdf_base64(
+            ("Count this",) * (_PDF_MAX_TOTAL_STREAM_BYTES // _PDF_MAX_STREAM_BYTES + 1),
+            padding=_PDF_MAX_STREAM_BYTES - 100,
+            compressed=True,
+        ),
+        "objects": lambda: _pdf_base64(("Count this",), unused_objects=_PDF_MAX_OBJECTS),
+        "input_bytes": lambda: _pdf_base64(("Count this",), unused_bytes=_PDF_MAX_INPUT_BYTES),
+    }[case]()
+    source: Final = _pdf_source(pdf)
+    assert _count_user_content([{"type": "document", "source": source}]) == _count_user_content(
+        [{"type": "image", "source": source}]
+    )
+
+
+def test_compressed_pdf_within_budget_keeps_text_and_page_counts():
+    pages: Final = ("Count the first page", "Count the second page")
+    compressed: Final = _pdf_source(_pdf_base64(pages, compressed=True))
+    uncompressed: Final = _pdf_source(_pdf_base64(pages))
+    assert _count_user_content([{"type": "document", "source": compressed}]) == _count_user_content(
+        [{"type": "document", "source": uncompressed}]
+    )
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_pdf_form_budget_never_returns_a_partial_count(nested: bool):
+    from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject
+
+    writer: Final = PdfWriter()
+    page: Final = writer.add_blank_page(width=612, height=792)
+    font: Final = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    form: Final = DecodedStreamObject()
+    form.set_data(b"BT /F1 12 Tf 72 720 Td (Every form must be counted) Tj ET")
+    form.update(
+        {
+            NameObject("/Type"): NameObject("/XObject"),
+            NameObject("/Subtype"): NameObject("/Form"),
+            NameObject("/BBox"): ArrayObject([NumberObject(0), NumberObject(0), NumberObject(612), NumberObject(792)]),
+            NameObject("/Resources"): DictionaryObject(
+                {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})}
+            ),
+        }
+    )
+    resources: Final = DictionaryObject(
+        {NameObject("/XObject"): DictionaryObject({NameObject("/Fm"): writer._add_object(form)})}
+    )
+    repeated: Final = DecodedStreamObject()
+    repeated.set_data(b"/Fm Do\n" * 17)
+    repeated.update(
+        {
+            NameObject("/Subtype"): NameObject("/Form"),
+            NameObject("/BBox"): form["/BBox"],
+            NameObject("/Resources"): resources,
+        }
+    )
+    outer: Final = DecodedStreamObject()
+    outer.set_data(b"/Fm Do")
+    page[NameObject("/Resources")] = (
+        DictionaryObject({NameObject("/XObject"): DictionaryObject({NameObject("/Fm"): writer._add_object(repeated)})})
+        if nested
+        else resources
+    )
+    page[NameObject("/Contents")] = writer._add_object(outer if nested else repeated)
+    output: Final = io.BytesIO()
+    writer.write(output)
+    source: Final = _pdf_source(base64.b64encode(output.getvalue()).decode())
+    assert _count_user_content([{"type": "document", "source": source}]) == _count_user_content(
+        [{"type": "image", "source": source}]
+    )
+
+
+def test_pdf_counting_restores_the_callers_parser_limits():
+    from pypdf import get_configuration
+
+    original: Final = get_configuration()
+    source: Final = _pdf_source(_pdf_base64(("Count this",)))
+    assert _count_user_content([{"type": "document", "source": source}]) > _count_user_content(
+        [{"type": "image", "source": source}]
+    )
+    assert get_configuration() == original
+
+
 def test_base64_pdf_document_counts_every_page_text_and_rendering():
     """A base64 PDF is read page by page: each page costs its text plus the image Anthropic renders it to.
 
@@ -1500,13 +1614,18 @@ def test_base64_pdf_document_counts_every_page_text_and_rendering():
     first: Final = "Revenue grew eleven percent while churn fell to two percent."
     second: Final = "Headcount is flat and the office lease was renewed for three years."
     base: Final = _count_user_content([prompt])
-    blank_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64(("",)))}]) - base
+    blank_page: Final = (
+        _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64(("",)))}]) - base
+    )
 
     assert blank_page > 0
     assert _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first, second)))}]) == (
-        _count_user_content([prompt, {"type": "text", "text": first}, {"type": "text", "text": second}]) + 2 * blank_page
+        _count_user_content([prompt, {"type": "text", "text": first}, {"type": "text", "text": second}])
+        + 2 * blank_page
     )
-    one_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,)))}]) - base
+    one_page: Final = (
+        _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,)))}]) - base
+    )
     twelve_pages: Final = (
         _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,) * 12))}]) - base
     )
@@ -1514,7 +1633,9 @@ def test_base64_pdf_document_counts_every_page_text_and_rendering():
     assert twelve_pages == 12 * one_page
 
 
-@pytest.mark.parametrize("fields", [{}, {"title": "Q3 board packet", "context": "Shared by finance"}], ids=["bare", "described"])
+@pytest.mark.parametrize(
+    "fields", [{}, {"title": "Q3 board packet", "context": "Shared by finance"}], ids=["bare", "described"]
+)
 def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[str, str]):
     """Anthropic rasterizes each PDF page within its image limits (1568 px long edge, 1.15 MP) and bills
     width * height / 750 tokens for it: https://platform.claude.com/docs/en/build-with-claude/pdf-support and
