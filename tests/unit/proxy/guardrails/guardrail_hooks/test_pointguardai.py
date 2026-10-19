@@ -999,10 +999,101 @@ class TestPointGuardAIGuardrailApplyGuardrail:
         )
 
         sent_body = json.loads(guardrail.async_handler.post.call_args.kwargs["data"])
+        earlier_turn = [
+            {"role": "user", "content": "Previous input"},
+            {"role": "assistant", "content": "Previous output"},
+        ]
         assert sent_body["input"] == [
             {"role": "system", "content": "System prompt"},
-            {"role": "user", "content": "Current input part one"},
-            {"role": "user", "content": "Current input part two"},
+            {"role": "user", "content": "Current input part one", "history": earlier_turn},
+            {
+                "role": "user",
+                "content": "Current input part two",
+                "history": [*earlier_turn, {"role": "user", "content": "Current input part one"}],
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_request_history_skips_blank_and_tool_messages(self):
+        guardrail = _pointguard_guardrail(
+            api_key="test_key",
+            api_base="https://api.appsoc.com",
+            org_code="test-org",
+            policy_config_name="test-policy",
+            guardrail_name="pointguardai-guard",
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "policyName": "test-policy",
+            "input": {"blocked": False, "modified": False, "content": []},
+        }
+        mock_response.raise_for_status = MagicMock()
+        guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "Look up the weather"}]},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function"}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny"},
+            {"role": "assistant", "content": "   "},
+            {"role": "user", "content": "Thanks"},
+        ]
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(
+                texts=["Thanks"],
+                structured_messages=messages,  # pyright: ignore[reportArgumentType]  # fixture uses the equivalent message dictionary shape
+            ),
+            request_data={"messages": messages},
+            input_type="request",
+            logging_obj=None,
+        )
+
+        sent_body = json.loads(guardrail.async_handler.post.call_args.kwargs["data"])
+        assert sent_body["input"] == [
+            {
+                "role": "user",
+                "content": "Thanks",
+                "history": [{"role": "user", "content": "Look up the weather"}],
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_request_history_keeps_last_nine_user_turns(self):
+        guardrail = _pointguard_guardrail(
+            api_key="test_key",
+            api_base="https://api.appsoc.com",
+            org_code="test-org",
+            policy_config_name="test-policy",
+            guardrail_name="pointguardai-guard",
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "policyName": "test-policy",
+            "input": {"blocked": False, "modified": False, "content": []},
+        }
+        mock_response.raise_for_status = MagicMock()
+        guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+        earlier_turns = [
+            message
+            for turn in range(12)  # comprehension-ok: builds one user/assistant pair per turn
+            for message in (
+                {"role": "user", "content": f"Question {turn}"},
+                {"role": "assistant", "content": f"Answer {turn}"},
+            )
+        ]
+        messages = [*earlier_turns, {"role": "user", "content": "Current question"}]
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["Current question"]),
+            request_data={"messages": messages},
+            input_type="request",
+            logging_obj=None,
+        )
+
+        sent_body = json.loads(guardrail.async_handler.post.call_args.kwargs["data"])
+        assert sent_body["input"] == [
+            {"role": "user", "content": "Current question", "history": earlier_turns[6:]},
         ]
 
     @pytest.mark.asyncio
@@ -1050,7 +1141,16 @@ class TestPointGuardAIGuardrailApplyGuardrail:
         )
 
         sent_body = json.loads(guardrail.async_handler.post.call_args.kwargs["data"])
-        assert sent_body["input"] == [{"role": "tool", "content": "Tool result"}]
+        assert sent_body["input"] == [
+            {
+                "role": "tool",
+                "content": "Tool result",
+                "history": [
+                    {"role": "user", "content": "User prompt"},
+                    {"role": "assistant", "content": "Calling a tool"},
+                ],
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_request_fallback_includes_system_and_latest_input(self):
@@ -1089,7 +1189,14 @@ class TestPointGuardAIGuardrailApplyGuardrail:
         sent_body = json.loads(guardrail.async_handler.post.call_args.kwargs["data"])
         assert sent_body["input"] == [
             {"role": "system", "content": "System prompt"},
-            {"role": "user", "content": "Second input"},
+            {
+                "role": "user",
+                "content": "Second input",
+                "history": [
+                    {"role": "user", "content": "First input"},
+                    {"role": "assistant", "content": "First output"},
+                ],
+            },
         ]
 
     @pytest.mark.asyncio

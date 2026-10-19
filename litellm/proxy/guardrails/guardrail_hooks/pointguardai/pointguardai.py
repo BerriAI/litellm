@@ -35,6 +35,12 @@ if TYPE_CHECKING:
 
 GUARDRAIL_NAME: Final = "POINTGUARDAI"
 DEFAULT_POINTGUARDAI_API_BASE: Final = "https://api.appsoc.com"
+# Roles sent as their own input messages, never with history.
+CONTEXT_ROLES: Final = ("system", "developer")
+# Roles sent as history; PointGuard decides which of them its policy reads.
+HISTORY_ROLES: Final = ("user", "assistant")
+# A PointGuard policy reads at most 10 turns: the inspected message and the 9 user turns before it.
+MAX_HISTORY_TURNS: Final = 9
 
 
 def _is_json_object(
@@ -817,12 +823,12 @@ class PointGuardAIGuardrail(CustomGuardrail):
         request_data: Mapping[str, object],
     ) -> GenericGuardrailAPIInputs:
         """Handle request-side (pre-call) guardrail checks for input messages."""
-        request_messages: Final = self._get_input_messages_from_request_data(request_data)
+        request_messages: Final = self._get_request_messages(request_data)
         messages: Final = (
-            request_messages
+            self._inspection_messages(request_messages)
             if request_messages is not None
             else (
-                self.transform_messages(self._select_input_messages(structured_messages))
+                self._inspection_messages(structured_messages)
                 if structured_messages
                 else [{"role": "user", "content": text} for text in texts[-1:]]
             )
@@ -846,9 +852,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
         if not messages and not serialized_tools:
             return inputs
 
-        new_messages: Final = self.transform_messages(messages=messages) + [
-            {"role": "tool", "content": serialized} for _, serialized in serialized_tools
-        ]
+        new_messages: Final = messages + [{"role": "tool", "content": serialized} for _, serialized in serialized_tools]
 
         # Make PointGuardAI API request (input only - no output)
         modified_content: Final = await self.make_pointguard_api_request(
@@ -934,11 +938,10 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 scan_only_tool_results=scan_only_tool_results,
             )
         ]
-        context_roles: Final = ("system", "developer")
         context_messages: Final = (
             []
             if skip_system
-            else [message for message in scoped_messages if str(message.get("role") or "").lower() in context_roles]
+            else [message for message in scoped_messages if str(message.get("role") or "").lower() in CONTEXT_ROLES]
         )
         latest_assistant_index: Final = next(
             (
@@ -951,19 +954,61 @@ class PointGuardAIGuardrail(CustomGuardrail):
         current_turn_messages: Final = [
             message
             for message in scoped_messages[latest_assistant_index + 1 :]
-            if str(message.get("role") or "").lower() not in context_roles
+            if str(message.get("role") or "").lower() not in CONTEXT_ROLES
         ]
         return context_messages + current_turn_messages
+
+    def _inspection_messages(
+        self,
+        messages: Sequence[object],
+    ) -> list[dict[str, object]]:  # mutable-ok: PointGuard input schema requires a JSON array of objects
+        """Transform the selected input messages, each non-system one carrying the conversation before it as history."""
+        selected: Final = self._select_input_messages(messages)
+        needs_history: Final = frozenset(
+            id(message) for message in selected if str(message.get("role") or "").lower() not in CONTEXT_ROLES
+        )
+        histories: Final[dict[int, tuple[Mapping[str, str], ...]]] = {}  # mutable-ok: local lookup by message identity
+        earlier: Final[list[Mapping[str, str]]] = []  # mutable-ok: local accumulator of the conversation so far
+        for message in messages:
+            if id(message) in needs_history:
+                histories[id(message)] = self._recent_turns(earlier)
+            if not _is_json_object(message):
+                continue
+            role = str(message.get("role") or "user").lower()
+            content = self._extract_text_content(message.get("content"))
+            # PointGuard rejects blank history messages, such as an assistant turn holding only tool calls.
+            if role in HISTORY_ROLES and content.strip():
+                earlier.append({"role": role, "content": content})
+
+        inspection_messages: Final[list[dict[str, object]]] = []  # mutable-ok: outbound JSON message accumulator
+        for message, transformed in zip(selected, self.transform_messages(selected), strict=True):
+            history = histories.get(id(message), ())
+            inspection_messages.append({**transformed, "history": list(history)} if history else transformed)
+        return inspection_messages
+
+    @staticmethod
+    def _recent_turns(history: Sequence[Mapping[str, str]]) -> tuple[Mapping[str, str], ...]:
+        """The last MAX_HISTORY_TURNS user turns of ``history``, the most a PointGuard policy reads."""
+        user_indices: Final = [index for index, message in enumerate(history) if message["role"] == "user"]
+        start: Final = user_indices[-MAX_HISTORY_TURNS] if len(user_indices) >= MAX_HISTORY_TURNS else 0
+        return tuple(history[start:])
 
     def _get_input_messages_from_request_data(
         self,
         request_data: Mapping[str, object],
     ) -> list[dict[str, object]] | None:  # mutable-ok: PointGuard input schema requires a JSON array of objects
         """Read input messages from the request payload without copying them into metadata."""
+        messages: Final = self._get_request_messages(request_data)
+        return None if messages is None else self.transform_messages(self._select_input_messages(messages))
 
+    def _get_request_messages(
+        self,
+        request_data: Mapping[str, object],
+    ) -> list[dict[str, object]] | None:  # mutable-ok: LiteLLM messages are redacted in place
+        """Read the request's messages, with Responses API input normalized into a message array."""
         messages: Final = request_data.get("messages")
         if _is_json_array(messages):
-            return self.transform_messages(self._select_input_messages(messages))
+            return [message for message in messages if _is_json_object(message)]
 
         request_input: Final = request_data.get("input")
         if isinstance(request_input, str):
@@ -974,10 +1019,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 input_messages.append({"role": "user", "content": item})
             elif _is_json_object(item) and "content" in item:
                 input_messages.append(item)
-        if input_messages:
-            return self.transform_messages(self._select_input_messages(input_messages))
-
-        return None
+        return input_messages or None
 
     @staticmethod
     def _responses_input_items(request_input: object) -> Sequence[object]:
