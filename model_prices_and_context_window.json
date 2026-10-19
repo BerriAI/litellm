@@ -75503,7 +75503,6 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-4-argon": {
-        "deprecation_date": "2027-10-13",
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_flex": 5e-08,
