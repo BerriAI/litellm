@@ -342,6 +342,10 @@ EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
 
 
+def _sequence_field(request_body: Mapping[str, object], field: str) -> tuple[object, ...]:
+    return tuple(_validated_object_list(request_body.get(field)) or ())
+
+
 class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def _request_value(request_kwargs: object, key: str) -> object:
@@ -964,9 +968,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _request_has_cache_control(
-        messages: list[AllMessageValues],
-        system: str | list | None,
-        tools: list | None = None,
+        messages: Iterable[object],
+        system: object = None,
+        tools: Iterable[object] | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
         on_messages_route: bool = False,
@@ -987,6 +991,19 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             else AnthropicCacheControlHook.count_external_cache_breakpoints(tools, cache_control, request_kwargs)
         )
         return AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) + external_breakpoints > 0
+
+    @staticmethod
+    def body_has_cache_control(request_body: Mapping[str, object]) -> bool:
+        """Whether a proxy request body marks a cache breakpoint of its own, on either surface a
+        breakpoint can arrive on: `messages` for chat completions and `input` for the Responses
+        API, alongside the `system` and `tools` blocks both surfaces share and the top-level
+        `cache_control` that turns on Anthropic's automatic caching."""
+        return AnthropicCacheControlHook._request_has_cache_control(
+            messages=_sequence_field(request_body, "messages") + _sequence_field(request_body, "input"),
+            system=request_body.get("system"),
+            tools=_sequence_field(request_body, "tools"),
+            cache_control=request_body.get("cache_control"),
+        )
 
     @staticmethod
     def get_default_injection_points(

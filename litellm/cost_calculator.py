@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_regional_uplift_multiplier,
     get_service_tier_cost_key,
     get_token_type_cost_breakdown,
+    normalize_service_tier,
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
@@ -131,7 +132,6 @@ from litellm.types.utils import (
     ModelInfo,
     ModelInfoBase,
     PromptTokensDetailsWrapper,
-    ServiceTier,
     StandardBuiltInToolsParams,
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
@@ -1034,20 +1034,6 @@ def _map_traffic_type_to_service_tier(traffic_type: str | None) -> str | None:
     return service_tier
 
 
-def _normalize_service_tier(service_tier: object) -> str | None:
-    """
-    Reduce a service_tier value to a concrete billable tier string or None.
-
-    "auto" is a routing preference and any non-string value is not a billable
-    tier, so both defer to standard pricing (or to the tier the provider reports
-    on the response usage) instead of crashing the downstream cost-key lookup,
-    which calls service_tier.lower()
-    """
-    if not isinstance(service_tier, str) or service_tier.lower() == ServiceTier.AUTO.value:
-        return None
-    return service_tier
-
-
 _BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "standard"})
 
 
@@ -1058,7 +1044,7 @@ def _resolve_billable_service_tier(requested: object, served: object) -> str | N
         return served_lower
     if served_lower in _BASE_PRICING_SERVICE_TIERS:
         return None
-    return _normalize_service_tier(requested)
+    return normalize_service_tier(requested)
 
 
 def _served_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
@@ -1519,7 +1505,7 @@ def completion_cost(
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
-        explicit_tier: Final = _normalize_service_tier(service_tier)
+        explicit_tier: Final = normalize_service_tier(service_tier)
         if explicit_tier is not None:
             service_tier = explicit_tier
         else:
