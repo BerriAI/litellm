@@ -10,7 +10,7 @@ from typing import Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -39,6 +39,7 @@ class _AzureV1ClientParams(TypedDict, total=False, extra_items=object):
     base_url: ReadOnly[str]
 
 
+@with_config(ConfigDict(extra="allow"))
 class _AsyncAzureClientParams(TypedDict, total=False, extra_items=object):
     api_key: ReadOnly[str | None]
     azure_ad_token: ReadOnly[str | None]
