@@ -8306,8 +8306,8 @@ def get_base_model_from_metadata(model_call_details: Mapping[str, object] | None
     litellm_params: Final = cast(Mapping[str, object], model_call_details.get("litellm_params", {}))
     if litellm_params is not None:
         base_model: Final = litellm_params.get("base_model", None)
-        if base_model is not None:
-            return cast(str | None, base_model)
+        if isinstance(base_model, str):
+            return base_model
         metadata: Final = cast(Mapping[str, object], litellm_params.get("metadata") or {})
         base_model_metadata_getter: Final[_BaseModelFromMetadataGetter] = (
             litellm_utils.get_base_model_from_litellm_call_metadata
