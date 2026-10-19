@@ -155,7 +155,15 @@ def test_a_cold_burst_of_searches_fetches_the_entra_token_once(monkeypatch: pyte
                 second_fetch_started.set()
             return AccessToken("entra-token", int(time.time()) + 3600)
 
+    second_build_started: Final = threading.Event()
+    builds: Final[list[str]] = []
+
     def provider_factory(azure_scope: str) -> object:
+        builds.append(azure_scope)
+        if len(builds) == 1:
+            second_build_started.wait(timeout=0.5)
+        else:
+            second_build_started.set()
         return get_bearer_token_provider(SlowCredential(), azure_scope)
 
     provider_module: Final = importlib.import_module("litellm.secret_managers.get_azure_ad_token_provider")

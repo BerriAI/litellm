@@ -137,8 +137,12 @@ def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return _single_flight_azure_ad_token_provider(get_azure_ad_token_provider(azure_scope=scope))
 
 
+_refresh_provider_lookup: Final = threading.Lock()
+
+
 def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
-    return _cached_azure_ad_token_refresh_provider(scope)
+    with _refresh_provider_lookup:
+        return _cached_azure_ad_token_refresh_provider(scope)
 
 
 @lru_cache(maxsize=128)
@@ -461,7 +465,7 @@ def get_azure_ad_token(
             "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
         )
         try:
-            azure_ad_token_provider = _cached_azure_ad_token_refresh_provider(scope)
+            azure_ad_token_provider = cached_azure_ad_token_refresh_provider(scope)
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
         except Exception as e:
@@ -760,7 +764,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = _cached_azure_ad_token_refresh_provider(scope)
+                azure_ad_token_provider = cached_azure_ad_token_refresh_provider(scope)
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
