@@ -7,6 +7,7 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from itertools import accumulate, groupby
+from os.path import commonpath
 from pathlib import Path
 from typing import Final, cast
 
@@ -43,9 +44,9 @@ def _outcome(row: dict[str, object]) -> Outcome:
     return Outcome(_string(row["nodeid"]), _string(row["category"]), _string(row["reason"]))
 
 
-def _cell(value: str | float) -> str:
+def _cell(value: str | float, limit: int = 240) -> str:
     raw: Final = str(value)
-    clipped: Final = raw[:240] + ("..." if len(raw) > 240 else "")
+    clipped: Final = raw[:limit] + ("..." if len(raw) > limit else "")
     return (
         html.escape(" ".join(clipped.split()), quote=True)
         .replace("|", "&#124;")
@@ -75,18 +76,36 @@ def _metric_row(row: dict[str, object]) -> str:
     value: Final = row["value"]
     if not isinstance(value, (str, int, float)):
         raise ValueError("invalid metric value")
-    return (
-        "| "
-        + " | ".join(
-            _cell(value)
-            for value in (
-                _string(row["name"]),
-                value,
-                _string(row["unit"]),
-                _string(row["nodeid"]),
-            )
+    unit: Final = _string(row["unit"])
+    measured: Final = _cell(f"{value} {unit}".strip())
+    formatted: Final = f"<strong>{measured}</strong>" if isinstance(value, (int, float)) else measured
+    return f"| {_cell(_string(row['name']))} | {formatted} |"
+
+
+def _metric_group(nodeid: str, rows: tuple[dict[str, object], ...]) -> str:
+    return "\n".join(
+        (
+            "| Metric | Value |",
+            "| --- | --- |",
+            _limited(tuple(_metric_row(row) for row in rows)),
+            "",
+            "<details>",
+            "<summary>Metric source</summary>",
+            "",
+            f"<code>{_cell(nodeid)}</code>",
+            "",
+            "</details>",
+            "",
         )
-        + " |"
+    )
+
+
+def _expected_detail(outcome: Outcome) -> str:
+    path, _, test = outcome.nodeid.partition("::")
+    return (
+        f"- **{outcome.category}**: {_cell(test or path)}\n\n"
+        f"  {_cell(outcome.reason, 1000)}\n\n"
+        f"  <sub>{_cell(path)}</sub>\n"
     )
 
 
@@ -104,24 +123,36 @@ def render(data: dict[str, object], title: str) -> str:
         or "No test outcomes recorded"
     )
     files: Final = frozenset(outcome.nodeid.split("::")[0] for outcome in outcomes if outcome.category != "passed")
+    prefix: Final = (commonpath(tuple(str(Path(path).parent) for path in files)) or ".") if files else "."
     grouped: Final = groupby(
         sorted(outcomes, key=lambda outcome: outcome.nodeid), key=lambda outcome: outcome.nodeid.split("::")[0]
     )
-    file_rows: Final = tuple(_file_row(path, tuple(group)) for path, group in grouped if path in files)
-    table: Final = "\n".join(
-        (
-            "| File | passed | failed | error | skipped | xfailed | xpassed |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
-            _limited(file_rows),
+    file_rows: Final = tuple(
+        _file_row(str(Path(path).relative_to(prefix)), tuple(group)) for path, group in grouped if path in files
+    )
+    table: Final = (
+        "\n".join(
+            (
+                "### Files with non-pass outcomes",
+                "",
+                f"Paths relative to <code>{_cell(prefix)}/</code>\n" if prefix != "." else "",
+                "| File | Passed | Failed | Errors | Skipped | Xfailed | Xpassed |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+                _limited(file_rows),
+            )
         )
+        if file_rows
+        else ""
+    )
+    metric_groups: Final = groupby(
+        sorted(metrics, key=lambda row: _string(row["nodeid"])), key=lambda row: _string(row["nodeid"])
     )
     metric_table: Final = (
         "\n".join(
             (
+                "### Metrics",
                 "",
-                "| Metric | Value | Unit | Test |",
-                "| --- | --- | --- | --- |",
-                _limited(tuple(_metric_row(row) for row in metrics)),
+                _limited(tuple(_metric_group(nodeid, tuple(rows)) for nodeid, rows in metric_groups)),
             )
         )
         if metrics
@@ -138,14 +169,9 @@ def render(data: dict[str, object], title: str) -> str:
             (
                 "",
                 "<details>",
-                "<summary>Xfail and xpass reasons</summary>",
+                f"<summary>Xfail and xpass reasons ({len(expected)})</summary>",
                 "",
-                _limited(
-                    tuple(
-                        f"- {outcome.category}: {_cell(outcome.nodeid)}: {_cell(outcome.reason)}"
-                        for outcome in expected
-                    )
-                ),
+                _limited(tuple(_expected_detail(outcome) for outcome in expected)),
                 "",
                 "</details>",
             )
@@ -153,7 +179,10 @@ def render(data: dict[str, object], title: str) -> str:
         if expected
         else ""
     )
-    return "\n".join((f"## {_cell(title)}", "", totals, "", table, metric_table, details, ""))
+    return (
+        "\n\n".join(part for part in (f"## {_cell(title)}", f"**{totals}**", metric_table, table, details) if part)
+        + "\n"
+    )
 
 
 def main() -> None:

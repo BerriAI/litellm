@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -28,7 +29,9 @@ def _run_shard(tmp_path: Path, test_path: str, workers: str) -> subprocess.Compl
     shim_dir.mkdir()
     (shim_dir / "uv").write_text(_UV_SHIM)
     (shim_dir / "uv").chmod(0o755)
-    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\naddopts = '-p no:cacheprovider'\n")
+    (tmp_path / "pyproject.toml").write_text(
+        f"[tool.pytest.ini_options]\naddopts = '-p no:cacheprovider'\npythonpath = [{json.dumps(str(_REPO_ROOT / 'scripts'))}]\n"
+    )
     return subprocess.run(
         ("bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _run_tests_script()),
         cwd=tmp_path,

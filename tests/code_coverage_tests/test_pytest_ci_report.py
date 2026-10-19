@@ -149,6 +149,7 @@ def test_outcomes_match_pytest_and_metrics_survive_workers(tmp_path: Path, worke
     )
     assert ", ".join(terminal) in rendered.stdout
     assert "| test_sample.py | 3 | 1 | 1 | 1 | 1 | 1 |" in html.unescape(rendered.stdout)
+    assert "Paths relative to" not in html.unescape(rendered.stdout)
     assert rendered.stdout.index("fixed bug") < rendered.stdout.index("known bug")
 
 
@@ -173,9 +174,7 @@ def test_collection_errors_are_reported_and_match_terminal(tmp_path: Path, worke
     terminal_summary: Final = next(
         line for line in reversed(result.stdout.splitlines()) if re.search(r"\d+ errors? in ", line)
     )
-    terminal_counts: Final = re.findall(
-        r"\d+ (?:failed|passed|skipped|xfailed|xpassed|errors?)\b", terminal_summary
-    )
+    terminal_counts: Final = re.findall(r"\d+ (?:failed|passed|skipped|xfailed|xpassed|errors?)\b", terminal_summary)
     assert terminal_counts == ["1 error"]
     rendered: Final = render(report)
     assert rendered.returncode == 0, rendered.stderr
@@ -264,11 +263,57 @@ def test_details_and_large_cells_fit_summary_limit(tmp_path: Path, reason: str) 
     )
     result: Final = render(report)
     assert result.returncode == 0
-    visible: Final = result.stdout.count("- xfailed:")
+    visible: Final = result.stdout.count("- **xfailed**:")
     assert visible <= 500
     assert f"and {600 - visible} more" in result.stdout
     assert len(result.stdout.encode()) < 1_000_000
     assert "<tag>" not in result.stdout
+
+
+def test_passing_metrics_are_compact_and_preserve_sources(tmp_path: Path) -> None:
+    report: Final = tmp_path / "report.json"
+    _ = report.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "outcomes": [{"nodeid": "tests/wheel/test_build.py::test_sizes", "category": "passed", "reason": ""}],
+                "metrics": [
+                    {"nodeid": "tests/wheel/test_build.py::test_sizes", "name": "Wheel", "value": 20.5, "unit": "MB"},
+                    {"nodeid": "tests/wheel/test_build.py::test_sizes", "name": "Native", "value": 30, "unit": "MB"},
+                ],
+            }
+        )
+    )
+    rendered: Final = render(report)
+    assert rendered.returncode == 0, rendered.stderr
+    readable: Final = html.unescape(rendered.stdout)
+    assert "**1 passed**" in readable
+    assert "| Wheel | <strong>20.5 MB</strong> |" in readable
+    assert "| Native | <strong>30 MB</strong> |" in readable
+    assert readable.count("tests/wheel/test_build.py::test_sizes") == 1
+    assert "Files with non-pass outcomes" not in readable
+
+
+def test_file_rows_shorten_shared_directory_without_losing_paths(tmp_path: Path) -> None:
+    report: Final = tmp_path / "report.json"
+    _ = report.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "metrics": [],
+                "outcomes": [
+                    {"nodeid": "tests/unit/proxy/test_first.py::test_one", "category": "skipped", "reason": ""},
+                    {"nodeid": "tests/unit/proxy/test_second.py::test_two", "category": "failed", "reason": ""},
+                ],
+            }
+        )
+    )
+    rendered: Final = render(report)
+    readable: Final = html.unescape(rendered.stdout)
+    assert rendered.returncode == 0, rendered.stderr
+    assert "Paths relative to <code>tests/unit/proxy/</code>" in readable
+    assert "| test_first.py | 0 | 0 | 0 | 1 | 0 | 0 |" in readable
+    assert "| test_second.py | 0 | 1 | 0 | 0 | 0 | 0 |" in readable
 
 
 def test_metrics_are_compatible_with_junit(tmp_path: Path) -> None:
