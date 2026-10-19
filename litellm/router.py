@@ -322,6 +322,7 @@ from litellm.router_utils.routing_groups import (
     validate_routing_strategy,
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
+from litellm.router_utils.stream_usage_injection import router_config_requests_stream_usage
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import GuardrailEventHooks
@@ -554,7 +555,6 @@ _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_CONFIGURED_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DEPLOYMENT_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | GenericLiteLLMParams]] = TypeAdapter(
     Mapping[str, object] | GenericLiteLLMParams
 )
@@ -574,22 +574,6 @@ def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: st
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
     fallback_depth: Final = request_kwargs.get("fallback_depth")
     return isinstance(fallback_depth, int) and fallback_depth > 0
-
-
-def _router_config_requests_stream_usage(
-    request_kwargs: Mapping[str, object], configured_params: Sequence[Mapping[str, object]]
-) -> bool:
-    if request_kwargs.get("stream") is not True or "stream_options" in request_kwargs:
-        return False
-    return any(_includes_usage(params.get("stream_options")) for params in configured_params)
-
-
-def _includes_usage(stream_options: object) -> bool:
-    match stream_options:
-        case {"include_usage": True}:
-            return True
-        case _:
-            return False
 
 
 def _deployment_that_just_failed(request_metadata: object) -> str | None:
@@ -4595,7 +4579,7 @@ class Router:
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
         ):
             kwargs.pop(key, None)
-        defaults: Final = _CONFIGURED_PARAMS_ADAPTER.validate_python(self.default_litellm_params)
+        defaults: Final = _LITELLM_PARAMS_ADAPTER.validate_python(self.default_litellm_params)
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs, defaults=defaults)
 
         model_info = deployment.get("model_info", {}).copy()
@@ -4731,9 +4715,9 @@ class Router:
                 data=_DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]),
             )
 
-        if _router_config_requests_stream_usage(
+        if router_config_requests_stream_usage(
             _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
-            (_CONFIGURED_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]), defaults),
+            (_LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]), defaults),
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
