@@ -2386,7 +2386,7 @@ export interface paths {
          *
          *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
          *     the key is authenticated and the catalog also holds the disabled plugins granted
-         *     to it through `object_permission.skills` on the key or its team.
+         *     to it through `object_permission.skills` or an access group on the key or its team.
          *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
@@ -4713,8 +4713,9 @@ export interface paths {
          * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
          *
          *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
-         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
-         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
+         *     `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
+         *     any provider is called. `model` is any decision model in the proxy
          *     model list. System One decision models accept this format too, LiteLLM translates the request and the
          *     answers. Streaming is not supported.
          *
@@ -5831,7 +5832,8 @@ export interface paths {
         };
         /**
          * Latest Release Info
-         * @description Latest stable LiteLLM GitHub release with its PR count split into new features, bug fixes and other updates.
+         * @description Latest stable LiteLLM GitHub release with the PR count of its whole minor line (e.g. v1.105.0 + v1.105.1)
+         *     split into new features, bug fixes and other updates.
          *     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
@@ -7991,7 +7993,7 @@ export interface paths {
          * Cancel Interaction
          * @description Cancel an interaction by ID.
          *
-         *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
+         *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}/cancel
          */
         post: operations["cancel_interaction_interactions__interaction_id__cancel_post"];
         delete?: never;
@@ -8564,7 +8566,8 @@ export interface paths {
          *           hour), so subtracting budget_duration from it does not give the window's start
          *         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
-         *           the key has per-model budgets
+         *           the key has per-model budgets. Each entry's budget_reset_at is when that model's open
+         *           window ends and its spend resets, or None when no window is open or it ends after year 9999
          *         - budget_limits: list | None - Concurrent budget windows, exactly as stored
          *         - budget_limits_usage: dict | None - Current-window spend per budget window, e.g.
          *           {"1h": {"current_spend": 0.0009}}, present only when the key has budget windows
@@ -9470,6 +9473,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/users/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Current User */
+        get: operations["get_current_user_management_v1_users_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp": {
         parameters: {
             query?: never;
@@ -9911,7 +9931,8 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy.
+         *     models configured on this proxy. An entry also names its `successor_model`
+         *     when the deployment sets `model_info.successor_model`.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -10160,6 +10181,23 @@ export interface paths {
          * @description Edit existing model params
          */
         post: operations["update_model_model_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/{model_id}/kubernetes_pods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Kubernetes Pods */
+        get: operations["get_kubernetes_pods_model__model_id__kubernetes_pods_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13437,6 +13475,9 @@ export interface paths {
          *
          *     If an agent has `inherit_credentials_from_provider`, the provider's credential
          *     fields are automatically appended to the agent's credential_fields.
+         *
+         *     Reads from the bundled local files. Result is cached in-process for the
+         *     lifetime of the server process.
          */
         get: operations["get_agent_fields_public_agents_fields_get"];
         put?: never;
@@ -13658,6 +13699,9 @@ export interface paths {
         /**
          * Get Provider Fields
          * @description Return provider metadata required by the dashboard create-model flow.
+         *
+         *     Reads from the bundled local file. Result is cached in-process for the
+         *     lifetime of the server process.
          */
         get: operations["get_provider_fields_public_providers_fields_get"];
         put?: never;
@@ -15627,6 +15671,11 @@ export interface paths {
          * View Spend Tags
          * @description LiteLLM Enterprise - View Spend Per Request Tag
          *
+         *     - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see tag aggregates
+         *       across every spend log.
+         *     - All other callers see aggregates over their own spend logs and those of
+         *       teams they may view, exactly like ``/spend/logs/ui``.
+         *
          *     Example Request:
          *     ```
          *     curl -X GET "http://0.0.0.0:8000/spend/tags" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
@@ -15943,9 +15992,10 @@ export interface paths {
          * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
-         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
-         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
-         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
+         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+         *     these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *
          *     [Docs](https://docs.litellm.ai/docs/decisions)
@@ -19849,8 +19899,9 @@ export interface paths {
          * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
          *
          *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
-         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
-         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
+         *     `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
+         *     any provider is called. `model` is any decision model in the proxy
          *     model list. System One decision models accept this format too, LiteLLM translates the request and the
          *     answers. Streaming is not supported.
          *
@@ -21189,7 +21240,8 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy.
+         *     models configured on this proxy. An entry also names its `successor_model`
+         *     when the deployment sets `model_info.successor_model`.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -22225,9 +22277,10 @@ export interface paths {
          * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
-         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
-         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
-         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
+         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+         *     these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *
          *     [Docs](https://docs.litellm.ai/docs/decisions)
@@ -23404,7 +23457,7 @@ export interface paths {
          * Cancel Interaction
          * @description Cancel an interaction by ID.
          *
-         *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
+         *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}/cancel
          */
         post: operations["cancel_interaction_v1beta_interactions__interaction_id__cancel_post"];
         delete?: never;
@@ -23600,6 +23653,7 @@ export interface paths {
          *         modelId: Return a single deployment by LiteLLM model id.
          *         teamId: Filter to models with direct access or team membership for this team id.
          *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+         *         blocked: Filter by routing status (false = active, true = paused).
          *         access_group: Only return deployments in this model access group.
          *         wildcard_only: Only return deployments whose `model_name` contains `*`.
          *
@@ -25105,6 +25159,8 @@ export interface components {
             access_mcp_server_ids?: string[] | null;
             /** Access Model Names */
             access_model_names?: string[] | null;
+            /** Access Skill Names */
+            access_skill_names?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */
@@ -25154,6 +25210,11 @@ export interface components {
             access_mcp_servers: components["schemas"]["AccessGroupResource"][];
             /** Access Model Names */
             access_model_names: string[];
+            /**
+             * Access Skill Names
+             * @default []
+             */
+            access_skill_names: string[];
             /** Assigned Key Ids */
             assigned_key_ids: string[];
             /** Assigned Keys */
@@ -25193,6 +25254,8 @@ export interface components {
             access_mcp_server_ids?: string[] | null;
             /** Access Model Names */
             access_model_names?: string[] | null;
+            /** Access Skill Names */
+            access_skill_names?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */
@@ -26964,6 +27027,12 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
+            /**
              * Guard Name
              * @description Name of the guardrail in guardrails.ai
              */
@@ -27018,6 +27087,11 @@ export interface components {
              * @description Optional field if guardrail requires a 'model' parameter
              */
             model?: string | null;
+            /**
+             * Num Retries
+             * @description How many more times to send a guardrail check whose connection timed out waiting for the answer or was dropped after the request went out. Each retry opens a fresh connection and gets the full timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it.
+             */
+            num_retries?: number | null;
             /**
              * On Sensitive Data
              * @description Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.
@@ -27452,8 +27526,10 @@ export interface components {
         };
         /** Body_token_endpoint__mcp_server_name__token_post */
         Body_token_endpoint__mcp_server_name__token_post: {
+            /** Assertion */
+            assertion?: string | null;
             /** Client Id */
-            client_id: string;
+            client_id?: string | null;
             /** Client Secret */
             client_secret?: string | null;
             /** Code */
@@ -27479,8 +27555,10 @@ export interface components {
         };
         /** Body_token_endpoint_token_post */
         Body_token_endpoint_token_post: {
+            /** Assertion */
+            assertion?: string | null;
             /** Client Id */
-            client_id: string;
+            client_id?: string | null;
             /** Client Secret */
             client_secret?: string | null;
             /** Code */
@@ -27532,6 +27610,19 @@ export interface components {
         Body_video_generation_videos_post: {
             /** Input Reference */
             input_reference?: string | null;
+        };
+        /** BoxAnswer */
+        BoxAnswer: {
+            box: components["schemas"]["DecisionsBox"];
+            /** Confidence */
+            confidence: number | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "box";
+        } & {
+            [key: string]: unknown;
         };
         /**
          * BreakdownMetrics
@@ -28753,6 +28844,8 @@ export interface components {
             } | components["schemas"]["ChatCompletionCachedContent"] | null;
             /** Data */
             data?: string;
+            /** Index */
+            index?: number;
             /**
              * Type
              * @constant
@@ -28791,6 +28884,8 @@ export interface components {
             cache_control?: {
                 [key: string]: unknown;
             } | components["schemas"]["ChatCompletionCachedContent"] | null;
+            /** Index */
+            index?: number;
             /** Signature */
             signature?: string | null;
             /** Thinking */
@@ -28857,6 +28952,8 @@ export interface components {
             /** Allowed Callers */
             allowed_callers?: string[];
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
+            /** Defer Loading */
+            defer_loading?: boolean;
             /** Eager Input Streaming */
             eager_input_streaming?: boolean;
             function: components["schemas"]["ChatCompletionToolParamFunctionChunk"];
@@ -29603,6 +29700,12 @@ export interface components {
              */
             admission_queue_timeout_seconds: number;
             /**
+             * Agent Access Default Deny
+             * @description When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. Proxy admins are exempt.
+             * @default false
+             */
+            agent_access_default_deny: boolean;
+            /**
              * Alert To Webhook Url
              * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`
              */
@@ -29782,6 +29885,11 @@ export interface components {
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
             disable_password_login_when_sso_enabled?: boolean | null;
+            /**
+             * Disable Requester Ip Address Logging
+             * @description If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.
+             */
+            disable_requester_ip_address_logging?: boolean | null;
             /**
              * Disable Responses Id Security
              * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
@@ -29985,6 +30093,11 @@ export interface components {
              */
             mcp_client_id_header?: string | null;
             /**
+             * Mcp Disabled Capabilities
+             * @description MCP capabilities the gateway stops serving on every route, any of 'prompts' and 'resources'. A disabled capability is left out of the initialize and server/discover responses, its list operations return an empty list without contacting any upstream MCP server, and its get/read operations answer METHOD_NOT_FOUND. Unset means prompts and resources stay advertised.
+             */
+            mcp_disabled_capabilities?: ("prompts" | "resources")[] | null;
+            /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
              */
@@ -29994,6 +30107,12 @@ export interface components {
              * @description When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.
              */
             mcp_prefer_client_id_metadata_document?: boolean | null;
+            /**
+             * Mcp Require Explicit Server Scope
+             * @description Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.
+             * @default false
+             */
+            mcp_require_explicit_server_scope: boolean;
             /**
              * Mcp Required Fields
              * @description List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).
@@ -30094,6 +30213,11 @@ export interface components {
              * @default false
              */
             search_tool_deny_by_default: boolean;
+            /**
+             * Self Serve Budget Policy
+             * @description Lets a non-admin change max_budget or budget_limits on a key they created and still own via /key/update. 'disabled' (default) requires an admin for any budget change. 'lower_only' lets the owner add or lower limits. 'ceiling' also lets the owner raise or remove limits when they could create that key with the new budget via /key/generate.
+             */
+            self_serve_budget_policy?: ("disabled" | "lower_only" | "ceiling") | null;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
@@ -30177,6 +30301,11 @@ export interface components {
              * @default false
              */
             vector_store_deny_by_default: boolean;
+            /**
+             * Vertex Ai Pass Through Drop Anthropic Betas
+             * @description anthropic-beta header values the Vertex AI pass-through routes (/vertex_ai/* and /vertex-ai/*) remove before calling Vertex, for a beta a Vertex Claude model rejects, whether the client sent them as anthropic-beta or x-pass-anthropic-beta. Every other value the client sent is forwarded unchanged, and the header is left out when no value remains. Unset forwards the header as sent.
+             */
+            vertex_ai_pass_through_drop_anthropic_betas?: string[] | null;
         };
         /** ConfigList */
         ConfigList: {
@@ -30982,6 +31111,14 @@ export interface components {
              */
             source: "db" | "config";
         };
+        /** CurrentUserResponse */
+        CurrentUserResponse: {
+            /** User Email */
+            user_email: string | null;
+            /** User Id */
+            user_id: string;
+            user_role: components["schemas"]["LitellmUserRoles"] | null;
+        };
         /** CustomDimension */
         CustomDimension: {
             /**
@@ -31288,6 +31425,11 @@ export interface components {
              */
             total_prompt_tokens: number;
             /**
+             * Total Ptu Hours
+             * @default 0
+             */
+            total_ptu_hours: number;
+            /**
              * Total Response Time Ms
              * @default 0
              */
@@ -31334,11 +31476,24 @@ export interface components {
              */
             threshold: number;
         };
+        /** DecisionsBox */
+        DecisionsBox: {
+            /** Bottom */
+            bottom: number;
+            /** Left */
+            left: number;
+            /** Right */
+            right: number;
+            /** Top */
+            top: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** DecisionsResponse */
         DecisionsResponse: {
             /** Answers */
             answers: {
-                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"];
+                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"] | components["schemas"]["BoxAnswer"];
             };
             /** Model */
             model?: string | null;
@@ -33631,6 +33786,21 @@ export interface components {
              */
             tier: string;
         };
+        /** KubernetesPodsResponse */
+        KubernetesPodsResponse: {
+            /** Error */
+            error: string | null;
+            /** Model Id */
+            model_id: string;
+            /** Pod Count */
+            pod_count: number;
+            /** Pod Ips */
+            pod_ips: string[];
+            /** Port */
+            port: number | null;
+            /** Service Host */
+            service_host: string;
+        };
         /** LLMV2Calibration */
         LLMV2Calibration: {
             capable: components["schemas"]["LLMV2ProbabilityCalibration"];
@@ -35027,6 +35197,8 @@ export interface components {
             input_cost_per_query?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
+            /** Input Cost Per Text Message */
+            input_cost_per_text_message?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
             /** Input Cost Per Token Above 100K Tokens */
@@ -35226,6 +35398,8 @@ export interface components {
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
+            /** Responses Api Version */
+            responses_api_version?: string | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */
@@ -36379,6 +36553,12 @@ export interface components {
              */
             file_guardrail_timeout?: number | null;
             /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
+            /**
              * Gateway Name
              * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
              */
@@ -36531,6 +36711,11 @@ export interface components {
              * @description If True, logs violations without blocking. Defaults to False if not provided
              */
             monitor_mode?: boolean | null;
+            /**
+             * Num Retries
+             * @description How many more times to send a guardrail check whose connection timed out waiting for the answer or was dropped after the request went out. Each retry opens a fresh connection and gets the full timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it.
+             */
+            num_retries?: number | null;
             /**
              * On Disallowed Action
              * @description Choose whether disallowed tools block the request or get rewritten out of the payload
@@ -37199,6 +37384,8 @@ export interface components {
             id_jag_resource_client_secret?: string | null;
             /** Id Jag Resource Token Endpoint */
             id_jag_resource_token_endpoint?: string | null;
+            /** Id Jag Subject Source */
+            id_jag_subject_source?: string | null;
             /** Redirect Uris */
             redirect_uris?: string[] | null;
             /** Scopes */
@@ -37987,6 +38174,11 @@ export interface components {
              * @enum {string}
              */
             status: "upcoming" | "imminent" | "deprecated";
+            /**
+             * Successor Model
+             * @description The model to migrate to, as set in model_info.successor_model on the deployment.
+             */
+            successor_model?: string | null;
         };
         /** ModelDeprecationResponse */
         ModelDeprecationResponse: {
@@ -39321,6 +39513,19 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** OpenAIBoxAnswer */
+        OpenAIBoxAnswer: {
+            box: components["schemas"]["DecisionsBox"];
+            /** Confidence */
+            confidence: number | null;
+            /** Name */
+            name: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "box";
+        };
         /** OpenAIChoiceAnswer */
         OpenAIChoiceAnswer: {
             /** Choice */
@@ -39368,7 +39573,7 @@ export interface components {
         /** OpenAIDecisionResponse */
         OpenAIDecisionResponse: {
             /** Answers */
-            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIRefusalAnswer"])[];
+            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIBoxAnswer"] | components["schemas"]["OpenAIRefusalAnswer"])[];
             /** Model */
             model: string;
             usage: components["schemas"]["OpenAIDecisionUsage"];
@@ -39443,6 +39648,16 @@ export interface components {
             probability: number;
             /** Value */
             value: number;
+        };
+        /** OpenAIToolSearchToolParam */
+        OpenAIToolSearchToolParam: {
+            /** Execution */
+            execution?: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search";
         };
         /**
          * OpenIdConnectSecurityScheme
@@ -39859,6 +40074,32 @@ export interface components {
             reasoning_tokens?: number | null;
             /** Text Tokens */
             text_tokens?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** OutputToolSearchCall */
+        OutputToolSearchCall: {
+            /** Arguments */
+            arguments: unknown;
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_call";
         } & {
             [key: string]: unknown;
         };
@@ -43705,7 +43946,7 @@ export interface components {
             /** Tool Choice */
             tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
             /** Tools */
-            tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+            tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
             /** Top Logprobs */
             top_logprobs?: number | null;
             /** Top P */
@@ -43839,7 +44080,7 @@ export interface components {
             /** Output */
             output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
                 [key: string]: unknown;
-            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"])[];
+            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"])[];
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Previous Response Id */
@@ -44697,6 +44938,8 @@ export interface components {
             api_base?: string | null;
             /** Api Key */
             api_key?: string | null;
+            /** Input Cost Per Query */
+            input_cost_per_query?: number | null;
             /** Max Retries */
             max_retries?: number | null;
             /** Search Provider */
@@ -45310,6 +45553,11 @@ export interface components {
              */
             prompt_tokens: number;
             /**
+             * Ptu Hours
+             * @default 0
+             */
+            ptu_hours: number;
+            /**
              * Spend
              * @default 0
              */
@@ -45869,6 +46117,8 @@ export interface components {
             access_group_mcp_server_ids?: string[] | null;
             /** Access Group Models */
             access_group_models?: string[] | null;
+            /** Access Group Skill Names */
+            access_group_skill_names?: string[] | null;
             /**
              * Admins
              * @default []
@@ -46639,9 +46889,17 @@ export interface components {
          * @description Response structure for token count details with modality breakdown.
          *
          *     Example:
-         *         {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+         *         {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+         *          'litellm_count_source': 'provider'}
          */
         TokenCountDetailsResponse: {
+            /** Litellm Count Model */
+            litellm_count_model?: string;
+            /**
+             * Litellm Count Source
+             * @enum {string}
+             */
+            litellm_count_source?: "provider" | "token_count_model" | "local_estimate";
             /** Prompttokensdetails */
             promptTokensDetails: components["schemas"]["PromptTokensDetails"][];
             /** Totaltokens */
@@ -46670,6 +46928,8 @@ export interface components {
         };
         /** TokenCountResponse */
         TokenCountResponse: {
+            /** Count Source */
+            count_source?: ("provider" | "token_count_model" | "local_estimate") | null;
             /**
              * Error
              * @default false
@@ -49771,6 +50031,8 @@ export interface components {
             blocked?: boolean | null;
             /** Cache Creation Input Token Cost */
             cache_creation_input_token_cost?: number | null;
+            /** Cache Creation Input Token Cost Above 1Hr */
+            cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cost Per Ptu Per Hour */
@@ -49811,6 +50073,10 @@ export interface components {
             ptu_effective_from?: string | null;
             /** Ptu Effective To */
             ptu_effective_to?: string | null;
+            /** Ptu Shares */
+            ptu_shares?: {
+                [key: string]: number;
+            } | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
@@ -50173,6 +50439,8 @@ export interface components {
             input_cost_per_query?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
+            /** Input Cost Per Text Message */
+            input_cost_per_text_message?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
             /** Input Cost Per Token Above 100K Tokens */
@@ -50372,6 +50640,8 @@ export interface components {
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
+            /** Responses Api Version */
+            responses_api_version?: string | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */
@@ -57457,6 +57727,22 @@ export interface operations {
                          * @constant
                          */
                         type: "score";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description What to find in the input's image
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "box";
                     })[];
                     /**
                      * Safety Identifier
@@ -63525,6 +63811,26 @@ export interface operations {
             };
         };
     };
+    get_current_user_management_v1_users_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
     aggregate_mcp_route_mcp_get: {
         parameters: {
             query?: never;
@@ -64756,6 +65062,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_kubernetes_pods_model__model_id__kubernetes_pods_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPodsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -66028,7 +66365,7 @@ export interface operations {
                     /** Tool Choice */
                     tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -69492,7 +69829,7 @@ export interface operations {
                     /** Tool Choice */
                     tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -71725,6 +72062,27 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Assets
+                     * @description TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs
+                     */
+                    assets?: {
+                        [key: string]: {
+                            /**
+                             * Data Base64
+                             * @description Base64-encoded image bytes, no data: prefix
+                             */
+                            data_base64: string;
+                            /**
+                             * Format
+                             * @description The image's format, in lowercase
+                             * @enum {string}
+                             */
+                            format: "png" | "jpg" | "jpeg";
+                            /** Type */
+                            type?: "image" | null;
+                        };
+                    } | null;
+                    /**
                      * Audio
                      * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
                      * @default []
@@ -71835,6 +72193,21 @@ export interface operations {
                              * @constant
                              */
                             type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Instructions
+                             * @description What to find, and in which image, such as 'the coffee mug in `photo`'
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "box";
                         } & {
                             [key: string]: unknown;
                         });
@@ -77354,6 +77727,22 @@ export interface operations {
                          * @constant
                          */
                         type: "score";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description What to find in the input's image
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "box";
                     })[];
                     /**
                      * Safety Identifier
@@ -78475,6 +78864,8 @@ export interface operations {
             query?: {
                 /** @description Filter MCP servers by team scope. When provided, returns only servers the team has access to plus globally available (allow_all_keys) servers. Used by the Create Key UI to show team-scoped MCP servers. */
                 team_id?: string | null;
+                /** @description Filter MCP servers by internal user scope. When provided (and team_id is not), returns the union of the servers each of the user's teams has access to plus globally available (allow_all_keys) servers. A user who belongs to no team gets the unscoped list. Used by the Internal User and Virtual Key edit UIs. */
+                user_id?: string | null;
                 /** @description Annotate each returned server with connected_app_reachable: whether a connected app authorized by the calling user (a gateway OAuth session) is served this server on the aggregate MCP endpoint. */
                 connected_app_view?: boolean;
             };
@@ -80095,7 +80486,7 @@ export interface operations {
                     /** Tool Choice */
                     tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -80605,6 +80996,27 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Assets
+                     * @description TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs
+                     */
+                    assets?: {
+                        [key: string]: {
+                            /**
+                             * Data Base64
+                             * @description Base64-encoded image bytes, no data: prefix
+                             */
+                            data_base64: string;
+                            /**
+                             * Format
+                             * @description The image's format, in lowercase
+                             * @enum {string}
+                             */
+                            format: "png" | "jpg" | "jpeg";
+                            /** Type */
+                            type?: "image" | null;
+                        };
+                    } | null;
+                    /**
                      * Audio
                      * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
                      * @default []
@@ -80715,6 +81127,21 @@ export interface operations {
                              * @constant
                              */
                             type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Instructions
+                             * @description What to find, and in which image, such as 'the coffee mug in `photo`'
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "box";
                         } & {
                             [key: string]: unknown;
                         });
@@ -82902,6 +83329,8 @@ export interface operations {
                 sortBy?: string | null;
                 /** @description Sort order. Options: asc, desc */
                 sortOrder?: string | null;
+                /** @description Filter by routing status: false = active deployments, true = paused (blocked) deployments. Omit to return both. */
+                blocked?: boolean | null;
                 /** @description Omit auto-router deployments (litellm model prefixed `auto_router/`). They select among deployments rather than being deployments themselves, so a caller rendering a deployment list can leave them out. Defaults to false, so existing callers are unaffected */
                 exclude_auto_routers?: boolean | null;
                 /** @description Only return deployments whose `model_info.access_groups` contains this access group */

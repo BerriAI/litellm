@@ -14,6 +14,8 @@ import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
+    BoxAnswer,
+    BoxQuestion,
     ChoiceAnswer,
     ChoiceQuestion,
     DecisionAnswer,
@@ -21,6 +23,8 @@ from litellm.types.decisions import (
     DecisionsBase64Image,
     DecisionsImage,
     DecisionsIRAnswer,
+    DecisionsIRBoxAnswer,
+    DecisionsIRBoxQuestion,
     DecisionsIRChoiceAnswer,
     DecisionsIRChoiceOption,
     DecisionsIRChoiceProbability,
@@ -98,6 +102,8 @@ def _ir_question(name: str, question: DecisionQuestion) -> DecisionsIRQuestion:
                 ),
                 extra=extra,
             )
+        case BoxQuestion():
+            return DecisionsIRBoxQuestion(name=name, instructions=question.instructions, extra=extra)
         case _:
             assert_never(question)
 
@@ -105,6 +111,7 @@ def _ir_question(name: str, question: DecisionQuestion) -> DecisionsIRQuestion:
 def systemone_request_to_ir(request: DecisionsRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
         input=DecisionsIRState(state=request.state, images=tuple(request.images or ())),
+        assets=MappingProxyType(dict(request.assets or {})),
         audio=request.audio,
         videos=request.videos,
         questions=tuple(_ir_question(name, question) for name, question in request.questions.items()),
@@ -282,6 +289,8 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
                 "criteria": [_level_criterion(level) for level in question.levels],
                 **question.extra,
             }
+        case DecisionsIRBoxQuestion():
+            return {"type": "box", "instructions": question.instructions, **question.extra}
         case _:
             assert_never(question)
 
@@ -311,6 +320,11 @@ def ir_to_systemone_request(
         ),
         "questions": {key: _systemone_question(question) for key, question in keyed_questions},
         **({"images": [_systemone_image(image) for image in images]} if images else {}),
+        **(
+            {"assets": {key: asset.model_dump(exclude_none=True) for key, asset in request.assets.items()}}
+            if request.assets
+            else {}
+        ),
     }
 
 
@@ -351,6 +365,10 @@ def _ir_answer(question: DecisionsIRQuestion, answer: DecisionAnswer | None) -> 
             return _ir_choice_answer(question, answer)
         case DecisionsIRScoreQuestion(), ScoreAnswer():
             return _ir_score_answer(question, answer)
+        case DecisionsIRBoxQuestion(), BoxAnswer():
+            return DecisionsIRBoxAnswer(
+                box=answer.box, confidence=answer.confidence, extra=MappingProxyType(answer.model_extra or {})
+            )
         case _:
             return DecisionsIRRefusal()
 
@@ -372,8 +390,24 @@ def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRe
     )
 
 
+_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_LABELS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+
+
+def _normalize_answer(value: object) -> Mapping[str, object]:
+    answer: Final = _MAPPING.validate_python(value)
+    legend: Final = answer.get("legend")
+    if answer.get("type") != "score" or not isinstance(legend, list):
+        return answer
+    labels: Final = _LABELS.validate_python(legend)
+    return {**answer, "legend": {str(index): label for index, label in enumerate(labels)}}
+
+
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(payload), request)
+    response: Final = _MAPPING.validate_python(payload)
+    answers: Final = _MAPPING.validate_python(response.get("answers"))
+    normalized: Final = {**response, "answers": {name: _normalize_answer(answer) for name, answer in answers.items()}}
+    return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(normalized), request)
 
 
 def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:
@@ -402,6 +436,10 @@ def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:
                     "legend": {str(item.value): item.label for item in answer.probabilities},
                     "probabilities": {str(item.value): item.probability for item in answer.probabilities},
                 }
+            )
+        case DecisionsIRBoxAnswer():
+            return BoxAnswer.model_validate(
+                {**answer.extra, "type": "box", "box": answer.box, "confidence": answer.confidence}
             )
         case DecisionsIRRefusal():
             return None
@@ -473,6 +511,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        return api_key
+
     @staticmethod
     def _first_secret(names: tuple[str, ...]) -> str | None:
         return next((value for value in (get_secret_str(name) for name in names) if value), None)
@@ -483,12 +526,32 @@ class BaseDecisionsConfig(ABC):
     def request_model(self, model: str) -> str:
         return model
 
-    def validate_environment(self, headers: Mapping[str, str], model: str, api_key: str | None) -> dict[str, str]:
+    def validate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, str]:
         return {
             **{name: value for name, value in headers.items() if name.lower() not in _RESERVED_HEADERS},
             **({"Authorization": f"Bearer {api_key}"} if api_key is not None else {}),
             "Content-Type": "application/json",
         }
+
+    async def avalidate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, str]:
+        return self.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"
@@ -506,6 +569,23 @@ class BaseDecisionsConfig(ABC):
         litellm_params: Mapping[str, object],
     ) -> tuple[Mapping[str, str], bytes | None]:
         return headers, None
+
+    def supports_images_in(
+        self, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]
+    ) -> bool:
+        return self.supports_images
+
+    def supports_assets(self, headers: Mapping[str, str]) -> bool:
+        return False
+
+    def supports_box_questions(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str], deployment_flag: bool | None
+    ) -> bool:
+        if deployment_flag is not None:
+            return deployment_flag
+        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_box_questions(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
     def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(

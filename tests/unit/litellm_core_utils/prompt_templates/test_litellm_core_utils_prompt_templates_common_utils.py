@@ -1,9 +1,11 @@
+import base64
 import copy
 import functools
 import json
 import os
 import sys
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, cast
 
 import pytest
 
@@ -13,6 +15,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
     cache_control_as_prompt_cache_breakpoint,
+    converse_redacted_content,
     encrypted_content_from_signature,
     encrypted_reasoning_signature,
     get_file_ids_from_messages,
@@ -23,11 +26,17 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
+    native_redacted_thinking_data,
     parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
     salvage_concatenated_tool_arguments,
+    schema_grammar_branch_count,
+    schema_has_open_object,
+    schema_has_unresolvable_ref,
+    schema_property_count,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
+    strip_litellm_response_only_fields,
     system_messages_first,
     update_messages_with_model_file_ids,
     with_prompt_cache_breakpoint,
@@ -2306,3 +2315,127 @@ def test_a_breakpoint_the_client_wrote_survives_a_per_part_cache_control() -> No
         "text": "rules",
         "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
     }
+
+
+_NATIVE_REDACTED_DATA: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+_CONVERSE_REDACTED_DATA: Final = base64.b64encode(_NATIVE_REDACTED_DATA.encode()).decode()
+
+
+@pytest.mark.parametrize(
+    "data, native",
+    [
+        pytest.param(_NATIVE_REDACTED_DATA, _NATIVE_REDACTED_DATA, id="claude-native"),
+        pytest.param(_CONVERSE_REDACTED_DATA, _NATIVE_REDACTED_DATA, id="converse-wrapped-legacy-history"),
+        pytest.param(
+            encrypted_reasoning_signature("gAAAA_1"), encrypted_reasoning_signature("gAAAA_1"), id="openai-encrypted"
+        ),
+        pytest.param("", "", id="blank"),
+        pytest.param(base64.b64encode(b"not base64!").decode(), base64.b64encode(b"not base64!").decode(), id="b64-once"),
+    ],
+)
+def test_native_redacted_thinking_data_only_unwraps_the_converse_base64_layer(data: str, native: str) -> None:
+    assert native_redacted_thinking_data(data) == native
+
+
+@pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
+def test_converse_redacted_content_wraps_claude_native_data_exactly_once(data: str) -> None:
+    assert converse_redacted_content(data) == _CONVERSE_REDACTED_DATA
+
+
+def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fields() -> None:
+    message: Final = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "provider_specific_fields": {"namespace": "ns"},
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                    "provider_specific_fields": {"namespace": "ns"},
+                },
+            }
+        ],
+    }
+
+    stripped: Final = strip_litellm_response_only_fields(message)
+
+    tool_call: Final = cast("dict[str, object]", stripped["tool_calls"][0])
+    assert "provider_specific_fields" not in tool_call
+    function: Final = cast("dict[str, object]", tool_call["function"])
+    assert "provider_specific_fields" not in function
+    assert function["name"] == "get_weather"
+    assert function["arguments"] == '{"city": "Paris"}'
+
+
+@pytest.mark.parametrize(
+    ("schema", "is_open"),
+    [
+        ({"type": "object", "properties": {"a": {"type": "string"}}}, False),
+        ({"type": "object", "properties": {}}, False),
+        ({"type": "object", "additionalProperties": False}, False),
+        ({"type": "string"}, False),
+        ({"type": "object"}, True),
+        ({"type": ["object", "null"]}, True),
+        ({"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": True}, True),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, True),
+        ({"type": "object", "properties": {}, "patternProperties": {"^x": {"type": "string"}}}, True),
+        ({"type": "object", "properties": {"inner": {"anyOf": [{"type": "object"}, {"type": "null"}]}}}, True),
+        ({"type": "array", "items": {"type": "object", "additionalProperties": {"type": "string"}}}, True),
+    ],
+)
+def test_schema_has_open_object_flags_any_node_that_accepts_unlisted_keys(schema, is_open):
+    assert schema_has_open_object(schema) is is_open
+
+
+def _object_with(properties: Mapping[str, object], **defs: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "object", "properties": properties, **defs}
+
+
+@pytest.mark.parametrize(
+    ("schema", "unresolvable"),
+    [
+        (_object_with({"a": {"type": "string"}}), False),
+        (_object_with({"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "string"}}}), False),
+        (_object_with({"a": {"$ref": "#/definitions/A"}}, definitions={"A": {"$ref": "#/definitions/B"}, "B": {"type": "integer"}}), False),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"items": {"$ref": "/$defs/B"}}, "B": {"type": "string"}}}), False),
+        (_object_with({"a": {"$ref": "#/$defs/Missing"}}, **{"$defs": {"A": {"type": "string"}}}), True),
+        (_object_with({"a": {"$ref": "other.json#/A"}}), True),
+        (_object_with({"parent": {"$ref": "#"}}), True),
+        (_object_with({"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "#/$defs/A"}}}}), True),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "/$defs/A"}}}}), True),
+        (
+            _object_with(
+                {"a": {"$ref": "#/$defs/A"}},
+                **{"$defs": {"A": {"properties": {"b": {"$ref": "#/$defs/B"}}}, "B": {"properties": {"a": {"$ref": "#/$defs/A"}}}}},
+            ),
+            True,
+        ),
+    ],
+    ids=["no-refs", "shared-def", "chained-definitions", "root-path-defs", "missing-def", "external", "root", "self-cycle", "root-path-self-cycle", "mutual-cycle"],
+)
+def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, unresolvable):
+    assert schema_has_unresolvable_ref(schema) is unresolvable
+
+
+@pytest.mark.parametrize(
+    ("schema", "properties", "branches"),
+    [
+        (_object_with({"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}}, required=["a"]), 3, 8),
+        (
+            _object_with(
+                {"x": {"$ref": "#/$defs/Pair"}, "y": {"$ref": "#/$defs/Pair"}},
+                required=["x", "y"],
+                **{"$defs": {"Pair": _object_with({"l": {"type": "string"}, "r": {"type": "string"}}, required=["l"])}},
+            ),
+            4,
+            7,
+        ),
+        (_object_with({"inner": _object_with({"z": {"type": "string"}})}, required=["inner"]), 2, 4),
+    ],
+    ids=["flat", "shared-def-counted-once", "nested"],
+)
+def test_schema_size_counts_every_written_object_once(schema, properties, branches):
+    assert schema_property_count(schema) == properties
+    assert schema_grammar_branch_count(schema) == branches

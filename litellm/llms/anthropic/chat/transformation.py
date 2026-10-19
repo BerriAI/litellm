@@ -1,3 +1,4 @@
+import copy
 import json
 import re
 import time
@@ -24,7 +25,18 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFS_MAX_INLINED_BYTES,
+    is_object_schema,
     sanitize_input_schema_for_anthropic,
+    schema_fragment_ref,
+    schema_grammar_branch_count,
+    schema_has_lookaround_pattern,
+    schema_has_open_object,
+    schema_has_unresolvable_ref,
+    schema_optional_property_count,
+    schema_string_formats,
+    schema_union_property_count,
+    unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
@@ -43,11 +55,12 @@ from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,
     unwrap_response_format_envelope,
 )
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
@@ -146,6 +159,92 @@ else:
 # response side.
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
+_DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
+_TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+_NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
+    ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
+)
+NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
+NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
+NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
+
+
+def _tool_type(tool: object) -> str | None:
+    match tool:
+        case {"type": str() as tool_type}:
+            return tool_type
+        case _:
+            return None
+
+
+def _is_openai_tool_search_tool(tool: object) -> bool:
+    return _tool_type(tool) == "tool_search"
+
+
+def _is_anthropic_tool_search_tool(tool: object) -> bool:
+    return _tool_type(tool) in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+
+
+def _without_defer_loading(fields: object) -> object:
+    match fields:
+        case Mapping():
+            return {
+                key: value
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(fields).items()
+                if key != "defer_loading"
+            }
+        case _:
+            return fields
+
+
+def _member_without_deferral(member: object) -> object:
+    match member:
+        case Mapping():
+            return {
+                key: _without_defer_loading(value) if key == "function" else value
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(member).items()
+                if key != "defer_loading"
+            }
+        case _:
+            return member
+
+
+def _namespace_members_without_deferral(members: object) -> object:
+    match members:
+        case list():
+            return [_member_without_deferral(member) for member in _TOOLS_ADAPTER.validate_python(members)]
+        case _:
+            return members
+
+
+def _field_without_deferral(key: str, value: object) -> object:
+    match key:
+        case "function":
+            return _without_defer_loading(value)
+        case "tools":
+            return _namespace_members_without_deferral(value)
+        case _:
+            return value
+
+
+def _without_deferral(tool: object) -> object:
+    match tool:
+        case Mapping():
+            return {
+                key: _field_without_deferral(key, value)
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(tool).items()
+                if key != "defer_loading"
+            }
+        case _:
+            return tool
+
+
+def _validated_defer_loading(value: object) -> bool:
+    try:
+        return _DEFER_LOADING_ADAPTER.validate_python(value, strict=True)
+    except ValidationError as exc:
+        raise ValueError("defer_loading must be a boolean") from exc
 
 
 class _AnthropicUsageIteration(TypedDict, total=False):
@@ -313,6 +412,36 @@ DROP_SERVICE_TIER_PROVIDER_WARNING: Final = (
     "Dropping `service_tier` for model=%s on provider=%s. Only the Anthropic API routes accept it."
 )
 
+DROP_UNSUPPORTED_TOOL_SEARCH_WARNING: Final = (
+    "Dropping the OpenAI `tool_search` tool and the `defer_loading` of the other tools for model=%s on %s "
+    "(drop_params=True) because this route cannot run that tool search."
+)
+
+
+TOOL_SEARCH_MODEL_INFO_REMEDY: Final = (
+    " If this model does run tool search, set `supports_tool_search: true` in its `model_info`, or for the SDK "
+    "with `litellm.register_model`."
+)
+
+
+def tools_without_unsupported_tool_search(
+    tools: Sequence[object], model: str, route: str, drop_params: bool, remedy: str
+) -> Sequence[object]:
+    if not any(_is_openai_tool_search_tool(tool) for tool in tools):
+        return tools
+    if not (litellm.drop_params or drop_params):
+        raise litellm.utils.UnsupportedParamsError(
+            message=(
+                f"{model} on {route} cannot run the OpenAI `tool_search` tool as sent. Only a server-executed "
+                f"`tool_search` on a route that supports tool search becomes Anthropic's tool search.{remedy} "
+                "To drop it and the `defer_loading` of the other tools, set `litellm.drop_params=True` or for "
+                "proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            status_code=400,
+        )
+    litellm.verbose_logger.warning(DROP_UNSUPPORTED_TOOL_SEARCH_WARNING, model, route)
+    return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
+
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
@@ -412,7 +541,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         # Include caller information if present (for programmatic tool calling)
         if "caller" in anthropic_tool_content:
-            tool_call["caller"] = cast(dict[str, Any], anthropic_tool_content["caller"])
+            tool_call["caller"] = cast(dict[str, object], anthropic_tool_content["caller"])
         return tool_call
 
     @staticmethod
@@ -642,7 +771,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         grammar Anthropic compiles the schema into, so the API rejects them with a
         400 ``invalid_request_error`` (e.g. "output_format.schema: For 'array' type,
         property 'uniqueItems' is not supported"):
-        - maxItems/minItems/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
+        - maxItems/minItems above 1/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
         - minimum/maximum/exclusiveMinimum/exclusiveMaximum/multipleOf: numeric constraints
         - minLength/maxLength: string constraints
         - minProperties/maxProperties/patternProperties/propertyNames: object constraints
@@ -699,7 +828,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "else": "conditional (else): {}",
             "not": "must not match: {}",
         }
-        unsupported_fields: Final = set(constraint_labels)
+        min_items: Final = schema.get("minItems")
+        enforced_min_items: Final = (
+            isinstance(min_items, int) and not isinstance(min_items, bool) and min_items in (0, 1)
+        )
+        unsupported_fields: Final = set(constraint_labels) - ({"minItems"} if enforced_min_items else set())
 
         # Build description additions from removed constraints. Iterating
         # constraint_labels (not the set) keeps the note order deterministic across
@@ -707,7 +840,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # PYTHONHASHSEED and stay cache-friendly.
         constraint_descriptions: Final[list] = []
         for field, label in constraint_labels.items():
-            if field not in schema:
+            if field not in schema or field not in unsupported_fields:
                 continue
             value = schema[field]
             # A falsy boolean constraint (e.g. ``uniqueItems: false``) imposes no
@@ -742,7 +875,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Already handled above
                 continue
 
-            if key in ("properties", "$defs") and isinstance(value, dict):
+            if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
                 nested_schemas: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
                 result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in nested_schemas.items()}
             elif key == "items" and isinstance(value, dict):
@@ -754,6 +887,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ]
             elif key == "allOf" and isinstance(value, list):
                 result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
+            elif key == "$ref" and isinstance(value, str):
+                result[key] = schema_fragment_ref(value)
             elif key == "oneOf" and isinstance(value, list):
                 # Anthropic rejects oneOf ("Schema type 'oneOf' is not supported");
                 # the Anthropic SDK rewrites it to anyOf, so do the same.
@@ -765,7 +900,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Anthropic requires additionalProperties=false for object schemas
         # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
-        if result.get("type") == "object":
+        if is_object_schema(result):
             result["additionalProperties"] = False
 
         return result
@@ -980,9 +1115,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 "computer_20250124",
             ):
                 if _defer_loading is not None:
-                    if not isinstance(_defer_loading, bool):
-                        raise ValueError("defer_loading must be a boolean")
-                    returned_tool["defer_loading"] = _defer_loading
+                    returned_tool["defer_loading"] = _validated_defer_loading(_defer_loading)
                 elif _defer_loading_function is not None:
                     if not isinstance(_defer_loading_function, bool):
                         raise ValueError("defer_loading must be a boolean")
@@ -1061,6 +1194,53 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if authorization_token is not None:
             initial_tool["authorization_token"] = authorization_token
         return initial_tool
+
+    def _tools_with_openai_tool_search_mapped(
+        self, tools: Sequence[object], model: str, drop_params: bool
+    ) -> Sequence[object]:
+        from litellm.responses.litellm_completion_transformation.tool_search import (
+            anthropic_tool_search_chat_tool,
+            runs_tool_search_on_the_server,
+        )
+
+        first_search_tool_index: Final = next(
+            (index for index, tool in enumerate(tools) if _is_openai_tool_search_tool(tool)), None
+        )
+        if first_search_tool_index is None:
+            return tools
+        if any(_is_anthropic_tool_search_tool(tool) for tool in tools):
+            return [tool for tool in tools if not _is_openai_tool_search_tool(tool)]
+        model_runs_tool_search: Final = litellm.supports_tool_search(model, self._resolved_provider)
+        search_runs_on_the_server: Final = all(
+            runs_tool_search_on_the_server(tool) for tool in tools if _is_openai_tool_search_tool(tool)
+        )
+        if not (model_runs_tool_search and search_runs_on_the_server):
+            return tools_without_unsupported_tool_search(
+                tools=tools,
+                model=model,
+                route=self._resolved_provider,
+                drop_params=drop_params,
+                remedy="" if model_runs_tool_search else TOOL_SEARCH_MODEL_INFO_REMEDY,
+            )
+        return [
+            *tools[:first_search_tool_index],
+            anthropic_tool_search_chat_tool(),
+            *(tool for tool in tools[first_search_tool_index + 1 :] if not _is_openai_tool_search_tool(tool)),
+        ]
+
+    def _tools_param_with_openai_tool_search_mapped(
+        self, non_default_params: Mapping[str, object], model: str, drop_params: bool
+    ) -> Mapping[str, object]:
+        tools: Final = non_default_params.get("tools")
+        if not isinstance(tools, list):
+            return {}
+        return {
+            "tools": list(
+                self._tools_with_openai_tool_search_mapped(
+                    tools=_TOOLS_ADAPTER.validate_python(tools), model=model, drop_params=drop_params
+                )
+            )
+        }
 
     def _map_tools(
         self,
@@ -1472,32 +1652,55 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return json_schema
 
+    @staticmethod
+    def _defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
+        unpacked: Final = copy.deepcopy(dict(json_schema))
+        defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
+        if isinstance(defs, dict) and defs:
+            unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
+        return unpacked
+
+    @staticmethod
+    def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        if (
+            schema_has_unresolvable_ref(json_schema)
+            or schema_has_open_object(json_schema)
+            or schema_has_lookaround_pattern(json_schema)
+            or not schema_string_formats(json_schema) <= _NATIVE_OUTPUT_STRING_FORMATS
+            or schema_union_property_count(json_schema) > NATIVE_OUTPUT_MAX_UNION_PARAMETERS
+            or schema_optional_property_count(json_schema) > NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS
+            or schema_grammar_branch_count(json_schema) > NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES
+        ):
+            return None
+        return AnthropicConfig.filter_anthropic_output_schema(dict(json_schema))
+
+    def uses_native_structured_output_for_schema(
+        self,
+        model: str,
+        json_schema: Mapping[str, object] | None,
+        request_params: Mapping[str, object],
+    ) -> bool:
+        open_object_takes_forced_json_tool: Final = (
+            json_schema is not None
+            and schema_has_open_object(json_schema)
+            and not self.is_thinking_requested(request_params)
+            and not self.is_thinking_enabled(dict(request_params))
+            and not request_params.get("tools")
+            and not AnthropicModelInfo.forced_tool_use_unsupported(model)
+        )
+        return self.uses_native_structured_output(model) and not open_object_takes_forced_json_tool
+
+    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
+
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
-        json_schema: dict | None = self._extract_json_schema_from_response_format(value)
+        json_schema: Final = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
-
-        # Resolve $ref/$defs before filtering — Anthropic doesn't support
-        # external schema references (e.g., /$defs/CalendarEvent).
-        import copy
-
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            DEFS_MAX_INLINED_BYTES,
-            unpack_defs,
-        )
-
-        json_schema = copy.deepcopy(json_schema)
-        defs: Final = json_schema.pop("$defs", json_schema.pop("definitions", {}))
-        if defs:
-            unpack_defs(json_schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
-
-        # Filter out unsupported fields for Anthropic's output_format API
-        filtered_schema: Final = self.filter_anthropic_output_schema(json_schema)
-
-        return AnthropicOutputSchema(
-            type="json_schema",
-            schema=filtered_schema,
-        )
+        native_schema: Final = self.native_output_format_schema(json_schema)
+        if native_schema is None:
+            return None
+        return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
 
     def map_response_format_to_anthropic_tool(
         self, value: dict | None, optional_params: dict, is_thinking_enabled: bool
@@ -1551,8 +1754,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def map_openai_context_management_to_anthropic(
-        context_management: list[dict[str, Any]] | dict[str, Any],
-    ) -> dict[str, Any] | None:
+        context_management: Sequence[Mapping[str, object]] | dict[str, object],
+    ) -> dict[str, object] | None:
         """
         OpenAI format: [{"type": "compaction", "compact_threshold": 200000}]
         Anthropic format: {
@@ -1576,7 +1779,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # If in OpenAI format (list), transform to Anthropic format
         if isinstance(context_management, list):
-            anthropic_edits: Final = []
+            anthropic_edits: Final[list[dict[str, object]]] = []
             for entry in context_management:
                 if not isinstance(entry, dict):
                     continue
@@ -1630,7 +1833,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
             elif param == "tools":
-                anthropic_tools, mcp_servers = self._map_tools(value)
+                anthropic_tools, mcp_servers = self._map_tools(
+                    list(self._tools_with_openai_tool_search_mapped(tools=value, model=model, drop_params=drop_params))
+                )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
                 )
@@ -1662,7 +1867,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if self.uses_native_structured_output(model):
+                if self.uses_native_structured_output_for_schema(
+                    model,
+                    self._extract_json_schema_from_response_format(value),
+                    REQUEST_PARAMS.validate_python(non_default_params),
+                ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
@@ -1720,7 +1929,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 else:
                     optional_params["thinking"] = value
                     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-                        model=model, optional_params=optional_params, custom_llm_provider=self._resolved_provider
+                        model=model,
+                        optional_params=optional_params,
+                        custom_llm_provider=self._resolved_provider,
+                        drop_params=drop_params,
                     )
             elif param == "reasoning_effort":
                 # Accept both string ("low") and dict ({"effort": "low",
@@ -2338,9 +2550,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
             ## TOOL RESULTS - handle all tool result types (code execution, etc.)
             elif content["type"].endswith("_tool_result"):
-                # Skip tool_search_tool_result as it's internal metadata
-                if content["type"] == "tool_search_tool_result":
-                    continue
                 # Handle web_search_tool_result separately for backwards compatibility
                 if content["type"] == "web_search_tool_result" or content["type"] == "web_fetch_tool_result":
                     if web_search_results is None:
@@ -2616,7 +2825,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         code_by_id: Final[dict[str, str]] = {}
         for tc in tool_calls:
             try:
-                args: object = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                args: object = _DECODED_JSON.validate_python(json.loads(tc.get("function", {}).get("arguments", "{}")))
                 if not isinstance(args, Mapping):
                     continue
                 call_id = tc.get("id")
@@ -2709,6 +2918,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
+
+        if tool_results is not None and any(result.get("type") != "tool_search_tool_result" for result in tool_results):
             container_id: Final = (
                 completion_response.get("container", {}).get("id")
                 if isinstance(completion_response.get("container"), dict)
@@ -2819,6 +3030,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             completion_response["stop_reason"] = "stop"
             if refusal_fields:
                 json_mode_message.provider_specific_fields = dict(refusal_fields)
+            if thinking_blocks:
+                json_mode_message.thinking_blocks = thinking_blocks
+                json_mode_message.reasoning_content = reasoning_content
             _message = json_mode_message
 
         model_response.choices[0].message = _message
@@ -2939,7 +3153,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if split_answer is not None:
             return litellm.Message(content=json.dumps(split_answer))
         try:
-            payload: Final[object] = json.loads(json_mode_content_str)
+            payload: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
         except (json.JSONDecodeError, RecursionError):
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)
@@ -2971,6 +3185,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 

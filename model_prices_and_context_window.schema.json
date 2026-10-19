@@ -380,6 +380,10 @@
           "type": "number",
           "minimum": 0
         },
+        "input_cost_per_text_message": {
+          "type": "number",
+          "minimum": 0
+        },
         "input_cost_per_token": {
           "type": "number",
           "minimum": 0,
@@ -1023,6 +1027,9 @@
         "supports_bedrock_converse_tool_result_images": {
           "type": "boolean"
         },
+        "supports_bedrock_native_structured_output": {
+          "type": "boolean"
+        },
         "supports_bedrock_runtime_chat_completions_inline_reasoning": {
           "type": "boolean"
         },
@@ -1030,6 +1037,9 @@
           "type": "boolean"
         },
         "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {
+          "type": "boolean"
+        },
+        "supports_box_questions": {
           "type": "boolean"
         },
         "supports_computer_use": {
@@ -1199,6 +1209,36 @@
             },
             "additionalProperties": false
           }
+        },
+        "token_count_framing": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tokens added once per request to a local count estimate, for the provider's chat framing."
+        },
+        "token_count_model": {
+          "type": "object",
+          "required": [
+            "model"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "region": {
+              "type": "string",
+              "pattern": "\\S"
+            }
+          },
+          "description": "Model that counts tokens for this one, and the AWS region its count API runs in."
+        },
+        "token_count_tokenizer": {
+          "type": "string",
+          "description": "Tokenizer litellm counts this model's requests with when the provider cannot count them.",
+          "enum": [
+            "kimi_k3"
+          ]
         },
         "tpm": {
           "type": "integer",

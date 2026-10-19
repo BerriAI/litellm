@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,6 +14,7 @@ from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.types.utils import (
+    CallTypes,
     ModelResponse,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -480,6 +482,227 @@ async def test_deployment_callback_on_success(sync_mode):
             end_time=time.time(),
         )
     assert tpm_key is not None
+
+
+@pytest.mark.asyncio
+async def test_deployment_callback_on_success_counts_a_responses_websocket_turn():
+    import time
+
+    model_list = [
+        {
+            "model_name": "gpt-5-mini",
+            "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake", "rpm": 100},
+            "model_info": {"id": "ws-deployment"},
+        }
+    ]
+    router = Router(model_list=model_list)
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 17
+
+    def turn_kwargs(call_type: str) -> dict:
+        return {
+            "call_type": call_type,
+            "litellm_params": {
+                "metadata": {"model_group": "gpt-5-mini"},
+                "model_info": {"id": "ws-deployment"},
+            },
+            "standard_logging_object": standard_logging_payload,
+        }
+
+    tpm_key = await router.deployment_callback_on_success(
+        kwargs=turn_kwargs("_aresponses_websocket"),
+        completion_response=None,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+    assert tpm_key is not None
+    assert await router.cache.async_get_cache(key=tpm_key) == 17
+
+    realtime_key = await router.deployment_callback_on_success(
+        kwargs=turn_kwargs("_arealtime"),
+        completion_response=None,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+    assert realtime_key is None
+    assert await router.cache.async_get_cache(key=tpm_key) == 17
+
+
+async def _kwargs_routed_to(router: Router, model: str, function_name: str) -> dict[str, object]:
+    routed: Final[dict[str, object]] = {}
+
+    async def call(**kwargs: object) -> None:
+        routed.update(kwargs)
+
+    call.__name__ = function_name
+    await router._ageneric_api_call_with_fallbacks_helper(model=model, original_generic_function=call)
+    return routed
+
+
+async def _finish_35_token_websocket_turn(routed: Mapping[str, object], call_id: str) -> None:
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    turn: Final = Logging(
+        model="gpt-5-mini",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id=call_id,
+        function_id=call_id,
+    )
+    turn.update_environment_variables(litellm_params={"litellm_metadata": routed["litellm_metadata"]}, optional_params={})
+    await turn.dispatch_success_handlers(
+        [{"type": "response.completed", "response": {"usage": {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35}}}],
+        prefer_async_handlers=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_is_refused_once_its_deployment_crosses_budget():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-budget",
+                "litellm_params": {
+                    "model": "openai/gpt-5-mini",
+                    "api_key": "sk-fake",
+                    "max_budget": 0.001,
+                    "budget_duration": "1d",
+                },
+                "model_info": {"id": "ws-budget-dep"},
+            }
+        ]
+    )
+    assert "turn_admission" not in await _kwargs_routed_to(router, "ws-budget", "aresponses")
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-budget", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+
+    await admit_turn()
+    await router.cache.async_set_cache("deployment_spend:ws-budget-dep:1d", 0.002)
+
+    with pytest.raises(litellm.RateLimitError, match="crossed budget"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_after_the_first_counts_toward_deployment_rpm():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-rpm",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "rpm": 1},
+                "model_info": {"id": "ws-rpm-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-rpm", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+
+    with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_is_checked_against_limits_changed_after_the_socket_opened():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-rpm-lowered",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "rpm": 100},
+                "model_info": {"id": "ws-rpm-lowered-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-rpm-lowered", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+    await admit_turn()
+
+    router.upsert_deployment(
+        Deployment(
+            model_name="ws-rpm-lowered",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5-mini", api_key="sk-fake", rpm=1),
+            model_info=ModelInfo(id="ws-rpm-lowered-dep"),
+        )
+    )
+
+    with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_counts_toward_deployment_tpm(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-tpm",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "tpm": 30},
+                "model_info": {"id": "ws-tpm-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm.callbacks))
+    routed: Final = await _kwargs_routed_to(router, "ws-tpm", "_aresponses_websocket")
+    admit_turn: Final = routed["turn_admission"]
+    assert callable(admit_turn)
+    await admit_turn()
+
+    await _finish_35_token_websocket_turn(routed, "ws-tpm-turn")
+
+    with pytest.raises(litellm.RateLimitError, match="TPM limit=30, current usage=35"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_is_refused_by_usage_based_routing_once_deployment_tpm_is_used(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-tpm-v2",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "tpm": 30},
+                "model_info": {"id": "ws-tpm-v2-dep"},
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+    )
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm.callbacks))
+    routed: Final = await _kwargs_routed_to(router, "ws-tpm-v2", "_aresponses_websocket")
+    admit_turn: Final = routed["turn_admission"]
+    assert callable(admit_turn)
+    await admit_turn()
+
+    await _finish_35_token_websocket_turn(routed, "ws-tpm-v2-turn")
+
+    with pytest.raises(litellm.RateLimitError):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turns_do_not_reserve_deployment_otpm():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-otpm",
+                "litellm_params": {"model": "openai/ws-otpm-unpriced", "api_key": "sk-fake", "otpm": 5000},
+                "model_info": {"id": "ws-otpm-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-otpm", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+
+    for _ in range(3):
+        await admit_turn()
 
 
 @pytest.mark.asyncio
@@ -1071,6 +1294,7 @@ def _shared_redis_stub(store: dict) -> MagicMock:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
 async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
     store: dict = {}
     worker_a = _rpm_tpm_router("lit-3058-workers")

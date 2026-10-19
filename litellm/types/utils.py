@@ -2,6 +2,7 @@ import json
 import re
 import time
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -9,6 +10,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    TypeAlias,
     get_args,
 )
 
@@ -56,6 +58,7 @@ from litellm.types.llms.base import (
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
+from litellm.types.token_count import TokenCountModelInfo, TokenCountSource, TokenCountTokenizer
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     OPENAI_WIF_KWARGS_KEYS,
@@ -196,11 +199,13 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_video_input: ReadOnly[bool | None]
+    supports_box_questions: ReadOnly[bool | None]
     supports_embedding_image_input: bool | None
     supports_audio_output: bool | None
     supports_pdf_input: bool | None
     supports_native_streaming: bool | None
     supports_native_structured_output: bool | None
+    supports_bedrock_native_structured_output: ReadOnly[bool | None]
     supports_parallel_function_calling: bool | None
     supports_web_search: bool | None
     supports_reasoning: bool | None
@@ -226,6 +231,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
     supports_regex_lookaround: ReadOnly[bool | None]
+    token_count_framing: ReadOnly[int | None]
+    token_count_model: ReadOnly[TokenCountModelInfo | None]
+    token_count_tokenizer: ReadOnly[TokenCountTokenizer | None]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -355,6 +363,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_image_token_batches: ReadOnly[float | None]
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
+    input_cost_per_text_message: ReadOnly[float | None]
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
@@ -1799,6 +1808,9 @@ class PromptTokensDetailsWrapper(
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
 
+    initial_prompt_tokens: int | None = None
+    """The first hop's prompt tokens on a Gemini long decode, the real context size when prompt_tokens sums every hop."""
+
     character_count: int | None = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -2885,6 +2897,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     no_log: bool | None
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
+    input_cost_per_text_message: ReadOnly[float | None]
     input_cost_per_token: float | None
     output_cost_per_token: float | None
     output_cost_per_second: float | None
@@ -3161,6 +3174,7 @@ InternalCallOrigin = Literal[
     "shadow_eval_judge",
     "llm_as_a_judge_guardrail",
     "background_response_cost_poll",
+    "background_response_status_poll",
 ]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
@@ -3170,6 +3184,7 @@ SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
 SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN: Final[InternalCallOrigin] = "llm_as_a_judge_guardrail"
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
+BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_status_poll"
 
 
 class StandardLoggingHeuristicV2Forecast(TypedDict):
@@ -3225,6 +3240,13 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     savings_baseline_model: str
     savings_baseline_deployment_id: str
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+
+
+class StandardLoggingKubernetesPodRouting(TypedDict):
+    service_host: ReadOnly[str]
+    pod_ip: ReadOnly[str]
+    pod_count: ReadOnly[int]
+    selection: ReadOnly[Literal["round_robin", "session_affinity", "session_affinity_retry"]]
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -3293,6 +3315,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
+    kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     applied_guardrails: list[str] | None
     usage_object: dict | None
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
@@ -3664,6 +3687,46 @@ class StandardAuditLogPayload(TypedDict):
     updated_values: str | None
 
 
+class StandardBatchLineItemUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class StandardBatchLineItemMetadata(TypedDict):
+    user_api_key_hash: ReadOnly[str | None]
+    user_api_key_alias: ReadOnly[str | None]
+    user_api_key_team_id: ReadOnly[str | None]
+    user_api_key_team_alias: ReadOnly[str | None]
+    user_api_key_user_id: ReadOnly[str | None]
+    user_api_key_org_id: ReadOnly[str | None]
+
+
+class StandardBatchLineItem(TypedDict):
+    """One line of a finished batch, the request line next to the output or error line the provider wrote for it."""
+
+    batch_id: ReadOnly[str]
+    custom_id: ReadOnly[str | None]
+    status: ReadOnly[Literal["success", "failure"]]
+    request: ReadOnly[Mapping[str, object] | None]
+    response: ReadOnly[Mapping[str, object] | None]
+    usage: ReadOnly[StandardBatchLineItemUsage | None]
+    response_cost: ReadOnly[float]
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str | None]
+    metadata: ReadOnly[StandardBatchLineItemMetadata]
+
+
+class StandardBatchLineItemsPayload(TypedDict):
+    """One part of a finished batch's lines, dispatched to batch_line_item_callbacks. A batch's lines arrive in parts
+    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines."""
+
+    batch_id: ReadOnly[str]
+    finished_at: ReadOnly[int]
+    part: ReadOnly[int]
+    lines: ReadOnly[tuple[StandardBatchLineItem, ...]]
+
+
 class ClassifierAudit(TypedDict, total=False):
     classifier_input: ReadOnly[Mapping[str, JsonValue]]
     originating_request_masked: ReadOnly[Mapping[str, JsonValue]]
@@ -3850,6 +3913,7 @@ class MirroredPricingParams(LiteLLMBaseModel):
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
+    cache_creation_input_token_cost_above_1hr: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
 
@@ -3857,6 +3921,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     ## CUSTOM PRICING ##
     cost_per_second: float | None = None
     input_cost_per_second: float | None = None
+    input_cost_per_text_message: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
     output_cost_per_second_480p: float | None = None
@@ -3876,7 +3941,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_priority: float | None = None
     input_cost_per_token_balanced: float | None = None
     input_cost_per_token_ultrafast: float | None = None
-    cache_creation_input_token_cost_above_1hr: float | None = None
     cache_creation_input_token_cost_above_100k_tokens: float | None = None
     cache_creation_input_token_cost_above_1hr_above_100k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
@@ -3995,13 +4059,18 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
-DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
+DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
+    {"supports_regex_lookaround", "supports_assistant_prefill", "supports_bedrock_native_structured_output"}
+)
+
+DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
     - frozenset(CustomPricingLiteLLMParams.model_fields)
     - DEPLOYMENT_SCOPED_PRICING_FIELDS
     - DEPLOYMENT_SCOPED_CAPABILITY_FIELDS
+    - DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS
 )
 
 
@@ -4216,6 +4285,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
+    NACE = "nace"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"
@@ -4259,6 +4329,7 @@ class LlmProviders(str, Enum):
     TRITON = "triton"
     PREDIBASE = "predibase"
     DATABRICKS = "databricks"
+    DATABRICKS_AGENT = "databricks_agent"
     EMPOWER = "empower"
     GITHUB = "github"
     RAGFLOW = "ragflow"
@@ -4333,6 +4404,8 @@ class LlmProviders(str, Enum):
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
+    OPENINFER = "openinfer"
+    INFERENCEAPIS = "inferenceapis"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
@@ -4420,11 +4493,21 @@ class LiteLLMLoggingBaseClass:
         pass
 
 
+TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
+
+
+@dataclass(frozen=True, slots=True)
+class CountContextManagement:
+    spec: JsonValue
+    drop_invalid_edits: bool
+
+
 class TokenCountResponse(LiteLLMPydanticObjectBase):
     total_tokens: int
     request_model: str
     model_used: str
     tokenizer_type: str
+    count_source: TokenCountSource | None = None
     original_response: dict | None = None
     """
     Original Response from upstream API call - if an API call was made for token counting
@@ -4435,6 +4518,7 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     HTTP status code from the token counting API (e.g., 200 for success, 429 for rate limit, 400 for bad request)
     """
     status_code: int | None = None
+    rejected_before_provider_call: bool = Field(default=False, exclude=True)
 
 
 class CustomHuggingfaceTokenizer(TypedDict):
@@ -4462,6 +4546,7 @@ class HttpHandlerRequestFields(TypedDict, total=False):
 class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
     extra_headers: dict
+    native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
 
 
 class SelectTokenizerResponse(TypedDict):
@@ -4532,6 +4617,7 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
     service_tier: str | None = None
+    id: str | None = None
     _hidden_params: dict = {}
 
     @property
@@ -4736,3 +4822,12 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     stream_holdback_chars: list[
         int
     ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)
+
+
+class ProviderRoutingHints(TypedDict, total=False):
+    custom_llm_provider: ReadOnly[str | None]
+    api_base: ReadOnly[str | None]
+
+
+class BaseUrlRoutingHint(TypedDict, total=False):
+    base_url: ReadOnly[str | None]

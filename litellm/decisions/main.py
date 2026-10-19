@@ -1,5 +1,7 @@
+import asyncio
 import warnings
 from collections.abc import Mapping
+from functools import partial
 from typing import Final
 
 import httpx
@@ -27,7 +29,7 @@ _SYSTEMONE_QUESTIONS_ADAPTER: Final[TypeAdapter[SystemOneQuestions | None]] = Ty
 _OPENAI_QUESTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionQuestions | None]] = TypeAdapter(
     OpenAIDecisionQuestions | None
 )
-_SYSTEMONE_FIELDS: Final = frozenset({"state", "images"})
+_SYSTEMONE_FIELDS: Final = frozenset({"state", "images", "assets"})
 
 
 def _request_fields(
@@ -55,6 +57,7 @@ def _request_fields(
         state=_STATE_ADAPTER.validate_python(kwargs["state"]),
         questions=_SYSTEMONE_QUESTIONS_ADAPTER.validate_python(questions),
         images=kwargs.get("images"),
+        assets=kwargs.get("assets"),
         audio=audio,
         videos=videos,
     )
@@ -103,19 +106,22 @@ async def adecisions(
     videos: DecisionsVideoClips | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
-    call: Final = _prepare_decisions_call(
-        model=model,
-        decision_input=input,
-        questions=questions,
-        safety_identifier=safety_identifier,
-        audio=audio,
-        videos=videos,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+    call: Final = await asyncio.to_thread(
+        partial(
+            _prepare_decisions_call,
+            model=model,
+            decision_input=input,
+            questions=questions,
+            safety_identifier=safety_identifier,
+            audio=audio,
+            videos=videos,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            kwargs=kwargs,
+        )
     )
     return await asend(call)
 

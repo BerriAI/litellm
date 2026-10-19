@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -74,9 +75,14 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
+_THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
     return json.loads(payload)
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
@@ -162,7 +168,7 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
 
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
     try:
-        payload: Final[object] = json.loads(held)
+        payload: Final = _DECODED_JSON.validate_python(json.loads(held))
     except (json.JSONDecodeError, RecursionError):
         return held
     contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
@@ -685,6 +691,7 @@ class ModelResponseIterator:
         self._response = response
         self.content_blocks: list[ContentBlockDelta] = []
         self.tool_index = -1
+        self.thinking_block_index = -1
         self.json_mode = json_mode
         self.speed = speed
         self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
@@ -832,13 +839,18 @@ class ModelResponseIterator:
                     ChatCompletionThinkingBlock(
                         type="thinking",
                         thinking=thinking_content,
+                        index=self.thinking_block_index,
                     )
                 ]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
 
             signature: Final = content_block["delta"].get("signature")
             if isinstance(signature, str) and signature:
-                thinking_blocks = [ChatCompletionThinkingBlock(type="thinking", thinking="", signature=signature)]
+                thinking_blocks = [
+                    ChatCompletionThinkingBlock(
+                        type="thinking", thinking="", signature=signature, index=self.thinking_block_index
+                    )
+                ]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
                 if reasoning_content is None:
                     reasoning_content = ""
@@ -869,6 +881,7 @@ class ModelResponseIterator:
             ChatCompletionRedactedThinkingBlock(
                 type="redacted_thinking",
                 data=content_block_start["content_block"]["data"],
+                index=self.thinking_block_index,
             )
         ]
         provider_specific_fields["thinking_blocks"] = thinking_blocks
@@ -970,6 +983,8 @@ class ModelResponseIterator:
                 self.content_blocks = []  # reset content blocks when new block starts
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
+                if self.current_content_block_type in _THINKING_BLOCK_TYPES:
+                    self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
                     text = self._release_answer_close() + content_block_start["content_block"]["text"]
                 elif (
@@ -1053,13 +1068,14 @@ class ModelResponseIterator:
                         # Fixes: https://github.com/BerriAI/litellm/issues/18137
                         self.web_search_results.append(content_block_start["content_block"])
                         provider_specific_fields["web_search_results"] = self.web_search_results
-                    elif content_type != "tool_search_tool_result":
-                        # Handle other tool results (code execution, etc.)
-                        # Skip tool_search_tool_result as it's internal metadata
+                    else:
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
-                        # Convert to provider-neutral code_interpreter_results
-                        provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
+                        if content_type != "tool_search_tool_result":
+                            # Convert to provider-neutral code_interpreter_results
+                            provider_specific_fields["code_interpreter_results"] = (
+                                self._build_code_interpreter_results()
+                            )
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)
