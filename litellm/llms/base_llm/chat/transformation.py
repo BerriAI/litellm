@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -36,6 +36,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+REQUEST_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class BaseLLMException(Exception):
@@ -125,6 +128,17 @@ class BaseConfig(ABC):
         thinking: Final = non_default_params.get("thinking")
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
         return thinking is True or thinking_type == "enabled" or non_default_params.get("reasoning_effort") is not None
+
+    def is_thinking_requested(self, non_default_params: Mapping[str, object]) -> bool:
+        match non_default_params:
+            case {"thinking": True | {"type": "enabled" | "adaptive"}}:
+                return True
+            case {"reasoning_effort": None | "none"}:
+                return False
+            case {"reasoning_effort": object()}:
+                return True
+            case _:
+                return False
 
     def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
         """

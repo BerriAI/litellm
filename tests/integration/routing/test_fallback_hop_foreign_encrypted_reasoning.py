@@ -50,6 +50,8 @@ from integration._support.ports import allocate_port
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, SseResponse, StoredResponse
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 ORDER_ONE_BLOB: Final = "gAAAAA-minted-by-order-1"
 ORDER_TWO_BLOB: Final = "gAAAAA-minted-by-order-2"
 SUMMARY_TEXT: Final = "multiply 17 by 23"

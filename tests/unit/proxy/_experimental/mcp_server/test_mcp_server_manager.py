@@ -15634,6 +15634,73 @@ def _mcp_upstream(respond):
         yield
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("responder", "expects_exchange", "expected_fragments"),
+    (
+        pytest.param(
+            AsyncMock(return_value=httpx2.Response(500, json={"error": "health-check-boom"})),
+            True,
+            (
+                "MCP health check failed for",
+                "upstream exchange:",
+                "-> HTTP 500",
+                '"method":"initialize"',
+                "health-check-boom",
+            ),
+            id="upstream-http-500",
+        ),
+        pytest.param(
+            AsyncMock(side_effect=httpx2.ConnectError("connection failed")),
+            False,
+            ("MCP health check failed for",),
+            id="connect-error",
+        ),
+    ),
+)
+async def test_health_check_logs_upstream_exchange_only_for_http_failures(
+    caplog: pytest.LogCaptureFixture,
+    responder: AsyncMock,
+    expects_exchange: bool,
+    expected_fragments: tuple[str, ...],
+) -> None:
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(responder))
+    token: Final = "health-check-secret-0123456789"
+    server: Final = MCPServer(
+        server_id="health-check-upstream",
+        name="health_check_upstream",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.bearer_token,
+        authentication_token=token,
+    )
+    manager.registry[server.server_id] = server
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = await manager.health_check_server(server.server_id)
+
+    assert result.status == "unhealthy"
+    warning_messages: Final = tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "LiteLLM"
+        and record.levelno == logging.WARNING
+        and "MCP health check failed for" in record.getMessage()
+    )
+    assert len(warning_messages) == 1
+    warning: Final = warning_messages[0]
+    assert all(fragment in warning for fragment in expected_fragments)
+    assert ("upstream exchange:" in warning) is expects_exchange
+    assert not any(
+        record.name == "LiteLLM"
+        and record.levelno == logging.WARNING
+        and "run_with_session failed" in record.getMessage()
+        for record in caplog.records
+    )
+    assert token not in caplog.text
+    assert responder.await_args_list[0].args[0].headers["Authorization"] == f"Bearer {token}"
+
+
 class _DiscoveryUpstream:
     def __init__(self) -> None:
         self.requests: tuple[tuple[str, str], ...] = ()
@@ -19987,6 +20054,74 @@ async def test_disabled_stdio_tools_are_empty_initially_and_reject_continuation(
         page = await manager.get_tools_page(server, params=PaginatedRequestParams())
         assert page.tools == []
         assert page.next_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_aggregate_bounds_each_paginated_server_by_its_own_listing_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp.types import JSONRPCRequest, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR, get_server_prefix
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "paginated-listing-deadline-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(manager_module, "MCP_TOOL_LISTING_TIMEOUT", 0.0)
+    extended: Final = MCPServer(
+        server_id="extended",
+        name="extended",
+        transport=MCPTransport.http,
+        url="https://extended.example/mcp",
+        timeout=60.0,
+    )
+    global_deadline: Final = MCPServer(
+        server_id="global", name="global", transport=MCPTransport.http, url="https://global.example/mcp"
+    )
+    servers: Final = (extended, global_deadline)
+    manager: Final = MCPServerManager()
+    manager.registry = {server.server_id: server for server in servers}
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    context: Final = operations.prepare_context(UserAPIKeyAuth(api_key="owned-caller", user_id="alice"))
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        result: Final = {
+            "initialize": {
+                "protocolVersion": "2025-03-26",
+                "serverInfo": {"name": "test", "version": "1"},
+                "capabilities": {"tools": {}},
+            },
+            "server/discover": {
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {"tools": {}},
+                "ttlMs": 60000,
+                "cacheScope": "private",
+                "resultType": "complete",
+            },
+            "tools/list": {
+                "tools": [{"name": "echo", "inputSchema": {"type": "object"}}],
+                "ttlMs": 60000,
+                "cacheScope": "private",
+                "resultType": "complete",
+            },
+        }[payload.method]
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+    with _mcp_upstream(respond):
+        listing: Final = await catalog.aggregate_gateway_tools(
+            context, PaginatedRequestParams(), servers, {}, record_listing=True, enforce_rate_limits=False
+        )
+
+    assert [tool.name for tool in listing.tools] == [f"{get_server_prefix(extended)}{MCP_TOOL_PREFIX_SEPARATOR}echo"]
+    assert listing.outcomes["extended"].tag == "ok"
+    assert listing.outcomes["global"].tag == "timeout"
 
 
 @pytest.mark.asyncio

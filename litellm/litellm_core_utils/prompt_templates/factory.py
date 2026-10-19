@@ -5504,14 +5504,14 @@ def _bedrock_tools_pt(
             description = name
 
         defs = parameters.pop("$defs", {})
-        defs_copy = copy.deepcopy(defs)
+        defs_copy = copy.deepcopy(defs) if isinstance(defs, dict) else {}
         # Expand $ref references in parameters using the definitions
         # Note: We don't pre-flatten defs as that causes exponential memory growth
         # with circular references (see issue #19098). unpack_defs handles nested
         # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
         normalize_json_schema_custom_types_to_object(parameters)
-        if parameters.get("type") not in _valid_json_schema_root_types:
+        if not (isinstance(root_type := parameters.get("type"), str) and root_type in _valid_json_schema_root_types):
             parameters["type"] = "object"
         tool_block = cast(
             BedrockToolBlock,
@@ -5531,6 +5531,11 @@ def _bedrock_tools_pt(
             tool_block_list.append(cache_point_tool_block)
 
     return tool_block_list
+
+
+def bedrock_tool_blocks(tools: Sequence[Mapping[str, object]], model: str | None) -> tuple[BedrockToolBlock, ...]:
+    """Bedrock Converse ``toolConfig.tools`` entries for OpenAI or Anthropic tool definitions."""
+    return tuple(_bedrock_tools_pt([dict(tool) for tool in tools], model=model))
 
 
 def _is_system_message(message: Mapping[str, object]) -> bool:
@@ -6166,3 +6171,25 @@ def resolve_structured_messages(
         if structured:
             return [msg if isinstance(msg, dict) else msg.model_dump() for msg in structured]
     return None
+
+
+def is_flat_responses_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return tool_type in ("function", "custom") and tool_type not in tool and "input_schema" not in tool
+
+
+def chat_completion_tools_for(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    if is_flat_responses_tool(tool):
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [dict(tool)]  # pyright: ignore[reportArgumentType]  # a JSON dict in a flat Responses tool shape
+        )
+        return tuple(chat_tools)
+    anthropic_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(
+        [dict(tool)]  # pyright: ignore[reportArgumentType]  # a JSON dict in an Anthropic or chat tool shape
+    )
+    return tuple(anthropic_tools)

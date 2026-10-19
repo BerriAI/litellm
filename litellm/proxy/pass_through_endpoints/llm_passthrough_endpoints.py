@@ -25,7 +25,7 @@ import httpx
 import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly, TypedDict
 
@@ -44,6 +44,7 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -1087,6 +1088,16 @@ def _guardrail_refusal_status(error: Exception) -> int | None:
             return None
 
 
+def _aws_error_type(error: Exception, handled: ProxyException) -> str | None:
+    """The AWS error type to answer the handled error with: ValidationException for a guardrail block, else the type
+    the error carried, as LiteLLM's own Bedrock request checks set it. None when the shared handler changed the
+    guardrail block's status."""
+    refusal_status: Final = _guardrail_refusal_status(error)
+    if refusal_status is not None:
+        return "ValidationException" if str(refusal_status) == handled.code else None
+    return next((value for name, value in handled.headers.items() if name.lower() == AWS_ERROR_TYPE_HEADER), None)
+
+
 def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:
     """Bedrock's own error response, for an error Bedrock answered the passthrough request with an AWS error
     type."""
@@ -1111,9 +1122,9 @@ async def bedrock_passthrough_error_response(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLoggingType,
 ) -> Response:
-    """Run the shared error handling for a Bedrock passthrough request, then answer a guardrail block or an error
-    Bedrock returned the way Bedrock does, so an AWS SDK reads its code and message. Anything else is raised as the
-    shared handler raises it."""
+    """Run the shared error handling for a Bedrock passthrough request, then answer a guardrail block, an error
+    Bedrock returned, or an error carrying an AWS error type the way Bedrock does, so an AWS SDK reads its code and
+    message. Anything else is raised as the shared handler raises it."""
     try:
         await processor.handle_llm_api_exception(
             e=error,
@@ -1126,9 +1137,9 @@ async def bedrock_passthrough_error_response(
             raise
         return response
     except ProxyException as handled:
-        refusal_status: Final = _guardrail_refusal_status(error)
-        if refusal_status is not None and str(refusal_status) == handled.code:
-            raise AwsErrorTypeProxyException(handled, "ValidationException") from handled
+        aws_error_type: Final = _aws_error_type(error, handled)
+        if aws_error_type is not None:
+            raise AwsErrorTypeProxyException(handled, aws_error_type) from handled
         raise
 
 
@@ -2560,6 +2571,47 @@ def _is_vertex_anthropic_count_tokens_route(endpoint: str) -> bool:
     return endpoint.rsplit("/", 1)[-1].split(":", 1)[0] == "count-tokens"
 
 
+_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING: Final = "vertex_ai_pass_through_drop_anthropic_betas"
+_VERTEX_DROPPED_ANTHROPIC_BETAS: Final[TypeAdapter[frozenset[str] | None]] = TypeAdapter(frozenset[str] | None)
+_ANTHROPIC_BETA_REQUEST_HEADERS: Final = ("anthropic-beta", f"{PASS_THROUGH_HEADER_PREFIX}anthropic-beta")
+
+
+def _vertex_dropped_anthropic_betas(
+    general_settings: Mapping[str, object], request_headers: Mapping[str, str]
+) -> frozenset[str]:
+    if not any(name in request_headers for name in _ANTHROPIC_BETA_REQUEST_HEADERS):
+        return frozenset()
+    try:
+        configured: Final = _VERTEX_DROPPED_ANTHROPIC_BETAS.validate_python(
+            general_settings.get(_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING)
+        )
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"general_settings.{_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING} must be a list of strings",
+        ) from error
+    listed_betas: Final = (beta.strip() for beta in ",".join(configured or ()).split(","))
+    return frozenset(beta for beta in listed_betas if beta)
+
+
+def _upstream_vertex_header_value(name: str, value: str, dropped_anthropic_betas: frozenset[str]) -> str | None:
+    if name.lower() != "anthropic-beta":
+        return value
+    betas: Final = tuple(beta.strip() for beta in value.split(","))
+    if dropped_anthropic_betas.isdisjoint(betas):
+        return value
+    return ",".join(beta for beta in betas if beta and beta not in dropped_anthropic_betas) or None
+
+
+def _without_dropped_anthropic_betas(
+    dropped_anthropic_betas: frozenset[str], headers: Mapping[str, str]
+) -> Mapping[str, str]:
+    upstream_values: Final = (
+        (name, _upstream_vertex_header_value(name, value, dropped_anthropic_betas)) for name, value in headers.items()
+    )
+    return MappingProxyType({name: value for name, value in upstream_values if value is not None})
+
+
 def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]) -> Mapping[str, str]:
     if not _is_vertex_anthropic_count_tokens_route(endpoint):
         return headers
@@ -2879,6 +2931,7 @@ async def _base_vertex_proxy_route(
     request: Request,
     fastapi_response: Response,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+    general_settings: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth | None = None,
     router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
@@ -2894,6 +2947,7 @@ async def _base_vertex_proxy_route(
         request: FastAPI request object
         fastapi_response: FastAPI response object
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
+        general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
         user_api_key_dict: User API key authentication dict
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
     """
@@ -3012,6 +3066,9 @@ async def _base_vertex_proxy_route(
         target=target,
         custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
+        upstream_headers_filter=partial(
+            _without_dropped_anthropic_betas, _vertex_dropped_anthropic_betas(general_settings, request.headers)
+        ),
     )  # dynamically construct pass-through endpoint based on incoming path
 
     try:
@@ -3074,6 +3131,7 @@ async def vertex_discovery_proxy_route(
         request=request,
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=discovery_handler,
+        general_settings=_proxy_general_settings(),
         router_credentials=vector_store_credentials,
     )
 
@@ -3107,6 +3165,7 @@ async def vertex_proxy_route(
         request=request,
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=ai_platform_handler,
+        general_settings=_proxy_general_settings(),
         user_api_key_dict=user_api_key_dict,
     )
 
