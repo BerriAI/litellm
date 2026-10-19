@@ -21808,6 +21808,39 @@
           "title": "CachedTokensDetails",
           "type": "object"
         },
+        "ChoiceAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "choice": {
+              "title": "Choice",
+              "type": "string"
+            },
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "type": {
+              "const": "choice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "choice",
+            "confidence",
+            "probabilities"
+          ],
+          "title": "ChoiceAnswer",
+          "type": "object"
+        },
         "Click": {
           "additionalProperties": true,
           "description": "A click action.",
@@ -22570,6 +22603,112 @@
             "detail"
           ],
           "title": "ErrorResponse",
+          "type": "object"
+        },
+        "EuJevDecisionResponse": {
+          "properties": {
+            "answers": {
+              "additionalProperties": {
+                "discriminator": {
+                  "mapping": {
+                    "choice": "#/components/schemas/ChoiceAnswer",
+                    "noul": "#/components/schemas/NoulAnswer",
+                    "score": "#/components/schemas/ScoreAnswer"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ChoiceAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NoulAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ScoreAnswer"
+                  }
+                ]
+              },
+              "description": "One answer per question, under the same names",
+              "title": "Answers",
+              "type": "object"
+            },
+            "meta": {
+              "$ref": "#/components/schemas/EuJevMeta"
+            },
+            "model": {
+              "description": "The release that answered, such as eu-jeff-1.0.0",
+              "title": "Model",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/components/schemas/EuJevUsage"
+            }
+          },
+          "required": [
+            "model",
+            "answers",
+            "usage",
+            "meta"
+          ],
+          "title": "EuJevDecisionResponse",
+          "type": "object"
+        },
+        "EuJevMeta": {
+          "properties": {
+            "cost_eur": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The exact charge in euros, on authenticated requests",
+              "title": "Cost Eur"
+            },
+            "latency_ms": {
+              "description": "Server-side time for token quoting, credit reservation and inference",
+              "title": "Latency Ms",
+              "type": "integer"
+            },
+            "mode": {
+              "const": "live",
+              "title": "Mode",
+              "type": "string"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "mode",
+            "latency_ms"
+          ],
+          "title": "EuJevMeta",
+          "type": "object"
+        },
+        "EuJevUsage": {
+          "properties": {
+            "input_tokens": {
+              "minimum": 0.0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "minimum": 0.0,
+              "title": "Output Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input_tokens",
+            "output_tokens"
+          ],
+          "title": "EuJevUsage",
           "type": "object"
         },
         "FileSearchTool": {
@@ -24209,6 +24348,26 @@
             "type"
           ],
           "title": "NamespaceTool",
+          "type": "object"
+        },
+        "NoulAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "noul": {
+              "title": "Noul",
+              "type": "number"
+            },
+            "type": {
+              "const": "noul",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "noul"
+          ],
+          "title": "NoulAnswer",
           "type": "object"
         },
         "OperationCreateFile": {
@@ -27480,6 +27639,59 @@
           "title": "Result",
           "type": "object"
         },
+        "ScoreAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "legend": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "items": {},
+                    "type": "array"
+                  }
+                ]
+              },
+              "title": "Legend",
+              "type": "object"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "score": {
+              "title": "Score",
+              "type": "number"
+            },
+            "type": {
+              "const": "score",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "score",
+            "confidence",
+            "legend",
+            "probabilities"
+          ],
+          "title": "ScoreAnswer",
+          "type": "object"
+        },
         "Screenshot": {
           "additionalProperties": true,
           "description": "A screenshot action.",
@@ -30374,7 +30586,7 @@
       },
       "/eu_jev/{endpoint}": {
         "delete": {
-          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "description": "Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.\n\n`POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)\nand returns one answer per question name, with spend booked from the reported `usage`. `custom_body` is\nrejected with a 400.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
           "operationId": "eu_jev_proxy_route_eu_jev__endpoint__delete",
           "parameters": [
             {
@@ -30387,11 +30599,295 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "eu-jeff-latest",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "team": {
+                      "criteria": {
+                        "billing": "Payments, invoices, and refunds",
+                        "support": "Technical issues and bugs"
+                      },
+                      "instructions": "Which team should handle this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "I was charged twice. Can I get a refund?"
+                },
+                "schema": {
+                  "properties": {
+                    "model": {
+                      "default": "eu-jeff-latest",
+                      "description": "eu-jeff-latest follows the current release, eu-jeff-1.0.0 pins it",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "description": "Two to 64 options, option name to description. A null description uses the option name",
+                                "maxProperties": 64,
+                                "minProperties": 2,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what true and false mean",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "EuJevNoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "description": "Two to 10 level descriptions, ordered from low to high",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "One to eight questions, keyed by names of up to 80 characters",
+                      "maxProperties": 8,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "maxLength": 80,
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The content to evaluate, a string of up to 100,000 characters or a JSON object or array",
+                      "title": "State"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions"
+                  ],
+                  "title": "EuJevDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/EuJevDecisionResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -30418,7 +30914,7 @@
           ]
         },
         "get": {
-          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "description": "Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.\n\n`POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)\nand returns one answer per question name, with spend booked from the reported `usage`. `custom_body` is\nrejected with a 400.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
           "operationId": "eu_jev_proxy_route_eu_jev__endpoint__get",
           "parameters": [
             {
@@ -30431,11 +30927,295 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "eu-jeff-latest",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "team": {
+                      "criteria": {
+                        "billing": "Payments, invoices, and refunds",
+                        "support": "Technical issues and bugs"
+                      },
+                      "instructions": "Which team should handle this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "I was charged twice. Can I get a refund?"
+                },
+                "schema": {
+                  "properties": {
+                    "model": {
+                      "default": "eu-jeff-latest",
+                      "description": "eu-jeff-latest follows the current release, eu-jeff-1.0.0 pins it",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "description": "Two to 64 options, option name to description. A null description uses the option name",
+                                "maxProperties": 64,
+                                "minProperties": 2,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what true and false mean",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "EuJevNoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "description": "Two to 10 level descriptions, ordered from low to high",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "One to eight questions, keyed by names of up to 80 characters",
+                      "maxProperties": 8,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "maxLength": 80,
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The content to evaluate, a string of up to 100,000 characters or a JSON object or array",
+                      "title": "State"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions"
+                  ],
+                  "title": "EuJevDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/EuJevDecisionResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -30462,7 +31242,7 @@
           ]
         },
         "patch": {
-          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "description": "Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.\n\n`POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)\nand returns one answer per question name, with spend booked from the reported `usage`. `custom_body` is\nrejected with a 400.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
           "operationId": "eu_jev_proxy_route_eu_jev__endpoint__patch",
           "parameters": [
             {
@@ -30475,11 +31255,295 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "eu-jeff-latest",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "team": {
+                      "criteria": {
+                        "billing": "Payments, invoices, and refunds",
+                        "support": "Technical issues and bugs"
+                      },
+                      "instructions": "Which team should handle this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "I was charged twice. Can I get a refund?"
+                },
+                "schema": {
+                  "properties": {
+                    "model": {
+                      "default": "eu-jeff-latest",
+                      "description": "eu-jeff-latest follows the current release, eu-jeff-1.0.0 pins it",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "description": "Two to 64 options, option name to description. A null description uses the option name",
+                                "maxProperties": 64,
+                                "minProperties": 2,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what true and false mean",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "EuJevNoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "description": "Two to 10 level descriptions, ordered from low to high",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "One to eight questions, keyed by names of up to 80 characters",
+                      "maxProperties": 8,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "maxLength": 80,
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The content to evaluate, a string of up to 100,000 characters or a JSON object or array",
+                      "title": "State"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions"
+                  ],
+                  "title": "EuJevDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/EuJevDecisionResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -30506,7 +31570,7 @@
           ]
         },
         "post": {
-          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "description": "Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.\n\n`POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)\nand returns one answer per question name, with spend booked from the reported `usage`. `custom_body` is\nrejected with a 400.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
           "operationId": "eu_jev_proxy_route_eu_jev__endpoint__post",
           "parameters": [
             {
@@ -30519,11 +31583,295 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "eu-jeff-latest",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "team": {
+                      "criteria": {
+                        "billing": "Payments, invoices, and refunds",
+                        "support": "Technical issues and bugs"
+                      },
+                      "instructions": "Which team should handle this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "I was charged twice. Can I get a refund?"
+                },
+                "schema": {
+                  "properties": {
+                    "model": {
+                      "default": "eu-jeff-latest",
+                      "description": "eu-jeff-latest follows the current release, eu-jeff-1.0.0 pins it",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "description": "Two to 64 options, option name to description. A null description uses the option name",
+                                "maxProperties": 64,
+                                "minProperties": 2,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what true and false mean",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "EuJevNoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "description": "Two to 10 level descriptions, ordered from low to high",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "One to eight questions, keyed by names of up to 80 characters",
+                      "maxProperties": 8,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "maxLength": 80,
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The content to evaluate, a string of up to 100,000 characters or a JSON object or array",
+                      "title": "State"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions"
+                  ],
+                  "title": "EuJevDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/EuJevDecisionResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -30550,7 +31898,7 @@
           ]
         },
         "put": {
-          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "description": "Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.\n\n`POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)\nand returns one answer per question name, with spend booked from the reported `usage`. `custom_body` is\nrejected with a 400.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
           "operationId": "eu_jev_proxy_route_eu_jev__endpoint__put",
           "parameters": [
             {
@@ -30563,11 +31911,295 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "eu-jeff-latest",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "team": {
+                      "criteria": {
+                        "billing": "Payments, invoices, and refunds",
+                        "support": "Technical issues and bugs"
+                      },
+                      "instructions": "Which team should handle this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "I was charged twice. Can I get a refund?"
+                },
+                "schema": {
+                  "properties": {
+                    "model": {
+                      "default": "eu-jeff-latest",
+                      "description": "eu-jeff-latest follows the current release, eu-jeff-1.0.0 pins it",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "description": "Two to 64 options, option name to description. A null description uses the option name",
+                                "maxProperties": 64,
+                                "minProperties": 2,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what true and false mean",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "EuJevNoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "description": "Two to 10 level descriptions, ordered from low to high",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "One to eight questions, keyed by names of up to 80 characters",
+                      "maxProperties": 8,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "maxLength": 80,
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The content to evaluate, a string of up to 100,000 characters or a JSON object or array",
+                      "title": "State"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions"
+                  ],
+                  "title": "EuJevDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/EuJevDecisionResponse"
+                  }
                 }
               },
               "description": "Successful Response"

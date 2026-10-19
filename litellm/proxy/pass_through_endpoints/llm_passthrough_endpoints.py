@@ -87,6 +87,7 @@ from litellm.proxy.common_request_processing import (
     model_deployments_support_stream_options,
     open_sse_before_first_byte,
 )
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -122,6 +123,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
+from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJevDecisionResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
@@ -681,10 +683,34 @@ async def typesafe_proxy_route(
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 
+_EU_JEV_DECISION_REQUEST_BODY: Final = inline_request_body(
+    EuJevDecisionRequest,
+    {
+        "model": "eu-jeff-latest",
+        "state": "I was charged twice. Can I get a refund?",
+        "questions": {
+            "team": {
+                "type": "choice",
+                "instructions": "Which team should handle this?",
+                "criteria": {"billing": "Payments, invoices, and refunds", "support": "Technical issues and bugs"},
+            },
+            "is_refund_request": {"type": "noul", "instructions": "Is the customer asking for a refund?"},
+            "frustration": {
+                "type": "score",
+                "instructions": "How frustrated is the customer?",
+                "criteria": ["calm", "mildly annoyed", "angry"],
+            },
+        },
+    },
+)
+
+
 @router.api_route(
     "/eu_jev/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["eu/jev Pass-through", "pass-through"],
+    responses={200: {"model": EuJevDecisionResponse}},
+    openapi_extra={"requestBody": _EU_JEV_DECISION_REQUEST_BODY},
 )
 async def eu_jev_proxy_route(
     endpoint: str,
@@ -692,7 +718,15 @@ async def eu_jev_proxy_route(
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> Response:
-    """[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)"""
+    """
+    Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.
+
+    `POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)
+    and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` is
+    rejected with a 400.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+    """
     if "custom_body" in await read_request_body(request):
         raise HTTPException(status_code=400, detail="custom_body is not supported for eu_jev requests")
     base_target_url: Final = get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com"
