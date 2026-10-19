@@ -4192,9 +4192,22 @@ API_KEY_UPSTREAM_PARAMS: Final = (
 )
 
 
+_DEFAULT_PORTS: Final = MappingProxyType({"http": 80, "ws": 80, "https": 443, "wss": 443})
+
+
 def _origin(url: str) -> str:
-    parts: Final = urlsplit(url.strip())
-    return f"{parts.scheme.lower()}://{parts.netloc.lower()}" if parts.netloc else url.strip().rstrip("/").lower()
+    text: Final = url.strip()
+    try:
+        parts: Final = urlsplit(text)
+        explicit_port: Final = parts.port
+    except ValueError:
+        return text.rstrip("/").lower()
+    host: Final = (parts.hostname or "").rstrip(".")
+    if not host:
+        return text.rstrip("/").lower()
+    scheme: Final = parts.scheme.lower()
+    port: Final = explicit_port if explicit_port is not None else _DEFAULT_PORTS.get(scheme)
+    return f"{scheme}://{host}" if port is None else f"{scheme}://{host}:{port}"
 
 
 _URL_IN_MODEL: Final = re.compile(r"https?://\S+", re.IGNORECASE)

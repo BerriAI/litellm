@@ -7390,8 +7390,9 @@ _CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own 
         ("https://api.mistral.ai/v1", "http://api.mistral.ai/v1"),
         ("https://api.mistral.ai/v1", "https://api.mistral.ai@caller.example/v1"),
         ("https://api.mistral.ai/v1", "https://api.mistral.ai:8443/v1"),
+        ("https://api.mistral.ai/v1", "http://[api.mistral.ai/v1"),
     ],
-    ids=["another host", "credential without api_base", "another scheme", "userinfo trick", "another port"],
+    ids=["another host", "credential without api_base", "another scheme", "userinfo trick", "another port", "unparseable"],
 )
 def test_a_named_credentials_oidc_api_key_never_goes_to_an_api_base_the_credential_does_not_set(
     monkeypatch: pytest.MonkeyPatch, credential_api_base: str | None, call_api_base: str
@@ -7415,6 +7416,38 @@ def test_a_named_credentials_oidc_api_key_never_goes_to_an_api_base_the_credenti
             )
 
     assert upstream.calls.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("credential_api_base", "call_api_base"),
+    [
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai:443/v1"),
+        ("https://api.mistral.ai:443/v1", "https://API.mistral.ai./v1"),
+    ],
+    ids=["explicit default port on the call", "explicit default port on the credential"],
+)
+def test_a_named_credentials_oidc_api_key_reaches_an_api_base_on_the_same_origin(
+    monkeypatch: pytest.MonkeyPatch, credential_api_base: str, call_api_base: str
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    credential_values: Final = {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": credential_api_base}
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route().respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(
+            model="mistral/devstral-latest",
+            messages=_PING,
+            litellm_credential_name="mistral-sa",
+            api_base=call_api_base,
+        )
+        sent: Final = tuple(authorization for _, authorization in _authorizations(upstream.calls))
+
+    assert sent == ("Bearer env-token",)
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,8 @@ Tests:
 4. strip_advisor_blocks_from_messages with replace_with_text=True
 """
 
-from typing import Dict
+import sys
+from typing import Dict, Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -785,13 +786,8 @@ def test_resolve_advisor_credentials_rejects_an_oidc_secret_reference_api_key(ap
     )
 
     tool = {**ADVISOR_TOOL, "api_key": "oidc/env/LITELLM_MASTER_KEY", "api_base": api_base}
-    with (
-        patch(
-            "litellm.llms.anthropic.pass_through.messages.interceptors.advisor._allow_client_side_advisor_credentials",
-            return_value=True,
-        ),
-        patch("litellm.llms.anthropic.pass_through.messages.interceptors.advisor.validate_url"),
-    ):
+    proxy_settings: Final = {"litellm.proxy.proxy_server": _fake_proxy_server({"allow_client_side_credentials": True})}
+    with patch.dict(sys.modules, proxy_settings):
         with pytest.raises(litellm.BadRequestError, match="oidc/ secret reference"):
             _resolve_advisor_credentials(tool)
 
