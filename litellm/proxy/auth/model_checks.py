@@ -1,6 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
+import itertools
 import re
 from collections.abc import Sequence
 from typing import Final
@@ -271,16 +272,33 @@ def _hydrate_litellm_credential_name(
     return litellm_params
 
 
+def _is_routing_segment(segment: str, provider_model_ids: tuple[str, ...]) -> bool:
+    return "*" not in segment and not any(model_id.startswith(f"{segment}/") for model_id in provider_model_ids)
+
+
+def _without_routing_segments(model_pattern: str, provider_model_ids: tuple[str, ...]) -> str:
+    segments: Final = model_pattern.split("/")
+    routing_segments: Final = tuple(
+        itertools.takewhile(lambda segment: _is_routing_segment(segment, provider_model_ids), segments[:-1])
+    )
+    return "/".join(segments[len(routing_segments) :])
+
+
 def _ids_routing_to_catalog_models(
     name_pattern: str, deployment_pattern: str, provider: str, catalog_ids: Sequence[str]
 ) -> tuple[str, ...]:
     if name_pattern.count("*") != deployment_pattern.count("*"):
         return ()
-    deployment_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex(deployment_pattern))
     provider_id_prefix: Final = f"{provider}/"
+    provider_model_ids: Final = tuple(catalog_id.removeprefix(provider_id_prefix) for catalog_id in catalog_ids)
+    catalog_pattern: Final = _without_routing_segments(
+        deployment_pattern.removeprefix(provider_id_prefix), provider_model_ids
+    )
+    deployment_regex: Final = re.compile(
+        PatternMatchRouter().pattern_to_regex(f"{provider_id_prefix}{catalog_pattern}")
+    )
     catalog_matches: Final = (
-        deployment_regex.fullmatch(f"{provider_id_prefix}{catalog_id.removeprefix(provider_id_prefix)}")
-        for catalog_id in catalog_ids
+        deployment_regex.fullmatch(f"{provider_id_prefix}{model_id}") for model_id in provider_model_ids
     )
     return tuple(
         dict.fromkeys(

@@ -1267,6 +1267,8 @@ _ROUTE_CF_ID: Final = "cloudflare/@cf/partial-route-org/model-a-instruct"
 _ROUTE_CF_SUFFIXED_ID: Final = "cloudflare/@cf/partial-route-org/model-b-instruct-v2"
 _ROUTE_HF_ID: Final = "cloudflare/@hf/partial-route-org/model-c"
 _ROUTE_GEMINI_ID: Final = "gemini-partial-route-9-flash"
+_ROUTE_OPENAI_ID: Final = "gpt-partial-route-9-mini"
+_ROUTE_BEDROCK_ID: Final = "anthropic.partial-route-9-v1:0"
 _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
 
 
@@ -1296,6 +1298,19 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
         pytest.param("gemini/gemini-*", "gemini/*", None, {_ROUTE_GEMINI_ID}, id="alias-over-bare-id"),
         pytest.param(
             "gemini/*", "gemini/*", "gemini/gemini-partial-route-9*", {_ROUTE_GEMINI_ID}, id="key-filter-over-bare-id"
+        ),
+        pytest.param(
+            "openai/*", "openai/responses/*", None, {f"openai/responses/{_ROUTE_OPENAI_ID}"}, id="responses-route"
+        ),
+        pytest.param(
+            "openai/*",
+            "openai/responses/*",
+            "openai/gpt-partial-route-9*",
+            {f"openai/responses/{_ROUTE_OPENAI_ID}"},
+            id="key-filter-over-responses-route",
+        ),
+        pytest.param(
+            "bedrock/*", "bedrock/converse/*", None, {f"bedrock/converse/{_ROUTE_BEDROCK_ID}"}, id="converse-route"
         ),
     ],
 )
@@ -1331,6 +1346,8 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
             _ROUTE_CF_SUFFIXED_ID: "cloudflare",
             _ROUTE_HF_ID: "cloudflare",
             _ROUTE_GEMINI_ID: "gemini",
+            _ROUTE_OPENAI_ID: "openai",
+            _ROUTE_BEDROCK_ID: "bedrock",
         }
     ):
         v1_models: Final = get_complete_model_list(
