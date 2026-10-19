@@ -103,8 +103,9 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    timeout: float | httpx.Timeout | None = None,
 ):
-    response: Final = await client.post(api_base, headers=headers, data=data, stream=True)
+    response: Final = await client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
 
     if response.status_code != 200:
         raise TextCompletionCodestralError(status_code=response.status_code, message=response.text)
@@ -336,16 +337,18 @@ class CodestralTextCompletion:
 
         ### SYNC STREAMING
         if stream is True:
+            data["stream"] = True
             response = litellm.module_level_client.post(
                 completion_url,
                 headers=headers,
                 data=json.dumps(data),
                 stream=stream,
+                timeout=timeout,
             )
             _response: Final = CustomStreamWrapper(
                 response.iter_lines(),
                 model,
-                custom_llm_provider="codestral",
+                custom_llm_provider="text-completion-codestral",
                 logging_obj=logging_obj,
             )
             return _response
@@ -355,6 +358,7 @@ class CodestralTextCompletion:
                 url=completion_url,
                 headers=headers,
                 data=json.dumps(data),
+                timeout=timeout,
             )
         return self.process_text_completion_response(
             model=model,
@@ -448,6 +452,7 @@ class CodestralTextCompletion:
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                timeout=timeout,
             ),
             model=model,
             custom_llm_provider="text-completion-codestral",
