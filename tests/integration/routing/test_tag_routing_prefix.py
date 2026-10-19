@@ -452,10 +452,13 @@ def _run_batch(gateway: Gateway, key: str, model: str, marker: str, count: int) 
     )
 
 
-def test_a_proxy_run_batch_keeps_applying_an_unprefixed_team_tag(prefixed: Gateway, upstream: Wire) -> None:
+@pytest.mark.parametrize("owner", ["key", "team", "project"])
+def test_a_proxy_run_batch_keeps_applying_an_unprefixed_key_team_or_project_tag(
+    prefixed: Gateway, upstream: Wire, owner: Literal["key", "team", "project"]
+) -> None:
     marker: Final = f"marker-{uuid.uuid4().hex}"
     with prefixed.scenario() as scenario:
-        finished: Final = _run_batch(prefixed, _team_key(scenario, ["&region:eu"]), BATCHED, marker, 8)
+        finished: Final = _run_batch(prefixed, _policy_key(scenario, owner, ["&region:eu"]), BATCHED, marker, 8)
 
     assert finished["status"] == "completed", finished
     assert _routed_backends(upstream, marker) == ("eu-batch-backend",) * 8
