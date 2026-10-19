@@ -12,4 +12,6 @@ Await each selected suspension in the caller's task so hooks retain thread, loop
 
 Native admission may select legacy before execution starts. A failure after execution starts is terminal and never authorizes fallback. Creating an unstarted native coroutine must not acquire clients or credentials or capture execution context
 
+`_native` ships in every wheel and the sdist builds it, so it is always importable. Import it directly with `from litellm.rust_bridge import _native` and use the attributes `_native.pyi` declares. Never add a `None` branch, `getattr` default or stand-in class for a missing extension
+
 Verify cross-language behavior using a fresh installed extension, including unstarted-call release, setup ordering, exception identity, sync and async streams, cancellation and GC. Keep `_native.pyi` accurate about Future-returning and coroutine-returning APIs

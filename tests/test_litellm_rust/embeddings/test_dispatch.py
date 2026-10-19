@@ -56,17 +56,13 @@ def test_sync_embedding_request_projects_public_arguments() -> None:
 
 @pytest.mark.asyncio
 async def test_async_embedding_falls_back_after_native_declines() -> None:
-    from litellm.rust_bridge.bindings import native_exception_types
+    from litellm.rust_bridge._native import RustBridgeDeclined
 
-    native_types: Final = native_exception_types()
-    if native_types is None:
-        pytest.skip("native bridge is unavailable")
-    declined, _ = native_types
     expected: Final = EmbeddingResponse(model="test-model", data=[])
     rules: Final[Rules] = (RouteRule(Route.EMBEDDINGS, Rollout.RUST_OPT_OUT),)
 
     async def native(request: NativeCall) -> EmbeddingResponse:
-        raise declined("unsupported")
+        raise RustBridgeDeclined("unsupported")
 
     async def python(*args: object, **kwargs: object) -> EmbeddingResponse:
         return expected
