@@ -1138,7 +1138,11 @@ def _calculate_input_cost(
         prompt_tokens_details["audio_length_seconds"] and model_info.get("input_cost_per_audio_per_second") is not None
     ):
         prompt_cost += _modality_token_cost(
-            model_info, "input_cost_per_audio_token", prompt_tokens_details["audio_tokens"], prompt_base_cost, service_tier
+            model_info,
+            "input_cost_per_audio_token",
+            prompt_tokens_details["audio_tokens"],
+            prompt_base_cost,
+            service_tier,
         )
 
     ### IMAGE TOKEN COST
@@ -1146,7 +1150,11 @@ def _calculate_input_cost(
         prompt_tokens_details["image_count"] and model_info.get("input_cost_per_image") is not None
     ):
         prompt_cost += _modality_token_cost(
-            model_info, "input_cost_per_image_token", prompt_tokens_details["image_tokens"], prompt_base_cost, service_tier
+            model_info,
+            "input_cost_per_image_token",
+            prompt_tokens_details["image_tokens"],
+            prompt_base_cost,
+            service_tier,
         )
 
     ### VIDEO TOKEN COST
@@ -1154,7 +1162,11 @@ def _calculate_input_cost(
         prompt_tokens_details["video_length_seconds"] and model_info.get("input_cost_per_video_per_second") is not None
     ):
         prompt_cost += _modality_token_cost(
-            model_info, "input_cost_per_video_token", prompt_tokens_details["video_tokens"], prompt_base_cost, service_tier
+            model_info,
+            "input_cost_per_video_token",
+            prompt_tokens_details["video_tokens"],
+            prompt_base_cost,
+            service_tier,
         )
 
     ### CACHE WRITING COST - Now uses tiered pricing
