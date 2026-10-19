@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Generic, TypeAlias, TypeVar
 
+from litellm._logging import verbose_logger
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, Rules
@@ -38,6 +39,15 @@ class PublicDispatch(Generic[RequestT]):
             )
         return request
 
+    def _guarded_context(self, request: RequestT) -> RouteContext | None:
+        try:
+            return self.context(request)
+        except Exception:  # noqa: BLE001  # detectors call legacy handlers, so any error must fall back to Python
+            verbose_logger.warning(
+                "%s route detection failed, serving the call on Python", self.route.value, exc_info=True
+            )
+            return None
+
     def run(
         self,
         args: tuple[object, ...],
@@ -63,8 +73,11 @@ class PublicDispatch(Generic[RequestT]):
         request: Final = self.request(args, kwargs)
         if request is None:
             return python(*args, **kwargs)
+        context: Final = self._guarded_context(request)
+        if context is None:
+            return python(*args, **kwargs)
         return runtime.run(
-            self.context(request),
+            context,
             binding=binding,
             native=lambda hook: native(hook, request, args, kwargs),
             python=lambda: python(*args, **kwargs),
@@ -96,8 +109,11 @@ class PublicDispatch(Generic[RequestT]):
         request: Final = self.request(args, kwargs)
         if request is None:
             return await python(*args, **kwargs)
+        context: Final = self._guarded_context(request)
+        if context is None:
+            return await python(*args, **kwargs)
         return await runtime.arun(
-            self.context(request),
+            context,
             binding=binding,
             native=lambda hook: native(hook, request, args, kwargs),
             python=lambda: python(*args, **kwargs),

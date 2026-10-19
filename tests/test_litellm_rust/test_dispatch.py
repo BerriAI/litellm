@@ -1,6 +1,6 @@
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Final, TypeAlias
+from typing import Final, NoReturn, TypeAlias
 
 import pytest
 
@@ -243,6 +243,50 @@ async def dispatch_without_python(
         return hook(value, args, kwargs)
 
     return await dispatch.arun(("model",), {"page": 1}, python=NO_PYTHON, binding=bound, native=native, rules=rules)
+
+
+def failing_context(request: Request) -> RouteContext:
+    raise RuntimeError("detector exploded")
+
+
+def failing_dispatch() -> PublicDispatch[Request]:
+    return PublicDispatch(
+        route=Route.CHAT_COMPLETIONS, request=lambda args, kwargs: Request(model="model"), context=failing_context
+    )
+
+
+def reject_native(hook: object, request: Request, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NoReturn:
+    pytest.fail("a failed context build must not reach native")
+
+
+def test_a_detector_error_keeps_the_call_on_python() -> None:
+    expected: Final = object()
+    result: Final = failing_dispatch().run(
+        ("model",),
+        {},
+        python=lambda *args, **kwargs: expected,
+        binding=binding(),
+        native=reject_native,
+        rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
+    )
+    assert result is expected
+
+
+async def test_a_detector_error_keeps_the_async_call_on_python() -> None:
+    expected: Final = object()
+
+    async def python(*args: object, **kwargs: object) -> object:  # kwargs-ok: stub
+        return expected
+
+    result: Final = await failing_dispatch().arun(
+        ("model",),
+        {},
+        python=python,
+        binding=binding(),
+        native=reject_native,
+        rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
+    )
+    assert result is expected
 
 
 def ocr_dispatch(request: Request | None) -> PublicDispatch[Request]:
