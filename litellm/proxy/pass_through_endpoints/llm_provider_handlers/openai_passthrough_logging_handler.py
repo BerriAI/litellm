@@ -721,6 +721,12 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 )
             )
 
+            settles_background_response: Final = (
+                terminal_response is not None
+                and is_background_response(terminal_response)
+                and terminal_response.usage is not None
+            )
+
             # Preserve existing litellm_params to maintain metadata tags
             existing_litellm_params: Final = litellm_logging_obj.model_call_details.get("litellm_params", {}) or {}
             litellm_params: Final = existing_litellm_params.copy()
@@ -728,6 +734,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Prepare kwargs for logging
             kwargs: Final = {
                 "response_cost": response_cost,
+                SETTLES_BACKGROUND_RESPONSE_KWARG: settles_background_response,
                 "model": model,
                 "custom_llm_provider": custom_llm_provider,
                 "call_type": litellm_logging_obj.call_type,
@@ -765,6 +772,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             litellm_logging_obj.model_call_details["model"] = model
             litellm_logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
             litellm_logging_obj.model_call_details["response_cost"] = response_cost
+            litellm_logging_obj.model_call_details[SETTLES_BACKGROUND_RESPONSE_KWARG] = (  # rebind-ok: spend row id
+                settles_background_response
+            )
 
             verbose_proxy_logger.debug(
                 f"OpenAI streaming passthrough cost tracking - Model: {model}, Cost: ${response_cost:.6f}"

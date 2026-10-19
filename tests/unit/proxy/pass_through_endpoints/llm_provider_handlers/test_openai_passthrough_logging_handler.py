@@ -2395,6 +2395,47 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert not poll.spend_row["spend"]
         assert read.callback_response_id == STORED_RESPONSE_ID
 
+    @pytest.mark.asyncio
+    async def test_streamed_background_create_and_its_finished_read_share_one_spend_row(self, local_model_cost_map):
+        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
+        stream_logging_obj: Final = LiteLLMLoggingObj(
+            model="gpt-5.4-mini",
+            messages=[],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=DISPATCH_TIME,
+            litellm_call_id="7e3b9a14-5c2d-4f60-8d1a-2b6c0e9f4a37",
+            function_id="1234",
+        )
+        stream_logging_obj.model_call_details["custom_llm_provider"] = "openai"
+        streamed_create: Final = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+            litellm_logging_obj=stream_logging_obj,
+            passthrough_success_handler_obj=None,
+            url_route=RESPONSES_URL,
+            request_body={**CREATE_REQUEST, "background": True, "stream": True},
+            endpoint_type=None,
+            start_time=DISPATCH_TIME,
+            all_chunks=[
+                f"data: {json.dumps({'type': 'response.completed', 'sequence_number': 1, 'response': finished})}",
+                "data: [DONE]",
+            ],
+            end_time=DISPATCH_TIME,
+        )
+        create_row: Final = get_logging_payload(
+            kwargs=streamed_create["kwargs"],
+            response_obj=streamed_create["result"],
+            start_time=DISPATCH_TIME,
+            end_time=DISPATCH_TIME,
+        )
+
+        read: Final = await self._logged_call(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, finished, "1c8d5e2a-9f47-4b3e-a6d0-5e7f2c1b8a93"
+        )
+
+        assert create_row["spend"] > 0
+        assert read.spend_row["request_id"] == create_row["request_id"]
+        assert read.callback_response_id == STORED_RESPONSE_ID
+
     @pytest.mark.parametrize(
         "base_url",
         [
