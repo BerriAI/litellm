@@ -13,7 +13,11 @@ from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager, get_valid_models
+from litellm.utils import (
+    ProviderConfigManager,
+    _get_valid_models_from_provider_api,  # pyright: ignore[reportPrivateUsage]  # no public wrapper
+    get_valid_models,
+)
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -41,6 +45,29 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     """
     if provider == "*":
         return get_valid_models(litellm_params=litellm_params)
+
+    api_base: Final = getattr(litellm_params, "api_base", None) if litellm_params is not None else None
+    if isinstance(api_base, str) and api_base and provider in litellm.models_by_provider:  # pyright: ignore[reportUnknownMemberType]  # untyped upstream dict
+        # A custom OpenAI-compatible endpoint was configured for this wildcard
+        # (e.g. Tinker's api_base=https://.../services/tinker-prod/oai/api/v1).
+        # The local catalog would advertise models the endpoint does not serve,
+        # so discover the live catalog from api_base instead. When the endpoint
+        # cannot be reached, return None so the wildcard advertises nothing -
+        # never fall back to the unrelated local catalog (#45504).
+        try:
+            provider_config: Final = ProviderConfigManager.get_provider_model_info(
+                model=None,
+                provider=LlmProviders(provider),
+            )
+        except ValueError:
+            # the name is in models_by_provider without a routable LlmProviders
+            # entry (e.g. "palm"), so there is no config to discover from -
+            # advertise nothing, exactly like the no-config branch below (#45504)
+            return None
+        if provider_config is None:
+            return None
+        endpoint_models: Final = _get_valid_models_from_provider_api(provider_config, provider, litellm_params)
+        return endpoint_models or None
 
     if provider in litellm.models_by_provider:
         provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
