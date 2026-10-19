@@ -3,8 +3,14 @@ Unit tests for the in-gateway `clear_tool_uses_20250919` polyfill editor.
 """
 
 from copy import deepcopy
+from itertools import chain
+from typing import Final
+
+import pytest
 
 import litellm
+from litellm.llms.anthropic.pass_through.adapters.handler import _run_polyfill_if_enabled
+from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.pass_through.context_management.constants import (
     CLEARED_TOOL_RESULT_PLACEHOLDER,
 )
@@ -204,23 +210,19 @@ def test_cleared_input_tokens_is_nonnegative():
     assert applied["cleared_input_tokens"] >= 0
 
 
-def _result_contents(messages):
-    """tool_use_id -> tool_result content."""
-    return {
-        block["tool_use_id"]: block["content"]
-        for msg in messages
-        if isinstance(msg.get("content"), list)
-        for block in msg["content"]
-        if block.get("type") == "tool_result"
-    }
+def _blocks_of(messages: list[dict[str, object]], block_type: str) -> tuple[dict[str, object], ...]:
+    contents: Final = (message["content"] for message in messages)
+    blocks: Final = chain.from_iterable(content for content in contents if isinstance(content, list))
+    return tuple(block for block in blocks if isinstance(block, dict) and block["type"] == block_type)
 
 
-def _cleared_ids(messages):
-    return {
-        tool_use_id
-        for tool_use_id, content in _result_contents(messages).items()
-        if content == CLEARED_TOOL_RESULT_PLACEHOLDER
-    }
+def _result_contents(messages: list[dict[str, object]]) -> dict[object, object]:
+    return {block["tool_use_id"]: block["content"] for block in _blocks_of(messages, "tool_result")}
+
+
+def _cleared_ids(messages: list[dict[str, object]]) -> set[object]:
+    placeholders: Final = (CLEARED_TOOL_RESULT_PLACEHOLDER, [{"type": "text", "text": CLEARED_TOOL_RESULT_PLACEHOLDER}])
+    return {tool_use_id for tool_use_id, content in _result_contents(messages).items() if content in placeholders}
 
 
 def _result_tokens(text: str) -> int:
@@ -245,7 +247,6 @@ def test_clear_at_least_clears_in_batches_and_leaves_an_incomplete_batch():
     assert applied is not None
     assert applied["cleared_tool_uses"] == 6
     assert _cleared_ids(new_messages) == {f"toolu_{i:02d}" for i in range(6)}
-    assert "warnings" not in applied
 
 
 def test_clear_at_least_keeps_the_cleared_prefix_stable_between_requests():
@@ -258,12 +259,14 @@ def test_clear_at_least_keeps_the_cleared_prefix_stable_between_requests():
         "keep": {"type": "tool_uses", "value": 1},
         "clear_at_least": {"type": "input_tokens", "value": 2 * one_result + 1},
     }
-    cleared = []
-    for n_pairs in (8, 9, 10):
-        new_messages, _ = apply_clear_tool_uses_20250919(
-            model=MODEL, messages=history[: 1 + 2 * n_pairs], tools=None, system=None, edit_spec=edit_spec
+    cleared: Final = tuple(
+        _cleared_ids(
+            apply_clear_tool_uses_20250919(
+                model=MODEL, messages=history[: 1 + 2 * n_pairs], tools=None, system=None, edit_spec=edit_spec
+            )[0]
         )
-        cleared.append(_cleared_ids(new_messages))
+        for n_pairs in (8, 9, 10)
+    )
     assert cleared[0] == cleared[1] == {f"toolu_{i:02d}" for i in range(6)}
     assert cleared[2] == {f"toolu_{i:02d}" for i in range(9)}
 
@@ -391,6 +394,7 @@ def test_tiny_results_stay_out_when_clear_tool_inputs_names_other_tools():
 
 
 def test_results_over_46_bytes_and_empty_results_still_count():
+    # The 46 byte cutoff was measured on api.anthropic.com on 2026-10-19.
     messages = _make_history(5)
     messages[2]["content"][0]["content"] = "x" * 47
     messages[4]["content"][0]["content"] = ""
@@ -399,20 +403,14 @@ def test_results_over_46_bytes_and_empty_results_still_count():
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}},
     ]
     new_messages, applied = _clear_with_keep_two(messages)
-    assert _cleared_ids(new_messages) == {"toolu_00", "toolu_01"}
+    assert _cleared_ids(new_messages) == {"toolu_00", "toolu_01", "toolu_02"}
     assert new_messages[6]["content"][0]["content"] == [{"type": "text", "text": CLEARED_TOOL_RESULT_PLACEHOLDER}]
     assert applied is not None
     assert applied["cleared_tool_uses"] == 3
 
 
-def _tool_inputs(messages):
-    return {
-        block["id"]: block["input"]
-        for msg in messages
-        if msg["role"] == "assistant"
-        for block in msg["content"]
-        if block.get("type") == "tool_use"
-    }
+def _tool_inputs(messages: list[dict[str, object]]) -> dict[object, object]:
+    return {block["id"]: block["input"] for block in _blocks_of(messages, "tool_use")}
 
 
 def test_clear_tool_inputs_true_empties_the_inputs_of_cleared_uses_only():
@@ -460,8 +458,111 @@ def test_clear_tool_inputs_list_clears_only_the_named_tools():
     }
 
 
-def test_invalid_knobs_are_ignored_with_warnings():
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("clear_at_least", {"type": "tool_uses", "value": 5}),
+        ("clear_at_least", {"value": 5}),
+        ("clear_at_least", {"type": "input_tokens", "value": -1}),
+        ("clear_at_least", {"type": "input_tokens", "value": 1.5}),
+        ("exclude_tools", "get_weather"),
+        ("exclude_tools", [1]),
+        ("clear_tool_inputs", "get_weather"),
+    ],
+)
+def test_malformed_fields_are_a_400_even_below_the_trigger(field, value):
     messages = _make_history(n_pairs=3)
+    with pytest.raises(AnthropicContextManagementError) as raised:
+        apply_clear_tool_uses_20250919(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec={
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "tool_uses", "value": 99},
+                field: value,
+            },
+        )
+    assert raised.value.status_code == 400
+    assert f"clear_tool_uses_20250919.{field}" in raised.value.message
+
+
+_MALFORMED_SPEC: Final = {
+    "edits": [
+        {
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "exclude_tools": "get_weather",
+        }
+    ]
+}
+
+
+async def test_malformed_field_raises_through_the_polyfill_and_drops_under_drop_params():
+    async def run(drop_invalid_edits: bool):
+        return await _run_polyfill_if_enabled(
+            model=MODEL,
+            messages=_make_history(n_pairs=3),
+            tools=None,
+            system=None,
+            context_management_spec=_MALFORMED_SPEC,
+            litellm_metadata={},
+            additional_drop_params=None,
+            llm_router=None,
+            drop_invalid_edits=drop_invalid_edits,
+        )
+
+    with pytest.raises(AnthropicContextManagementError):
+        await run(drop_invalid_edits=False)
+    assert await run(drop_invalid_edits=True) is None
+
+
+@pytest.mark.parametrize(("clear_tool_inputs", "cleared"), [("yes", True), ("true", True), (1, True), ("no", False)])
+def test_clear_tool_inputs_reads_boolean_strings_and_numbers_like_the_api(clear_tool_inputs, cleared):
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=_make_history(n_pairs=3),
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+            "clear_tool_inputs": clear_tool_inputs,
+        },
+    )
+    assert applied is not None
+    assert _tool_inputs(new_messages)["toolu_00"] == ({} if cleared else {"location": "City0"})
+
+
+@pytest.mark.parametrize(("trigger_value", "triggers"), [(2, False), (1, True)])
+def test_tool_uses_trigger_does_not_count_excluded_tools(trigger_value, triggers):
+    messages = [{"role": "user", "content": "Plan a trip."}]
+    for i, name in enumerate(["search", "get_weather", "search", "get_weather"]):
+        messages.extend(_make_pair(f"toolu_{i:02d}", f"Result {i}: " + "x" * 200, name=name))
+    _, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": trigger_value},
+            "keep": {"type": "tool_uses", "value": 0},
+            "exclude_tools": ["search"],
+        },
+    )
+    assert (applied is not None) == triggers
+
+
+def test_clear_at_least_counts_the_tool_inputs_it_clears():
+    messages = [{"role": "user", "content": "Write the files."}]
+    for i in range(4):
+        assistant_msg, user_msg = _make_pair(f"toolu_{i:02d}", "ok", name="write_file")
+        assistant_msg["content"][0]["input"] = {"path": f"file{i}.txt", "content": "lorem ipsum " * 300}
+        messages.extend((assistant_msg, user_msg))
+    one_input = litellm.token_counter(model=MODEL, text="lorem ipsum " * 300)
     new_messages, applied = apply_clear_tool_uses_20250919(
         model=MODEL,
         messages=messages,
@@ -471,21 +572,27 @@ def test_invalid_knobs_are_ignored_with_warnings():
             "type": "clear_tool_uses_20250919",
             "trigger": {"type": "tool_uses", "value": 0},
             "keep": {"type": "tool_uses", "value": 1},
-            "clear_at_least": {"type": "tool_uses", "value": 5},
-            "exclude_tools": "get_weather",
-            "clear_tool_inputs": "yes",
+            "clear_at_least": {"type": "input_tokens", "value": 3 * one_input // 2},
+            "clear_tool_inputs": True,
         },
     )
     assert applied is not None
-    assert applied["cleared_tool_uses"] == 2
-    assert _tool_inputs(new_messages)["toolu_00"] == {"location": "City0"}
-    assert applied["warnings"] == ["clear_at_least_invalid", "exclude_tools_invalid", "clear_tool_inputs_invalid"]
+    assert _cleared_ids(new_messages) == {"toolu_00", "toolu_01"}
+    assert [_tool_inputs(new_messages)[f"toolu_{i:02d}"] == {} for i in range(4)] == [True, True, False, False]
+    assert applied["cleared_input_tokens"] >= 3 * one_input // 2
 
 
-def test_valid_spec_omits_warnings_field():
-    """A spec without invalid fields gets no ``warnings``."""
-    messages = _make_history(n_pairs=3)
-    _, applied = apply_clear_tool_uses_20250919(
+_ONE_PIXEL_PNG: Final = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def test_clear_at_least_counts_image_results():
+    messages = _make_history(n_pairs=4)
+    image: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _ONE_PIXEL_PNG}}
+    for user_msg in messages[2::2]:
+        user_msg["content"][0]["content"] = [image]
+    new_messages, applied = apply_clear_tool_uses_20250919(
         model=MODEL,
         messages=messages,
         tools=None,
@@ -494,10 +601,11 @@ def test_valid_spec_omits_warnings_field():
             "type": "clear_tool_uses_20250919",
             "trigger": {"type": "tool_uses", "value": 0},
             "keep": {"type": "tool_uses", "value": 1},
+            "clear_at_least": {"type": "input_tokens", "value": 1},
         },
     )
     assert applied is not None
-    assert "warnings" not in applied
+    assert _cleared_ids(new_messages) == {"toolu_00", "toolu_01", "toolu_02"}
 
 
 def test_tool_result_list_content_shape_preserved():
