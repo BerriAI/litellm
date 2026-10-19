@@ -28,10 +28,9 @@ pytestmark: Final = pytest.mark.shares_worker_state
 CRAFTED_MODEL: Final = ("exceeded " * 32_000)[:288_000]
 HOSTILE_5KB_MODEL: Final = ("exceeded budget " * 400)[:5_000]
 BENIGN_288KB_MODEL: Final = "x" * len(CRAFTED_MODEL)
-SHORT_UNKNOWN_MODEL: Final = "x" * 16
-_Refused: TypeAlias = Literal["crafted", "short"]
-REFUSED_MODELS: Final[Mapping[_Refused, str]] = MappingProxyType(
-    {"crafted": CRAFTED_MODEL, "short": SHORT_UNKNOWN_MODEL}
+_Oversized: TypeAlias = Literal["crafted", "benign"]
+OVERSIZED_MODELS: Final[Mapping[_Oversized, str]] = MappingProxyType(
+    {"crafted": CRAFTED_MODEL, "benign": BENIGN_288KB_MODEL}
 )
 CRAFTED_SLOWDOWN_FACTOR: Final = 10
 CRAFTED_BURST_SLOWDOWN_FACTOR: Final = 3
@@ -357,17 +356,17 @@ def _burst_call(client: httpx.Client, label: str, path: str, body: Mapping[str, 
 
 def _burst(
     client: httpx.Client,
-    refused: _Refused,
+    oversized: _Oversized,
     happy_model: str,
     happy_key: str,
     open_key: str,
     during: Callable[[], None],
 ) -> tuple[_BurstResult, ...]:
-    refused_calls: Final = tuple(
+    oversized_calls: Final = tuple(
         (
-            f"{refused}-{path}-{index}",
+            f"{oversized}-{path}-{index}",
             path,
-            _body(path, REFUSED_MODELS[refused], uuid.uuid4().hex, stream=index % 2 == 1),
+            _body(path, OVERSIZED_MODELS[oversized], uuid.uuid4().hex, stream=index % 2 == 1),
             open_key,
         )
         for path in (CHAT, MESSAGES, RESPONSES)
@@ -384,7 +383,8 @@ def _burst(
         httpx.Client(base_url=client.base_url, timeout=client.timeout, trust_env=False) as fresh,
     ):
         first: Final = tuple(
-            pool.submit(_burst_call, client, label, path, body, key) for label, path, body, key in refused_calls + happy
+            pool.submit(_burst_call, client, label, path, body, key)
+            for label, path, body, key in oversized_calls + happy
         )
         wait(first, return_when=FIRST_COMPLETED)
         during()
@@ -394,11 +394,11 @@ def _burst(
         return tuple(future.result() for future in first + second)
 
 
-def _slowest_refusal(results: tuple[_BurstResult, ...], refused: _Refused) -> float:
-    answered: Final = tuple(result for result in results if result.label.startswith(refused) and result.status)
-    assert answered, f"every {refused} request dropped: {results}"
-    assert all(result.status == 400 for result in answered), answered
-    return max(result.seconds for result in answered)
+def _slowest_refusal(results: tuple[_BurstResult, ...], oversized: _Oversized) -> float:
+    refused: Final = tuple(result for result in results if result.label.startswith(oversized) and result.status)
+    assert refused, f"every {oversized} request dropped: {results}"
+    assert all(result.status == 400 for result in refused), refused
+    return max(result.seconds for result in refused)
 
 
 def _assert_rows_land_exactly_once(results: tuple[_BurstResult, ...], prefix: str) -> None:
@@ -433,7 +433,7 @@ def test_killing_one_worker_mid_burst_leaves_the_other_serving_crafted_and_happy
         workers: Final = owned.worker_pids()
         assert len(workers) == 2, workers
         victim: Final = min(workers)
-        control: Final = _slowest_refusal(_burst(client, "short", model, key, open_key, lambda: None), "short")
+        control: Final = _slowest_refusal(_burst(client, "benign", model, key, open_key, lambda: None), "benign")
 
         with owned.replacing_worker(victim) as kill:
             results: Final = _burst(client, "crafted", model, key, open_key, kill)
@@ -470,7 +470,7 @@ def test_upstream_returning_503_mid_burst_logs_every_failure_with_its_own_cluste
         model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
         key: Final = scenario.key(models=[model])
         open_key: Final = scenario.key()
-        control: Final = _slowest_refusal(_burst(client, "short", model, key, open_key, lambda: None), "short")
+        control: Final = _slowest_refusal(_burst(client, "benign", model, key, open_key, lambda: None), "benign")
         wire.drain()
         results: Final = _burst(client, "crafted", model, key, open_key, lambda: None)
         assert all(result.status is not None for result in results), results
