@@ -425,14 +425,21 @@ def _jsonable_fallback(value: object) -> object:
     return dict(_LOGGED_FIELDS_ADAPTER.validate_python(value)) if isinstance(value, Mapping) else str(value)
 
 
-def _logged_request_message(fields: RequestFields) -> ChatCompletionUserMessage:
+def _logged_request_message(caller_request: object) -> ChatCompletionUserMessage:
     caller_fields: Final = _LOGGED_FIELDS_ADAPTER.validate_python(
-        to_jsonable_python(fields, fallback=_jsonable_fallback)
+        to_jsonable_python(caller_request, fallback=_jsonable_fallback)
     )
     sent_fields: Final = json.dumps(
         dict((name, value) for name, value in caller_fields.items() if value not in (None, [], {}))
     )
     return ChatCompletionUserMessage(role="user", content=sent_fields)
+
+
+def log_caller_request(kwargs: Mapping[str, object], caller_request: object) -> None:
+    """Record every request field the caller sent as the logged `messages`, before any validation."""
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.update_messages([_logged_request_message(caller_request)])
 
 
 def prepare_call(
@@ -447,9 +454,6 @@ def prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
-    logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if isinstance(logging_obj, LiteLLMLoggingObj):
-        logging_obj.update_messages([_logged_request_message(fields)])
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -539,6 +543,7 @@ def prepare_call(
             model=model,
             llm_provider=provider,
         )
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.update_from_kwargs(
             kwargs=dict(kwargs),
