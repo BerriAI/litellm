@@ -4774,7 +4774,10 @@ class Router:
         """Helper to get stream timeout from kwargs or deployment params"""
         return (
             kwargs.get("stream_timeout", None)  # the params dynamically set by user
-            or get_service_tier_timeout(kwargs.get("service_tier"), data.get("stream_timeout_by_service_tier"))
+            or get_service_tier_timeout(
+                kwargs.get("service_tier"),
+                data["stream_timeout_by_service_tier"] if "stream_timeout_by_service_tier" in data else None,
+            )
             or data.get("stream_timeout", None)  # timeout set on litellm_params for this deployment
             or self.stream_timeout  # timeout set on router
             or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
@@ -4788,7 +4791,10 @@ class Router:
         return (
             kwargs.get("timeout", None)  # the params dynamically set by user
             or kwargs.get("request_timeout", None)  # the params dynamically set by user
-            or get_service_tier_timeout(kwargs.get("service_tier"), data.get("timeout_by_service_tier"))
+            or get_service_tier_timeout(
+                kwargs.get("service_tier"),
+                data["timeout_by_service_tier"] if "timeout_by_service_tier" in data else None,
+            )
             or data.get("timeout", None)  # timeout set on litellm_params for this deployment
             or data.get("request_timeout", None)  # timeout set on litellm_params for this deployment
             or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
