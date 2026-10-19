@@ -241,6 +241,7 @@ jobs:
               tests/unit/llms/clarifai
               tests/unit/llms/claude_code
               tests/unit/llms/cloudflare
+              tests/unit/llms/codestral
               tests/unit/llms/codex
               tests/unit/llms/cohere
               tests/unit/llms/cometapi
