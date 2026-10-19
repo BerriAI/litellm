@@ -13,7 +13,7 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Mapping, MutableSequence, Sequence
+from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, repeat
@@ -215,11 +215,24 @@ def _tool_use_names(message: object) -> tuple[str, ...]:
     return tuple(name for name in map(_tool_use_name, list_field(message, "content")) if name is not None)
 
 
-def _original_tool_names(request: Mapping[str, object]) -> Mapping[str, str]:
-    declared: Final = chain.from_iterable(map(anthropic_tool_names, list_field(request, "tools")))
-    used: Final = chain.from_iterable(map(_tool_use_names, list_field(request, "messages")))
+@dataclass(frozen=True, slots=True)
+class _OriginalToolNames:
+    """Caller tool names over the guardrail's limit, keyed by the shortened name the guardrail sees."""
+
+    declared: Mapping[str, str]
+    used: Mapping[str, str]
+
+
+def _restorable_names(names: Iterable[str]) -> Mapping[str, str]:
     return MappingProxyType(
-        {truncate_tool_name(name): name for name in chain(declared, used) if len(name) > OPENAI_MAX_TOOL_NAME_LENGTH}
+        {truncate_tool_name(name): name for name in names if len(name) > OPENAI_MAX_TOOL_NAME_LENGTH}
+    )
+
+
+def _original_tool_names(request: Mapping[str, object]) -> _OriginalToolNames:
+    return _OriginalToolNames(
+        declared=_restorable_names(chain.from_iterable(map(anthropic_tool_names, list_field(request, "tools")))),
+        used=_restorable_names(chain.from_iterable(map(_tool_use_names, list_field(request, "messages")))),
     )
 
 
@@ -687,7 +700,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
                 for tool in guardrailed_tools:
                     converted_tool, mcp_server = anthropic_config.map_tool_helper(
-                        _with_original_name(tool, original_tool_names)
+                        _with_original_name(tool, original_tool_names.declared)
                     )
                     if converted_tool is not None:
                         anthropic_tools.append(converted_tool)
@@ -721,7 +734,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                     ),
                     hoisted_system_message=hoisted_system_message,
                     preserve_system_messages=has_midturn_system_message,
-                    original_tool_names=original_tool_names,
+                    original_tool_names=original_tool_names.used,
                 )
             else:
                 if guardrailed_texts and len(guardrailed_texts) != len(scanned):

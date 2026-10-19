@@ -18,6 +18,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import Streami
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
+from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 
@@ -2784,6 +2785,34 @@ class TestLongToolNamesSurviveTheWriteBack:
 
         assert long == self._with_long_names(short)
         assert long["tool_choice"] == {"type": "tool", "name": self._LONG_NAMES["called"]}
+
+    @pytest.mark.parametrize(
+        "guardrail",
+        [MockPassThroughGuardrail(guardrail_name="test"), MockStructuredMaskingGuardrail()],
+        ids=["echoed-tools", "rewritten-messages"],
+    )
+    async def test_short_tool_named_like_a_shortened_history_tool_keeps_its_name(self, guardrail):
+        alias = truncate_tool_name(self._LONG_NAMES["dropped"])
+        names = {**self._LONG_NAMES, "called": alias}
+
+        data = await self._processed(guardrail, names)
+
+        assert [tool["name"] for tool in data["tools"]] == ["ToolSearch", self._LONG_NAMES["searched"], alias]
+        assert data["tool_choice"] == {"type": "tool", "name": alias}
+
+    async def test_history_tool_with_the_same_shortened_name_cannot_rename_a_declared_tool(self):
+        declared, historical = (
+            "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_7aeb",
+            "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_c034",
+        )
+        assert truncate_tool_name(declared) == truncate_tool_name(historical)
+
+        data = await self._processed(
+            MockPassThroughGuardrail(guardrail_name="test"),
+            {**self._LONG_NAMES, "called": declared, "dropped": historical},
+        )
+
+        assert [tool["name"] for tool in data["tools"]] == ["ToolSearch", self._LONG_NAMES["searched"], declared]
 
     async def test_guardrail_tool_without_a_function_name_still_reaches_the_request(self):
         data = await self._processed(NamelessComputerToolGuardrail(guardrail_name="test"), self._LONG_NAMES)

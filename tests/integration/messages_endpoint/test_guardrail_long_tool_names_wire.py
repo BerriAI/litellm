@@ -14,6 +14,8 @@ from integration._support.ports import allocate_port
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
+
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, JsonValue]])
 _NAME_SOURCE: Final = (
@@ -299,6 +301,46 @@ def test_guardrail_forwards_every_tool_name_the_caller_sent(
     assert all(len(seen) <= _GUARDRAIL_NAME_LIMIT for seen in _vendor_tool_names(screened)), screened
     rewritten: Final = mode == "pre_call" and verdict == "rewrite"
     assert (_MASK in sent[1].body.decode(), _EMAIL in sent[1].body.decode()) == (rewritten, not rewritten), outbound
+
+
+@pytest.mark.parametrize("verdict", ("echo", "rewrite"))
+def test_short_tool_named_like_a_shortened_history_tool_keeps_its_name(gateway: Gateway, verdict: str) -> None:
+    history_only: Final = _tool_name(90)
+    alias: Final = truncate_tool_name(history_only)
+    with (
+        wire_server(_anthropic_peer) as provider,
+        wire_server(_guardrail_peer) as vendor,
+        gateway.scenario() as scenario,
+    ):
+        body: Final[dict[str, JsonValue]] = {
+            "model": _anthropic_model(scenario, provider),
+            "max_tokens": 32,
+            "guardrails": [_guardrail(gateway, scenario, f"{vendor.url}/{verdict}", "pre_call")],
+            "tools": [_tool(alias)],
+            "tool_choice": {"type": "tool", "name": alias},
+            "messages": [
+                {"role": "user", "content": "list my workspaces"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_01", "name": history_only, "input": {}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_01", "content": "workspace-alpha"},
+                        {"type": "text", "text": f"share it with {_EMAIL}"},
+                    ],
+                },
+            ],
+        }
+        response: Final = gateway.request("POST", "/v1/messages", body)
+        sent: Final = provider.drain()
+
+    assert response.status_code == 200, response.text
+    assert len(sent) == 1, sent
+    outbound: Final = _JSON_OBJECT.validate_json(sent[0].body)
+    assert _carriers(outbound) == ((alias,), alias, (history_only,), ()), outbound
+    assert _answered_tool_names(response, stream=False) == (alias,), response.text
 
 
 def test_logging_only_guardrail_forwards_the_long_tool_names_untouched(gateway: Gateway) -> None:
