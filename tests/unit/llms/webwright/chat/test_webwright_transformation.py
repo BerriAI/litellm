@@ -86,11 +86,10 @@ def test_webwright_supported_params() -> None:
         "tools",
         "tool_choice",
         "response_format",
-        "reasoning_effort",
     ):
         assert param in supported_params
 
-    for unsupported in ("frequency_penalty", "presence_penalty", "n", "seed", "user"):
+    for unsupported in ("frequency_penalty", "presence_penalty", "n", "seed", "user", "reasoning_effort"):
         assert unsupported not in supported_params
 
 
