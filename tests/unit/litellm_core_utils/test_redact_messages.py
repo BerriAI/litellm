@@ -31,7 +31,7 @@ from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     _redacted_responses_api_response,
     perform_redaction,
-    redact_streaming_responses_for_custom_logger,
+    redacted_model_call_details_for_custom_logger,
     redacted_standard_logging_payload,
     should_redact_message_logging,
 )
@@ -220,9 +220,7 @@ def test_responses_redaction_removes_instructions_without_changing_the_response(
 
 @pytest.mark.parametrize("key", ("complete_streaming_response", "async_complete_streaming_response"))
 @pytest.mark.parametrize("redaction", ("global", "custom_logger"))
-def test_streaming_responses_redact_instructions_without_changing_the_client_response(
-    key: str, redaction: str
-) -> None:
+def test_streaming_responses_redact_instructions_without_changing_the_client_response(key: str, redaction: str) -> None:
     response: Final = mock_responses_api_response("private answer").model_copy(
         update={"instructions": "private system instructions"}
     )
@@ -231,7 +229,7 @@ def test_streaming_responses_redact_instructions_without_changing_the_client_res
     if redaction == "global":
         perform_redaction(details, result=None)
     redacted_details: Final = (
-        redact_streaming_responses_for_custom_logger(details, CustomLogger(message_logging=False))
+        redacted_model_call_details_for_custom_logger(details, CustomLogger(message_logging=False))
         if redaction == "custom_logger"
         else details
     )
@@ -1097,7 +1095,7 @@ class TestRedactStreamingResponsesForCustomLogger:
         model_call_details, response_obj = self._model_call_details()
         opted_out_logger = CustomLogger(message_logging=False)
 
-        redacted_details = redact_streaming_responses_for_custom_logger(
+        redacted_details = redacted_model_call_details_for_custom_logger(
             model_call_details=model_call_details, custom_logger=opted_out_logger
         )
 
@@ -1110,7 +1108,7 @@ class TestRedactStreamingResponsesForCustomLogger:
         model_call_details, response_obj = self._model_call_details()
         compliant_logger = CustomLogger()
 
-        result_details = redact_streaming_responses_for_custom_logger(
+        result_details = redacted_model_call_details_for_custom_logger(
             model_call_details=model_call_details, custom_logger=compliant_logger
         )
 
@@ -1628,11 +1626,12 @@ async def test_responses_redaction_removes_request_instructions_from_logged_kwar
 
 @pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
-async def test_one_callback_opting_out_leaves_instructions_for_the_other_callbacks(
+async def test_one_callback_opting_out_redacts_instructions_only_for_itself(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    opted_out: Final = TestCustomLogger(message_logging=False)
     sibling: Final = TestCustomLogger()
-    monkeypatch.setattr(litellm, "callbacks", [TestCustomLogger(message_logging=False), sibling])
+    monkeypatch.setattr(litellm, "callbacks", [opted_out, sibling])
     provider_reply: Final = {**mock_responses_api_response("private answer").model_dump(), "instructions": SECRET}
 
     await litellm.aresponses(
@@ -1646,16 +1645,25 @@ async def test_one_callback_opting_out_leaves_instructions_for_the_other_callbac
     )
 
     for _ in range(100):
-        if sibling.logged_kwargs is not None:
+        if sibling.logged_kwargs is not None and opted_out.logged_kwargs is not None:
             break
         await asyncio.sleep(0.1)
-    kwargs: Final = sibling.logged_kwargs
+    assert _logged_instructions(sibling) == (SECRET,) * 6
+    assert _logged_instructions(opted_out) == ("redacted-by-litellm",) * 6
+
+
+def _logged_instructions(logger: TestCustomLogger) -> tuple[object, ...]:
+    kwargs: Final = logger.logged_kwargs
     assert kwargs is not None
-    assert sibling.response_obj is not None
-    assert kwargs["optional_params"]["instructions"] == SECRET
-    assert kwargs["standard_logging_object"]["model_parameters"]["instructions"] == SECRET
-    assert kwargs["standard_logging_object"]["response"]["instructions"] == SECRET
-    assert sibling.response_obj.instructions == SECRET
+    assert isinstance(logger.response_obj, ResponsesAPIResponse)
+    return (
+        kwargs["instructions"],
+        kwargs["optional_params"]["instructions"],
+        kwargs["litellm_params"]["instructions"],
+        kwargs["standard_logging_object"]["model_parameters"]["instructions"],
+        kwargs["standard_logging_object"]["response"]["instructions"],
+        logger.response_obj.instructions,
+    )
 
 
 def test_request_body_redaction_replaces_instructions_only_when_sent() -> None:
