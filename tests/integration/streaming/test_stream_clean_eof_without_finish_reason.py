@@ -21,9 +21,9 @@ _ENDINGS: Final[tuple[Ending, ...]] = (
     "ending-done-only",
 )
 _PARTIAL: Final = ('{"findings":[{"title":', '"unfinished')
-_BACKEND: Final = "gpt-4o-mini"
-_CLAUDE: Final = "claude-sonnet-4-5"
-_GEMINI: Final = "gemini-2.5-flash"
+_BACKEND: Final = "gpt-5.6"
+_CLAUDE: Final = "claude-sonnet-5-5"
+_GEMINI: Final = "gemini-3.8-flash"
 _PROVIDER_KEY: Final = "synthetic-provider-key"
 _CALL_ID_HEADER: Final = "x-litellm-call-id"
 _USAGE: Final = {"prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16}
@@ -113,7 +113,9 @@ def _frames(family: Family, identity: str, ending: Ending) -> tuple[bytes, ...]:
 
 
 def _ending(request: Request) -> Ending:
-    return next(ending for ending in _ENDINGS if ending.encode() in request.body)
+    endings: Final = [ending for ending in _ENDINGS if ending.encode() in request.body]
+    assert len(endings) == 1, request.body
+    return endings[0]
 
 
 def _upstream(family: Family) -> Callable[[Request], Reply]:
@@ -157,14 +159,13 @@ def _finish_reasons(text: str) -> tuple[str, ...]:
 
 
 def _chat_text(text: str) -> str:
-    return "".join(
-        string_value(delta.get("content") or "")
+    deltas: Final = (
+        choice.get("delta")
         for frame in data_frames(text)
         for choice in frame.get("choices") or []
         if isinstance(choice, dict)
-        for delta in (choice.get("delta") or {},)
-        if isinstance(delta, dict)
     )
+    return "".join(string_value(delta.get("content") or "") for delta in deltas if isinstance(delta, dict))
 
 
 def _chat_errors(text: str) -> tuple[Mapping[str, JsonValue], ...]:
@@ -199,7 +200,8 @@ def test_chat_stream_that_sends_done_without_a_finish_reason_reaches_the_client_
 
 
 def test_chat_stream_that_sends_only_done_still_completes_empty(gateway: Gateway) -> None:
-    """Gemini's OpenAI-compatible endpoint answers with only [DONE] when reasoning uses up max_tokens."""
+    """An upstream can answer with only [DONE]: Gemini's OpenAI-compatible endpoint did on 2026-10-20 when
+    reasoning used up max_tokens."""
     with wire_server(_upstream("openai")) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_DEPLOYMENTS["openai"], api_base=wire.url, api_key=_PROVIDER_KEY)
         text, _ = _chat(gateway, model, "ending-done-only")

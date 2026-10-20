@@ -1580,7 +1580,7 @@ async def test_mid_stream_error_keeps_credentials_in_the_api_base_out(routed_api
 def _incomplete_openai_chat_chunk() -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-incomplete-eof",
-        created=int(time.time()),
+        created=1,
         model="gpt-5.6",
         object="chat.completion.chunk",
         choices=[
@@ -1600,12 +1600,9 @@ async def test_async_openai_compatible_chat_clean_eof_without_finish_reason_rais
 ):
     """An OpenAI-compatible stream without a provider finish reason must fail at clean EOF."""
 
-    async def source():
-        yield _incomplete_openai_chat_chunk()
-
     logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
     response = CustomStreamWrapper(
-        completion_stream=source(),
+        completion_stream=_as_async(iter([_incomplete_openai_chat_chunk()])),
         model="gpt-5.6",
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
@@ -1628,12 +1625,9 @@ def test_sync_openai_compatible_chat_clean_eof_without_finish_reason_raises_mids
 ):
     """The synchronous OpenAI-compatible stream must fail at clean EOF too."""
 
-    def source():
-        yield _incomplete_openai_chat_chunk()
-
     logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
     response = CustomStreamWrapper(
-        completion_stream=source(),
+        completion_stream=iter([_incomplete_openai_chat_chunk()]),
         model="gpt-5.6",
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
@@ -1664,12 +1658,8 @@ async def test_stream_that_sends_no_chunks_keeps_the_default_stop(
 ):
     """Gemini's OpenAI-compatible endpoint answers with only [DONE] when reasoning uses up max_tokens."""
 
-    async def no_chunks() -> AsyncIterator[ModelResponseStream]:
-        for chunk in ():
-            yield chunk
-
     wrapper: Final = CustomStreamWrapper(
-        completion_stream=iter(()) if sync_mode else no_chunks(),
+        completion_stream=iter(()) if sync_mode else _as_async(iter(())),
         model="gemini-2.5-flash",
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
@@ -1717,13 +1707,9 @@ def _anthropic_stream(
 ) -> CustomStreamWrapper:
     lines: Final = _anthropic_sse_lines(events)
 
-    async def async_lines() -> AsyncIterator[str]:
-        for line in lines:
-            yield line
-
     return CustomStreamWrapper(
         completion_stream=AnthropicModelResponseIterator(
-            streaming_response=iter(lines) if sync_mode else async_lines(), sync_stream=sync_mode
+            streaming_response=iter(lines) if sync_mode else _as_async(iter(lines)), sync_stream=sync_mode
         ),
         model="claude-sonnet-4-5",
         custom_llm_provider="anthropic",
@@ -1768,7 +1754,8 @@ async def test_anthropic_stream_with_message_stop_ends_with_its_finish_reason(sy
 async def test_generic_chunk_stream_without_a_finish_reason_keeps_the_default_stop(
     sync_mode: bool, logging_obj: Logging
 ):
-    """Providers that stream GenericStreamingChunks and never mark the last one finished still end with stop."""
+    """Providers that stream GenericStreamingChunks and never mark the last one finished still end with stop,
+    but the logged response built from ``chunks`` never gains that synthetic stop."""
     chunks: Final = [
         {"text": text, "tool_use": None, "is_finished": False, "finish_reason": "", "usage": None, "index": 0}
         for text in ("partial", " reply")
@@ -1784,6 +1771,7 @@ async def test_generic_chunk_stream_without_a_finish_reason_keeps_the_default_st
 
     assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
     assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == "partial reply"
+    assert all(not (c.choices and c.choices[0].finish_reason) for c in wrapper.chunks)
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1805,15 +1793,11 @@ async def test_gemini_stream_with_a_usage_chunk_after_its_finish_reason_still_co
         )
     ]
 
-    async def async_lines() -> AsyncIterator[str]:
-        for line in lines:
-            yield line
-
     logging_obj.update_environment_variables(
         model="gemini-2.5-flash", user=None, optional_params={}, litellm_params={"litellm_call_id": "gemini-tail"}
     )
     iterator: Final = GeminiModelResponseIterator(
-        streaming_response=iter(lines) if sync_mode else async_lines(), sync_stream=sync_mode, logging_obj=logging_obj
+        streaming_response=iter(lines) if sync_mode else _as_async(iter(lines)), sync_stream=sync_mode, logging_obj=logging_obj
     )
     wrapper: Final = CustomStreamWrapper(
         completion_stream=iter(iterator) if sync_mode else iterator,
