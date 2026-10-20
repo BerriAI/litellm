@@ -555,8 +555,7 @@ export const getProviderModels = (provider: string, modelMap: any): Array<string
   }
 
   const isMiniMaxText = (model: string) =>
-    modelMap[model]?.mode === "chat" &&
-    /(?:^|\/)(?:fw-)?(?:minimax\.)?minimax-m\d/i.test(model);
+    modelMap[model]?.mode === "chat" && /(?:^|\/)(?:fw-)?(?:minimax\.)?minimax-m\d/i.test(model);
   const currentMiniMaxModels = providerModels
     .filter((model) => isMiniMaxText(model) && /minimax-m3(?:\.1-flash|p1-flash)?(?::free)?$/i.test(model))
     .sort((a, b) => Number(!/flash/i.test(a)) - Number(!/flash/i.test(b)));
