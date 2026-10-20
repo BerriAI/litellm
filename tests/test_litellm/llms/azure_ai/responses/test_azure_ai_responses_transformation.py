@@ -1,12 +1,15 @@
 import json
+from typing import Final
 
 import httpx
 import pytest
 import respx
 
 import litellm
+from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.responses.main import _will_bridge_to_chat_completions
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager
 
@@ -309,3 +312,7 @@ async def test_aresponses_serverless_host_stays_on_chat_bridge():
     assert chat_route.called
     assert not responses_route.called
     assert chat_route.calls.last.request.headers["Authorization"] == "Bearer fake-key"
+
+
+def _responses_params(**fields: object) -> ResponsesAPIOptionalRequestParams:
+    return ResponsesAPIOptionalRequestParams(**fields)  # pyright: ignore[reportArgumentType]  # TypedDict kwargs from a test helper

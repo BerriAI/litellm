@@ -398,19 +398,21 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
             ("azure_ai/gpt-6-astra", "azure_ai"),
         ],
     )
-    def test_an_azure_hosted_deployment_advertises_none_but_not_max(
+    def test_an_azure_hosted_deployment_advertises_the_levels_both_its_routes_accept(
         self, local_model_cost_map, model, custom_llm_provider
     ):
-        """Microsoft hosts the same model with a different level set than OpenAI does. Verified live
-        on both Azure routes: none returns 200 with zero reasoning tokens and unlocks temperature,
-        which OpenAI's API rejects, while max returns 400 unsupported_value naming none through
-        xhigh as the levels it does take."""
+        """Verified live on 2026-10-01 against a Foundry gpt-6-astra deployment (model
+        gpt-6-astra-2026-09-03): none returns 400 unsupported_value on chat and on Responses, naming
+        low, medium, high and xhigh as the levels it takes; Responses also honors max with reasoning
+        tokens billed while chat refuses it, as OpenAI's chat does. The flag is route-blind, so the
+        row keeps max off and the advertised set stops at the level every route accepts.
+        Earlier evidence (2026-09-05, commit e79f3ec5205) had none accepted on chat; the deployment
+        no longer behaves that way."""
         from litellm.utils import _get_model_info_helper
 
         model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
 
         assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
-            "none",
             "low",
             "medium",
             "high",
