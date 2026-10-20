@@ -1812,6 +1812,7 @@ LITELLM_EXECUTED_BATCH_CONCURRENCY: Final = max(1, get_env_int("LITELLM_EXECUTED
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER: Final = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX: Final = "litellm-session-token"
+CP_RETURN_TO_COOKIE_PREFIX: Final = "return_to.v1."
 CLI_SSO_SESSION_CACHE_KEY_PREFIX: Final = "cli_sso_session"
 CLI_SSO_SESSION_TTL_SECONDS: Final = 600
 CLI_SESSION_KEY_PREFIX: Final = "cli-session"

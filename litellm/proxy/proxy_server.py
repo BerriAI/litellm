@@ -18540,6 +18540,7 @@ async def login(request: Request):
     # _is_same_origin_return_path (strictly relative path) so it can never be an open redirect, and the
     # one-shot cookie is cleared after use.
     from litellm.proxy.management_endpoints.ui_sso import (
+        read_return_to_cookie,
         set_session_token_cookie,
         sso_return_to_redirect,
     )
@@ -18551,7 +18552,7 @@ async def login(request: Request):
     # return_to is honored for EVERY sign-in branch, so the write and read sets cannot diverge: it
     # sets the token cookie on the same-origin arm and hands off via a one-time login code on the
     # cross-origin arm, and clears the one-shot cookie in both.
-    cp_return_to: Final = request.cookies.get("litellm_cp_return_to")
+    cp_return_to: Final = read_return_to_cookie(request)
     if cp_return_to:
         try:
             resumed = await sso_return_to_redirect(  # rebind-ok: pre-existing rebinding on a rename-only line
@@ -18575,7 +18576,7 @@ async def login(request: Request):
     # Create redirect response with cookie
     redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     set_session_token_cookie(redirect_response, request, jwt_token)
-    if cp_return_to:
+    if "litellm_cp_return_to" in request.cookies:
         redirect_response.delete_cookie(key="litellm_cp_return_to")
     return redirect_response
 
