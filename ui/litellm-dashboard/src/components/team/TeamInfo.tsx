@@ -75,6 +75,7 @@ import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
   TeamAccessGroupModelGrant,
+  teamPerModelLimitOptions,
   TeamModelBadge,
   TeamModelBadgeKind,
 } from "./teamModelAccess";
@@ -89,7 +90,6 @@ import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -666,20 +666,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         [mcpServersLoading || mcpToolsetsLoading || accessGroupsLoading, "the MCP server inventory is still loading"],
       ] as const
     ).find(([failed]) => failed)?.[1] ?? null;
-  const availableRateLimitModels = useMemo(() => {
+  const perModelLimitModels = useMemo(() => {
     const selected = (isEditing ? watchedModels : undefined) ?? teamData?.team_info?.models ?? [];
-    if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
-      return userModels;
-    }
-    return unfurlWildcardModelsInList(selected, userModels);
-  }, [isEditing, watchedModels, teamData, userModels]);
-  const availableModelBudgetModels = useMemo(() => {
-    const selected = (isEditing ? watchedModels : undefined) ?? teamData?.team_info?.models ?? [];
-    if (selected.length === 0 || selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
-      return userModels;
-    }
-    const granted = [...selected, ...(teamData?.team_info?.access_group_models ?? [])];
-    return unfurlWildcardModelsInList(Array.from(new Set(granted)), userModels);
+    return teamPerModelLimitOptions(selected, teamData?.team_info?.access_group_models ?? [], userModels);
   }, [isEditing, watchedModels, teamData, userModels]);
 
   const teamEditAccess = useMemo(() => parseTeamEditAccess(teamData?.team_info?.caller_edit_access), [teamData]);
@@ -1724,7 +1713,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           premiumUser={premiumUser}
                           value={teamMemberModelMaxBudget}
                           onChange={setTeamMemberModelMaxBudget}
-                          availableModels={availableModelBudgetModels}
+                          availableModels={perModelLimitModels}
                           hint="Set a default per-model spend cap for each team member, with an independent reset window."
                         />
                         <FormField
@@ -1853,7 +1842,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     premiumUser={premiumUser}
                     value={teamModelMaxBudget}
                     onChange={setTeamModelMaxBudget}
-                    availableModels={availableRateLimitModels}
+                    availableModels={perModelLimitModels}
                     usage={info.model_max_budget_usage}
                     hint="Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model."
                   />
@@ -1906,7 +1895,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                               inputId={id}
                               value={value ?? ""}
                               onValueChange={onChange}
-                              options={availableRateLimitModels.map((model) => ({
+                              options={perModelLimitModels.map((model) => ({
                                 label: model,
                                 value: model,
                               }))}
@@ -2644,7 +2633,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </span>
               ),
               type: "model-max-budget" as const,
-              availableModels: availableModelBudgetModels,
+              availableModels: perModelLimitModels,
               premiumUser,
             },
             {
