@@ -79,7 +79,9 @@ def wire_server(
             self.send_header("connection", "close")
             self.end_headers()
             try:
-                if reply.chunks is None:
+                if self.command == "HEAD":
+                    self.wfile.flush()
+                elif reply.chunks is None:
                     self.wfile.write(reply.body)
                 else:
                     for index, chunk in enumerate(reply.chunks):
@@ -104,6 +106,8 @@ def wire_server(
         do_PUT = respond
         do_GET = respond
         do_DELETE = respond
+        do_PATCH = respond
+        do_HEAD = respond
 
         def log_message(self, format: str, *args: object) -> None:
             pass
