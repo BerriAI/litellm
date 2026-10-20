@@ -338,6 +338,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
@@ -995,6 +996,21 @@ class Logging(LiteLLMLoggingBaseClass):
             if model_id is not None:
                 return model_id
         return None
+
+    def get_router_pricing_provider(self) -> str | None:
+        """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""
+        litellm_params: Final = cast(  # cast-ok: callback metadata is caller-provided
+            Mapping[str, object] | None, getattr(self, "litellm_params", None)
+        )
+        if not litellm_params:
+            return None
+        candidates: Final = (
+            _METADATA_MAPPING.validate_python(
+                _METADATA_MAPPING.validate_python(litellm_params.get(key) or {}).get("model_info") or {}
+            ).get("pricing_provider")
+            for key in ("litellm_metadata", "metadata")
+        )
+        return next((provider for provider in candidates if isinstance(provider, str) and provider), None)
 
     def _routed_deployment_model(self) -> str | None:
         litellm_params: Final = self._model_call_details_view.get("litellm_params")
@@ -2021,6 +2037,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
+                "pricing_provider": self.get_router_pricing_provider(),
                 "litellm_logging_obj": self,
                 "data_residency": (
                     self.litellm_params.get("data_residency")
@@ -2165,7 +2182,7 @@ class Logging(LiteLLMLoggingBaseClass):
         pricing: Final = pricing_entry_for_cost_calc(
             model=model,
             completion_response=result,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=self.get_router_pricing_provider() or custom_llm_provider,
             custom_pricing=self.custom_pricing_for(result),
             base_model=get_base_model_from_metadata(model_call_details=self.model_call_details),
             router_model_id=router_model_id or self.get_router_model_id(),
