@@ -100,6 +100,8 @@ ignored_function_names = [
     "_embedding",
     "_aembedding",
     "_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
+    "_narrow_to_video_deployment",  # Tested through video_status and avideo_status polls in test_router_provider_endpoints.py
+    "_video_call_pin",  # Tested through the video_status pin tests and the chat video_id test in test_router_provider_endpoints.py
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call

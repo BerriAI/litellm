@@ -3,6 +3,7 @@ import json
 import smtplib
 from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -444,6 +445,47 @@ class TestPostCallFailureHookLiftsFirstApiCallStartTime:
         assert "litellm_logging_obj" not in request_data
 
 
+class TestPostCallFailureHookDoesNotInventAProviderHandoff:
+    """A failure the proxy raised before any provider call (here an auth error) is logged through
+    _handle_logging_proxy_only_error, which fires pre_call for the callbacks. That must not stamp a
+    handoff instant onto the request, or every downstream reader (preprocessing latency, the
+    dispatched check behind the failure-row estimate) sees a provider call that never happened."""
+
+    @pytest.mark.asyncio
+    async def test_proxy_only_failure_lifts_no_first_api_call_start_time(self):
+        from datetime import datetime
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
+
+        logging_obj = Logging(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="pre-handoff-auth-failure",
+            function_id="pre-handoff",
+        )
+        request_data: Final[dict[str, object]] = {"litellm_logging_obj": logging_obj, "model": "gpt-4.1", "metadata": {}}
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with (
+            patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()),
+            patch.object(proxy_logging_obj, "_dispatch_proxy_only_failure_handlers", new=AsyncMock()),
+        ):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("Authentication Error, invalid key"),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                error_type=ProxyErrorTypes.auth_error,
+            )
+
+        assert request_data.get("first_api_call_start_time") is None
+        assert "api_call_start_time" not in logging_obj.model_call_details
+
+
 class TestPostCallFailureHookLiftsRecoveredPartialSpend:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered. The streaming handler stashes that recovered usage and
@@ -688,11 +730,13 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
     """A non-stream request that failed after dispatch (timeout, provider
     error) consumed provider-billed input tokens but recovered no usage.
     post_call_failure_hook must estimate the input side onto request_data so
-    the spend log's failure row records what was sent instead of zero, while
-    never charging spend for the failure (LIT-5690).
+    the spend log's failure row records what was sent instead of zero
+    (LIT-5690). On a timeout that estimate is priced at the model's input
+    rate since the provider bills the prompt it accepted (LIT-145); other
+    post-dispatch failures keep zero spend.
     """
 
-    async def _run(self, request_data):
+    async def _run(self, request_data, original_exception: Exception | None = None):
         from unittest.mock import AsyncMock, patch
 
         from litellm.proxy._types import UserAPIKeyAuth
@@ -702,9 +746,18 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
             await proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
-                original_exception=Exception("boom"),
+                original_exception=original_exception or Exception("boom"),
                 user_api_key_dict=UserAPIKeyAuth(),
             )
+
+    def _timeout(self, model: str, cause: Exception) -> Exception:
+        try:
+            try:
+                raise cause
+            except Exception as inner:
+                raise litellm.Timeout("Request timed out.", model=model, llm_provider="openai") from inner
+        except litellm.Timeout as timed_out:
+            return timed_out
 
     def _logging_obj(self, model_call_details):
         logging_obj = MagicMock()
@@ -712,7 +765,139 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         return logging_obj
 
     @pytest.mark.asyncio
-    async def test_dispatched_failure_estimates_input_tokens_with_zero_cost(self):
+    async def test_timed_out_request_estimates_input_tokens_priced_at_input_rate(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                }
+            ),
+            "metadata": {},
+            "response_cost": 123.0,
+        }
+        await self._run(
+            request_data, original_exception=self._timeout("gpt-3.5-turbo", httpx.ReadTimeout("no bytes in time"))
+        )
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        assert estimated.prompt_tokens > 0
+        assert estimated.completion_tokens == 0
+        assert estimated.total_tokens == estimated.prompt_tokens
+        expected_input_cost, _ = litellm.cost_per_token(model="gpt-3.5-turbo", prompt_tokens=estimated.prompt_tokens)
+        assert expected_input_cost > 0
+        assert request_data["response_cost"] == pytest.approx(expected_input_cost)
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_after_dispatch_is_priced_at_input_rate(self):
+        from datetime import datetime
+
+        from fastapi import HTTPException
+
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True,
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(
+            request_data,
+            original_exception=HTTPException(
+                status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail="Client disconnected the request"
+            ),
+        )
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected_input_cost, _ = litellm.cost_per_token(model="gpt-3.5-turbo", prompt_tokens=estimated.prompt_tokens)
+        assert expected_input_cost > 0
+        assert request_data["response_cost"] == pytest.approx(expected_input_cost)
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_before_provider_handoff_is_not_priced(self):
+        """A caller that hung up while the request was still in pre-call hooks never reached the
+        provider, so there is no handoff instant on the logging object and the 499 row is not priced."""
+        from datetime import datetime
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi import HTTPException
+
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        logging_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "count these input tokens please"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="lit145-pre-handoff",
+            function_id="lit145",
+        )
+        assert logging_obj.model_call_details.get("first_api_call_start_time") is None
+        request_data = {"litellm_logging_obj": logging_obj, "model": "gpt-3.5-turbo", "metadata": {}}
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with (
+            patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()),
+            patch.object(proxy_logging_obj, "_dispatch_proxy_only_failure_handlers", new=AsyncMock()),
+        ):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=HTTPException(
+                    status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail="Client disconnected the request"
+                ),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            )
+
+        assert request_data.get("first_api_call_start_time") is None
+        assert "combined_usage_object" not in request_data
+        assert request_data.get("response_cost", 0.0) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_connect_timeout_never_reached_the_provider_stays_zero_cost(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(
+            request_data, original_exception=self._timeout("gpt-3.5-turbo", httpx.ConnectTimeout("no route"))
+        )
+
+        assert isinstance(request_data["combined_usage_object"], Usage)
+        assert request_data["response_cost"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_dispatched_non_timeout_failure_estimates_input_tokens_with_zero_cost(self):
         from datetime import datetime
 
         from litellm.types.utils import Usage
@@ -734,8 +919,6 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         estimated = request_data["combined_usage_object"]
         assert isinstance(estimated, Usage)
         assert estimated.prompt_tokens > 0
-        assert estimated.completion_tokens == 0
-        assert estimated.total_tokens == estimated.prompt_tokens
         assert request_data["response_cost"] == 0.0
 
     @pytest.mark.asyncio
@@ -1902,7 +2085,149 @@ def test_usage_the_stream_already_recovered_beats_an_estimate():
     assert lifted == (recovered, 0.25)
 
 
-def test_a_request_that_reached_a_provider_bills_its_input_at_no_cost():
+def test_a_timed_out_request_on_an_unmapped_model_keeps_its_row_at_zero_cost():
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={
+            "call_type": "acompletion",
+            "model": "my-unmapped-model",
+            "custom_llm_provider": "openai",
+            "messages": ONE_USER_MESSAGE,
+        },
+        request_body={},
+        dispatched=True,
+        provider_billed=True,
+    )
+
+    assert lifted is not None
+    usage, response_cost = lifted
+    assert usage.prompt_tokens > 0
+    assert response_cost == 0.0
+
+
+def test_a_timed_out_request_is_priced_at_the_rate_the_router_registered_for_the_deployment(monkeypatch):
+    """Router._create_deployment registers a deployment's own ``input_cost_per_token`` under its
+    ``model_info.id``; the failure row prices with that entry through the same
+    ``deployment_pricing_model_info`` the success path uses."""
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "dep-lit145",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.25, "output_cost_per_token": 1.0},
+    )
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={
+            "call_type": "acompletion",
+            "model": FAILURE_USAGE_MODEL,
+            "messages": ONE_USER_MESSAGE,
+        },
+        request_body={},
+        dispatched=True,
+        provider_billed=True,
+        deployment_id="dep-lit145",
+    )
+
+    assert lifted is not None
+    usage, response_cost = lifted
+    assert usage.prompt_tokens > 0
+    assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
+
+
+def _dispatched_failure_logging_obj(model: str, litellm_params: dict) -> object:
+    """A Logging object as the failure hook sees it: litellm_params in the real get_litellm_params()
+    shape (every key present, ``litellm_metadata`` None on chat completions) and a first-handoff
+    instant, so the lift treats the request as dispatched."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model=model,
+        messages=ONE_USER_MESSAGE,
+        stream=False,
+        call_type="acompletion",
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="call-lit145",
+        function_id="fn-lit145",
+    )
+    logging_obj.update_environment_variables(model=model, user="", optional_params={}, litellm_params=litellm_params)
+    logging_obj.model_call_details["first_api_call_start_time"] = real_datetime.datetime.now()
+    logging_obj.model_call_details["messages"] = ONE_USER_MESSAGE
+    logging_obj.model_call_details["call_type"] = "acompletion"
+    return logging_obj
+
+
+def test_the_deployment_rate_is_found_on_the_logging_objects_real_litellm_params(monkeypatch):
+    """``get_litellm_params()`` always carries a ``litellm_metadata`` key (None on chat
+    completions) next to the router-stamped ``metadata.model_info.id``; the failure row must
+    still price at the deployment's own rate, like ``Logging.get_router_model_id`` on the
+    success path."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "dep-lit145-real-shape",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.25, "output_cost_per_token": 0.25},
+    )
+    litellm_params = get_litellm_params(metadata={"model_info": {"id": "dep-lit145-real-shape"}})
+    assert "litellm_metadata" in litellm_params and litellm_params["litellm_metadata"] is None
+    logging_obj = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, litellm_params)
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    assert lifted["response_cost"] == pytest.approx(lifted["combined_usage_object"].prompt_tokens * 0.25)
+
+
+def test_an_azure_deployment_is_priced_at_its_base_model_like_the_success_path():
+    """An Azure deployment name is not in the cost map; the success path prices it through
+    ``model_info.base_model`` (``get_base_model_from_metadata``) and so must the failure row."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    logging_obj = _dispatched_failure_logging_obj(
+        "azure/lit145-not-in-cost-map",
+        get_litellm_params(metadata={"model_info": {"base_model": "azure/gpt-4.1"}}),
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "azure"
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    expected_cost, _ = litellm.cost_per_token(
+        model="azure/gpt-4.1", prompt_tokens=lifted["combined_usage_object"].prompt_tokens
+    )
+    assert expected_cost > 0
+    assert lifted["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_a_litellm_params_key_in_the_request_body_cannot_zero_the_timeout_price():
+    """``model_call_details`` is flattened with the request's optional_params, so a body key
+    named ``litellm_params`` can land there; the deployment rate must come from the logging
+    object's own ``litellm_params`` instead."""
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={
+            "call_type": "acompletion",
+            "model": FAILURE_USAGE_MODEL,
+            "messages": ONE_USER_MESSAGE,
+            "litellm_params": {"input_cost_per_token": 0},
+        },
+        request_body={},
+        dispatched=True,
+        provider_billed=True,
+        deployment_id=None,
+    )
+
+    assert lifted is not None
+    usage, response_cost = lifted
+    expected_cost, _ = litellm.cost_per_token(model=FAILURE_USAGE_MODEL, prompt_tokens=usage.prompt_tokens)
+    assert response_cost == pytest.approx(expected_cost)
+    assert response_cost > 0
+
+
+def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rate():
     from litellm.proxy.utils import _failure_usage_to_lift
 
     lifted = _failure_usage_to_lift(
@@ -1913,13 +2238,16 @@ def test_a_request_that_reached_a_provider_bills_its_input_at_no_cost():
         },
         request_body={},
         dispatched=True,
+        provider_billed=True,
     )
 
     assert lifted is not None
     usage, response_cost = lifted
     assert usage.prompt_tokens > 0
     assert usage.completion_tokens == 0
-    assert response_cost == 0.0
+    expected_input_cost, _ = litellm.cost_per_token(model=FAILURE_USAGE_MODEL, prompt_tokens=usage.prompt_tokens)
+    assert expected_input_cost > 0
+    assert response_cost == pytest.approx(expected_input_cost)
 
 
 
