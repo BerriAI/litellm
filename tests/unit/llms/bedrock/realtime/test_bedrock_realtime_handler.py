@@ -18,6 +18,7 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
 from litellm.realtime_api import main as realtime_main
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 
 @pytest.fixture(autouse=True)
@@ -624,6 +625,27 @@ class TestBedrockRealtimeSessionLifecycle:
         assert first_event["type"] == "session.created"
         assert first_event["session"]["id"] == "trace-nova-sonic"
         assert first_event["session"]["model"] == "amazon.nova-sonic-v1:0"
+
+    @pytest.mark.asyncio
+    async def test_region_lookup_on_connect_leaves_the_event_loop_free(
+        self, stub_aws_sdk_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+        vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_REGION_NAME")
+        websocket: Final = RealtimeClientWS()
+
+        _ = await BedrockRealtime().async_realtime(
+            model="amazon.nova-2-sonic-v1:0",
+            websocket=websocket,
+            logging_obj=FakeLogging(),
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+        )
+
+        assert vault.read.is_set()
+        assert not vault.read_on_loop.is_set()
+        assert stub_aws_sdk_client["config_kwargs"]["region"] == "us-west-2"
+        assert stub_aws_sdk_client["config_kwargs"]["endpoint_uri"] == "https://bedrock-runtime.us-west-2.amazonaws.com"
 
     @pytest.mark.asyncio
     async def test_session_update_is_acked_with_session_updated(self, stub_aws_models):
