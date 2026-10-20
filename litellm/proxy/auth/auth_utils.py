@@ -4,7 +4,7 @@ import re
 import sys
 from collections.abc import Collection, Iterator, Mapping
 from functools import lru_cache
-from itertools import chain
+from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
 from typing import Any, Final, Protocol
@@ -599,20 +599,21 @@ def _direct_fallback_model_names(model: str, llm_router: Router) -> frozenset[st
     )
 
 
-def _fallback_model_names_reached(
-    frontier: frozenset[str], reached: frozenset[str], llm_router: Router
-) -> frozenset[str]:
-    if not frontier:
-        return reached
-    next_hop: Final = frozenset(
-        chain.from_iterable(_direct_fallback_model_names(model, llm_router) for model in frontier)
+def _fallback_hop(
+    frontier_and_reached: tuple[frozenset[str], frozenset[str]], llm_router: Router
+) -> tuple[frozenset[str], frozenset[str]]:
+    frontier, reached = frontier_and_reached
+    next_hop: Final = (
+        frozenset(chain.from_iterable(_direct_fallback_model_names(model, llm_router) for model in frontier)) - reached
     )
-    return _fallback_model_names_reached(next_hop - reached, reached | next_hop, llm_router)
+    return next_hop, reached | next_hop
 
 
 def router_fallback_model_names(model: str, llm_router: Router) -> frozenset[str]:
     """The groups a failure on `model` can reach through the router's fallbacks, chained and generic (`*`) ones."""
-    return _fallback_model_names_reached(frozenset({model}), frozenset({model}), llm_router) - {model}
+    hops: Final = accumulate(repeat(llm_router), _fallback_hop, initial=(frozenset({model}), frozenset({model})))
+    _, reached = next(hop for hop in hops if not hop[0])
+    return reached - {model}
 
 
 def request_fallback_model_names(request_body: Mapping[str, object]) -> tuple[str, ...]:
