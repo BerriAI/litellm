@@ -1,11 +1,12 @@
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
-from typing import Any, Final, Literal, cast, get_type_hints
+from typing import Any, Final, Literal, TypeVar, cast, get_type_hints
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -666,7 +667,7 @@ def _fix_enum_empty_strings(schema, depth=0):
         _fix_enum_empty_strings(items, depth=depth + 1)
 
 
-GEMINI_MAX_INTEGER_ENUM_VALUES: Final = 1000
+GEMINI_MAX_ENUM_CHARACTERS: Final = 2000
 _INT64_MIN: Final = -(2**63)
 _INT64_MAX: Final = 2**63 - 1
 
@@ -676,7 +677,7 @@ def _gemini_integer_enum_value(value: object) -> str | None:
         case bool():
             return None
         case int() if _INT64_MIN <= value <= _INT64_MAX:
-            return str(value)
+            return str(int(value))
         case str() if re.fullmatch(r"-?[0-9]{1,19}", value) and _INT64_MIN <= int(value) <= _INT64_MAX:
             return str(int(value))
         case _:
@@ -684,10 +685,58 @@ def _gemini_integer_enum_value(value: object) -> str | None:
 
 
 def _gemini_integer_enum(values: Sequence[object]) -> tuple[str, ...] | None:
-    if not values or len(values) > GEMINI_MAX_INTEGER_ENUM_VALUES:
+    if not values:
         return None
     converted: Final = tuple(text for value in values if (text := _gemini_integer_enum_value(value)) is not None)
     return converted if len(converted) == len(values) else None
+
+
+def _json_children(node: JsonValue) -> Iterable[JsonValue]:
+    match node:
+        case dict():
+            return node.values()
+        case list():
+            return node
+        case _:
+            return ()
+
+
+def _next_json_level(level: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, ...]:
+    return tuple(chain.from_iterable(_json_children(node) for node in level))
+
+
+def _enum_size(node: JsonValue) -> tuple[bool, int] | None:
+    match node:
+        case {"enum": list() as values}:
+            is_integer_enum: Final = node.get("format") == "enum" and str(node.get("type")).lower() == "integer"
+            return (is_integer_enum, sum(len(str(value)) for value in values))
+        case _:
+            return None
+
+
+def _integer_enums_fit(schema: JsonValue) -> bool:
+    levels: Final = takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,)))
+    enum_sizes: Final = tuple(size for node in chain.from_iterable(levels) if (size := _enum_size(node)) is not None)
+    return (
+        not any(is_integer for is_integer, _ in enum_sizes)
+        or sum(characters for _, characters in enum_sizes) <= GEMINI_MAX_ENUM_CHARACTERS
+    )
+
+
+_GeminiRequestPart: Final = TypeVar("_GeminiRequestPart")
+
+
+def with_integer_enums_that_fit(
+    build: Callable[[bool], _GeminiRequestPart], send_integer_enums: bool
+) -> _GeminiRequestPart:
+    if not send_integer_enums:
+        return build(False)
+    with_integer_enums: Final = build(True)
+    if _integer_enums_fit(
+        cast(JsonValue, with_integer_enums)  # cast-ok: built tools and schemas are JSON request data
+    ):
+        return with_integer_enums
+    return build(False)
 
 
 def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
@@ -751,7 +800,9 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
                 _fix_enum_types(item, depth=depth + 1, send_integer_enums=send_integer_enums)
 
 
-def build_vertex_schema(parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False):
+def build_vertex_schema(
+    parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
+) -> dict[str, object]:
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
 

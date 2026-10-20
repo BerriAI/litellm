@@ -95,6 +95,7 @@ from ..common_utils import (
     build_json_schema,
     build_vertex_schema,
     supports_response_json_schema,
+    with_integer_enums_that_fit,
 )
 from ..vertex_llm_base import VertexBase
 from .grounding_requests import calculate_grounding_requests
@@ -875,7 +876,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
         return self._map_function(value, optional_params)
 
-    def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> dict:
+    def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
         old_schema = deepcopy(value)
         if isinstance(old_schema, list):
             for item in old_schema:
@@ -932,8 +933,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - OpenAPI-style format (uppercase types)
                 # - No additionalProperties support
                 # - Requires propertyOrdering
-                optional_params["response_schema"] = self._map_response_schema(
-                    value=schema, send_integer_enums=self._is_gemini_3_or_newer(model)
+                optional_params["response_schema"] = with_integer_enums_that_fit(
+                    partial(self._map_response_schema, schema), self._is_gemini_3_or_newer(model)
                 )
 
     @property
@@ -1315,10 +1316,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = self._map_function(
-                    value=value,
-                    optional_params=optional_params,
-                    send_integer_enums=self._is_gemini_3_or_newer(model),
+                mapped_tools = with_integer_enums_that_fit(
+                    partial(self._map_function, value, optional_params), self._is_gemini_3_or_newer(model)
                 )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):

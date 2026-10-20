@@ -2,6 +2,7 @@ import copy
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from enum import Enum
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -14,7 +15,6 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
-    GEMINI_MAX_INTEGER_ENUM_VALUES,
     VertexAITokenCounter,
     _fix_enum_types,
     build_vertex_schema,
@@ -1622,6 +1622,11 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
     assert sent[1]["format"] == "enum"
 
 
+class _Priority(int, Enum):
+    LOW = 1
+    HIGH = 3
+
+
 @pytest.mark.parametrize(
     ("enum_values", "send_integer_enums", "expected_enum"),
     [
@@ -1636,8 +1641,7 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
         ([True, 1], True, None),
         ([1.5, 2], True, None),
         ([], True, None),
-        (list(range(GEMINI_MAX_INTEGER_ENUM_VALUES)), True, [str(n) for n in range(GEMINI_MAX_INTEGER_ENUM_VALUES)]),
-        (list(range(GEMINI_MAX_INTEGER_ENUM_VALUES + 1)), True, None),
+        ([_Priority.LOW, _Priority.HIGH], True, ["1", "3"]),
     ],
 )
 def test_fix_enum_types_sends_only_integer_enums_gemini_accepts(
