@@ -107,8 +107,9 @@ class ManagedObjectCreatorAttribution:
     user's alias, because a resolvable name is more useful on the spend row than a null.
     user_api_key_org_id is resolved too: the spend update writer reads it off this metadata
     to increment organization spend, so leaving it out drops the cost from org accounting.
-    A background response also carries its end user and the key, team, and user budgets, the
-    way the read that billed it before did, and never names a key-scoped creator as its user.
+    A background response also carries its end user, the creating key's project, and the key,
+    team, and user budgets and per-model budgets, the way the read that billed it before did,
+    and never names a key-scoped creator as its user.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -126,9 +127,22 @@ class ManagedObjectCreatorAttribution:
             "user_api_key_user_id": _creator_user_id(job.created_by),
             **_shared_metadata(job, rows),
             **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
-            **_budget_fields(rows.key, "user_api_key_spend", "user_api_key_max_budget"),
-            **_budget_fields(rows.team, "user_api_key_team_spend", "user_api_key_team_max_budget"),
-            **_budget_fields(rows.user, "user_api_key_user_spend", "user_api_key_user_max_budget"),
+            "user_api_key_project_id": getattr(rows.key, "project_id", None),
+            **_budget_fields(
+                rows.key, "user_api_key_spend", "user_api_key_max_budget", "user_api_key_model_max_budget"
+            ),
+            **_budget_fields(
+                rows.team,
+                "user_api_key_team_spend",
+                "user_api_key_team_max_budget",
+                "user_api_key_team_model_max_budget",
+            ),
+            **_budget_fields(
+                rows.user,
+                "user_api_key_user_spend",
+                "user_api_key_user_max_budget",
+                "user_api_key_user_model_max_budget",
+            ),
         }
 
     async def _rows(self, job: ManagedObjectRow, object_id: str) -> _CreatorRows:
@@ -212,7 +226,11 @@ def _organization_id(row: object) -> str | None:
     return cast("str | None", getattr(row, "organization_id", None)) if row is not None else None
 
 
-def _budget_fields(row: object, spend_key: str, max_budget_key: str) -> Mapping[str, object]:
+def _budget_fields(row: object, spend_key: str, max_budget_key: str, model_max_budget_key: str) -> Mapping[str, object]:
     if row is None:
         return {}
-    return {spend_key: getattr(row, "spend", None), max_budget_key: getattr(row, "max_budget", None)}
+    return {
+        spend_key: getattr(row, "spend", None),
+        max_budget_key: getattr(row, "max_budget", None),
+        model_max_budget_key: getattr(row, "model_max_budget", None),
+    }
