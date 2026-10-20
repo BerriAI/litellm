@@ -466,7 +466,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _translate_tool_to_responses_api(tool_dict: Mapping[str, object]) -> dict[str, object]:
-        """Convert one Anthropic tool definition to a Responses API tool."""
         tool_type: Final = tool_dict.get("type", "")
         tool_name: Final = tool_dict.get("name", "")
         # web_search tool
