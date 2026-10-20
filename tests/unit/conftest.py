@@ -308,7 +308,8 @@ def isolate_router_model_cost_state() -> Iterator[None]:
 
 
 def _provider_model_sets() -> tuple[set[str], ...]:
-    return tuple(models for name, models in vars(litellm).items() if name.endswith("_models") and isinstance(models, set))
+    module_globals: Final = tuple(vars(litellm).items())
+    return tuple(models for name, models in module_globals if name.endswith("_models") and isinstance(models, set))
 
 
 @pytest.fixture(autouse=True)
