@@ -1295,6 +1295,126 @@ async def test_vertex_long_decode_keeps_the_callers_own_authorization_header_on_
     assert seen == ["Bearer mine", "Bearer mine"]
 
 
+BUDGET_ENV: Final = "LITELLM_GEMINI_DEFAULT_MAX_OUTPUT_TOKENS"
+ARGON: Final = "gemini/gemini-4-argon"
+UNMAPPED_GEMINI: Final = "gemini/gemini-99-unreleased"
+OUTPUT_LIMIT_KEYS: Final = ("max_output_tokens", "maxOutputTokens")
+
+
+def _output_limits(request: Mapping[str, object]) -> dict[str, object]:
+    generation_config: Final = request.get("generationConfig", {})
+    assert isinstance(generation_config, dict)
+    return {key: value for key, value in generation_config.items() if key in OUTPUT_LIMIT_KEYS}
+
+
+def _cost_map_max_output_tokens(model: str) -> int:
+    provider, name = model.split("/", 1)
+    max_output_tokens: Final = litellm.get_model_info(model=name, custom_llm_provider=provider)["max_output_tokens"]
+    assert isinstance(max_output_tokens, int)
+    return max_output_tokens
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_request_with_no_output_limit_keeps_continuing_until_the_env_budget_is_spent(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, stream: bool
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        (_sse(STREAM_FIRST_CHUNK, STREAM_HOP_1_END), _sse(HOP_2_TRUNCATED), _sse(HOP_2))
+        if stream
+        else (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2_TRUNCATED), httpx.Response(200, json=HOP_2))
+    )
+    kwargs: Final = {"model": ARGON, "messages": list(MESSAGES), "stream": stream, "api_key": "fake-gemini-key"}
+    transport: Final = httpx.MockTransport(_replay(hops, sent))
+
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=transport))
+        if is_async
+        else litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=transport)))
+    )
+    chunks: Final = ([chunk async for chunk in response] if is_async else list(response)) if stream else []
+
+    assert len(sent) == 2
+    assert _output_limits(sent[0]) == {"max_output_tokens": 50}
+    if stream:
+        assert _stream_text(chunks) == "hello world"
+        assert _stream_finish_reasons(chunks) == ["length"]
+        assert {"continuation_token": "dG9rLTI="} in _delta_fields(chunks)
+    else:
+        assert response.choices[0].message.content == "hello world"
+        assert response.choices[0].finish_reason == "length"
+        assert response.choices[0].message.provider_specific_fields["continuation_token"] == "dG9rLTI="
+
+
+@pytest.mark.parametrize(
+    "budget, model, request_params, expected_limits",
+    [
+        ("50", ARGON, {"max_tokens": 30}, {"max_output_tokens": 30}),
+        ("50", ARGON, {"max_completion_tokens": 30}, {"max_output_tokens": 30}),
+        (
+            "50",
+            ARGON,
+            {"extra_body": {"generationConfig": {"maxOutputTokens": 30}}},
+            {"maxOutputTokens": 30},
+        ),
+        (None, ARGON, {}, {}),
+        ("", ARGON, {}, {}),
+        ("a lot", ARGON, {}, {}),
+        ("0", ARGON, {}, {}),
+        ("-5", ARGON, {}, {}),
+        ("50", UNMAPPED_GEMINI, {}, {}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_env_budget_applies_only_to_a_request_that_sets_no_output_limit_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+    budget: str | None,
+    model: str,
+    request_params: Mapping[str, object],
+    expected_limits: Mapping[str, object],
+):
+    if budget is None:
+        monkeypatch.delenv(BUDGET_ENV, raising=False)
+    else:
+        monkeypatch.setenv(BUDGET_ENV, budget)
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=model,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+        **request_params,
+    )
+
+    assert _output_limits(sent[0]) == expected_limits
+
+
+@pytest.mark.parametrize("model", ["gemini/gemini-2.5-flash", "vertex_ai/gemini-2.5-flash", ARGON])
+@pytest.mark.asyncio
+async def test_env_budget_above_a_models_output_limit_sends_that_limit_instead(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint: _TokenEndpoint, model: str
+):
+    budget: Final = 2 * _cost_map_max_output_tokens(model)
+    monkeypatch.setenv(BUDGET_ENV, str(budget))
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=model,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        vertex_project="p",
+        vertex_location="us-central1",
+        vertex_credentials=token_endpoint.credentials,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {"max_output_tokens": _cost_map_max_output_tokens(model)}
+
+
 def test_initial_prompt_tokens_is_absent_on_a_single_hop_and_the_first_hops_count_otherwise():
     assert initial_prompt_tokens_of((HOP_1,)) is None
     assert initial_prompt_tokens_of((HOP_1, HOP_2)) == 10

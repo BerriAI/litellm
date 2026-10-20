@@ -7,6 +7,7 @@ Why separate file? Make it easy to see how transformation works
 import os
 import re
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
@@ -64,6 +65,7 @@ from ..common_utils import (
     get_supports_response_schema,
     get_supports_system_message,
 )
+from .long_decode import with_default_output_budget
 
 # VertexBase is imported only for type checking to avoid introducing a
 # module-load-time cyclic import to vertex_llm_base. The instance is lazily
@@ -1292,14 +1294,27 @@ def sync_transform_request_body(
         vertex_auth_header=vertex_auth_header,
     )
 
-    return transform_request_body(
-        messages=messages,
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        cached_content=cached_content,
-        optional_params=optional_params,
+    return _with_default_output_budget(
+        transform_request_body(
+            messages=messages,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            cached_content=cached_content,
+            optional_params=optional_params,
+        ),
+        model,
+        custom_llm_provider,
     )
+
+
+def _cost_map_max_output_tokens(model: str, custom_llm_provider: str) -> int | None:
+    info: Final = litellm.utils.lookup_model_info_for_registration(model, custom_llm_provider)
+    return None if isinstance(info, litellm.utils.ModelInfoLookupMiss) else info.get("max_output_tokens")
+
+
+def _with_default_output_budget(request_body: RequestBody, model: str, custom_llm_provider: str) -> RequestBody:
+    return with_default_output_budget(request_body, partial(_cost_map_max_output_tokens, model, custom_llm_provider))
 
 
 def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:
@@ -1373,7 +1388,7 @@ async def async_transform_request_body(
         # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
         # whole sync transformation on a worker thread so it does not block the
         # async event loop.
-        return await asyncify(transform_request_body)(
+        offloaded_request_body: Final[RequestBody] = await asyncify(transform_request_body)(
             messages=inlined_messages,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -1381,14 +1396,19 @@ async def async_transform_request_body(
             cached_content=cached_content,
             optional_params=optional_params,
         )
+        return _with_default_output_budget(offloaded_request_body, model, custom_llm_provider)
 
-    return transform_request_body(
-        messages=inlined_messages,
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        cached_content=cached_content,
-        optional_params=optional_params,
+    return _with_default_output_budget(
+        transform_request_body(
+            messages=inlined_messages,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            cached_content=cached_content,
+            optional_params=optional_params,
+        ),
+        model,
+        custom_llm_provider,
     )
 
 
