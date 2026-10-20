@@ -1783,6 +1783,14 @@ class LiteLLMProxyRequestSetup:
         return user_api_key_logged_metadata
 
     @staticmethod
+    def get_inherited_tags(user_api_key_dict: UserAPIKeyAuth) -> tuple[str, ...]:
+        """Every tag key, team and project policy contributes, in that order, without repeats"""
+        key_tags: Final = (user_api_key_dict.metadata or MappingProxyType({})).get("tags") or ()  # pyright: ignore[reportUnknownMemberType]  # key metadata is an untyped dict
+        team_tags: Final = (user_api_key_dict.team_metadata or {}).get("tags") or ()
+        project_tags: Final = (user_api_key_dict.project_metadata or {}).get("tags") or ()
+        return tuple(dict.fromkeys((*key_tags, *team_tags, *project_tags)))
+
+    @staticmethod
     def add_user_api_key_auth_to_request_metadata(
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2514,7 +2522,6 @@ async def add_litellm_data_to_request(
         metadata=data[_metadata_variable_name],
     )
     team_metadata: Final = user_api_key_dict.team_metadata or {}
-    project_metadata: Final = user_api_key_dict.project_metadata or {}
 
     # inherited_tags: every tag key/team/project policy contributed, read
     # directly from those three sources rather than snapshotted off the shared
@@ -2526,12 +2533,10 @@ async def add_litellm_data_to_request(
     # allow_fail_open reads this (rather than subtracting caller_tags from the
     # final merged set) so a caller can't strip an inherited "!"/"&"
     # constraint's protection just by resubmitting its exact value alongside a
-    # conflicting one.
-    _key_tags: Final = (key_metadata or MappingProxyType({})).get("tags") or ()
-    _team_tags: Final = team_metadata.get("tags") or ()
-    _project_tags: Final = project_metadata.get("tags") or ()
-    data[_metadata_variable_name]["inherited_tags"] = tuple(  # rebind-ok: matches this file's data[...] mutation idiom
-        dict.fromkeys((*_key_tags, *_team_tags, *_project_tags))
+    # conflicting one, and its tag_routing_prefix filter keeps these tags routing
+    # when they are unprefixed.
+    data[_metadata_variable_name]["inherited_tags"] = (  # rebind-ok: matches this file's data[...] mutation idiom
+        LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict)
     )
 
     ## TEAM-LEVEL METADATA
