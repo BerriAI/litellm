@@ -1,0 +1,134 @@
+{
+ "status": 200,
+ "body": {
+  "id": "resp_bMD3sm4sTWEnCsRk61o6jKgUt5rtiU4_4g2Ucheuk3572zKJpHYxo0oAvaF21boCGIvboIfHfcdenyNNqMP4x-yzlphpm7vYPYWN6ObosRxoP36GtXN-LwMmQtuXIQ9MzcahZGsvIuKy4YWLoM1pM6KBPQUXAuHDNaxDcQqlJiIIw--c6BGIyWT1ZqtAOyS75H-8W2BMwdxwY8FNrpdJnzNvX25xLx-7iqjn686WTFiKT1FAq_hTU0LodxVO1KhbABwQdVlODe_xinrdOppIUzGkePCuj1ghtK9_4hRPyzR-7iUYbxlTFFUOGLVScYAb7OKYdWY_Q4ydrUcgHyWn1tKv0xcmaHttDVMrvmI2AGVccfZTbvtHTHV-auuFiu1ltf_KDZtZYCaoRb42ywq3j81Ka_cY98X771fyOs_a1lKaPTpqbY_W5gf38XsYysC7KmzXnEnRvdt6XmkMJKP6ko_a",
+  "created_at": 1792480316,
+  "error": null,
+  "incomplete_details": null,
+  "instructions": "You are a file assistant.",
+  "metadata": {},
+  "model": "gpt-6.1-sol",
+  "object": "response",
+  "output": [
+   {
+    "id": "rs_09b82af5c41f6701016ad7143dd3b087d0a0f653876da75154",
+    "summary": [],
+    "type": "reasoning",
+    "content": [],
+    "encrypted_content": "gAAAAABq1xQ_E698vwENJS3t2BnEo-egCVxbcMmxRw2LpHx_YWIWZARt4lvxsq2Z-gegq8hxWUpFH4X0tZ8h1BKyPB6wQBtwfikdEDBBtsrCOrIEUFrrtscsr64AkB-WUkW_sjZvfvY6eeYM-cpAItT0MAE3K-lVJllDdOejpwMNhCk2gSTXo0PtdzCN1SSWHnkXokeavhR6OqTkAOw5lPgiAMZtpLGboSeR-JYFcG_3rexTj-wcKYQfjiVuHbQf2xkHDBEb9M4EeVIeEXXGb8GukdAorlcFAw-OTUuW8f_OqVpmAYWsjF2vZxzneI9n3YIpP4wXn6hLcGj3j5IORowDI_CH2AWARQ_c3qC_Rt6ogfQMqdz5Gls3QIs5BYgK37nw_-2VBSmNJOhsVX6g11Dgq4cNg5Ad4LD5W5UAoPAR4ChcSTTfaoEPkEs3rQxXEMCFk0sQne02wxrz0TSL-cUd_JLtisNC8Xo6o1xEOVZQqfLA9qC0-XzZjQvwx95MunwRiPa6ZfABktypvXQJ3FoEQTzxOBMSWT4bjMZXqB9puVrWd_ErPIDOt1V_PVU-6mEl3XNLzRsaCP7tYgx7uYwGwiMRIVFGjAfksfI4O5rf-Hn3HN4XZhhLsAHVNwzerZ4Tc2k2OySK1ofF0GdYXUkO7TWTHEGHL4Pv3sGBjEqNBQatpvCkpMB_mHbBREDACTED"
+   },
+   {
+    "id": "msg_09b82af5c41f6701016ad7143e49c087d087a06bdfdc3be9a1",
+    "content": [
+     {
+      "annotations": [],
+      "text": "Listed `/srv/lib` using the tool: **400 files** across `pkg0`\u2013`pkg9`.\n\nThe largest `.ts` file is **`/srv/lib/pkg4/mod_175.ts`**, at **89,923 bytes** (about **87.8 KiB**).",
+      "type": "output_text",
+      "logprobs": []
+     }
+    ],
+    "role": "assistant",
+    "status": "completed",
+    "type": "message",
+    "phase": "final_answer"
+   }
+  ],
+  "parallel_tool_calls": true,
+  "temperature": 1.0,
+  "tool_choice": "auto",
+  "tools": [
+   {
+    "name": "list_dir",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "path"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true,
+    "type": "function",
+    "defer_loading": null,
+    "description": "List files as JSON",
+    "output_schema": null
+   }
+  ],
+  "top_p": 0.98,
+  "max_output_tokens": null,
+  "previous_response_id": null,
+  "reasoning": {
+   "context": "all_turns",
+   "effort": "medium",
+   "mode": "standard",
+   "summary": null
+  },
+  "status": "completed",
+  "text": {
+   "format": {
+    "type": "text"
+   },
+   "verbosity": "medium"
+  },
+  "truncation": "disabled",
+  "usage": {
+   "input_tokens": 25849,
+   "input_tokens_details": {
+    "audio_tokens": null,
+    "cached_tokens": 12910,
+    "cached_tokens_details": null,
+    "image_tokens": null,
+    "text_tokens": null,
+    "video_tokens": null,
+    "cache_write_tokens": 12936
+   },
+   "output_tokens": 82,
+   "output_tokens_details": {
+    "audio_tokens": null,
+    "reasoning_tokens": 16,
+    "text_tokens": null
+   },
+   "total_tokens": 25931,
+   "cost": null
+  },
+  "user": null,
+  "store": false,
+  "access_programs": null,
+  "background": false,
+  "billing": {
+   "payer": "developer"
+  },
+  "completed_at": 1792480319,
+  "frequency_penalty": 0.0,
+  "max_tool_calls": null,
+  "moderation": null,
+  "presence_penalty": 0.0,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "24h",
+  "safety_identifier": null,
+  "service_tier": "default",
+  "tool_usage": {
+   "image_gen": {
+    "input_tokens": 0,
+    "input_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "output_tokens": 0,
+    "output_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "total_tokens": 0
+   },
+   "web_search": {
+    "num_requests": 0
+   }
+  },
+  "top_logprobs": 0
+ }
+}

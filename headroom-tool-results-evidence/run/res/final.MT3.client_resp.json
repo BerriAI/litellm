@@ -1,0 +1,134 @@
+{
+ "status": 200,
+ "body": {
+  "id": "resp_RrO9kixedIe08OTjABzuzKqUD8w5ju20DI561FB6HRUjD2vM1q0PjGis_dtHKFyYf9aQgfilRsGljkscUA3n1KkxEl5Kxig_iekB796ZHBfhdD0UR1K571kUPm9emDWXE6UPJHVQJW6DzQ1nUDmJRibLcWRKFGpAi-onZOxC1zJqOv1srNAurxiO3Eien4AGu8E0ixn6nFkSTbe7-j1--fprglhXnhUS1l4LR5leETF6m8MX0YuqWDJrln44d_nlKAue8MJkwfKttBCPQaDZGDcnArkHQ45RSU344oRLv9yo6B0AykqchApQcGDkoDhJV7ASISLD7YNl5u_vHShsnyobyEf8VGFfla6uTkv3ILgMFXojgCxFemtpR8LrAN3xPwcDu-zkEXAM07FTGjMxf8tzW63_hRQVdqCLyELrkd5F3zecBkgeJCJjoRV6SYkcWAmBg_yws_rdQNLxytdz9js6",
+  "created_at": 1792480321,
+  "error": null,
+  "incomplete_details": null,
+  "instructions": "You are a file assistant.",
+  "metadata": {},
+  "model": "gpt-6.1-sol",
+  "object": "response",
+  "output": [
+   {
+    "id": "rs_0ba2ab3d10ce8433016ad71443311887d08f82554c2a0d77a9",
+    "summary": [],
+    "type": "reasoning",
+    "content": [],
+    "encrypted_content": "gAAAAABq1xRESeAmxIVqqSOTLDHLU5dFvy7vwcLwe0R-UbdmYCisAnInDSFUFxDuw088RqMTEp7rkDFFZhUrJNXQSnLPH5FU5bNDaxmpp-tnkVl64PLVNOHmG0WNmKm2WPvda-TTbfI75kTP3YVUBUG7z3dvqAqK4byOdIC9EaQ9eteIF33jnzJbcjYgf1Sk1NUOgtg-N10GWotfFjO-OiVkWVETiA5p0x10B7glI6tCyjXN9mXXIp4yoiAQyPwGul0kDf01YjuqaWrpqmv4HifBwjbAVtSZe7k6B3bIKMqAzLukqBowZa7UVgcOO3RHYwnJ2IkAvCv5vJ6d9HRAlYuHh2aZoOEB9F267aNKwZPpw3ATwdWokjMBt9Z7S9KGpwqBHeWtlV2DeLL7LEeYRl_FUN-eqUFvKnbXEb0Mjo41GYVDN24Z_WHVLFAMpVGXkHUUvf6laa0vuMm5OT0EonGe1G2OaWEEafHNVSIaE7Ikxac7k1Mfv6KsTRIywd8fsMfryXBjW2VQU-ch2nt0ksb7lbkZxCBkErlsUER4L_WZWjH8oRunNq-g8UbK2VP9ZHquQ2VVoVIscPH-7UuWzZjCKlIIk-f1Y7hGFuE4rMygxMy4Wr99FhJukT1IA68CBDVErCUExRIz5eJfil2NwnWaJ1dWohBTGoeyl7qUDulMeIcn6a8E6iaVbN8Le7LES8xF98iYC6FYfx4NSxZKau2ulJqaAW6XExrow0rSWPQdX7MgNsXWqIJju17g9GCPWrpI_g9JGot4Zsk0uDk1AWugBvLA6j8zXcF5hoeM3UlXEo9MXIBBAafa0MP3PnQAmG0iMe2koFprJafbZGvYpMARSZAh6bZ06AgtHi5XLRyswfH46_U6vfBkdV0u1tn-ELx8JbVpfCYBaqt4jnurQBM_k0X054lKSWqhzYwo6fsd6g2TEUEVOypX5Tj-aRCQtgJsz-mNGo9t5I5bqBjFy_SYueAT2PpxObQXQrLMhRCMMieJxW3tQRfVLQOpjpPw5qhdxVmHxUbRQjJKdHblrEFTrvp2PyNfb6wCWURcOlb18cWAkUEnTiWXlV5rc2revte9mVybe01FMpyfomFy8UyNewpMhrT_-TXmKQIJIEeDvzSxTR14Neb1Fug9uZZyHY1YLdvo-UMkWm4bguDHF4sECGwcRfmz1qhgD5zPAPnYKD1iNab2KY_VQoYVCvDrRpm2WJ0wGWnQGaFZyS37EZnnVTMSljkr2GXdSjZICfYfXqjRy4Y8qvVVZhV9j8Z_CmK3wFkqHXzcW1qT86dgGXuFBfx0ByGTZzKhYLd_Cy4qwsIKLacy3rElZkpwjXPWsjLnHPhuOUg529y-k7d1WOCIRDlYS9v_n3f_jhbjXmB29n6JSMFsa66y2hsAfKPeFOPsbSe5aeLsEnPY29Jx8-AfufYJfFJ0amarVbOBvMR5xYuwz__7MQfvloRRIxtP1P11q9Sl5yFAIX7hdcr-hAeNeYXddX_4WsDtY_4Nvj0r2-KJLmnmXI7WMvvAvbg4eCHTsn2UmJ6_tzC59UJCdtSDnUDmf1Crf0sxsjYbQYDHZCo1V0A9N3O3jEKxXov7wzz3JAWPTz_0"
+   },
+   {
+    "id": "msg_0ba2ab3d10ce8433016ad7144388d487d0ace0f4c977b72a36",
+    "content": [
+     {
+      "annotations": [],
+      "text": "Listed `/srv/web` using the tool: **400 files** across `pkg0`\u2013`pkg9`.\n\nThe largest `.md` file is **`/srv/web/pkg1/mod_74.md`**, at **88,342 bytes** (about **86.3 KiB**).",
+      "type": "output_text",
+      "logprobs": []
+     }
+    ],
+    "role": "assistant",
+    "status": "completed",
+    "type": "message",
+    "phase": "final_answer"
+   }
+  ],
+  "parallel_tool_calls": true,
+  "temperature": 1.0,
+  "tool_choice": "auto",
+  "tools": [
+   {
+    "name": "list_dir",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "path"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true,
+    "type": "function",
+    "defer_loading": null,
+    "description": "List files as JSON",
+    "output_schema": null
+   }
+  ],
+  "top_p": 0.98,
+  "max_output_tokens": null,
+  "previous_response_id": null,
+  "reasoning": {
+   "context": "all_turns",
+   "effort": "medium",
+   "mode": "standard",
+   "summary": null
+  },
+  "status": "completed",
+  "text": {
+   "format": {
+    "type": "text"
+   },
+   "verbosity": "medium"
+  },
+  "truncation": "disabled",
+  "usage": {
+   "input_tokens": 38784,
+   "input_tokens_details": {
+    "audio_tokens": null,
+    "cached_tokens": 25846,
+    "cached_tokens_details": null,
+    "image_tokens": null,
+    "text_tokens": null,
+    "video_tokens": null,
+    "cache_write_tokens": 12935
+   },
+   "output_tokens": 82,
+   "output_tokens_details": {
+    "audio_tokens": null,
+    "reasoning_tokens": 16,
+    "text_tokens": null
+   },
+   "total_tokens": 38866,
+   "cost": null
+  },
+  "user": null,
+  "store": false,
+  "access_programs": null,
+  "background": false,
+  "billing": {
+   "payer": "developer"
+  },
+  "completed_at": 1792480324,
+  "frequency_penalty": 0.0,
+  "max_tool_calls": null,
+  "moderation": null,
+  "presence_penalty": 0.0,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "24h",
+  "safety_identifier": null,
+  "service_tier": "default",
+  "tool_usage": {
+   "image_gen": {
+    "input_tokens": 0,
+    "input_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "output_tokens": 0,
+    "output_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "total_tokens": 0
+   },
+   "web_search": {
+    "num_requests": 0
+   }
+  },
+  "top_logprobs": 0
+ }
+}

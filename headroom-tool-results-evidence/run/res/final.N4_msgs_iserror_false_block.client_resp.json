@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD5Lavp2QgvWAmR1Ab6q",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQSgQYKEAgTGAI4AUIIdGhpbmtpbmcSDM1rxQ5kRYRbIBHUUhoMVQ+wXZbrGMR4hhB/IjC7F44X53HQxhoqmRxIFt10yyM3/cFHjFVsi6en0ErMVWYZ1KFQhXoz7Pbu/GWSw5oqngWO68mgdY8BTOQvSvF+vNfOWDMSC5cCEsgQ/NA00CF5Yq8g6K1ybuHNslSzPsB1BEgZ2e7DIwUnqk2q1Oqyccw7z9SFHqJO5H4yfemhE9X+kF6hPNtwj5ShtVZeb9KC71a9+wy+pfVK/ENhmWuhwLE3Epf4BV0AucalWO79NrlzmozZTNW6JZlUC31o8yQo33uKYjrd/xMMFeHNKSs4+JIiaOqNrEnvRc8Iz5t76hxRB+5zfzGe3UZiheoKF8lZ3n0LOZAklTsbm/6HBZRXWUsJu/08qy7UMrbsUYj3z9jRKmIMM21w5/StI4t+0eBRS93jpAoATSX7GvhAoSFBez3F2ugwExVJ5kOF6vR4b+EGi7JAyBKCsykz8hHej/U7xGi8ToLF+JOftSh0IaHKgtAbQ9yDnz6PLl/Wv95XsD3K31bMTOrr+Am2/g/3ycw9Ps5wdjfJ5EaTJP5iiItzEdiplyDC0opNirVCY8F6cmkMC5ygIFiwxbO7GK6ecMp0J34AUno2YJEcpT5O5ja8OVNkmzKSVkOWN9ctnAOMQFolQ1AHVG0gIknIItJ61b0j52wBkmpkyMcS/VY8gy2i89EJ4pzRC6bTn3GQBLp2Se2FAjJwIV5dPuZryFGcwfIdQ5XaFQA6sg39iOCqXbiYUujjjI1SNoycN6/JQry90g8g5/U+OIzdBmWCezj5TILbaYuFCPbhRnVpU6TW6AlIA1Hg2wS6m0xfi0OuzInH8/OxYslzvXAu++mDFaP81KU34ff4fD8FV5id3KCGQ8jOlSw5Otia/OA89NvKcxlTBPTNMbOFaBL6O3eeB9spWci03EBrzkJqSDpwz8JjaqT3AJX+ftM4iABzO1F59EPNgs/+423TD91APRoaOZBfXc6RGAE="
+   },
+   {
+    "type": "text",
+    "text": "The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only entry in the listing with that owner."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 2,
+   "cache_creation_input_tokens": 18781,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 18781,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 144,
+   "output_tokens_details": {
+    "thinking_tokens": 79
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

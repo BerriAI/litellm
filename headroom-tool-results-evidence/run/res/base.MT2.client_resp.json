@@ -1,0 +1,127 @@
+{
+ "status": 200,
+ "body": {
+  "id": "resp_FN-hnVktFv4BOtdMp8T2w_reXALDCkQ7a3xJ3yHMuuTqlp6JgTRuG4K7qXb5g2uLkaw6mExMQnsM9q1Mafp2zz1ng7e-SF5LnN9RWnLE-L-Vy34EBjiq73QfVOln7WdYS9yCsZKMuLOAjW0-W64M9lSOrAJg1w9r9Mk4_vsfVCBxgfSXT9EBmCbecbsgBrGAJL_78P5PMfWkpqAWfe-UAmPDDQo4Px5Gn0dhWW1VDDOku3kj9Iz24UvdNmLw3UQdYK8Me3Va3lKlGMYarexUQw3JrhlLw0KMRQxNk5SndyDh5csxi9LLx_CIfjU2u6IMq_3NimV59jNFDE118vkWWMdlNPHY7EqS9MVRpTIy6UcW8kCW5gol8TLrv4STavPoKUxk-x59iq5J7f4j-G8oB-g7YDPQkRapztcRGaUWLoPxFoQ8AKcQxrPcQvnjg9KEBwKT67eWyQh7n_szUWkMnMa_",
+  "created_at": 1792480294,
+  "error": null,
+  "incomplete_details": null,
+  "instructions": "You are a file assistant.",
+  "metadata": {},
+  "model": "gpt-6.1-sol",
+  "object": "response",
+  "output": [
+   {
+    "id": "msg_0447dd87892c0429016ad71428061087d0bf13c0590a2a35cf",
+    "content": [
+     {
+      "annotations": [],
+      "text": "Listed `/srv/lib` using the tool: 400 files across `pkg0`\u2013`pkg9`.\n\nThe largest `.ts` file is **`/srv/lib/pkg4/mod_175.ts`**, at **89,923 bytes** (about 87.8 KiB).",
+      "type": "output_text",
+      "logprobs": []
+     }
+    ],
+    "role": "assistant",
+    "status": "completed",
+    "type": "message",
+    "phase": "final_answer"
+   }
+  ],
+  "parallel_tool_calls": true,
+  "temperature": 1.0,
+  "tool_choice": "auto",
+  "tools": [
+   {
+    "name": "list_dir",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "path"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true,
+    "type": "function",
+    "defer_loading": null,
+    "description": "List files as JSON",
+    "output_schema": null
+   }
+  ],
+  "top_p": 0.98,
+  "max_output_tokens": null,
+  "previous_response_id": null,
+  "reasoning": {
+   "context": "all_turns",
+   "effort": "medium",
+   "mode": "standard",
+   "summary": null
+  },
+  "status": "completed",
+  "text": {
+   "format": {
+    "type": "text"
+   },
+   "verbosity": "medium"
+  },
+  "truncation": "disabled",
+  "usage": {
+   "input_tokens": 35829,
+   "input_tokens_details": {
+    "audio_tokens": null,
+    "cached_tokens": 12910,
+    "cached_tokens_details": null,
+    "image_tokens": null,
+    "text_tokens": null,
+    "video_tokens": null,
+    "cache_write_tokens": 22916
+   },
+   "output_tokens": 62,
+   "output_tokens_details": {
+    "audio_tokens": null,
+    "reasoning_tokens": 0,
+    "text_tokens": null
+   },
+   "total_tokens": 35891,
+   "cost": null
+  },
+  "user": null,
+  "store": false,
+  "access_programs": null,
+  "background": false,
+  "billing": {
+   "payer": "developer"
+  },
+  "completed_at": 1792480297,
+  "frequency_penalty": 0.0,
+  "max_tool_calls": null,
+  "moderation": null,
+  "presence_penalty": 0.0,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "24h",
+  "safety_identifier": null,
+  "service_tier": "default",
+  "tool_usage": {
+   "image_gen": {
+    "input_tokens": 0,
+    "input_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "output_tokens": 0,
+    "output_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "total_tokens": 0
+   },
+   "web_search": {
+    "num_requests": 0
+   }
+  },
+  "top_logprobs": 0
+ }
+}

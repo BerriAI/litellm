@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD5LL76MpM8b7HZwXdxw",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS3AYKEAgTGAI4AUIIdGhpbmtpbmcSDJthVeJjXBZKyf7tOBoMT+kYL9KoFuOyARNfIjDfbpJMKhZL40GJiuh+VsDGf3dIijYV+Lw5qSf2pJlbeQhONENzc56mbkhpPMxqmZkq+QW27azEovNxeiV43Ps/bvSTmVNGfftvMD2AVDUu3UzT9MIGcZnJV9O+TaEk5D9muwAlIXYONJsO2HlIZCwy3mBDacwFiwhpI9koh0cM/oJdbakYNq9UbFxOHmB785tOZmZKOXtndPZTE2TYKYPN5KYOXHwhdEpFxItnOZnZX66VmR5GkUIE8ZpenMSQeMlaZRpvcZqgVDWQLOUbGOKTQNgXfXAB/QrRTT+NotKqkRMo7AsvsjVi2vhsYh/E/uWHTVN+O60HZN2yj492EcrzjcIQZOGxzgHpV1QAKuTwwHv1qBvwbpfRg2VJDq1kaJBhgyBeW6e9T/WC4EHmkqV4hGZ104i40RoohQdDnznleQcvnGGSrBNVYF6Jd8UrNxZNxdHCUw+b5GKZIwLG/Bpax0zYgm5hoqqLL02BVAiu1zSvg4GrUorArSJZ4mKyt91zJsamZ/lgHfM3fxwiIFFuMK6MvekowtbEhYnoAESt+CrZOY+XqyoJ7LddTkA/gnUSdHc2UMwJkvxCz+WQOfGrxkR7irq2PJ4B8O1jdZPXbZrMDdG4ByuHolU7b7aMC/RbFK0ZEJw+B8qKSr7XziYQupMPuI4h6YfrD6+05gNAxpbswckrA3ygydbOXIrIfQzfv4wAedygIeXaxIRdwePEN+rcovubPf3FHctWSCJXOjw1OaZx2cwdOoFUGYaiDj4FRONIrpEUPSYTo03nkSZDx4Herx2pWrinH7+3UroIZo9REtPQvBtIUkpFsxrbfrcRzsq5D47EdGqk7xf/GVN0AVyol57VVrX6vKFjax7vo+m22aZq1A/V6dbqqVibVxbqLyjwUHV1i0LkvyCkxwBt23dGmq3I/Y3g9VTTCSXhvNLyfedWd5Ficxc298VtR92Pzen/GPc7qhfLCYu/jG5UqIu0P1h11E+eo3d8ZjwiYh/YTNE4P1nJpbEjB7GgB75OCHx9E7l9Sy0IjkEsyziYVDE33HvhLxG6msgcGGFVN0Qy4pcGkHHlkD0QRhgB"
+   },
+   {
+    "type": "text",
+    "text": "The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**. It is the only entry in the listing with that owner."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 2,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 30746,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 185,
+   "output_tokens_details": {
+    "thinking_tokens": 118
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

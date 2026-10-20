@@ -1,0 +1,61 @@
+{
+ "status": 200,
+ "body": {
+  "id": "chatcmpl-a10fce90-403a-4755-8a96-01d9cca6b4cb",
+  "created": 1792480959,
+  "model": "claude-haiku-5-5",
+  "object": "chat.completion",
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "message": {
+     "content": "The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only entry in the listing with that owner; the other 399 files are owned by `dev`.",
+     "role": "assistant",
+     "reasoning_content": "",
+     "thinking_blocks": [
+      {
+       "type": "thinking",
+       "thinking": "",
+       "signature": "CAQStwcKEAgTGAI4AUIIdGhpbmtpbmcSDFv5IICQbXqGNWIewhoME32RPIblsW4n1XYmIjBfBW2HmFWfLtj9phM8ix0tJveRz7eMLndNun9u197LLOuNvjXjSUPWhiugSWSbM20q1Ab4sBiKMCSJP7bADTg4eL+Jy8Qg/ahXScEXNGmDCIIPKRKBzNUt1sJCTED5rcGaAUdZMCFoDHUbH/FS2w4vwH43gtW87EwEypCm5RwQaprQmn8W+aLuaDWexdAq9GMi7FIGbyzfXYC1d0AojtTX4nai98c6H/fdjUTPUhwNoue8mdxsO+YoGIfmZthLY2aLdEdAxauGR9cSXnisdtHUdR8pT/bB/XigyEGBfFR/7s2RbB4HIA2aUtvDx1kYLa5n5iO/6/1q7iKcN1I28Ge0IKFZZiX3aQRQ0h930RKcT7zKYymWfa9Hl6Vz8FgEbZnN60X+u1LSeMnaLA5Lbux7CD6gXMteykD0j2uqKsHCIHiKq4D+hxvpbqfSlU5+2sbFIzgbeus3M3DytiZxPQ8GB4+/M81ub2jgTftBmEW5mEuTSxT9nGwC20yRze1gmEUH1Rbvn8+vzGCnJJ5JsEK+rxmDww4wwNLgJ5GfOtkbMFY7bsJj5HRupgYLdnEQ73mmUGSmLBqeD/Wxlq8YNfOJ6FSpBVu//BUZClaWxdu4+NljPNVAKnj0Is3xZMXaL87XpW9VPD/pEuc9fuREJe7eARe0bY5s6XhIP9zIAfwgiWQCy3EVuJ6dYxHB8DIdDKBYdUtKUdQFvId9M+wue4enqB9HVmjMSAhH8O+4MNR1IepzkzjZliaDZMZZQe7teyn4xkR1uzgphdc73MjHU78+2CkbPfB9g9dI766MPz2dsfFrusE+9ugfzNnwzXgBXLk7R2lE2DhRxROgyDWDithNpesPN6eCTjo4lCksOE7jJjvD9ttKWF4+TYlQgEALz5Uo/5C9XtrEZHw+ghjV9fLExM4THbhcVYztfi7Begjkq5GtHnhHFpgqLuP2z2KnCos9/UZPz05msDP/dZ8a8/CM4BQdcV0CtTd3t50VaBNguc4H24smGzAf4G/5WHGdgJ/JwjpOlygMxzNXDRuyZ1hNgeTN1WGycnkmNvfheDuW7MA5FGSbgf8y1iSkBqMNnKJtD4mM4/hx7E6FP+0CArbdHnMELNCiG9yQ95fm/xOE1yS7F/qen67RykUbKJmFPDPGmOuXG3yslDsPwK/6v/k87FIjIXe6GRoGkrO2i/nUCyJ5Mqd+0e4YAQ=="
+      }
+     ],
+     "provider_specific_fields": {
+      "citations": null,
+      "thinking_blocks": [
+       {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "CAQStwcKEAgTGAI4AUIIdGhpbmtpbmcSDFv5IICQbXqGNWIewhoME32RPIblsW4n1XYmIjBfBW2HmFWfLtj9phM8ix0tJveRz7eMLndNun9u197LLOuNvjXjSUPWhiugSWSbM20q1Ab4sBiKMCSJP7bADTg4eL+Jy8Qg/ahXScEXNGmDCIIPKRKBzNUt1sJCTED5rcGaAUdZMCFoDHUbH/FS2w4vwH43gtW87EwEypCm5RwQaprQmn8W+aLuaDWexdAq9GMi7FIGbyzfXYC1d0AojtTX4nai98c6H/fdjUTPUhwNoue8mdxsO+YoGIfmZthLY2aLdEdAxauGR9cSXnisdtHUdR8pT/bB/XigyEGBfFR/7s2RbB4HIA2aUtvDx1kYLa5n5iO/6/1q7iKcN1I28Ge0IKFZZiX3aQRQ0h930RKcT7zKYymWfa9Hl6Vz8FgEbZnN60X+u1LSeMnaLA5Lbux7CD6gXMteykD0j2uqKsHCIHiKq4D+hxvpbqfSlU5+2sbFIzgbeus3M3DytiZxPQ8GB4+/M81ub2jgTftBmEW5mEuTSxT9nGwC20yRze1gmEUH1Rbvn8+vzGCnJJ5JsEK+rxmDww4wwNLgJ5GfOtkbMFY7bsJj5HRupgYLdnEQ73mmUGSmLBqeD/Wxlq8YNfOJ6FSpBVu//BUZClaWxdu4+NljPNVAKnj0Is3xZMXaL87XpW9VPD/pEuc9fuREJe7eARe0bY5s6XhIP9zIAfwgiWQCy3EVuJ6dYxHB8DIdDKBYdUtKUdQFvId9M+wue4enqB9HVmjMSAhH8O+4MNR1IepzkzjZliaDZMZZQe7teyn4xkR1uzgphdc73MjHU78+2CkbPfB9g9dI766MPz2dsfFrusE+9ugfzNnwzXgBXLk7R2lE2DhRxROgyDWDithNpesPN6eCTjo4lCksOE7jJjvD9ttKWF4+TYlQgEALz5Uo/5C9XtrEZHw+ghjV9fLExM4THbhcVYztfi7Begjkq5GtHnhHFpgqLuP2z2KnCos9/UZPz05msDP/dZ8a8/CM4BQdcV0CtTd3t50VaBNguc4H24smGzAf4G/5WHGdgJ/JwjpOlygMxzNXDRuyZ1hNgeTN1WGycnkmNvfheDuW7MA5FGSbgf8y1iSkBqMNnKJtD4mM4/hx7E6FP+0CArbdHnMELNCiG9yQ95fm/xOE1yS7F/qen67RykUbKJmFPDPGmOuXG3yslDsPwK/6v/k87FIjIXe6GRoGkrO2i/nUCyJ5Mqd+0e4YAQ=="
+       }
+      ]
+     }
+    }
+   }
+  ],
+  "usage": {
+   "completion_tokens": 235,
+   "prompt_tokens": 19090,
+   "total_tokens": 19325,
+   "completion_tokens_details": {
+    "reasoning_tokens": 154,
+    "text_tokens": 81
+   },
+   "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "text_tokens": 19090,
+    "cache_write_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_creation_token_details": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    }
+   },
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "inference_geo": "global",
+   "speed": "standard",
+   "service_tier": "standard"
+  }
+ }
+}

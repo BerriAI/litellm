@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD5L3794QuufxP8DBiy6",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS8wgKEAgTGAI4AUIIdGhpbmtpbmcSDP1jXhblNrgse5ieihoMYrT5UNw4siklou1+IjDVfCU/rGJL0mvAUk5/rqiugFE+hyKGxStRb6a60A31hyNlZ/dDJk/WhQ5XAuJh0YcqkAhkCoYANneu6G69h4pz/P0uYVNa/kgZcLBQqCB/q1DV/XuixcC8KC2bqfoiOVR8p/MMN71xKr/YLB6j/230G2jyB/An6ECvxwCdZYn0pnpGd9vGQN4uB6CO0FS1yhWZF7Atf4w/oDOEIcvqF0LsD9/w/m4x6+REjiGypxqBc37ITaDnBru1rDuOhb1uVKabMq6zlYB+XsyQ+huPVlusiULXfPUSJ+1XvJ9Zq2QeF0+0Xj0xlrhkwHxqzq2cwSKW6f6tEotPEAiWHwnGSuY4VRFeAJ9f7llFqzRQX5rQhMJjOymVWyYK/NRjypnvRvWL3Pc8q7pyByg5A/UKt/dx+bmpNpxtcaB+M1qij1Q+eeWSpTysl9QaW31h8S25lQgkgRaMspLPJOj/gcCzH2X4dYESri5cb6jjcrLGR3ptmenYstohrpcpACmIqTE8yBFwVBO6sJd4/prOCDdMbWbVK1xLxp5vZcolyOiwEP+OYHROY1n7i66KZkpkgSCvLVGQqJYCVrpj8RN02KIh9LFPM7r0s4V/1rfh4BiiGG3F0U4RTZi8etZrGQw4H36uEJNP/p/e7wuONQUZS+kXejRUxJa2vo/bifvXihpkDsPewFqX8s6fohLagnoeANi+m1v+zizHs6tMMEpxHRMJo/aANIAyGYeeGPX9KGypjjeSsIHxsiuiADan+4zY0g5pJTlBLoi7nxd11iB68zu6tZVH+UcVZOa0bxhJJdntPTUoqZSeie3miuAGQA6gLtY45IOGO7+F2qLdHN/4I41EXtFpBtnLvNeYJf5C98KBRhpvU2Sv9mNhB44fcntCDn2+XMe6IPu/qwofTYTaLDWSOS3Gfy7fIDswmRJnT1Q7nEWEwkm7lsDnF2a97oD0lsgF9kIMAECfsdOaYzjHrylbE/i025K6Uhujck3xdPLbIpa7UyfmZJEI5//kHwvUtkCbrq1UL1Mh3PM8EYp1CV5HIbhCIelmM/tXTHnQY8u0AdT36M/mk7Mo9184yGsj/yLgUVC1UfophrOsqiMkUVT4bzVaQ7maCGBfuLtHk7zy6jUuXsfdyXZdBUOLoyYfRQ6QW2OgL5/7zpMbG03I2msQYXwKnPwC9TZBz+HSPxtzUGMhnprXc2IHWMHbqwT5iE7dtlvQ6HYqglSjnpB9FhADaOAY5OAqSi3+v++0bSOb21YVa604SU3vpQ3UwLO2BJYFmi45RPP91V5bFEfaOMUnjuuyGBw38QLinjyyOLzGdp4U/zaVF75no7Qs0EXcskmeCwXwyrV82Q5C0hLOloknt8Jz/qZ1z91H2xD19544UR1XGUTw3AKqSEjZshx8LHod64D99IsoJOkHOwnQW/gz+K2iHcttWR2KJss4R6MHlCcFRIOvQxgB"
+   },
+   {
+    "type": "text",
+    "text": "The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**.\n\nThe listing reported a permission-denied error on /srv/app/pkg9, so it may be incomplete. I saw no other file ow"
+   }
+  ],
+  "container": null,
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 18419,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 300,
+   "output_tokens_details": {
+    "thinking_tokens": 210
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

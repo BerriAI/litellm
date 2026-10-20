@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD5DxeaS8ehZDQogmoUL",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS8wUKEAgTGAI4AUIIdGhpbmtpbmcSDB17VfE7ubnyq3p4NxoMMARgmkXCYq06/FTPIjAwnkiF8f0FlxolNlsNoS/FN+vnf+z2Z9OUEfY4RkS4gq7CEsiJYcwJm3z+4OHK/HAqkAWGb8QU3RUIKWy9WuQAhC6DMVhDfC0PRP64gaXzTSoaDjIbxlV++nfHDivrajB/OFjZ+3ZAyxJqWV5qyEq2dvEsgJsdSkPrF18o5wdSOmYNYWAklh0SrS0i5imPboZv3Abcjm1rgSzJMop2Odn7miL2p/YUou0WkshgJGOaPSN3opvMSObc1doF6edRk8l06Rgh0sij+6e3r7hWBcl7/L8yENNfbpXikWIL9oHPdlXEj7NvZoYmgKyGC6mRtI0/yKjPZx0vPhA/iGsN9P5jGikSzJDw0WFxhVGlPh0ti3+0YlaFHVJEdWOjfNR4IY1Tg5L86V6LHLs92k0tm/DPQqFLR2ujBJC1of+7Wh24gej5y8PZl91oFpGl1OvGA1XF9uPj3XZzzuoZPzGyZGKjqNQGcFfuFXnC0R9IH727svlCCVKJ2ksZFWMsclHvlkV3y7+C0fEeh1N6134GN4IUjyTlu+l/v8Ftq+TczGwlsGHlLzzdEcAiwgDxqfg8OpDicfhvisqNaRN43zgM6LDd3mxOoib0smfHbXbNkkl30YwRv66f/uzPnOP3w1Ax2NOODrQ+j18k6k24f69gjgglTzNb/vDz43S60ewoIjriNyZj+aD1y3dY02eETHPGlAqI1LzCXHFNrUzhhZWSwQyttuZLmLJQe22TFMw1q4ulX5IpLBg0DPX13yBKLC/9F/Cmw/+8Iu//geC4K1cPy5wDbhxhuk/zr+bXr+R72uwCogEoCTRG34XA+itm2NBfke5VVPuKhH3MBN+XvX/bNQkApJjVZtoFyyPxuUJxxQs9rntnoWbl9WaqA+kBqKS0vVAohQJA/cveiFnipDSzutAuObDvECb1qPOiIwFkhsUAiIZcGxgB"
+   },
+   {
+    "type": "text",
+    "text": "The only file in /srv/app owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 2,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 30746,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 137,
+   "output_tokens_details": {
+    "thinking_tokens": 79
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

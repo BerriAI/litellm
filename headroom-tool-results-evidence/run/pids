@@ -1,0 +1,109 @@
+recorded_at=2026-10-20T06:53:56+00:00
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess                               
+LISTEN 0      2048         0.0.0.0:4021      0.0.0.0:*    users:(("python",pid=222987,fd=18))  
+LISTEN 0      2048       127.0.0.1:8787      0.0.0.0:*    users:(("headroom",pid=221645,fd=11))
+LISTEN 0      5          127.0.0.1:8791      0.0.0.0:*    users:(("python3",pid=222986,fd=3))  
+port=8787 listener_pid=221645
+ 221645 Tue Oct 20 06:51:56 2026 <scratch>/hrvenv/bin/python3 hrvenv/bin/headroom proxy --host 127.0.0.1 --port 8787
+port=8791 listener_pid=222986
+ 222986 Tue Oct 20 06:53:29 2026 ~/.pyenv/versions/3.12.13/bin/python3 <scratch>/rec.py 8791
+port=4021 listener_pid=222987
+ 222987 Tue Oct 20 06:53:29 2026 ~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/base.yaml --port 4021
+base_sha=f43f2d8c1598e640daa7345d1d46925fe61b9783
+base_porcelain=0
+base_litellm_file=<scratch>/wt-base/litellm/__init__.py
+
+Name: headroom-ai
+Version: 0.41.0
+Summary: The Context Optimization Layer for LLM Applications - Cut costs by 50-90%
+Home-page: https://docs.headroomlabs.ai
+Author: Headroom Contributors
+Author-email: 
+License-Expression: Apache-2.0
+Location: <scratch>/hrvenv/lib/python3.12/site-packages
+Requires: ast-grep-cli, click, litellm, opentelemetry-api, pydantic, pyyaml, rich, tiktoken, tomlkit, truststore
+Required-by: 
+
+second_candidate=2c1e7bf6178c78f39d5c36d79bc1b76c7941febb
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess                             
+LISTEN 0      2048         0.0.0.0:4032      0.0.0.0:*    users:(("python",pid=225490,fd=18))
+LISTEN 0      2048         0.0.0.0:4033      0.0.0.0:*    users:(("python",pid=225492,fd=18))
+LISTEN 0      2048         0.0.0.0:4022      0.0.0.0:*    users:(("python",pid=225491,fd=18))
+port=4032 listener_pid=225490
+ 225490 Tue Oct 20 06:57:55 2026 ~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/base.yaml --port 4032
+port=4022 listener_pid=225491
+ 225491 Tue Oct 20 06:57:55 2026 ~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/basefo.yaml --port 4022
+port=4033 listener_pid=225492
+ 225492 Tue Oct 20 06:57:55 2026 ~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/candfo.yaml --port 4033
+candidate_sha=2c1e7bf6178c78f39d5c36d79bc1b76c7941febb
+candidate_porcelain=0
+candidate_litellm_file=<scratch>/wt-cand/litellm/__init__.py
+
+final_candidate=93a5f048762dfd991b4de7053607f584fdd0fe53
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess                             
+LISTEN 0      2048         0.0.0.0:4034      0.0.0.0:*    users:(("python",pid=228576,fd=18))
+LISTEN 0      2048         0.0.0.0:4035      0.0.0.0:*    users:(("python",pid=228577,fd=18))
+port=4034 listener_pid=228576
+ 228576 Tue Oct 20 07:02:36 2026 ~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/base.yaml --port 4034
+port=4035 listener_pid=228577
+ 228577 Tue Oct 20 07:02:36 2026 ~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/finalfo.yaml --port 4035
+final_sha=93a5f048762dfd991b4de7053607f584fdd0fe53
+final_porcelain=0
+final_litellm_file=<scratch>/wt-final/litellm/__init__.py
+
+final_tip_checkout_head=572e5f603f06e3cfc88a4155324055896a0ec86c
+final_tip_checkout_porcelain=0
+git_diff_stat_93a5_to_572e_litellm=<empty>
+
+final_572e_runtime
+port=4034 pid=231130 lstart=Tue Oct 20 07:06:22 2026
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+ANTHROPIC_API_KEY=true
+OPENAI_API_KEY=true
+~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/base.yaml --port 4034
+port=4035 pid=231131 lstart=Tue Oct 20 07:06:22 2026
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+ANTHROPIC_API_KEY=true
+OPENAI_API_KEY=true
+~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/finalfo.yaml --port 4035
+HEAD=572e5f603f06e3cfc88a4155324055896a0ec86c
+porcelain=0
+litellm_file=<scratch>/wt-final/litellm/__init__.py
+
+proxy=base port=4021 pid=231799
+lstart=Tue Oct 20 07:07:27 2026
+cwd=<scratch>/wt-base
+PYTHONPATH=<scratch>/wt-base
+ANTHROPIC_API_KEY=true
+OPENAI_API_KEY=true
+HR_MASTER_KEY=true
+args=~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/base.yaml --port 4021
+
+proxy=basefo port=4022 pid=231800
+lstart=Tue Oct 20 07:07:27 2026
+cwd=<scratch>/wt-base
+PYTHONPATH=<scratch>/wt-base
+ANTHROPIC_API_KEY=true
+OPENAI_API_KEY=true
+HR_MASTER_KEY=true
+args=~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/basefo.yaml --port 4022
+
+proxy=final port=4034 pid=231130
+lstart=Tue Oct 20 07:06:22 2026
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+ANTHROPIC_API_KEY=true
+OPENAI_API_KEY=true
+HR_MASTER_KEY=true
+args=~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/base.yaml --port 4034
+
+proxy=finalfo port=4035 pid=231131
+lstart=Tue Oct 20 07:06:22 2026
+cwd=<scratch>/wt-final
+PYTHONPATH=<scratch>/wt-final
+ANTHROPIC_API_KEY=true
+OPENAI_API_KEY=true
+HR_MASTER_KEY=true
+args=~/repos/litellm/.venv/bin/python -m litellm.proxy.proxy_cli --config <scratch>/run/finalfo.yaml --port 4035

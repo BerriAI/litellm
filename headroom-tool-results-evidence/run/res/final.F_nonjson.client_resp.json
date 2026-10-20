@@ -1,0 +1,4 @@
+{
+ "status": 502,
+ "body": "{\"error\":{\"message\":\"Headroom compression service returned non-JSON response\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"502\",\"provider_specific_fields\":{\"error\":\"Headroom compression service returned non-JSON response\",\"body\":\"<html>\",\"guardrail_name\":\"headroom\",\"guardrail_mode\":\"pre_call\"}}}"
+}

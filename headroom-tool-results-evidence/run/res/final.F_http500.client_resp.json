@@ -1,0 +1,4 @@
+{
+ "status": 502,
+ "body": "{\"error\":{\"message\":\"Headroom compression service returned an error\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"502\",\"provider_specific_fields\":{\"error\":\"Headroom compression service returned an error\",\"status_code\":500,\"body\":\"{\\\"error\\\":\\\"x\\\"}\",\"guardrail_name\":\"headroom\",\"guardrail_mode\":\"pre_call\"}}}"
+}

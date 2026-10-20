@@ -1,0 +1,61 @@
+{
+ "status": 200,
+ "body": {
+  "id": "chatcmpl-9461254e-129a-4f8c-b8d7-7ef40e7d41c4",
+  "created": 1792480080,
+  "model": "claude-haiku-5-5",
+  "object": "chat.completion",
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "message": {
+     "content": "The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only file in the listing with that owner.",
+     "role": "assistant",
+     "reasoning_content": "",
+     "thinking_blocks": [
+      {
+       "type": "thinking",
+       "thinking": "",
+       "signature": "CAQSrAYKEAgTGAI4AUIIdGhpbmtpbmcSDF/O7euGmG86g0gUfRoMWxvScgQJNV4iTyyAIjDbf5hKXcueaaQ7HaznUIX5acANPalI66vwFXAxZ2weqq39qz/Xk7mLM9KjduRO9/QqyQUkbVWZR3he/04yPqYnzuvpjQbXIjH5J500g9aVdq+MF2GXZ4pu6jgyynqpo9OJ8PdbLVuQuyvcdhqlhZx7c1LFMNPXOhq6y+uc+yVYOuCBRZNzQwde8ZI1aWT3rAmJf08MpXivrD6w+En40NOkP+wnjxxMjp+jAV7hK7nhKIlZSvkM8dLBgoUgZM9lAQABBCq2RfeCbXww5wjXj7dCMv8BL/DXEvfm5rWscYphxeTM8v3MwwyA8DjxC6i57iBwyrjEExnacTJoOREJ7uJiUIYPPFiUBfVAgbj54ZIPyB0RHer7Wb7BrG0n5P5q9es2GU/5Yc329Xok7JdZbZ1HDLNdKp4w8YuFBFdr+XAGDIV9eXyt0q044JzE6bX/5cPVpsYjkpm50V5vLXblxGKSWCScKD8uVuaWUu/HtOD0GFHlbCDDNvxVJ2ZB2WludPzF7GHAwiRm9tq4j1J4wzx6YJXJcx+Vd2vnt+nMfnVzHwM58azoDMkRaoMr//FJc0TWW+gL1EYMnhVWimksLT+f51NSpLv4xBkLOHOnpgXxIWJJfQU+7Pp+9n0FgBMHrfqLUfjUzQp0UFe+SDg1sNLmLI5UyWVdwRXh8xqRm/Yr0Gxp0fWBhwDJ+Rng/DD6xBwWeUCsiasaEDSzeqDiyvrgHI6ppdAVlPmx57L28QuCC0+1xSBTh0KvfM+PJ/U+JKtBzQxQAf7rCbEP3gsyMbXoO8Byk3+2ujrWOkpQdwuFxlPb8hb1E2JDAKOBiV6kuPZ0nEvm3sHToWr+ivNWXaoy3Z0e4Ax9xkjU44CtTaLYYIhAhBUrmD6AQ00CfnYhgR+WftSXJ5Ahwt1GqRTi0XIX4xE/ZrxgDk9ii9nduJLPxfU9WylK5trxoC+FwOgGaSZ2mJKviGD1KM2Kfoh/Cia7EzRvizP3GxZ2L+kMYnwU0vJf1AXkJ1fpvgaUCRgB"
+      }
+     ],
+     "provider_specific_fields": {
+      "citations": null,
+      "thinking_blocks": [
+       {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "CAQSrAYKEAgTGAI4AUIIdGhpbmtpbmcSDF/O7euGmG86g0gUfRoMWxvScgQJNV4iTyyAIjDbf5hKXcueaaQ7HaznUIX5acANPalI66vwFXAxZ2weqq39qz/Xk7mLM9KjduRO9/QqyQUkbVWZR3he/04yPqYnzuvpjQbXIjH5J500g9aVdq+MF2GXZ4pu6jgyynqpo9OJ8PdbLVuQuyvcdhqlhZx7c1LFMNPXOhq6y+uc+yVYOuCBRZNzQwde8ZI1aWT3rAmJf08MpXivrD6w+En40NOkP+wnjxxMjp+jAV7hK7nhKIlZSvkM8dLBgoUgZM9lAQABBCq2RfeCbXww5wjXj7dCMv8BL/DXEvfm5rWscYphxeTM8v3MwwyA8DjxC6i57iBwyrjEExnacTJoOREJ7uJiUIYPPFiUBfVAgbj54ZIPyB0RHer7Wb7BrG0n5P5q9es2GU/5Yc329Xok7JdZbZ1HDLNdKp4w8YuFBFdr+XAGDIV9eXyt0q044JzE6bX/5cPVpsYjkpm50V5vLXblxGKSWCScKD8uVuaWUu/HtOD0GFHlbCDDNvxVJ2ZB2WludPzF7GHAwiRm9tq4j1J4wzx6YJXJcx+Vd2vnt+nMfnVzHwM58azoDMkRaoMr//FJc0TWW+gL1EYMnhVWimksLT+f51NSpLv4xBkLOHOnpgXxIWJJfQU+7Pp+9n0FgBMHrfqLUfjUzQp0UFe+SDg1sNLmLI5UyWVdwRXh8xqRm/Yr0Gxp0fWBhwDJ+Rng/DD6xBwWeUCsiasaEDSzeqDiyvrgHI6ppdAVlPmx57L28QuCC0+1xSBTh0KvfM+PJ/U+JKtBzQxQAf7rCbEP3gsyMbXoO8Byk3+2ujrWOkpQdwuFxlPb8hb1E2JDAKOBiV6kuPZ0nEvm3sHToWr+ivNWXaoy3Z0e4Ax9xkjU44CtTaLYYIhAhBUrmD6AQ00CfnYhgR+WftSXJ5Ahwt1GqRTi0XIX4xE/ZrxgDk9ii9nduJLPxfU9WylK5trxoC+FwOgGaSZ2mJKviGD1KM2Kfoh/Cia7EzRvizP3GxZ2L+kMYnwU0vJf1AXkJ1fpvgaUCRgB"
+       }
+      ]
+     }
+    }
+   }
+  ],
+  "usage": {
+   "completion_tokens": 163,
+   "prompt_tokens": 30742,
+   "total_tokens": 30905,
+   "completion_tokens_details": {
+    "reasoning_tokens": 98,
+    "text_tokens": 65
+   },
+   "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "text_tokens": 30742,
+    "cache_write_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_creation_token_details": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    }
+   },
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "inference_geo": "global",
+   "speed": "standard",
+   "service_tier": "standard"
+  }
+ }
+}

@@ -1,0 +1,4 @@
+{
+ "status": 502,
+ "body": "{\"error\":{\"message\":\"Headroom compression service returned empty message list\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"502\",\"provider_specific_fields\":{\"error\":\"Headroom compression service returned empty message list\",\"body\":\"{\\\"messages\\\": [], \\\"tokens_before\\\": 22818, \\\"tokens_after\\\": 12835, \\\"tokens_saved\\\": 9983, \\\"compression_ratio\\\": 0.5624945218687002, \\\"transforms_applied\\\": [\\\"router:smart_crusher:0.40\\\"], \\\"transforms_summary\\\": {\\\"router:smart_crusher:0.40\\\": 1}, \\\"ccr_hashes\\\": []}\",\"guardrail_name\":\"headroom\",\"guardrail_mode\":\"pre_call\"}}}"
+}

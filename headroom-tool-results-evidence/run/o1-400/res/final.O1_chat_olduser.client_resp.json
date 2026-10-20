@@ -1,0 +1,4 @@
+{
+ "status": 400,
+ "body": "{\"error\":{\"message\":\"litellm.BadRequestError: OpenAIException - Function tools with reasoning_effort are not supported for gpt-6.1-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.\\n\\nLiteLLM: model group 'gpt-6.1-sol' failed with the error above. No fallback was attempted.\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"400\"}}"
+}

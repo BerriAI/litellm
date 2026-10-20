@@ -1,0 +1,18 @@
+N1_msgs proxy-log evidence
+The requested base.log and final.log are stale logs from stopped proxy PIDs 222987 and 228576.
+Current proxy logs are base-keyed.log (PID 231799) and final-572e.log (PID 231130).
+Windows use the recorder tap mtime through the client response artifact mtime, local time.
+
+base: live_log=base-keyed.log, PID=231799
+  N1 window: 2026-10-20T07:12:21.705 to 2026-10-20T07:12:23.713
+  litellm_call_id(s) found in window: none
+  matching lines (limit 80): 0
+  no lines containing the N1 litellm_call_id or headroom were logged in this window
+  N1 client/tap artifacts do not store litellm_call_id or response headers
+
+final: live_log=final-572e.log, PID=231130
+  N1 window: 2026-10-20T07:12:24.986 to 2026-10-20T07:12:26.999
+  litellm_call_id(s) found in window: none
+  matching lines (limit 80): 0
+  no lines containing the N1 litellm_call_id or headroom were logged in this window
+  N1 client/tap artifacts do not store litellm_call_id or response headers

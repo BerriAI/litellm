@@ -1,0 +1,7 @@
+model_list:
+  - {model_name: claude-haiku-5-5, litellm_params: {model: anthropic/claude-haiku-5-5, api_key: os.environ/ANTHROPIC_API_KEY, api_base: "http://127.0.0.1:8791/anthropic"}}
+  - {model_name: gpt-6.1-sol, litellm_params: {model: openai/gpt-6.1-sol, api_key: os.environ/OPENAI_API_KEY, api_base: "http://127.0.0.1:8791/openai/v1"}}
+guardrails:
+  - guardrail_name: headroom
+    litellm_params: {guardrail: headroom, mode: pre_call, default_on: true, api_base: "http://127.0.0.1:8791/hr", unreachable_fallback: fail_open}
+general_settings: {master_key: os.environ/HR_MASTER_KEY}

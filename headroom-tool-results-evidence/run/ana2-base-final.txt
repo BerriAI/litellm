@@ -1,0 +1,242 @@
+== B1_bypass
+ base: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**. It was the only file in the listing with that owner.'
+   usage={'completion_tokens': 153, 'prompt_tokens': 30742, 'total_tokens': 30895, 'completion_tokens_details': {'reasoning_tokens': 87, 'text_tokens': 66}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 30742, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62741] total=63040
+ final: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**.\n\nIt is the only file in the listing with that owner; the other'
+   usage={'completion_tokens': 183, 'prompt_tokens': 30742, 'total_tokens': 30925, 'completion_tokens_details': {'reasoning_tokens': 102, 'text_tokens': 81}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 30742, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62741] total=63040
+  provider rows differing base vs final: [] (n=3/3)
+== C1_chat_cacheprefix
+ base: status=200 answer='The file owned by `zeta-canary-7731` is **`/srv/app/pkg6/mod_263.lock`**, which is **77777 bytes**. It is the only file in `/srv/app` with that owner; every oth'
+   usage={'completion_tokens': 201, 'prompt_tokens': 61481, 'total_tokens': 61682, 'completion_tokens_details': {'reasoning_tokens': 117, 'text_tokens': 84}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 30331, 'cache_write_tokens': 31150, 'cache_creation_tokens': 31150, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 31150, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 31150, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[87, 129, 62918, 129, 62741] total=126004
+ final: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only file in the listing with that owner.'
+   usage={'completion_tokens': 213, 'prompt_tokens': 49516, 'total_tokens': 49729, 'completion_tokens_details': {'reasoning_tokens': 148, 'text_tokens': 65}, 'prompt_tokens_details': {'cached_tokens': 31150, 'text_tokens': 18366, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 31150, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=[('tool', 62643)] hr_stats={'tokens_before': 22818, 'tokens_after': 12835, 'tokens_saved': 9983, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=anthropic rowlens=[87, 129, 62918, 129, 27625] total=90888
+  provider rows differing base vs final: [4] (n=5/5)
+   row4 keysA=['content', 'role'] keysB=['content', 'role']
+== F_close
+ base: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only file in the listing with that owner.'
+   usage={'completion_tokens': 165, 'prompt_tokens': 30742, 'total_tokens': 30907, 'completion_tokens_details': {'reasoning_tokens': 100, 'text_tokens': 65}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 30742, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62741] total=63040
+ final: status=502 answer='{"error":{"message":"Headroom compression service unreachable","type":"internal_server_error","param":null,"code":"502","provider_specific_fields":{"error":"Headroom compression service unreachable","detail":"Server disconnected","guardrail_name":"headroom","guardrail_mode":"pre_call"}}}'
+   usage=None
+   hr_sent=[('tool', 62643)] hr_stats={}
+   provider=None rowlens=None total=None
+== F_drop_row
+ base: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes** in size. It is the only file in the listing with that owner.'
+   usage={'completion_tokens': 187, 'prompt_tokens': 30742, 'total_tokens': 30929, 'completion_tokens_details': {'reasoning_tokens': 120, 'text_tokens': 67}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 30742, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62741] total=63040
+ final: status=502 answer='{"error":{"message":"Headroom compression service returned empty message list","type":"internal_server_error","param":null,"code":"502","provider_specific_fields":{"error":"Headroom compression service returned empty message list","body":"{\\"messages\\": [], \\"tokens_before\\": 22818, \\"tokens_after\\"'
+   usage=None
+   hr_sent=[('tool', 62643)] hr_stats={'tokens_before': 22818, 'tokens_after': 12835, 'tokens_saved': 9983, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=None rowlens=None total=None
+== F_http500
+ base: status=200 answer='The only file in /srv/app owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**.'
+   usage={'completion_tokens': 137, 'prompt_tokens': 30742, 'total_tokens': 30879, 'completion_tokens_details': {'reasoning_tokens': 79, 'text_tokens': 58}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 30742, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62741] total=63040
+ final: status=502 answer='{"error":{"message":"Headroom compression service returned an error","type":"internal_server_error","param":null,"code":"502","provider_specific_fields":{"error":"Headroom compression service returned an error","status_code":500,"body":"{\\"error\\":\\"x\\"}","guardrail_name":"headroom","guardrail_mode"'
+   usage=None
+   hr_sent=[('tool', 62643)] hr_stats={}
+   provider=None rowlens=None total=None
+== F_nomessages
+ base: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only file in the listing with that owner; the other '
+   usage={'completion_tokens': 174, 'prompt_tokens': 30742, 'total_tokens': 30916, 'completion_tokens_details': {'reasoning_tokens': 94, 'text_tokens': 80}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 30742, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62741] total=63040
+ final: status=502 answer='{"error":{"message":"Headroom compression service response missing \'messages\'","type":"internal_server_error","param":null,"code":"502","provider_specific_fields":{"error":"Headroom compression service response missing \'messages\'","body":"{}","guardrail_name":"headroom","guardrail_mode":"pre_call"}}'
+   usage=None
+   hr_sent=[('tool', 62643)] hr_stats={}
+   provider=None rowlens=None total=None
+== F_nonjson
+ base: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only entry in the listing with that owner; all other'
+   usage={'completion_tokens': 161, 'prompt_tokens': 30742, 'total_tokens': 30903, 'completion_tokens_details': {'reasoning_tokens': 83, 'text_tokens': 78}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 30742, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62741] total=63040
+ final: status=502 answer='{"error":{"message":"Headroom compression service returned non-JSON response","type":"internal_server_error","param":null,"code":"502","provider_specific_fields":{"error":"Headroom compression service returned non-JSON response","body":"<html>","guardrail_name":"headroom","guardrail_mode":"pre_call"'
+   usage=None
+   hr_sent=[('tool', 62643)] hr_stats={}
+   provider=None rowlens=None total=None
+== K1_chat
+ base: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only file in the listing with that owner.'
+   usage={'completion_tokens': 163, 'prompt_tokens': 30742, 'total_tokens': 30905, 'completion_tokens_details': {'reasoning_tokens': 98, 'text_tokens': 65}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 30742, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62741] total=63040
+ final: status=200 answer="The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**. It's the only file in the listing with that owner."
+   usage={'completion_tokens': 205, 'prompt_tokens': 18777, 'total_tokens': 18982, 'completion_tokens_details': {'reasoning_tokens': 140, 'text_tokens': 65}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 18777, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=[('tool', 62643)] hr_stats={'tokens_before': 22818, 'tokens_after': 12835, 'tokens_saved': 9983, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=anthropic rowlens=[170, 129, 27625] total=27924
+  provider rows differing base vs final: [2] (n=3/3)
+   row2 keysA=['content', 'role'] keysB=['content', 'role']
+== K1_resp
+ base: status=200 answer='/srv/app/pkg6/mod_263.lock — 77777 bytes'
+   usage={'input_tokens': 22918, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 0, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 22915}, 'output_tokens': 18, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0, 'text_tokens': None}, 'total_tokens': 22936, 'cost': None}
+   hr_sent=None hr_stats={}
+   provider=openai rowlens=[142, 113, 62714] total=62969
+ final: status=200 answer='/srv/app/pkg6/mod_263.lock — 77777 bytes'
+   usage={'input_tokens': 12935, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 12932, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 0}, 'output_tokens': 18, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0, 'text_tokens': None}, 'total_tokens': 12953, 'cost': None}
+   hr_sent=[('tool', 62643)] hr_stats={'tokens_before': 16833, 'tokens_after': 6789, 'tokens_saved': 10044, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=openai rowlens=[142, 113, 27598] total=27853
+  provider rows differing base vs final: [2] (n=3/3)
+   row2 keysA=['call_id', 'output', 'type'] keysB=['call_id', 'output', 'type']
+== L1_chat
+ base: status=200 answer='ANSWER: REQ00417'
+   usage={'completion_tokens': 93, 'prompt_tokens': 23492, 'total_tokens': 23585, 'completion_tokens_details': {'reasoning_tokens': 80, 'text_tokens': 13}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 23492, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[42427] total=42427
+ final: status=200 answer='ANSWER: REQ00417'
+   usage={'completion_tokens': 13, 'prompt_tokens': 23492, 'total_tokens': 23505, 'completion_tokens_details': {'reasoning_tokens': 0, 'text_tokens': 13}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 23492, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[42427] total=42427
+  provider rows differing base vs final: [] (n=1/1)
+== M1_chat
+ base: status=200 answer='The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**. It is the only file in the listing with that owner.'
+   usage={'completion_tokens': 157, 'prompt_tokens': 30758, 'total_tokens': 30915, 'completion_tokens_details': {'reasoning_tokens': 92, 'text_tokens': 65}, 'prompt_tokens_details': {'cached_tokens': 0, 'text_tokens': 2, 'cache_write_tokens': 30756, 'cache_creation_tokens': 30756, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 30756, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 30756, 'cache_read_input_tokens': 0, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62875] total=63174
+ final: status=200 answer='The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only file in the listing with that owner.'
+   usage={'completion_tokens': 141, 'prompt_tokens': 30758, 'total_tokens': 30899, 'completion_tokens_details': {'reasoning_tokens': 77, 'text_tokens': 64}, 'prompt_tokens_details': {'cached_tokens': 30756, 'text_tokens': 2, 'cache_write_tokens': 0, 'cache_creation_tokens': 0, 'cache_creation_token_details': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}}, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 30756, 'inference_geo': 'global', 'speed': 'standard', 'service_tier': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62875] total=63174
+  provider rows differing base vs final: [] (n=3/3)
+== MT1
+ base: status=200 answer='Listed `/srv/app` using the tool: 400 files across `pkg0`–`pkg9`.\n\nThe largest `.py` file is **`/srv/app/pkg9/mod_390.py`**, at **89,877 bytes** (about 87.8 KiB'
+   usage={'input_tokens': 22895, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 0, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 22892}, 'output_tokens': 62, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0, 'text_tokens': None}, 'total_tokens': 22957, 'cost': None}
+   hr_sent=None hr_stats={}
+   provider=openai rowlens=[92, 110, 62713] total=62915
+ final: status=200 answer='Listed `/srv/app` using the tool: **400 files** across `pkg0`–`pkg9`.\n\nThe largest `.py` file is **`/srv/app/pkg9/mod_390.py`**, at **89,877 bytes** (about **87'
+   usage={'input_tokens': 12913, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 12910, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 0}, 'output_tokens': 64, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0, 'text_tokens': None}, 'total_tokens': 12977, 'cost': None}
+   hr_sent=[('tool', 62645)] hr_stats={'tokens_before': 16834, 'tokens_after': 6789, 'tokens_saved': 10045, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=openai rowlens=[92, 110, 27597] total=27799
+  provider rows differing base vs final: [2] (n=3/3)
+   row2 keysA=['call_id', 'output', 'type'] keysB=['call_id', 'output', 'type']
+== MT2
+ base: status=200 answer='Listed `/srv/lib` using the tool: 400 files across `pkg0`–`pkg9`.\n\nThe largest `.ts` file is **`/srv/lib/pkg4/mod_175.ts`**, at **89,923 bytes** (about 87.8 KiB'
+   usage={'input_tokens': 35829, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 12910, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 22916}, 'output_tokens': 62, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0, 'text_tokens': None}, 'total_tokens': 35891, 'cost': None}
+   hr_sent=[('user', 63), ('tool', 62645)] hr_stats={'tokens_before': 16854, 'tokens_after': 6809, 'tokens_saved': 10045, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=openai rowlens=[92, 110, 27597, 205, 96, 110, 62707] total=90917
+ final: status=200 answer='Listed `/srv/lib` using the tool: **400 files** across `pkg0`–`pkg9`.\n\nThe largest `.ts` file is **`/srv/lib/pkg4/mod_175.ts`**, at **89,923 bytes** (about **87'
+   usage={'input_tokens': 25849, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 12910, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 12936}, 'output_tokens': 82, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 16, 'text_tokens': None}, 'total_tokens': 25931, 'cost': None}
+   hr_sent=[('user', 63), ('tool', 62645), ('tool', 62639)] hr_stats={'tokens_before': 33683, 'tokens_after': 13594, 'tokens_saved': 20089, 'transforms_applied': ['router:smart_crusher:0.40', 'router:smart_crusher:0.40']}
+   provider=openai rowlens=[92, 110, 27597, 213, 96, 110, 27591] total=55809
+  provider rows differing base vs final: [3, 6] (n=7/7)
+   row3 keysA=['content', 'role'] keysB=['content', 'role']
+   row6 keysA=['call_id', 'output', 'type'] keysB=['call_id', 'output', 'type']
+== MT3
+ base: status=200 answer='Listed `/srv/web` using the tool: 400 files across `pkg0`–`pkg9`.\n\nThe largest `.md` file is **`/srv/web/pkg1/mod_74.md`**, at **88,342 bytes** (about 86.3 KiB)'
+   usage={'input_tokens': 48762, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 25844, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 22915}, 'output_tokens': 78, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 14, 'text_tokens': None}, 'total_tokens': 48840, 'cost': None}
+   hr_sent=[('user', 63), ('tool', 62645), ('user', 67), ('tool', 62639)] hr_stats={'tokens_before': 33704, 'tokens_after': 13615, 'tokens_saved': 20089, 'transforms_applied': ['router:smart_crusher:0.40', 'router:smart_crusher:0.40']}
+   provider=openai rowlens=[92, 110, 27597, 205, 96, 110, 27591, 205, 96, 110, 62706] total=118918
+ final: status=200 answer='Listed `/srv/web` using the tool: **400 files** across `pkg0`–`pkg9`.\n\nThe largest `.md` file is **`/srv/web/pkg1/mod_74.md`**, at **88,342 bytes** (about **86.'
+   usage={'input_tokens': 38784, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 25846, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 12935}, 'output_tokens': 82, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 16, 'text_tokens': None}, 'total_tokens': 38866, 'cost': None}
+   hr_sent=[('user', 63), ('tool', 62645), ('user', 67), ('tool', 62639), ('tool', 62638)] hr_stats={'tokens_before': 50533, 'tokens_after': 20399, 'tokens_saved': 30134, 'transforms_applied': ['router:smart_crusher:0.40', 'router:smart_crusher:0.40', 'router:smart_crusher:0.40']}
+   provider=openai rowlens=[92, 110, 27597, 213, 96, 110, 27591, 213, 96, 110, 27590] total=83818
+  provider rows differing base vs final: [3, 7, 10] (n=11/11)
+   row3 keysA=['content', 'role'] keysB=['content', 'role']
+   row7 keysA=['content', 'role'] keysB=['content', 'role']
+   row10 keysA=['call_id', 'output', 'type'] keysB=['call_id', 'output', 'type']
+== N1_msgs
+ base: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It was the only entry in the listing with that owner.'
+   usage={'input_tokens': 2, 'cache_creation_input_tokens': 30746, 'cache_read_input_tokens': 0, 'cache_creation': {'ephemeral_5m_input_tokens': 30746, 'ephemeral_1h_input_tokens': 0}, 'output_tokens': 129, 'output_tokens_details': {'thinking_tokens': 63}, 'service_tier': 'standard', 'inference_geo': 'global', 'speed': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[142, 171, 62782] total=63095
+ final: status=200 answer='The only file in /srv/app owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**.'
+   usage={'input_tokens': 2, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 30746, 'cache_creation': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}, 'output_tokens': 137, 'output_tokens_details': {'thinking_tokens': 79}, 'service_tier': 'standard', 'inference_geo': 'global', 'speed': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[142, 171, 62782] total=63095
+  provider rows differing base vs final: [] (n=3/3)
+== N2_msgs_multipart
+ base: status=200 answer='The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only entry in the listing with that owner.'
+   usage={'input_tokens': 2, 'cache_creation_input_tokens': 30762, 'cache_read_input_tokens': 0, 'cache_creation': {'ephemeral_5m_input_tokens': 30762, 'ephemeral_1h_input_tokens': 0}, 'output_tokens': 132, 'output_tokens_details': {'thinking_tokens': 67}, 'service_tier': 'standard', 'inference_geo': 'global', 'speed': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[142, 171, 62876] total=63189
+ final: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**. It was the only file in the listing with that owner.'
+   usage={'input_tokens': 2, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 30762, 'cache_creation': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}, 'output_tokens': 131, 'output_tokens_details': {'thinking_tokens': 65}, 'service_tier': 'standard', 'inference_geo': 'global', 'speed': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[142, 171, 62876] total=63189
+  provider rows differing base vs final: [] (n=3/3)
+== N3_msgs_iserror_true
+ base: status=200 answer='The file is **/srv/app/pkg6/mod_263.lock**, and it is **77,777 bytes**.\n\nThe list'
+   usage={'input_tokens': 30787, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'cache_creation': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}, 'output_tokens': 300, 'output_tokens_details': {'thinking_tokens': 260}, 'service_tier': 'standard', 'inference_geo': 'global', 'speed': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[142, 171, 62849] total=63162
+ final: status=200 answer='The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**.\n\nThe listing reported a permission-denied error on /srv/app/pkg'
+   usage={'input_tokens': 18419, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'cache_creation': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}, 'output_tokens': 300, 'output_tokens_details': {'thinking_tokens': 210}, 'service_tier': 'standard', 'inference_geo': 'global', 'speed': 'standard'}
+   hr_sent=[('tool', 62732)] hr_stats={'tokens_before': 22837, 'tokens_after': 12852, 'tokens_saved': 9985, 'transforms_applied': ['router:mixed:0.40']}
+   provider=anthropic rowlens=[170, 171, 27330] total=27671
+  provider rows differing base vs final: [0, 2] (n=3/3)
+   row0 keysA=['content', 'role'] keysB=['content', 'role']
+   row2 keysA=['content', 'role'] keysB=['content', 'role']
+== N4_msgs_iserror_false_block
+ base: status=200 answer='The file owned by `zeta-canary-7731` is **/srv/app/pkg6/mod_263.lock**, which is **77,777 bytes**. It is the only entry in the listing with that owner.'
+   usage={'input_tokens': 2, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 30746, 'cache_creation': {'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 0}, 'output_tokens': 185, 'output_tokens_details': {'thinking_tokens': 118}, 'service_tier': 'standard', 'inference_geo': 'global', 'speed': 'standard'}
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[142, 171, 62829] total=63142
+ final: status=200 answer='The file owned by zeta-canary-7731 is **/srv/app/pkg6/mod_263.lock**, which is **77777 bytes**. It is the only entry in the listing with that owner.'
+   usage={'input_tokens': 2, 'cache_creation_input_tokens': 18781, 'cache_read_input_tokens': 0, 'cache_creation': {'ephemeral_5m_input_tokens': 18781, 'ephemeral_1h_input_tokens': 0}, 'output_tokens': 144, 'output_tokens_details': {'thinking_tokens': 79}, 'service_tier': 'standard', 'inference_geo': 'global', 'speed': 'standard'}
+   hr_sent=[('tool', 62643)] hr_stats={'tokens_before': 22819, 'tokens_after': 12836, 'tokens_saved': 9983, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=anthropic rowlens=[170, 171, 27713] total=28054
+  provider rows differing base vs final: [0, 2] (n=3/3)
+   row0 keysA=['content', 'role'] keysB=['content', 'role']
+   row2 keysA=['content', 'role'] keysB=['content', 'role']
+== O1_chat_olduser
+ base: status=400 answer='{"error":{"message":"litellm.BadRequestError: OpenAIException - Function tools with reasoning_effort are not supported for gpt-6.1-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to \'none\'.\\n\\nLiteLLM: model group \'gpt-6.1-sol\' failed with the error abov'
+   usage=None
+   hr_sent=[('user', 42268)] hr_stats={'tokens_before': 10424, 'tokens_after': 143, 'tokens_saved': 10281, 'transforms_applied': ['router:log:0.01']}
+   provider=openai rowlens=[58, 577, 49, 142, 156, 62704] total=63686
+ final: status=400 answer='{"error":{"message":"litellm.BadRequestError: OpenAIException - Function tools with reasoning_effort are not supported for gpt-6.1-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to \'none\'.\\n\\nLiteLLM: model group \'gpt-6.1-sol\' failed with the error abov'
+   usage=None
+   hr_sent=[('user', 42268), ('tool', 62643)] hr_stats={'tokens_before': 27254, 'tokens_after': 6929, 'tokens_saved': 20325, 'transforms_applied': ['router:log:0.01', 'router:smart_crusher:0.40']}
+   provider=openai rowlens=[58, 577, 49, 142, 156, 27588] total=28570
+  provider rows differing base vs final: [5] (n=6/6)
+   row5 keysA=['content', 'role', 'tool_call_id'] keysB=['content', 'role', 'tool_call_id']
+== R2_resp_block
+ base: status=200 answer='/srv/app/pkg6/mod_263.lock — 77777 bytes'
+   usage={'input_tokens': 22918, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 22915, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 0}, 'output_tokens': 18, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0, 'text_tokens': None}, 'total_tokens': 22936, 'cost': None}
+   hr_sent=None hr_stats={}
+   provider=openai rowlens=[142, 112, 62747] total=63001
+ final: status=200 answer='/srv/app/pkg6/mod_263.lock — 77777 bytes'
+   usage={'input_tokens': 12935, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 12932, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 0}, 'output_tokens': 18, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0, 'text_tokens': None}, 'total_tokens': 12953, 'cost': None}
+   hr_sent=[('tool', 62643)] hr_stats={'tokens_before': 16833, 'tokens_after': 6789, 'tokens_saved': 10044, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=openai rowlens=[142, 112, 27631] total=27885
+  provider rows differing base vs final: [2] (n=3/3)
+   row2 keysA=['call_id', 'output', 'type'] keysB=['call_id', 'output', 'type']
+== R3_resp_multipart
+ base: status=200 answer='/srv/app/pkg6/mod_263.lock — 77777 bytes'
+   usage={'input_tokens': 22926, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 22923, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 0}, 'output_tokens': 18, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0, 'text_tokens': None}, 'total_tokens': 22944, 'cost': None}
+   hr_sent=None hr_stats={}
+   provider=openai rowlens=[142, 112, 62819] total=63073
+ final: status=200 answer='`/srv/app/pkg6/mod_263.lock` — 77777 bytes.'
+   usage={'input_tokens': 22926, 'input_tokens_details': {'audio_tokens': None, 'cached_tokens': 22923, 'cached_tokens_details': None, 'image_tokens': None, 'text_tokens': None, 'video_tokens': None, 'cache_write_tokens': 0}, 'output_tokens': 21, 'output_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0, 'text_tokens': None}, 'total_tokens': 22947, 'cost': None}
+   hr_sent=None hr_stats={}
+   provider=openai rowlens=[142, 112, 62819] total=63073
+  provider rows differing base vs final: [] (n=3/3)
+== S1_stream
+ base: status=200 answer='data: {"id":"chatcmpl-0093e882-798e-44f1-9629-cac0499b57af","created":1792480403,"model":"claude-haiku-5-5","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"","thinking_blocks":[{"type":"thinking","thinking":"","signature":"CAQSgwYKEAgTGAI4AUIIdGhpbmtpbmcSDF77vjk5'
+   usage=None
+   hr_sent=None hr_stats={}
+   provider=anthropic rowlens=[170, 129, 62741] total=63040
+ final: status=200 answer='data: {"id":"chatcmpl-83a01cc6-72c5-4b21-9b6b-fa3d34665c07","created":1792480410,"model":"claude-haiku-5-5","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"","thinking_blocks":[{"type":"thinking","thinking":"","signature":"CAQSjQYKEAgTGAI4AUIIdGhpbmtpbmcSDOfofsYL'
+   usage=None
+   hr_sent=[('tool', 62643)] hr_stats={'tokens_before': 22818, 'tokens_after': 12835, 'tokens_saved': 9983, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=anthropic rowlens=[170, 129, 27625] total=27924
+  provider rows differing base vs final: [2] (n=3/3)
+   row2 keysA=['content', 'role'] keysB=['content', 'role']
+== S2_stream_resp
+ base: status=200 answer='data: {"type":"response.created","response":{"id":"resp_fTH9R2DPJAsosHcGs9xkZrEO_5hKkUQzM6lV1XWPf39aDzRSiYIoqKZw2FT4o5d3v0ZNADK9BdJsmW9IeqMbaaxT74qiHLxWu1E5Dzr_gO9uF-v50037H2XL3k9Nv_6VLdPKsLyCGIh9qo-UvQiu_3Of0vPxTt1zjhUCvfSXdlg2QU4BisZhq2_0Jt3OOvezQvGIKl7fX7I2emeT7CswDhecUQnJeYy7iStOzAQerZav3ibn1qEz'
+   usage=None
+   hr_sent=None hr_stats={}
+   provider=openai rowlens=[142, 112, 62747] total=63001
+ final: status=200 answer='data: {"type":"response.created","response":{"id":"resp_u-v1rV4E-yRiGJcrz9txokcnLU_OWQWsi2wW7Yy1FXREJFZZ70RT2KwozUNhaQCjiyLCCsqi_o-hXOEjE348WBmGj6FYBxwfKBOH1OWIpI194Wczgslm3Nj7NaAgmGUykYr5G3kXdJXGDyzEZ5vuhKuRrJ28l4LEUNj6ykLS13jaKF9cSYwxi7mB0APZ_gN24o0BgWtsf0-Bob4nn-BvcD_LZvOmgeJn-TvzbF5ZYFFq0VPLgNlT'
+   usage=None
+   hr_sent=[('tool', 62643)] hr_stats={'tokens_before': 16833, 'tokens_after': 6789, 'tokens_saved': 10044, 'transforms_applied': ['router:smart_crusher:0.40']}
+   provider=openai rowlens=[142, 112, 27631] total=27885
+  provider rows differing base vs final: [2] (n=3/3)
+   row2 keysA=['call_id', 'output', 'type'] keysB=['call_id', 'output', 'type']

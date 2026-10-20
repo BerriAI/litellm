@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "body": {
+  "model": "claude-haiku-5-5",
+  "id": "msg_011CgD5KkJrMfomHKxZVXhNG",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS3AkKEAgTGAI4AUIIdGhpbmtpbmcSDGfPbFJIeyU+E6A2hhoMyiltR+HbxSJCcIXGIjAZVLaYsXOI/TROd8dlE/xhDk3ZXxjDUfD6yAHrhprQwDr/qCeB+cJuiItx7AgdUK8q+QjPKU7M36Z81wiGryRmCPYEMCBbDd56NLLkATD9mhkAxVp9vXjBeW+iI3WKdJCfvu3I3aV6+Nktr8d1hD5Ox9LyiC3bqIim+k2e47xzqJOt3v3Kv2cfuPtQ349zdWg9PquG22C/09GBe3NP11IqSHNWiPmPg7QXs4+vHIqsIO7DALRPCl2osyB8LdaOpiONR/JYfSHYNIuF0B5By/eEbbJQ9hSMsBt6ij8L37ewHfiiBZreBNtCYqZpgzYb6VTACy30L2M4B1luuFpUGsz4WSrbr7muxjjS1qy+I0e3HF5Hbp2F1osyWdhqFnysMrXQxOSzLLASbkEUFtks+1jd14v+2pRnvGI83wlvL+ggY6h+a92BrsL0hsorTJhUZzfwPsaPc2swd8xRO2EOaXqW616SXiJ/hiTV5FOs3ms1m2HF8ZnZkCrMlv6KBMkbxSnqjvDc1Kaf+HOGX6L84/DdNGNmYbMgwVMLOTQEV174zCuMiCK/i9KxheLCe3Xmqvp4jBbVYu0Uo41JlGyvYgOJ4X5DPJXyphfcpGSVCUSufW2IAHKXtDywGZT2VwvQLGqLntvcmLNFuYnvJJN+x1iAye5PzEymEP7B4HbVI1zKz9eAvZJYoRa9WOOteVPslPltKdwVftcoRR4ifUofZTnl1csdDR96kG6AM42ZHfomyszBoceFvBTaC3wefT1Xs53eRKpAw5EFiGYgzHOjBSWD+lvOXYkUombXhCqjoQuq/6uM2B2SM8n5Se5R5wwzIg/Ha9mFu+ULffVlKekF9PAErL9+JHozav2NhmjmhzX0c3rbHwBGxAuwwY/EKE6XTdpLOSb3CYOK+V6tzPiJfL+mqlNaL/2uGBlc6AdczaE5DV9HK70J2A/MV+zEGC/lWZMfiAn13B7OGmr0MU9Zz0wxD50q6B4hNPBDataODeguPpPJTzgtd9S4n/QNvj1UfVHlhjxNTJnxJ44GQ2web4zCirymxvalidZlp9wPk8WwUF8UTxcVvCmim0zRi4sGsNZfiYGG8sB0jsDCshKRt5mGYmMjwEt4HagHROlTPqQClRBauJ7PLz4OUnjlWRPZ45igmUA9SXjvwmUQEs1Pd1DsrduUVZSPUJIXLQ7bcbwF5plkpRW5WlygXJfknIOxqb0LLuWfyF8mk/4lp5AtkfvOATJq7C5aeSj2K0UD6NTJgGWfcKwGEbECqxAWPhg1OdL0QRBtO3wDykhJ2vBqXa3dqpSC9FMja2S7pMo91gk4s33bITlqTQ4BEQ32R/ItSkVNaYKdesVgB681+TxSmxzWqvY94/GEqVUkPavZDhEQFGg+4IvRR0YxdfkDg7ydWcRnkN4luC23gBsLeBosBJNfsBYc4bPOMzJlVDxfw6OzAgi6xS0qWMsZhu9TuKfiasc3BdgEMwI7HcTk8J3/kZWsJAkNEwRFnkvmdO8khTBDqsig78Vz+W7Ock8+mqdnK+x2kvvreOW8kWV4YsdfFV5yx2pj7KhK//SwznwRHsSm9XFiOj7+Ct/E3yF3VxgB"
+   },
+   {
+    "type": "text",
+    "text": "The file is **/srv/app/pkg6/mod_263.lock**, and it is **77,777 bytes**.\n\nThe list"
+   }
+  ],
+  "container": null,
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 30787,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 300,
+   "output_tokens_details": {
+    "thinking_tokens": 260
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}
