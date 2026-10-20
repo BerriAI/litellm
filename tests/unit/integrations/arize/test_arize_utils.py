@@ -1037,8 +1037,8 @@ _PRICE_LOOKUP_FAILED: Final = {"error_str": "This model isn't mapped yet. model=
         pytest.param({"response_cost": "not-a-number"}, None, id="malformed-cost"),
         pytest.param(
             {"response_cost": 0.002, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED},
-            0.002,
-            id="unpriced-with-billed-guardrail-fee",
+            None,
+            id="unpriced-with-guardrail-fee",
         ),
     ],
 )

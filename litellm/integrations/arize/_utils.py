@@ -892,9 +892,9 @@ def _set_response_cost_attr(span: "Span", standard_logging_payload: Mapping[str,
     single total in `StandardLoggingPayload.response_cost`, so we cannot
     split it into prompt/completion. We also keep the legacy
     `llm.response.cost` key for back-compat with any consumer querying it.
-    When the price lookup failed and nothing else was billed, `response_cost`
-    is a placeholder 0.0 and no cost is emitted, so the backend does not
-    record the call as free. A billed guardrail fee is still emitted.
+    When the price lookup failed, the call's total is unknown, so no cost is
+    emitted and the backend does not record the call as free. A guardrail fee
+    in `response_cost` stays on the guardrail span, as in OTel v2.
     """
     if not isinstance(standard_logging_payload, dict):
         return
@@ -903,13 +903,11 @@ def _set_response_cost_attr(span: "Span", standard_logging_payload: Mapping[str,
         standard_logging_payload.get("response_cost_failure_debug_info") is not None
         and standard_logging_payload.get("cache_hit") is not True
     )
-    if not isinstance(cost, (int, float, str)):
+    if not isinstance(cost, (int, float, str)) or cost_lookup_failed:
         return
     try:
         cost_value: Final = float(cost)
     except ValueError:
-        return
-    if cost_lookup_failed and cost_value == 0:
         return
     safe_set_attribute(span, "llm.cost.total", cost_value)
     safe_set_attribute(span, "llm.response.cost", cost_value)
