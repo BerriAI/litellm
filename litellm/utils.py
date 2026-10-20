@@ -4033,6 +4033,9 @@ def _get_non_default_params(passed_params: dict, default_params: dict, additiona
     return non_default_params
 
 
+_OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS: Final = frozenset(("languages", "keywords", "stream"))
+
+
 def get_optional_params_transcription(
     model: str,
     custom_llm_provider: str,
@@ -4060,16 +4063,13 @@ def get_optional_params_transcription(
     for k, v in special_params.items():
         passed_params[k] = v
 
-    default_params: Final = {
-        "language": None,
-        "languages": None,
-        "keywords": None,
-        "prompt": None,
-        "response_format": None,
-        "temperature": None,  # openai defaults this to 0
-        "timestamp_granularities": None,
-        "stream": None,
-    }
+    sends_through_openai_sdk: Final = custom_llm_provider in ("openai", "azure")
+    transcription_params: Final = (
+        OPENAI_TRANSCRIPTION_PARAMS
+        if sends_through_openai_sdk
+        else [param for param in OPENAI_TRANSCRIPTION_PARAMS if param not in _OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS]
+    )
+    default_params: Final = {param: None for param in (*transcription_params, "prompt", "temperature")}
 
     non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
     optional_params = {}
@@ -4122,7 +4122,7 @@ def get_optional_params_transcription(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
-        openai_params=OPENAI_TRANSCRIPTION_PARAMS,
+        openai_params=transcription_params,
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
     extra_body: Final = optional_params.get("extra_body")
