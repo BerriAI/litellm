@@ -9,7 +9,7 @@ import litellm
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
-from litellm.types.token_count import TokenCountSourceFields, TokenCountTokenizer
+from litellm.types.token_count import TokenCountProvider, TokenCountSourceFields, TokenCountTokenizer
 from litellm.types.utils import TokenCountResponse
 
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
@@ -46,6 +46,7 @@ def _with_hint(message: str, hint: str) -> str:
 class TokenCountModel:
     model: str
     region: str | None
+    litellm_provider: TokenCountProvider | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,9 +101,27 @@ def _non_blank(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _count_provider(value: object) -> TokenCountProvider | None:
+    match value:
+        case "bedrock":
+            return "bedrock"
+        case "bedrock_mantle":
+            return "bedrock_mantle"
+        case _:
+            return None
+
+
 def _count_model(value: Mapping[str, object]) -> TokenCountModel | None:
     model: Final = _non_blank(value.get("model"))
-    return None if model is None else TokenCountModel(model=model, region=_non_blank(value.get("region")))
+    return (
+        None
+        if model is None
+        else TokenCountModel(
+            model=model,
+            region=_non_blank(value.get("region")),
+            litellm_provider=_count_provider(value.get("litellm_provider")),
+        )
+    )
 
 
 def _geography(region: str) -> str:
@@ -112,7 +131,10 @@ def _geography(region: str) -> str:
 def _within_deployment_geography(
     count_model: TokenCountModel | None, deployment_region: Callable[[], str]
 ) -> TokenCountModel | None:
-    if count_model is None or count_model.region is None or count_model.model.startswith("global."):
+    if count_model is None or count_model.region is None:
+        return count_model
+    model: Final = count_model.model.removeprefix("bedrock/").removeprefix("bedrock_mantle/")
+    if model.startswith("global."):
         return count_model
     if _geography(deployment_region()) == _geography(count_model.region):
         return count_model
