@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from urllib.parse import unquote
@@ -6,6 +6,7 @@ from urllib.parse import unquote
 import httpx
 from openai.types.responses import EasyInputMessageParam, ResponseInputContentParam, ResponseInputItemParam
 
+from litellm.llms.base_llm.base_utils import hoisted_instruction_indices
 from litellm.llms.fireworks_ai.common_utils import (
     FIREWORKS_FORWARD_USER_ID_PARAM,
     get_fireworks_forwarded_user_id,
@@ -42,9 +43,6 @@ def _forwarded_user_params(litellm_params: GenericLiteLLMParams) -> Mapping[str,
             "litellm_metadata": extras.get("litellm_metadata"),
         }
     )
-
-
-_INSTRUCTION_ROLES: Final = frozenset({"system", "developer"})
 
 
 def _role(item: ResponseInputItemParam) -> str | None:
@@ -86,28 +84,6 @@ def _text_only_content(item: ResponseInputItemParam) -> str | None:
             return None
 
 
-def _leading_instruction_block_length(roles: Sequence[str | None]) -> int:
-    return next((index for index, role in enumerate(roles) if role not in _INSTRUCTION_ROLES), len(roles))
-
-
-def _closing_instruction_block_start(roles: Sequence[str | None], leading_length: int) -> int:
-    last_conversation_index: Final = next(
-        (index for index in range(len(roles) - 1, leading_length - 1, -1) if roles[index] not in _INSTRUCTION_ROLES),
-        None,
-    )
-    if last_conversation_index is None or roles[last_conversation_index] != "assistant":
-        return len(roles)
-    return last_conversation_index + 1
-
-
-def _hoisted_indices(roles: Sequence[str | None]) -> tuple[int, ...]:
-    leading_length: Final = _leading_instruction_block_length(roles)
-    closing_start: Final = _closing_instruction_block_start(roles, leading_length)
-    return tuple(
-        index for index, role in enumerate(roles[:closing_start]) if index < leading_length or role == "developer"
-    )
-
-
 def _with_instruction_items_folded(
     input: str | ResponseInputParam, instructions: str | None
 ) -> tuple[str | None, str | ResponseInputParam]:
@@ -117,7 +93,7 @@ def _with_instruction_items_folded(
     folded: Final = MappingProxyType(
         {
             index: text
-            for index in _hoisted_indices(tuple(map(_role, items)))
+            for index in hoisted_instruction_indices(tuple(map(_role, items)))
             if (text := _text_only_content(items[index])) is not None
         }
     )

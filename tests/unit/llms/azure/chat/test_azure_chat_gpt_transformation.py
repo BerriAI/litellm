@@ -783,3 +783,24 @@ def test_responses_api_version_leaves_the_chat_route_and_body_untouched(respx_mo
     assert request.url.params["api-version"] == "2024-12-01-preview"
     assert json.loads(request.content) == {"model": "gpt-5.4-nano", "messages": messages}
     assert response.choices[0].message.content == "Hello"
+
+
+def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize("config", [AzureOpenAIConfig(), AzureOpenAIGPT5Config()])
+def test_azure_keeps_a_later_developer_message_in_place_as_system(config):
+    messages = config.translate_developer_role_to_system_role(
+        messages=_developer_message_after_a_user_turn(),
+        custom_llm_provider="azure",
+        api_base="https://example-resource.openai.azure.com",
+    )
+    assert [message["role"] for message in messages] == ["system", "user", "assistant", "system", "user"]
+    assert messages[3]["content"] == "Answer with exactly one word."

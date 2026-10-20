@@ -2358,3 +2358,19 @@ def test_global_disable_flag_with_transform_messages_helper(
     )
 
     assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": content}]
+
+
+def test_translate_developer_role_hoists_a_later_developer_message_into_one_leading_system_message():
+    messages = FireworksAIConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are Codex"},
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        custom_llm_provider="fireworks_ai",
+        api_base=None,
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user", "user"]
+    assert messages[0]["content"] == "You are Codex\n\nAnswer with exactly one word."

@@ -1793,3 +1793,34 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         )
 
         assert request["tools"][0] is tool
+
+
+def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("config", "custom_llm_provider", "api_base", "expected_roles"),
+    [
+        (OpenAIGPTConfig(), "openai", "https://api.openai.com/v1", ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPT5Config(), "openai", "https://api.openai.com/v1", ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "openai", "http://vllm.internal:8000/v1", ["system", "user", "assistant", "user"]),
+        (OpenAIGPTConfig(), "groq", None, ["system", "user", "assistant", "user"]),
+    ],
+)
+def test_translate_developer_role_hoists_a_later_developer_message_only_off_openai(
+    config, custom_llm_provider, api_base, expected_roles
+):
+    messages = config.translate_developer_role_to_system_role(
+        messages=_developer_message_after_a_user_turn(),
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+    )
+    assert [message["role"] for message in messages] == expected_roles
+    assert "Answer with exactly one word." in [message["content"] for message in messages if message["role"] == "system"][-1]

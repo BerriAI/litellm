@@ -24,6 +24,7 @@ from litellm.llms.openai.openai import (
     AsyncCursorPage,
     MessageData,
     OpenAIChatCompletion,
+    OpenAIConfig,
     OpenAIMessage as Message,
     Run,
     SyncCursorPage,
@@ -2010,3 +2011,29 @@ async def test_chat_completion_sends_the_caller_params_extra_body_and_extra_head
     assert json.loads(sent.content) == {**_WIRE_REQUEST, "vendor_flag": True}
     assert sent.headers["x-caller"] == "unit"
     assert sent.headers["authorization"] == "Bearer sk-test"
+
+
+def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "api_base", "expected_roles"),
+    [
+        ("openai", "https://api.openai.com/v1", ["system", "user", "assistant", "system", "user"]),
+        ("azure_ai", "https://example.services.ai.azure.com/models", ["system", "user", "assistant", "user"]),
+    ],
+)
+def test_openai_config_hoists_a_later_developer_message_only_off_openai(custom_llm_provider, api_base, expected_roles):
+    messages = OpenAIConfig().translate_developer_role_to_system_role(
+        messages=_developer_message_after_a_user_turn(),
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+    )
+    assert [message["role"] for message in messages] == expected_roles

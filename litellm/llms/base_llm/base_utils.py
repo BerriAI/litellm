@@ -9,14 +9,22 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, TypeAlias
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs lands in typing only on 3.13
 
 from litellm._logging import verbose_logger
+from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionCachedContent,
+    ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
+    ChatCompletionToolCallChunk,
+)
 from litellm.types.utils import (
     CountContextManagement,
     Message,
@@ -456,7 +464,7 @@ def type_to_response_format_param(
 
 
 def map_developer_role_to_system_role(
-    messages: list[AllMessageValues],
+    messages: Sequence[AllMessageValues],
 ) -> list[AllMessageValues]:
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
@@ -471,3 +479,154 @@ def map_developer_role_to_system_role(
         else:
             new_messages.append(m)
     return new_messages
+
+
+SystemMessageContent: TypeAlias = str | list[object]
+
+_system_content_adapter: Final = TypeAdapter[SystemMessageContent | None](SystemMessageContent | None)
+
+
+def _system_content(message: ChatCompletionSystemMessage) -> SystemMessageContent:
+    if "content" not in message:
+        return ""
+    content: Final = _system_content_adapter.validate_python(message["content"])
+    return "" if content is None else content
+
+
+def _message_cache_control(message: ChatCompletionSystemMessage) -> ChatCompletionCachedContent | None:
+    if "cache_control" not in message:
+        return None
+    return message["cache_control"]
+
+
+def _with_message_cache_control(
+    blocks: Sequence[object], cache_control: ChatCompletionCachedContent | None
+) -> list[object]:  # mutable-ok: content block lists are the wire format callers isinstance-check
+    last: Final = as_str_mapping(blocks[-1]) if blocks else None
+    if last is None or cache_control is None or "cache_control" in last:
+        return [*blocks]
+    return [*blocks[:-1], {**last, "cache_control": cache_control}]
+
+
+def _as_system_message(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "developer":
+        return message
+    translated: Final[ChatCompletionSystemMessage] = {**message, "role": "system"}
+    return translated
+
+
+def _text_blocks(
+    message: ChatCompletionSystemMessage,
+) -> list[object]:  # mutable-ok: content block lists are the wire format callers isinstance-check
+    content: Final = _system_content(message)
+    cache_control: Final = _message_cache_control(message)
+    if not isinstance(content, str):
+        return _with_message_cache_control(content, cache_control)
+    if not content:
+        return []
+    if cache_control:
+        cached_block: Final[ChatCompletionTextObject] = {
+            "type": "text",
+            "text": content,
+            "cache_control": cache_control,
+        }
+        return [cached_block]
+    text_block: Final[ChatCompletionTextObject] = {"type": "text", "text": content}
+    return [text_block]
+
+
+def _plain_text(message: ChatCompletionSystemMessage) -> str | None:
+    content: Final = _system_content(message)
+    if (
+        not isinstance(content, str)
+        or _message_cache_control(message)
+        or content.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
+    ):
+        return None
+    return content
+
+
+def _is_system_message(
+    message: AllMessageValues,
+) -> TypeIs[ChatCompletionSystemMessage]:  # guard-ok: the role literal picks the TypedDict member
+    return message["role"] == "system"
+
+
+def _merged_system_content(run: Sequence[ChatCompletionSystemMessage]) -> SystemMessageContent:
+    texts: Final = tuple(_plain_text(message) for message in run)
+    if all(text is not None for text in texts):
+        return "\n\n".join(text for text in texts if text)
+    return list(itertools.chain.from_iterable(map(_text_blocks, run)))
+
+
+def _merged_system_run(run: Sequence[ChatCompletionSystemMessage]) -> ChatCompletionSystemMessage:
+    if len(run) == 1:
+        return run[0]
+    content: Final = _merged_system_content(run)
+    named: Final = next((message for message in reversed(run) if "name" in message), None)
+    if named is None:
+        merged: Final[ChatCompletionSystemMessage] = {"role": "system", "content": content}
+        return merged
+    with_name: Final[ChatCompletionSystemMessage] = {"role": "system", "content": content, "name": named["name"]}
+    return with_name
+
+
+def _merged_system_runs(messages: Sequence[AllMessageValues]) -> Iterator[AllMessageValues]:
+    for is_system, run in itertools.groupby(messages, key=_is_system_message):
+        if is_system:
+            yield _merged_system_run(tuple(message for message in run if _is_system_message(message)))
+        else:
+            yield from run
+
+
+_INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
+
+
+def _leading_instruction_block_length(roles: Sequence[str | None]) -> int:
+    return next((index for index, role in enumerate(roles) if role not in _INSTRUCTION_ROLES), len(roles))
+
+
+def _closing_instruction_block_start(roles: Sequence[str | None], leading_length: int) -> int:
+    last_conversation_index: Final = next(
+        (index for index in range(len(roles) - 1, leading_length - 1, -1) if roles[index] not in _INSTRUCTION_ROLES),
+        None,
+    )
+    if last_conversation_index is None or roles[last_conversation_index] != "assistant":
+        return len(roles)
+    return last_conversation_index + 1
+
+
+def hoisted_instruction_indices(roles: Sequence[str | None]) -> tuple[int, ...]:
+    """
+    Indices of the leading instruction block plus every developer item after it, except
+    a developer block that closes the conversation right after an assistant turn, which
+    stays in place so the request does not end on the assistant's turn. Items without a
+    role (tool calls and their outputs) count as conversation.
+    """
+    leading_length: Final = _leading_instruction_block_length(roles)
+    closing_start: Final = _closing_instruction_block_start(roles, leading_length)
+    moved: Final = tuple(index for index in range(leading_length, closing_start) if roles[index] == "developer")
+    return (*range(leading_length), *moved)
+
+
+def _move_later_developer_messages_up(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    hoisted: Final = hoisted_instruction_indices(tuple(message["role"] for message in messages))
+    hoisted_set: Final = frozenset(hoisted)
+    rest: Final = (index for index in range(len(messages)) if index not in hoisted_set)
+    return tuple(messages[index] for index in (*hoisted, *rest))
+
+
+def hoist_developer_messages_into_leading_system_message(
+    messages: Sequence[AllMessageValues],
+) -> Sequence[AllMessageValues]:
+    """
+    Translate `developer` role to `system` role for OpenAI-compatible backends whose
+    chat template allows a single system message and only at the start: developer
+    messages that arrive after the first user turn move into the leading system
+    block, except a developer message that closes the conversation right after an
+    assistant turn, which stays in place so the request does not end on the
+    assistant's turn. Each run of consecutive system messages is then folded into
+    one message in a single pass.
+    """
+    translated: Final = tuple(map(_as_system_message, _move_later_developer_messages_up(messages)))
+    return tuple(_merged_system_runs(translated))
