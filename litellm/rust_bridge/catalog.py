@@ -43,9 +43,6 @@ class RouteContext:
     target: Target | None = None
     features: frozenset[Feature] = frozenset()
 
-    def axes(self) -> tuple[frozenset[object], ...]:
-        return (frozenset({self.provider}), frozenset({self.model}), frozenset({self.target}), self.features)
-
 
 @dataclass(frozen=True, slots=True)
 class RouteRule:
@@ -56,13 +53,16 @@ class RouteRule:
     targets: frozenset[Target] | None = None
     features: frozenset[Feature] | None = None
 
-    def constraints(self) -> tuple[frozenset[object] | None, ...]:
-        return (self.providers, self.models, self.targets, self.features)
+    def unconstrained(self) -> bool:
+        return self.providers is None and self.models is None and self.targets is None and self.features is None
 
     def matches(self, context: RouteContext) -> bool:
-        return context.route is self.route and all(
-            allowed is None or not allowed.isdisjoint(values)
-            for allowed, values in zip(self.constraints(), context.axes(), strict=True)
+        return (
+            context.route is self.route
+            and (self.providers is None or context.provider in self.providers)
+            and (self.models is None or context.model in self.models)
+            and (self.targets is None or context.target in self.targets)
+            and (self.features is None or not self.features.isdisjoint(context.features))
         )
 
 
@@ -92,7 +92,7 @@ def decision(context: RouteContext, rules: Rules | None = None) -> Decision:
     return _decision(rollout(context, rules))
 
 
-def may_leave_python(route: Route, rules: Rules) -> bool:
+def rust_might_handle(route: Route, rules: Rules) -> bool:
     own: Final = tuple(rule for rule in rules if rule.route is route)
-    last: Final = next((i for i, rule in enumerate(own) if all(c is None for c in rule.constraints())), len(own))
+    last: Final = next((i for i, rule in enumerate(own) if rule.unconstrained()), len(own))
     return any(_decision(rule.rollout) is not Decision.PYTHON for rule in own[: last + 1])

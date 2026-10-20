@@ -113,20 +113,19 @@ def _without_bags(legacy: inspect.Signature, named: Mapping[str, object]) -> Map
     return MappingProxyType({name: value for name, value in named.items() if legacy.parameters[name].kind not in _BAGS})
 
 
-def _is_true(value: object) -> bool:
-    return value is True
-
-
 @dataclass(frozen=True, slots=True)
 class AsyncFlag:
     """The keyword that makes a sync entry hand off to its async entry, as in ``completion(..., acompletion=True)``.
 
     ``is_set`` is the route's own reading of the flag. ``@client`` hands off on ``is True``, the Messages handler on truthiness.
+
+    Completion uses ``AsyncFlag("acompletion", sync=signature(_PYTHON_COMPLETION))``.
+    Messages uses ``AsyncFlag("is_async", sync=signature(_PYTHON_MESSAGES), is_set=bool)``.
     """
 
     name: str
     sync: inspect.Signature
-    is_set: Callable[[object], bool] = _is_true
+    is_set: Callable[[object], bool] = lambda value: value is True
 
     def requested(self, kwargs: Mapping[str, object]) -> bool:
         return self.is_set(kwargs.get(self.name))

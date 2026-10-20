@@ -58,7 +58,7 @@ class PublicDispatch(Generic[RequestT]):
                 python=python,
                 rules=selected_rules,
             )
-        if not catalog.may_leave_python(self.route, selected_rules):
+        if not catalog.rust_might_handle(self.route, selected_rules):
             return python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
         if request is None:
@@ -91,7 +91,7 @@ class PublicDispatch(Generic[RequestT]):
                 python=python,
                 rules=selected_rules,
             )
-        if not catalog.may_leave_python(self.route, selected_rules):
+        if not catalog.rust_might_handle(self.route, selected_rules):
             return await python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
         if request is None:
