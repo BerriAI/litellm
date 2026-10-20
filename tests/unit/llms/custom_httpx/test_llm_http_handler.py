@@ -2639,6 +2639,72 @@ async def test_async_audio_transcriptions_sends_dict_data_as_json_body():
     assert response.text == "transcribed"
 
 
+_TRANSCRIPTION_SSL_VERIFY_CASES: Final = pytest.mark.parametrize(
+    ("litellm_params", "expected_ssl_verify"),
+    [
+        ({"ssl_verify": "/etc/ssl/custom-ca.pem"}, "/etc/ssl/custom-ca.pem"),
+        ({"ssl_verify": False}, False),
+        ({}, None),
+    ],
+    ids=["custom-ca-path", "verify-disabled", "unset"],
+)
+
+
+@_TRANSCRIPTION_SSL_VERIFY_CASES
+def test_audio_transcriptions_builds_default_sync_client_with_ssl_verify(litellm_params, expected_ssl_verify):
+    """Regression for #33384: the sync path built its default client without
+    litellm_params, so a custom CA path or ssl_verify=False never reached it."""
+    captured: Final = {}
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_capture_json_transcription_request(captured)))
+    )
+    kwargs: Final = {
+        **_json_transcription_call_kwargs(_JSONBodyAudioTranscriptionConfig()),
+        "litellm_params": litellm_params,
+    }
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client", return_value=client) as factory:
+        response: Final = BaseLLMHTTPHandler().audio_transcriptions(client=None, atranscription=False, **kwargs)
+
+    factory.assert_called_once_with(params={"ssl_verify": expected_ssl_verify})
+    assert response.text == "transcribed"
+
+
+@_TRANSCRIPTION_SSL_VERIFY_CASES
+@pytest.mark.asyncio
+async def test_async_audio_transcriptions_builds_default_client_with_ssl_verify(litellm_params, expected_ssl_verify):
+    captured: Final = {}
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_capture_json_transcription_request(captured)))
+    kwargs: Final = {
+        **_json_transcription_call_kwargs(_JSONBodyAudioTranscriptionConfig()),
+        "litellm_params": litellm_params,
+    }
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client", return_value=client) as factory:
+        response: Final = await BaseLLMHTTPHandler().async_audio_transcriptions(client=None, **kwargs)
+
+    assert factory.call_args.kwargs["params"] == {"ssl_verify": expected_ssl_verify}
+    assert response.text == "transcribed"
+
+
+def test_audio_transcriptions_keeps_caller_sync_client():
+    captured: Final = {}
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_capture_json_transcription_request(captured)))
+    )
+    kwargs: Final = {
+        **_json_transcription_call_kwargs(_JSONBodyAudioTranscriptionConfig()),
+        "litellm_params": {"ssl_verify": "/etc/ssl/custom-ca.pem"},
+    }
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as factory:
+        response: Final = BaseLLMHTTPHandler().audio_transcriptions(client=client, atranscription=False, **kwargs)
+
+    factory.assert_not_called()
+    assert response.text == "transcribed"
+
+
 class _WordTimestampAudioTranscriptionConfig(_JSONBodyAudioTranscriptionConfig):
     def transform_audio_transcription_response(self, raw_response):
         payload = raw_response.json()
