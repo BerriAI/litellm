@@ -87,6 +87,10 @@ def _local_counts(raw: object, keys: tuple[str, ...]) -> tuple[int, ...]:
     return _as_counts(values)
 
 
+def _unexpired(times: Sequence[float], now: float) -> tuple[float, ...]:
+    return tuple(t for t in times if now - t < SELECTION_RESERVATION_TTL_SECONDS)
+
+
 def _least_busy_index(counts: tuple[int, ...]) -> int:
     return min(range(len(counts)), key=lambda index: counts[index])
 
@@ -122,7 +126,12 @@ class LeastBusyLoggingHandler(CustomLogger):
         self._reservations: Mapping[str, tuple[float, ...]] = MappingProxyType({})
 
     def _live_reservations(self, key: str, now: float) -> tuple[float, ...]:
-        return tuple(t for t in self._reservations.get(key, ()) if now - t < SELECTION_RESERVATION_TTL_SECONDS)
+        return _unexpired(self._reservations.get(key, ()), now)
+
+    def _store_reservations(self, key: str, times: tuple[float, ...], now: float) -> None:
+        # Drop expired and empty entries on every write so the map only holds the last TTL window.
+        merged: Final = {**self._reservations, key: times}
+        self._reservations = MappingProxyType({k: live for k, v in merged.items() if (live := _unexpired(v, now))})
 
     def _select(
         self,
@@ -137,7 +146,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         live: Final = tuple(self._live_reservations(key, now) for key in keys)
         index: Final = _least_busy_index(tuple(count + len(r) for count, r in zip(counts, live, strict=True)))
         if reserve:
-            self._reservations = MappingProxyType({**self._reservations, keys[index]: (*live[index], now)})
+            self._store_reservations(keys[index], (*live[index], now), now)
         return healthy_deployments[index]
 
     def _release_reservation(self, kwargs: Mapping[str, object]) -> None:
@@ -145,8 +154,8 @@ class LeastBusyLoggingHandler(CustomLogger):
         if ref is None:
             return
         key: Final = _request_count_key(*ref)
-        live: Final = self._live_reservations(key, self._clock())
-        self._reservations = MappingProxyType({**self._reservations, key: live[1:]})
+        now: Final = self._clock()
+        self._store_reservations(key, self._live_reservations(key, now)[1:], now)
 
     @with_service_target("router_usage")
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:

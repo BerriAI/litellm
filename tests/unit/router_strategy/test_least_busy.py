@@ -454,3 +454,16 @@ def test_a_started_request_moves_its_reservation_into_the_in_flight_count() -> N
 
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+
+
+def test_expired_and_released_reservations_do_not_accumulate_across_model_groups() -> None:
+    now: list[float] = [0.0]
+    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), clock=lambda: now[0])
+
+    for i in range(50):
+        worker.get_available_deployments(f"group-{i}", HEALTHY, reserve=True)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+    now[0] = SELECTION_RESERVATION_TTL_SECONDS + 0.5
+    worker.get_available_deployments("group-new", HEALTHY, reserve=True)
+
+    assert len(worker._reservations) == 1
