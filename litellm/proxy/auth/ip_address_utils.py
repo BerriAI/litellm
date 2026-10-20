@@ -371,4 +371,4 @@ class IPAddressUtils:
                     return client_ip
                 case _HopCountUnset():
                     pass
-        return get_request_ip_address(request, use_x_forwarded_for=use_xff is True)
+        return get_request_ip_address(request, use_x_forwarded_for=use_xff)
