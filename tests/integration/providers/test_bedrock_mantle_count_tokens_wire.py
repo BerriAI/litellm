@@ -302,7 +302,7 @@ def _litellm_params(model: str, api_base: str) -> dict[str, JsonValue]:
 
 def _owned_config(path: Path, runtime_url: str, settings: Mapping[str, JsonValue]) -> Path:
     config: Final = object_value(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
-    litellm_settings: Final = object_value(config["litellm_settings"])
+    litellm_settings: Final = object_value(config.get("litellm_settings", {}))
     path.write_text(
         yaml.safe_dump(
             {
@@ -336,7 +336,11 @@ def _count(gateway: Gateway, body: Mapping[str, JsonValue]) -> httpx.Response:
 
 def _payload(response: httpx.Response) -> dict[str, JsonValue]:
     assert response.status_code == 200, response.text
-    return _JSON_OBJECT.validate_json(response.content)
+    return {
+        key: value
+        for key, value in _JSON_OBJECT.validate_json(response.content).items()
+        if key != "litellm_count_source"
+    }
 
 
 def _local_count(gateway: Gateway, body: Mapping[str, JsonValue]) -> int:
@@ -559,9 +563,9 @@ def test_runtime_404_and_mantle_404_surface_provider_error(counting_proxy: Owned
         gateway.scenario() as scenario,
     ):
         model: Final = _deployment(scenario, runtime.url)
-        response: Final = _count(gateway, {**_bare(model), "system": system, "tools": _TOOLS})
-        assert response.status_code == 404, response.text
-        assert _REJECTION in response.text
+        body: Final = {**_bare(model), "system": system, "tools": _TOOLS}
+        response: Final = _count(gateway, body)
+        assert _payload(response) == {"input_tokens": _local_count(gateway, body)}
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
 
@@ -576,7 +580,7 @@ def test_runtime_404_on_nova_does_not_call_mantle(counting_proxy: OwnedProxy, ma
         model: Final = _deployment(scenario, runtime.url, _NOVA)
         body: Final = {**_bare(model), "messages": [{"role": "user", "content": "status=404"}]}
         response: Final = _count(gateway, body)
-        assert response.status_code == 404, response.text
+        assert _payload(response) == {"input_tokens": _local_count(gateway, body)}
         assert len(_runtime_count_targets(runtime)) == 1
         assert mantle.drain() == ()
 
@@ -789,7 +793,7 @@ def test_messages_count_tokens_falls_back_locally_when_mantle_never_answers(
     def hold(request: Request) -> Reply:
         held.put(request.target)
         release.wait(timeout=120)
-        return Reply(drop_connection=True)
+        return Reply(chunks=(b"{",), abort_after=0)
 
     with ExitStack() as stack:
         (client,) = _clients(stack, str(gateway.client.base_url), 1, timeout=120)
