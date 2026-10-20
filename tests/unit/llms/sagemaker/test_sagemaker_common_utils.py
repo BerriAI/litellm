@@ -250,40 +250,50 @@ _PAYLOAD_PART_HEADERS: Final = (
 )
 
 
-def _payload_part(body: str) -> bytes:
-    encoded: Final = body.encode()
+def _payload_part(body: str | bytes) -> bytes:
+    encoded: Final = body.encode() if isinstance(body, str) else body
     prelude: Final = struct.pack("!II", 16 + len(_PAYLOAD_PART_HEADERS) + len(encoded), len(_PAYLOAD_PART_HEADERS))
     message: Final = prelude + struct.pack("!I", zlib.crc32(prelude)) + _PAYLOAD_PART_HEADERS + encoded
     return message + struct.pack("!I", zlib.crc32(message))
 
 
-def _cut(stream: str, size: int) -> tuple[str, ...]:
-    return tuple(stream[start : start + size] for start in range(0, len(stream), size))
+def _cut(stream: str, size: int) -> tuple[bytes, ...]:
+    encoded: Final = stream.encode()
+    return tuple(encoded[start : start + size] for start in range(0, len(encoded), size))
 
 
 def _sse(record: Mapping[str, object]) -> str:
-    return f"data: {json.dumps(record)}\n\n"
+    return f"data: {json.dumps(record, ensure_ascii=False)}\n\n"
 
 
 def _vllm_chunk(choices: list[Mapping[str, object]], **extra: object) -> str:
-    return _sse({"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 1, "model": "m", "choices": choices, **extra})
+    return _sse(
+        {"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 1, "model": "m", "choices": choices, **extra}
+    )
 
 
 _VLLM_EVENTS: Final = (
     _vllm_chunk([{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]),
-    _vllm_chunk([{"index": 0, "delta": {"content": "Hel"}, "finish_reason": None}]),
-    _vllm_chunk([{"index": 0, "delta": {"content": "lo!"}, "finish_reason": "stop"}]),
+    _vllm_chunk([{"index": 0, "delta": {"content": "Hél"}, "finish_reason": None}]),
+    _vllm_chunk([{"index": 0, "delta": {"content": "lo 👋"}, "finish_reason": "stop"}]),
     _vllm_chunk([], usage={"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}),
     "data: [DONE]\n\n",
 )
 _VLLM_STREAM: Final = "".join(_VLLM_EVENTS)
-_TGI_EVENTS: Final = tuple(f"data:{json.dumps({'index': 0, 'token': {'text': text}})}\n\n" for text in ("Hel", "lo!"))
+_TGI_EVENTS: Final = tuple(
+    f"data:{json.dumps({'index': 0, 'token': {'text': text}}, ensure_ascii=False)}\n\n" for text in ("Hél", "lo 👋")
+)
 _TGI_STREAM: Final = "".join(_TGI_EVENTS)
-_LMI_STREAM: Final = "".join(f"{json.dumps({'token': {'text': text}})}\n" for text in ("Hel", "lo!"))
+_TGI_KEEP_ALIVE_STREAM: Final = (
+    f"{_TGI_EVENTS[0]}:\n\n: keep-alive\n\nevent: message\nid: 2\nretry: 1000\n{_TGI_EVENTS[1]}"
+)
+_LMI_STREAM: Final = "".join(
+    f"{json.dumps({'token': {'text': text}}, ensure_ascii=False)}\n" for text in ("Hél", "lo 👋")
+)
 
 
 async def _decode(
-    parts: tuple[str, ...], is_messages_api: bool, mode: str
+    parts: tuple[str | bytes, ...], is_messages_api: bool, mode: str
 ) -> list[GChunk | StreamingChatCompletionChunk | None]:
     decoder: Final = AWSEventStreamDecoder(model="m", is_messages_api=is_messages_api)
     frames: Final = tuple(map(_payload_part, parts))
@@ -311,14 +321,17 @@ async def _decode(
         pytest.param((*_VLLM_EVENTS[:4], "data: [DO", "NE]\n\n"), id="done-split-across-parts"),
         pytest.param((_VLLM_STREAM,), id="whole-stream-in-one-part"),
         pytest.param(_cut(_VLLM_STREAM, 7), id="seven-byte-parts"),
+        pytest.param(_cut(_VLLM_STREAM, 1), id="one-byte-parts-split-every-utf8-character"),
     ],
 )
-async def test_messages_api_stream_keeps_every_chunk_however_sagemaker_cuts_the_parts(parts, mode, caplog):
+async def test_messages_api_stream_keeps_every_chunk_however_sagemaker_cuts_the_parts(
+    parts: tuple[str | bytes, ...], mode: str, caplog: pytest.LogCaptureFixture
+):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         chunks: Final = await _decode(parts, is_messages_api=True, mode=mode)
 
     assert None not in chunks
-    assert "".join(chunk.choices[0].delta.content for chunk in chunks if chunk.choices) == "Hello!"
+    assert "".join(chunk.choices[0].delta.content for chunk in chunks if chunk.choices) == "Héllo 👋"
     assert [(chunk.usage.prompt_tokens, chunk.usage.total_tokens) for chunk in chunks if chunk.usage] == [(7, 10)]
     assert caplog.records == []
 
@@ -331,29 +344,89 @@ async def test_messages_api_stream_keeps_every_chunk_however_sagemaker_cuts_the_
         pytest.param(_TGI_EVENTS, id="tgi-sse-one-event-per-part"),
         pytest.param((_TGI_STREAM,), id="tgi-sse-whole-stream-in-one-part"),
         pytest.param(_cut(_TGI_STREAM, 5), id="tgi-sse-five-byte-parts"),
+        pytest.param(_cut(_TGI_STREAM, 1), id="tgi-sse-one-byte-parts-split-every-utf8-character"),
+        pytest.param((_TGI_KEEP_ALIVE_STREAM,), id="tgi-sse-comments-and-fields-whole-stream-in-one-part"),
+        pytest.param(_cut(_TGI_KEEP_ALIVE_STREAM, 1), id="tgi-sse-comments-and-fields-one-byte-parts"),
         pytest.param((_LMI_STREAM,), id="json-lines-whole-stream-in-one-part"),
         pytest.param(_cut(_LMI_STREAM, 5), id="json-lines-five-byte-parts"),
-        pytest.param(tuple(_LMI_STREAM.split()), id="undelimited-objects-one-per-part"),
+        pytest.param(tuple(_LMI_STREAM.splitlines()), id="undelimited-objects-one-per-part"),
     ],
 )
-async def test_completion_stream_keeps_every_token_however_sagemaker_cuts_the_parts(parts, mode, caplog):
+async def test_completion_stream_keeps_every_token_however_sagemaker_cuts_the_parts(
+    parts: tuple[str | bytes, ...], mode: str, caplog: pytest.LogCaptureFixture
+):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         chunks: Final = await _decode(parts, is_messages_api=False, mode=mode)
 
     assert None not in chunks
-    assert "".join(chunk["text"] for chunk in chunks) == "Hello!"
+    assert "".join(chunk["text"] for chunk in chunks) == "Héllo 👋"
     assert caplog.records == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["sync", "async"])
-async def test_truncated_last_record_is_reported_after_the_complete_ones(mode, caplog):
+async def test_truncated_last_record_is_reported_after_the_complete_ones(mode: str, caplog: pytest.LogCaptureFixture):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         chunks: Final = await _decode((*_VLLM_EVENTS[:2], _VLLM_EVENTS[2][:20]), is_messages_api=True, mode=mode)
 
     assert chunks[-1] is None
-    assert "".join(chunk.choices[0].delta.content for chunk in chunks[:-1]) == "Hel"
+    assert "".join(chunk.choices[0].delta.content for chunk in chunks[:-1]) == "Hél"
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    ("parts", "is_messages_api"),
+    [
+        pytest.param(
+            (
+                _VLLM_EVENTS[1],
+                _sse({"error": {"message": "CUDA out of memory while decoding", "code": 500}}) + "data: [DONE]\n\n",
+            ),
+            True,
+            id="vllm-error-event-shares-a-part-with-done",
+        ),
+        pytest.param(
+            (_VLLM_EVENTS[1], _sse({"error": {"message": "CUDA out of memory while decoding"}}), "data: [DONE]\n\n"),
+            True,
+            id="vllm-error-event-in-its-own-part",
+        ),
+        pytest.param(
+            (
+                _TGI_EVENTS[0]
+                + f"data:{json.dumps({'error': 'CUDA out of memory while decoding', 'error_type': 'generation'})}\n\n",
+            ),
+            False,
+            id="tgi-error-event-shares-a-part-with-a-token",
+        ),
+    ],
+)
+async def test_container_error_event_is_logged_with_its_message_and_the_stream_keeps_its_chunks(
+    parts: tuple[str, ...], is_messages_api: bool, mode: str, caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        chunks: Final = await _decode(parts, is_messages_api=is_messages_api, mode=mode)
+
+    texts: Final = [chunk.choices[0].delta.content if is_messages_api else chunk["text"] for chunk in chunks]
+    assert texts == ["Hél"]
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert "CUDA out of memory while decoding" in caplog.records[0].getMessage()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_record_that_is_not_a_chunk_is_logged_and_skipped(mode: str, caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        chunks: Final = await _decode(
+            (_VLLM_EVENTS[1], _sse({"object": "keepalive", "detail": "still decoding"}), _VLLM_EVENTS[2]),
+            is_messages_api=True,
+            mode=mode,
+        )
+
+    assert "".join(chunk.choices[0].delta.content for chunk in chunks) == "Héllo 👋"
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert "still decoding" in caplog.records[0].getMessage()
 
 
 class TestSagemakerTransform:

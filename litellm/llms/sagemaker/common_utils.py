@@ -1,3 +1,4 @@
+import codecs
 import functools
 import json
 import re
@@ -40,7 +41,7 @@ class _SageMakerMessagesChunkDataRoot(RootModel[_SageMakerMessagesChunkData]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
-_STREAM_FRAMING: Final = re.compile(r"(?:\s|data:|\[DONE\])*")
+_STREAM_FRAMING: Final = re.compile(r"(?:\s|data:|\[DONE\]|(?::|event:|id:|retry:)[^\n]*\n)*")
 _JSON_DECODER: Final = json.JSONDecoder()
 _RAW_DECODED: Final = TypeAdapter(tuple[object, int])
 _NO_RECORD: Final = object()
@@ -54,18 +55,19 @@ def _framing_end(text: str) -> int:
 class _StreamRecordBuffer:
     """
     SageMaker cuts a container's stream into PayloadParts at arbitrary points, so one part can hold
-    several SSE events or JSON lines, or only part of one
+    several SSE events or JSON lines, or only part of one, down to half of a UTF-8 character
     """
 
     def __init__(self) -> None:
+        self._decoder: Final = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._pending: str = ""
 
-    def feed(self, text: str) -> tuple[object, ...]:
-        self._pending += text
+    def feed(self, data: bytes) -> tuple[object, ...]:
+        self._pending += self._decoder.decode(data)
         return tuple(iter(self._pop_record, _NO_RECORD))
 
     def unparsed(self) -> str:
-        return self._pending[_framing_end(self._pending) :]
+        return self._pending + self._decoder.decode(b"", final=True)
 
     def _pop_record(self) -> object:
         start: Final = _framing_end(self._pending)
@@ -189,12 +191,22 @@ class AWSEventStreamDecoder:
             usage=None,
         )
 
-    def _record_to_chunk(self, record: object) -> GChunk | StreamingChatCompletionChunk:
-        if self.is_messages_api:
-            return self._chunk_parser_messages_api(
-                chunk_data=_SageMakerMessagesChunkDataRoot.model_validate(record).root
-            )
-        return self._chunk_parser(chunk_data=_SageMakerChunkDataRoot.model_validate(record).root)
+    def _record_to_chunk(self, record: object) -> GChunk | StreamingChatCompletionChunk | None:
+        if isinstance(record, Mapping) and "error" in record:
+            verbose_logger.error("SageMaker endpoint streamed an error: %s", json.dumps(record))
+            return None
+        try:
+            if self.is_messages_api:
+                return self._chunk_parser_messages_api(
+                    chunk_data=_SageMakerMessagesChunkDataRoot.model_validate(record).root
+                )
+            return self._chunk_parser(chunk_data=_SageMakerChunkDataRoot.model_validate(record).root)
+        except ValidationError:
+            verbose_logger.error("Skipping a SageMaker stream record that is not a chunk: %s", json.dumps(record))
+            return None
+
+    def _chunks(self, records: tuple[object, ...]) -> Iterator[GChunk | StreamingChatCompletionChunk]:
+        return (chunk for chunk in map(self._record_to_chunk, records) if chunk is not None)
 
     def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
@@ -206,8 +218,8 @@ class AWSEventStreamDecoder:
         for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             for event in event_stream_buffer:
-                if message := self._parse_message_from_event(event):
-                    yield from map(self._record_to_chunk, records.feed(message))
+                if payload := self._parse_message_from_event(event):
+                    yield from self._chunks(records.feed(payload))
 
         unparsed: Final = records.unparsed()
         if unparsed:
@@ -227,12 +239,10 @@ class AWSEventStreamDecoder:
             event_stream_buffer.add_data(chunk)
             for event in event_stream_buffer:
                 try:
-                    if message := self._parse_message_from_event(event):
-                        verbose_logger.debug("sagemaker  parsed chunk bytes %s", message)
-                        for record in records.feed(message):
-                            yield self._record_to_chunk(record)
-                except UnicodeDecodeError as e:
-                    verbose_logger.warning("UnicodeDecodeError: %s. Attempting to combine with next event.", e)
+                    if payload := self._parse_message_from_event(event):
+                        verbose_logger.debug("sagemaker  parsed chunk bytes %s", payload)
+                        for chunk in self._chunks(records.feed(payload)):
+                            yield chunk
                 except Exception as e:
                     verbose_logger.error("Error parsing message: %s. Attempting to combine with next event.", e)
 
@@ -241,7 +251,7 @@ class AWSEventStreamDecoder:
             verbose_logger.error("Warning: Unparseable JSON data remained: %s", unparsed)
             yield None
 
-    def _parse_message_from_event(self, event) -> str | None:
+    def _parse_message_from_event(self, event) -> bytes | None:
         response_stream_shape: Final = get_sagemaker_response_stream_shape()
         if response_stream_shape is None:
             raise SagemakerError(
@@ -261,10 +271,10 @@ class AWSEventStreamDecoder:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()
+            return chunk.get("bytes")
         else:
             chunk = response_dict.get("body")
             if not chunk:
                 return None
 
-            return chunk.decode()
+            return chunk
