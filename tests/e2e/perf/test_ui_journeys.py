@@ -10,6 +10,7 @@ import pytest
 from e2e_config import MASTER_KEY, UI_BASE_URL, UI_PASSWORD, UI_USERNAME
 from e2e_http import send_text_external, without_retries
 from setup.ui_journeys import (
+    assert_within_ceiling,
     Dashboard,
     Journey,
     Sample,
@@ -104,3 +105,4 @@ def test_ui_journey_latency(journey_name: str, ui_fixture: UiFixture, request: p
         }
         output: Final = target / f"ui-journey-{journey.name}.json"
         _ = output.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+        assert_within_ceiling(journey.name, samples)

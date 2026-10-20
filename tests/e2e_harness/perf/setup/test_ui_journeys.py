@@ -3,7 +3,15 @@ from __future__ import annotations
 from typing import Final
 
 import pytest
-from setup.ui_journeys import Sample, database_failures, journeys, summarize, ui_junit_properties
+from setup.ui_journeys import (
+    UI_JOURNEY_LIMITS,
+    Sample,
+    assert_within_ceiling,
+    database_failures,
+    journeys,
+    summarize,
+    ui_junit_properties,
+)
 
 
 def test_first_journey_is_separate_from_repeated_latency() -> None:
@@ -116,3 +124,21 @@ def test_lazy_failure_counters_require_evidence_of_database_activity() -> None:
 def test_missing_or_invalid_metrics_cannot_pass_as_zero(text: str) -> None:
     with pytest.raises(AssertionError):
         _ = database_failures(text)
+
+
+def test_every_journey_has_a_latency_ceiling() -> None:
+    assert frozenset(journey.name for journey in journeys("key")) == frozenset(UI_JOURNEY_LIMITS)
+
+
+def test_failed_sample_fails_the_journey_before_latency_is_judged() -> None:
+    with pytest.raises(AssertionError, match="1 of 2 logs_open_24h samples failed: timeout"):
+        assert_within_ceiling("logs_open_24h", (Sample(seconds=0.2, rows=25), Sample(seconds=120, error="timeout")))
+
+
+def test_slow_journey_fails_its_ceiling() -> None:
+    fast: Final = tuple(Sample(seconds=1, rows=25) for _ in range(9))
+    assert_within_ceiling("logs_open_24h", fast)
+    with pytest.raises(AssertionError, match=r"logs_open_24h p90 25\.0s over 20s"):
+        assert_within_ceiling("logs_open_24h", (*fast[:8], Sample(seconds=25, rows=25), Sample(seconds=25, rows=25)))
+    with pytest.raises(AssertionError, match=r"logs_open_24h p50 11\.0s over 10s"):
+        assert_within_ceiling("logs_open_24h", tuple(Sample(seconds=11, rows=25) for _ in range(3)))

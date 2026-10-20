@@ -34,7 +34,7 @@ export E2E_ARTIFACT_DIR=/tmp/e2e-artifacts
 uv run pytest tests/e2e/perf/test_ui_journeys.py --reruns 0 --junitxml="$E2E_ARTIFACT_DIR/junit.xml" -q
 ```
 
-`E2E_UI_JOURNEY_TIMEOUT_SECONDS` (default 120) bounds one journey. A journey that never settles is recorded as a `timeout` sample, a journey whose page rendered empty or threw in the browser as a `ui` sample, and neither fails the test, the lane reads the artifacts
+`E2E_UI_JOURNEY_TIMEOUT_SECONDS` (default 120) bounds one journey. A journey that never settles is recorded as a `timeout` sample and a journey whose page rendered empty or threw in the browser as a `ui` sample. The test fails when any sample failed, or when the p50 or p90 across all samples is over the journey's `Ceiling` in `UI_JOURNEY_LIMITS` (`setup/ui_journeys.py`, 10s/20s for Logs journeys and 20s/40s for Usage and Caching, generous until the first 1TB run sets real numbers). The artifacts are written before the assertion so a failed run still ships its samples
 
 ## Artifacts
 

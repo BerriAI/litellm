@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain
+from types import MappingProxyType
 from typing import Final
 
 from playwright.sync_api import Error as PlaywrightError
@@ -101,6 +102,42 @@ def ui_junit_properties(samples: tuple[Sample, ...]) -> tuple[tuple[str, float],
         ("perf_ui_repeated_samples", timings.repeated_samples),
         *((f"perf_ui_error_{code}", codes.count(code)) for code in sorted(frozenset(codes))),
         *((f"perf_ui_{name}", value) for name, value in latency if value is not None),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Ceiling:
+    p50_seconds: float
+    p90_seconds: float
+
+
+LOGS_CEILING: Final = Ceiling(p50_seconds=10, p90_seconds=20)
+CHART_CEILING: Final = Ceiling(p50_seconds=20, p90_seconds=40)
+UI_JOURNEY_LIMITS: Final = MappingProxyType(
+    {
+        "logs_open_24h": LOGS_CEILING,
+        "logs_last_7_days": LOGS_CEILING,
+        "logs_next_page": LOGS_CEILING,
+        "logs_filter_key_hash": LOGS_CEILING,
+        "logs_filter_team": LOGS_CEILING,
+        "logs_filter_model": LOGS_CEILING,
+        "usage_open": CHART_CEILING,
+        "usage_team_view": CHART_CEILING,
+        "cache_open": CHART_CEILING,
+    }
+)
+
+
+def assert_within_ceiling(journey_name: str, samples: tuple[Sample, ...]) -> None:
+    failed: Final = tuple(sample.error for sample in samples if sample.error)
+    assert not failed, f"{len(failed)} of {len(samples)} {journey_name} samples failed: {failed[0]}"
+    metrics: Final = dict(ui_junit_properties(samples))
+    ceiling: Final = UI_JOURNEY_LIMITS[journey_name]
+    assert metrics["perf_ui_seconds_p50"] <= ceiling.p50_seconds, (
+        f"{journey_name} p50 {metrics['perf_ui_seconds_p50']:.1f}s over {ceiling.p50_seconds}s"
+    )
+    assert metrics["perf_ui_seconds_p90"] <= ceiling.p90_seconds, (
+        f"{journey_name} p90 {metrics['perf_ui_seconds_p90']:.1f}s over {ceiling.p90_seconds}s"
     )
 
 
