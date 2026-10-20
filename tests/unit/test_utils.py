@@ -8742,7 +8742,6 @@ def isolated_openai_model_sets(monkeypatch: pytest.MonkeyPatch) -> None:
         "open_ai_text_completion_models",
         set(litellm.open_ai_text_completion_models),
     )
-    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
 
 
 def test_aget_valid_models():

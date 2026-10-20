@@ -288,8 +288,6 @@ def isolate_litellm_globals() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def isolate_router_model_cost_state() -> Iterator[None]:
-    original_model_cost: Final = litellm.model_cost
-    original_model_cost_entries: Final = dict(original_model_cost)
     original_live_routers: Final = frozenset(litellm_router_module._live_routers)
     original_runtime_registered_model_cost: Final = {
         model_key: dict(model_value)
@@ -305,8 +303,29 @@ def isolate_router_model_cost_state() -> Iterator[None]:
         litellm_router_module._live_routers.add(router)
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
-    original_model_cost.clear()
-    original_model_cost.update(original_model_cost_entries)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    litellm.get_model_info.cache_clear()
+
+
+def _provider_model_sets() -> tuple[set[str], ...]:
+    return tuple(models for name, models in vars(litellm).items() if name.endswith("_models") and isinstance(models, set))
+
+
+@pytest.fixture(autouse=True)
+def isolate_model_catalog() -> Iterator[None]:
+    model_cost: Final = litellm.model_cost
+    model_cost_entries: Final = dict(model_cost)
+    models_by_provider: Final = litellm.models_by_provider
+    models_by_provider_entries: Final = dict(models_by_provider)
+    provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
+    yield
+    model_cost.clear()
+    model_cost.update(model_cost_entries)
+    models_by_provider.clear()
+    models_by_provider.update(models_by_provider_entries)
+    for models, entries in provider_model_sets:
+        models.clear()
+        models.update(entries)
     litellm_utils_module._invalidate_model_cost_lowercase_map()
     litellm.get_model_info.cache_clear()
 
