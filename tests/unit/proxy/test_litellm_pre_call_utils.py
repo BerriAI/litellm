@@ -17,6 +17,7 @@ from starlette.datastructures import Headers
 
 import litellm
 from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     SERVER_STREAMING_CLASSIFICATION_KEY,
     SERVER_STREAMING_CLASSIFICATION_MARKER,
@@ -232,6 +233,37 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
     litellm_metadata = updated_data.get("metadata", {})
     assert isinstance(litellm_metadata, dict)
     assert updated_data["metadata"]["generation_name"] == "gen123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", [False, True])
+async def test_add_litellm_data_to_request_keeps_requester_ip_address_for_guardrails_when_ip_logging_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, disabled: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    settings = {"use_x_forwarded_for": True, "disable_requester_ip_address_logging": disabled}
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", "x-forwarded-for": "203.0.113.9"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o"},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings=settings,
+    )
+
+    assert updated_data["metadata"]["requester_ip_address"] == "203.0.113.9"
 
 
 @pytest.mark.asyncio
@@ -1158,6 +1190,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_gateway_injected_cache": "forged-deployment-id",
         "_session_deployment_affinity_ttl": 999999,
         "internal_call_origin": "autorouter_classifier",
+        "_managed_background_response": True,
         "_guardrail_pipelines": [{"name": "spoofed"}],
         "_pipeline_managed_guardrails": ["evaded"],
         "safe_user_metadata": "kept",
@@ -1215,6 +1248,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_gateway_injected_cache",
         "_session_deployment_affinity_ttl",
         "internal_call_origin",
+        "_managed_background_response",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
     }
@@ -3273,6 +3307,92 @@ def test_add_litellm_metadata_from_request_headers_x_litellm_trace_id_sets_chain
     assert data["metadata"]["session_id"] == "foo"
     assert data["litellm_session_id"] == "foo"
     assert data["litellm_trace_id"] == "foo"
+
+
+@pytest.mark.parametrize("correlation_in_logs", [True, False], ids=["correlation-on", "correlation-off"])
+@pytest.mark.parametrize("session_in_metadata", [False, True], ids=["top-level", "metadata"])
+def test_x_litellm_trace_id_keeps_the_body_session_beside_it_whatever_the_log_setting(
+    monkeypatch: pytest.MonkeyPatch,
+    correlation_in_logs: bool,
+    session_in_metadata: bool,
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", correlation_in_logs)
+    metadata: Final[dict[str, str]] = {"session_id": "convo-1"} if session_in_metadata else {}
+    data: Final[dict[str, object]] = (
+        {"metadata": metadata} if session_in_metadata else {"metadata": metadata, "litellm_session_id": "convo-1"}
+    )
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-trace-id": "req-trace-1"}, data=data, _metadata_variable_name="metadata"
+    )
+    assert metadata.get(CALLER_SESSION_ID_METADATA_KEY) == "convo-1"
+    assert data["litellm_session_id"] == "req-trace-1"
+    assert metadata["session_id"] == "req-trace-1"
+    assert data["litellm_trace_id"] == "req-trace-1"
+
+
+@pytest.mark.parametrize(
+    "session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"]
+)
+@pytest.mark.parametrize("with_trace_header", [False, True], ids=["session-header-only", "beside-trace-header"])
+def test_session_headers_still_beat_the_body_session_with_correlation_logging(
+    monkeypatch: pytest.MonkeyPatch, session_header: str, with_trace_header: bool
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    metadata: Final[dict[str, str]] = {}
+    data: Final[dict[str, object]] = {"metadata": metadata, "litellm_session_id": "convo-1"}
+    trace_header: Final = {"x-litellm-trace-id": "req-trace-1"} if with_trace_header else {}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={**trace_header, session_header: "hdr-session-1"}, data=data, _metadata_variable_name="metadata"
+    )
+    spend_log_session: Final = metadata.get(CALLER_SESSION_ID_METADATA_KEY) or data["litellm_session_id"]
+    assert spend_log_session == "hdr-session-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forged_in", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    "headers",
+    [{"x-litellm-session-id": "hdr-session-1"}, {}],
+    ids=["session-header", "no-headers"],
+)
+async def test_client_metadata_cannot_set_the_spend_log_caller_session(
+    monkeypatch: pytest.MonkeyPatch, forged_in: str, headers: dict[str, str]
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    updated: Final = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-5.4-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            forged_in: {CALLER_SESSION_ID_METADATA_KEY: "forged-session"},
+        },
+        request=_make_request_mock("/v1/chat/completions", headers),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert CALLER_SESSION_ID_METADATA_KEY not in updated["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_spend_log_caller_session_stays_out_of_requester_metadata(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    updated: Final = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-5.4-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_session_id": "convo-1",
+            "metadata": {"team_label": "kept"},
+        },
+        request=_make_request_mock("/v1/chat/completions", {"x-litellm-trace-id": "req-trace-1"}),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert updated["metadata"][CALLER_SESSION_ID_METADATA_KEY] == "convo-1"
+    assert updated["metadata"]["requester_metadata"]["team_label"] == "kept"
+    assert CALLER_SESSION_ID_METADATA_KEY not in updated["metadata"]["requester_metadata"]
 
 
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
@@ -7061,6 +7181,76 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
         assert value not in logged
 
 
+_SERVICE_ACCOUNT_TOKEN_REFERENCE: Final = "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_refuses_a_forwarded_x_api_key_holding_an_oidc_reference():
+    """A forwarded provider key lands in api_key after auth, so the body check cannot see it and a client could get
+    the proxy to read its own service account token for the call."""
+    from fastapi import HTTPException
+
+    request_mock = _make_request_mock(
+        "/v1/messages",
+        {
+            "Content-Type": "application/json",
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+            "x-api-key": _SERVICE_ACCOUNT_TOKEN_REFERENCE,
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await add_litellm_data_to_request(
+            data={"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hello"}]},
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"forward_llm_provider_auth_headers": True},
+            version="test-version",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "api_key holds an oidc/ secret reference" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_refuses_a_model_config_credential_holding_an_oidc_reference(monkeypatch):
+    """Team and project metadata are written by non-admins, so a model_config naming a credential whose api_key is an
+    oidc/ reference must not get that reference resolved for a deployment the team controls."""
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(litellm, "enable_model_config_credential_overrides", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-oidc",
+                credential_info={},
+                credential_values={"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+            )
+        ],
+    )
+    team_key: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team-1",
+        team_metadata={"model_config": {"azure/gpt-4o": {"azure": {"litellm_credentials": "admin-oidc"}}}},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await add_litellm_data_to_request(
+            data={"model": "azure/gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            request=_make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"}),
+            user_api_key_dict=team_key,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "api_key holds an oidc/ secret reference" in str(exc_info.value.detail)
+
+
 @pytest.mark.parametrize(
     "header, expected_redacted",
     [
@@ -7815,6 +8005,23 @@ def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
     forwarded = _headers_forwarded_to({"anthropic-beta": "claude-code-20250219"}, "openai")
 
     assert forwarded == {}
+
+
+TYPESAFE_DANGER_ZONE_HEADERS = {
+    "TypeSafe-Danger-Zone-Images": "true",
+    "typesafe-danger-zone-long-context": "true",
+}
+
+
+def test_client_typesafe_danger_zone_headers_reach_typesafe():
+    client_headers = {**TYPESAFE_DANGER_ZONE_HEADERS, "x-request-id": "abc"}
+
+    assert _headers_forwarded_to(client_headers, "typesafe") == TYPESAFE_DANGER_ZONE_HEADERS
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["perplexity", "openai", "anthropic"])
+def test_client_typesafe_danger_zone_headers_stay_off_other_providers(custom_llm_provider: str):
+    assert _headers_forwarded_to(TYPESAFE_DANGER_ZONE_HEADERS, custom_llm_provider) == {}
 
 
 @pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)

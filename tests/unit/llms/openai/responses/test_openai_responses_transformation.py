@@ -79,6 +79,36 @@ def validate_responses_api_response(response: ResponsesAPIResponse, final_chunk:
     return True
 
 
+_CLAUDE_SEARCH_CALL: Final = {
+    "type": "function_call",
+    "call_id": "srvtoolu_01Search",
+    "name": "tool_search_tool_bm25",
+    "arguments": '{"query": "weather"}',
+}
+
+
+_BM25_TOOL: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+_DEFERRED_WEATHER: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
+_CLIENT_TOOL_SEARCH: Final = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "Search the tool catalog",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+}
+
+
+def _undeferred(tool: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in tool.items() if key != "defer_loading"}
+
+
+def _openai_model(supports_tool_search: bool) -> str:
+    return next(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "openai" and info.get("supports_tool_search", False) is supports_tool_search
+    )
+
+
 class TestOpenAIResponsesAPIConfig:
     def setup_method(self):
         self.config = OpenAIResponsesAPIConfig()
@@ -196,6 +226,248 @@ class TestOpenAIResponsesAPIConfig:
         }
 
         self.validate_responses_api_request_params(result, expected_fields)
+
+    @pytest.mark.parametrize(
+        "tool_type",
+        ["tool_search_tool_bm25_20251119", "tool_search_tool_regex_20251119"],
+    )
+    def test_transform_maps_anthropic_search_tool_and_preserves_deferred_functions(self, tool_type: str) -> None:
+        tools: Final = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object"},
+                "defer_loading": True,
+            },
+            {"type": tool_type, "name": "tool_search"},
+            {
+                "type": "function",
+                "name": "get_stock_price",
+                "parameters": {"type": "object"},
+                "defer_loading": True,
+            },
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [
+            tools[0],
+            {"type": "tool_search", "execution": "server"},
+            tools[2],
+        ]
+
+    def test_transform_deduplicates_anthropic_search_tools(self) -> None:
+        tools: Final = [
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}},
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [
+            tools[0],
+            {"type": "tool_search", "execution": "server"},
+            tools[2],
+        ]
+
+    @pytest.mark.parametrize("execution", [None, "client", "server"])
+    def test_transform_keeps_caller_tool_search_and_drops_anthropic_search_tools(
+        self, execution: str | None
+    ) -> None:
+        caller_tool_search: Final[dict[str, object]] = {
+            "type": "tool_search",
+            **({"execution": execution} if execution is not None else {}),
+        }
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            caller_tool_search,
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [tools[1], caller_tool_search]
+
+    def test_transform_leaves_tools_without_anthropic_search_unchanged(self) -> None:
+        tools: Final = [
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            {"type": "tool_search", "execution": "client"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == tools
+
+    def test_transform_forwards_anthropic_search_tool_and_history_unchanged_to_another_gateway(self) -> None:
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
+        ]
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OTHER_HOST,
+            headers={},
+        )
+
+        assert result["tools"] == tools
+        assert result["input"] == history
+
+    def _transform_tools(self, model: str, tools: list[dict[str, object]], drop_params: bool) -> object:
+        return self.config.transform_responses_api_request(
+            model=model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1", drop_params=drop_params),
+            headers={},
+        )["tools"]
+
+    def test_drop_params_drops_tool_search_for_a_model_that_cannot_run_it(self) -> None:
+        eager: Final = {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}}
+        namespace: Final = {
+            "type": "namespace",
+            "name": "finance",
+            "description": "Finance tools",
+            "tools": [{**_DEFERRED_WEATHER, "name": "get_quote"}],
+        }
+
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=False), [_BM25_TOOL, _DEFERRED_WEATHER, eager, namespace], True
+        )
+
+        assert tools == [
+            _undeferred(_DEFERRED_WEATHER),
+            eager,
+            {**namespace, "tools": [_undeferred({**_DEFERRED_WEATHER, "name": "get_quote"})]},
+        ]
+
+    def test_drop_params_drops_tool_search_when_no_tool_is_deferred(self) -> None:
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=True), [_BM25_TOOL, _undeferred(_DEFERRED_WEATHER)], True
+        )
+
+        assert tools == [_undeferred(_DEFERRED_WEATHER)]
+
+    @pytest.mark.parametrize(
+        ("sent", "expected"),
+        [
+            pytest.param(
+                [{"type": "tool_search"}, _DEFERRED_WEATHER], [{"type": "tool_search"}, _DEFERRED_WEATHER], id="alone"
+            ),
+            pytest.param(
+                [_CLIENT_TOOL_SEARCH, _BM25_TOOL, _undeferred(_DEFERRED_WEATHER)],
+                [_CLIENT_TOOL_SEARCH, _undeferred(_DEFERRED_WEATHER)],
+                id="beside-anthropic-search",
+            ),
+        ],
+    )
+    def test_drop_params_keeps_a_callers_own_tool_search_unchanged(
+        self, sent: list[dict[str, object]], expected: list[dict[str, object]]
+    ) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=False), sent, True)
+
+        assert tools == expected
+
+    @pytest.mark.parametrize("drop_params", [False, True])
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            pytest.param({"type": None, "name": "x"}, id="null-type"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": "oops"}, id="string-members"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": ["x"]}, id="string-member"),
+        ],
+    )
+    def test_malformed_tool_beside_the_search_tool_reaches_openai_as_sent(
+        self, malformed: dict[str, object], drop_params: bool
+    ) -> None:
+        model: Final = _openai_model(supports_tool_search=True)
+
+        tools: Final = self._transform_tools(model, [_BM25_TOOL, malformed], drop_params)
+
+        assert malformed in tools
+
+    @pytest.mark.parametrize(
+        "deferred",
+        [
+            pytest.param(_DEFERRED_WEATHER, id="function"),
+            pytest.param(
+                {"type": "namespace", "name": "weather", "description": "Weather", "tools": [_DEFERRED_WEATHER]},
+                id="namespace-member",
+            ),
+        ],
+    )
+    def test_drop_params_keeps_tool_search_for_a_model_that_runs_it(self, deferred: dict[str, object]) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=True), [_BM25_TOOL, deferred], True)
+
+        assert tools == [{"type": "tool_search", "execution": "server"}, deferred]
+
+    def test_transform_drops_claude_search_calls_openai_cannot_answer_from_history(self) -> None:
+        answered_search_call: Final = {
+            **_CLAUDE_SEARCH_CALL,
+            "call_id": "srvtoolu_02Answered",
+            "name": "tool_search_tool_regex",
+        }
+        history: Final = [
+            {"role": "user", "content": "What is the weather in Paris?"},
+            _CLAUDE_SEARCH_CALL,
+            answered_search_call,
+            {"type": "function_call_output", "call_id": "srvtoolu_02Answered", "output": "get_weather"},
+            {"type": "function_call", "call_id": "toolu_01Weather", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": [_BM25_TOOL, _DEFERRED_WEATHER]},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [item for item in history if item is not _CLAUDE_SEARCH_CALL]
+
+    def test_transform_keeps_history_as_sent_when_no_anthropic_search_tool_is_mapped(self) -> None:
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": [_undeferred(_DEFERRED_WEATHER)]},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == history
 
     def test_transform_strips_cache_control_from_input_content_blocks(self):
         """`cache_control` markers (Anthropic-only) must be stripped from
@@ -1122,6 +1394,19 @@ class TestAzureResponsesAPIConfig:
 
         assert result["tools"][0]["parameters"] == {"type": "object"}
 
+    def test_azure_leaves_anthropic_search_tool_unchanged(self) -> None:
+        tool: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["tools"] == [tool]
+
     def test_azure_get_complete_url_with_version_types(self):
         """Test Azure get_complete_url with different API version types"""
         base_url = "https://litellm8397336933.openai.azure.com"
@@ -1149,11 +1434,11 @@ class TestAzureResponsesAPIConfig:
         # Test with date-based version - should use openai/responses
         result_date = self.config.get_complete_url(
             api_base=base_url,
-            litellm_params={"api_version": "2025-01-01"},
+            litellm_params={"api_version": "2025-04-01-preview"},
         )
         assert (
             result_date
-            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
+            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
         )
 
     def test_azure_transform_then_normalize_strips_custom_tool_call_namespace(self):
@@ -2017,6 +2302,115 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=True,
         )
         assert ("top_p" in mapped) is top_p_survives
+
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_effort_levels_the_map_row_turns_off_are_dropped_or_refused(self, local_model_cost_map, level):
+        """Same row as the chat gate, read opt-out for every level but max. gpt-6.1-sol's row turns
+        none and minimal off: OpenAI lists low, medium, high, xhigh and max for it
+        (https://developers.openai.com/api/docs/models/gpt-6.1-sol, via #43910), and a local proxy
+        got OpenAI's 400 for none and minimal through /v1/responses on 2026-09-30."""
+        forwarded = (
+            level == "max" or litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is not False
+        )
+        dropped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert ("reasoning" in dropped) is forwarded
+        if forwarded:
+            kept = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": level}},
+                model="gpt-6.1-sol",
+                drop_params=False,
+            )
+            assert kept["reasoning"] == {"effort": level}
+        else:
+            with pytest.raises(litellm.UnsupportedParamsError):
+                OpenAIResponsesAPIConfig().map_openai_params(
+                    response_api_optional_params={"reasoning": {"effort": level}},
+                    model="gpt-6.1-sol",
+                    drop_params=False,
+                )
+
+    @pytest.mark.parametrize(
+        ("flags", "level", "forwarded"),
+        [
+            ({}, "none", True),
+            ({"supports_none_reasoning_effort": False}, "none", False),
+            ({"supports_none_reasoning_effort": True}, "none", True),
+            ({"supports_minimal_reasoning_effort": False}, "minimal", False),
+            ({"supports_max_reasoning_effort": False}, "max", True),
+            ({}, "xhigh", True),
+            ({"supports_xhigh_reasoning_effort": False}, "xhigh", False),
+            ({"supports_none_reasoning_effort": False}, "medium", True),
+        ],
+    )
+    def test_the_row_flags_alone_decide_whether_a_level_is_forwarded(
+        self, local_model_cost_map, monkeypatch, flags, level, forwarded
+    ):
+        """Same model name, rewritten row: this surface reads every level opt-out, xhigh included,
+        so the gate flips with the flags alone. max is the one level no flag can turn off here,
+        since the same model honors it on this route and refuses it on chat. The chat test module
+        pins the real row's facts."""
+        real_row = litellm.model_cost["gpt-6.1-sol"]
+        without_flags = {
+            field: value
+            for field, value in real_row.items()
+            if not (field.startswith("supports_") and field.endswith("_reasoning_effort"))
+        }
+        monkeypatch.setitem(litellm.model_cost, "gpt-6.1-sol", {**without_flags, **flags})
+        dropped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert ("reasoning" in dropped) is forwarded
+        if not forwarded:
+            with pytest.raises(litellm.UnsupportedParamsError):
+                OpenAIResponsesAPIConfig().map_openai_params(
+                    response_api_optional_params={"reasoning": {"effort": level}},
+                    model="gpt-6.1-sol",
+                    drop_params=False,
+                )
+
+    def test_dropping_a_refused_effort_keeps_the_rest_of_the_reasoning_object(self, local_model_cost_map):
+        refused = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": refused, "summary": "auto"}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert mapped["reasoning"] == {"summary": "auto"}
+
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_gpt5_3_codex_forwards_exactly_the_effort_levels_its_map_row_allows(self, local_model_cost_map, level):
+        """The gate turns a stale false into a local refusal, so the Responses-only codex row has to
+        say what the route does. On 2026-10-01 /v1/responses answered gpt-5.3-codex none and xhigh
+        with 200 (effort echoed back) and minimal and max with 400 unsupported_value naming none,
+        low, medium, high and xhigh, so the row takes none and xhigh and turns minimal off."""
+        forwarded = (
+            level == "max" or litellm.model_cost["gpt-5.3-codex"].get(f"supports_{level}_reasoning_effort") is not False
+        )
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-5.3-codex",
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is forwarded
+
+    def test_gpt5_3_codex_row_takes_none_and_xhigh(self, local_model_cost_map):
+        """Pinned on purpose so the row-derived test above cannot go vacuous: the live answers of
+        2026-10-01 listed above. When OpenAI changes the set, flip the row and this assertion
+        together."""
+        row = litellm.model_cost["gpt-5.3-codex"]
+        assert row["supports_none_reasoning_effort"] is True
+        assert row["supports_xhigh_reasoning_effort"] is True
+        assert row["supports_minimal_reasoning_effort"] is False
 
     def test_top_p_raises_without_drop_params(self, local_model_cost_map):
         with pytest.raises(litellm.UnsupportedParamsError):

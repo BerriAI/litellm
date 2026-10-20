@@ -13,6 +13,8 @@ import threading
 import time
 from typing import Final, Literal
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.constants import (
     DAYS_IN_A_MONTH,
@@ -21,6 +23,8 @@ from litellm.constants import (
     HOURS_IN_A_DAY,
 )
 from litellm.utils import ModelResponse
+
+_BUDGET_SERVER_REPLY: Final = TypeAdapter(object)
 
 
 class BudgetManager:
@@ -211,6 +215,5 @@ class BudgetManager:
         elif self.client_type == "hosted":
             url: Final = self.api_base + "/set_budget"
             data: Final = {"project_name": self.project_name, "user_dict": self.user_dict}
-            response = litellm.module_level_client.post(url, headers=self.headers, json=data)
-            response = response.json()
-            return response
+            response: Final = litellm.module_level_client.post(url, headers=self.headers, json=data)
+            return _BUDGET_SERVER_REPLY.validate_python(response.json())
