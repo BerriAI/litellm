@@ -5,7 +5,12 @@ Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthrop
 """
 
 import json
-from typing import Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final, Literal
+
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
@@ -24,6 +29,17 @@ ANTHROPIC_ERROR_TYPE_MAP: Final[dict[int, AnthropicErrorType]] = {
     529: "overloaded_error",
 }
 
+ANTHROPIC_STATUS_CODE_MAP: Final = MappingProxyType({503: 529})
+
+
+@with_config(ConfigDict(extra="allow"))
+class _AnthropicShapedEnvelope(TypedDict):
+    type: ReadOnly[Literal["error"]]
+    error: ReadOnly[Mapping[str, object]]
+
+
+_ANTHROPIC_SHAPED_ENVELOPE: Final = TypeAdapter(_AnthropicShapedEnvelope)
+
 
 class AnthropicExceptionMapping:
     """
@@ -33,9 +49,15 @@ class AnthropicExceptionMapping:
     """
 
     @staticmethod
+    def get_status_code(status_code: int) -> int:
+        """Map an HTTP status code to the one Anthropic's contract answers with: it has no 503, so an upstream that
+        cannot take the request right now is its 529 overloaded_error."""
+        return ANTHROPIC_STATUS_CODE_MAP.get(status_code, status_code)
+
+    @staticmethod
     def get_error_type(status_code: int) -> AnthropicErrorType:
         """Map HTTP status code to Anthropic error type."""
-        return ANTHROPIC_ERROR_TYPE_MAP.get(status_code, "api_error")
+        return ANTHROPIC_ERROR_TYPE_MAP.get(AnthropicExceptionMapping.get_status_code(status_code), "api_error")
 
     @staticmethod
     def create_error_response(
@@ -89,22 +111,28 @@ class AnthropicExceptionMapping:
         return raw_message
 
     @staticmethod
-    def _is_anthropic_error_dict(parsed: dict) -> bool:
-        """
-        Check if a parsed dict is in Anthropic error format.
+    def _anthropic_error_envelope(parsed: dict | None) -> _AnthropicShapedEnvelope | None:
+        """The parsed body when it already is an Anthropic error envelope, `{"type": "error", "error": {"type": ...,
+        "message": ...}}`, with every other field it carries kept."""
+        try:
+            envelope: Final = _ANTHROPIC_SHAPED_ENVELOPE.validate_python(parsed)
+        except ValidationError:
+            return None
+        return envelope if "type" in envelope["error"] and "message" in envelope["error"] else None
 
-        Anthropic error format:
-        {
-            "type": "error",
-            "error": {"type": "...", "message": "..."}
-        }
-        """
-        return (
-            parsed.get("type") == "error"
-            and isinstance(parsed.get("error"), dict)
-            and "type" in parsed["error"]
-            and "message" in parsed["error"]
+    @staticmethod
+    def _passthrough(
+        envelope: _AnthropicShapedEnvelope, status_code: int, request_id: str | None
+    ) -> AnthropicErrorResponse:
+        """An already Anthropic-shaped body passes through with the request id it lacks and the error type a
+        remapped status names: a 503 envelope answers as 529, and a 529 answering `api_error` contradicts itself."""
+        request_id_field: Final[Mapping[str, str]] = (
+            {"request_id": request_id} if request_id and "request_id" not in envelope else {}
         )
+        error_type_field: Final[Mapping[str, AnthropicErrorType]] = (
+            {"type": ANTHROPIC_ERROR_TYPE_MAP[status_code]} if status_code in ANTHROPIC_STATUS_CODE_MAP.values() else {}
+        )
+        return {**envelope, **request_id_field, "error": {**envelope["error"], **error_type_field}}
 
     @staticmethod
     def _extract_message_from_dict(parsed: dict, raw_message: str) -> str:
@@ -131,7 +159,8 @@ class AnthropicExceptionMapping:
         """
         Transform an error message to Anthropic format.
 
-        - If already in Anthropic format: passthrough unchanged
+        - If already in Anthropic format: passthrough, with the error type a remapped status names (a 503 answers
+          as 529, and 529 is overloaded_error)
         - Otherwise: extract message and create Anthropic error
 
         Parses JSON only once for efficiency.
@@ -150,11 +179,9 @@ class AnthropicExceptionMapping:
             parsed = None
 
         # If parsed and already in Anthropic format - passthrough
-        if parsed is not None and AnthropicExceptionMapping._is_anthropic_error_dict(parsed):
-            # Optionally add request_id if provided and not present
-            if request_id and "request_id" not in parsed:
-                parsed["request_id"] = request_id
-            return parsed
+        envelope: Final = AnthropicExceptionMapping._anthropic_error_envelope(parsed)
+        if envelope is not None:
+            return AnthropicExceptionMapping._passthrough(envelope, status_code, request_id)
 
         # Extract message - use parsed dict if available, otherwise raw string
         if parsed is not None:
@@ -196,7 +223,8 @@ class AnthropicErrorSseFrame(str):
 
 
 def anthropic_error_sse_frame(status_code: int, raw_message: str) -> AnthropicErrorSseFrame:
+    answered_status: Final = AnthropicExceptionMapping.get_status_code(status_code)
     return AnthropicErrorSseFrame(
-        status_code,
-        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=status_code, raw_message=raw_message),
+        answered_status,
+        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=answered_status, raw_message=raw_message),
     )

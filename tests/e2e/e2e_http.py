@@ -321,12 +321,15 @@ def request_with_retry[T: RetryableResponse](
     """Bounded retry on statuses attributable to the PROVIDER, never the proxy.
 
     The system under test is the proxy, so the transport may only absorb
-    statuses the proxy itself cannot emit; today that is exactly 529, the
-    Anthropic overloaded_error passed through verbatim (their own SDK retries
-    it too). 500/502/503/504 stay first-class failures: at this layer a 5xx
-    from the proxy is indistinguishable from one it relayed, and retrying them
-    could mask an intermittently failing proxy. Widen the set only for a
-    status litellm provably never originates, with an observed flake in hand.
+    statuses that mean an overloaded provider; today that is exactly 529, the
+    Anthropic overloaded_error (their own SDK retries it too). The Anthropic
+    routes also answer the proxy's own 503s as 529, so a test asserting one of
+    those wraps its call in without_retries(), and a proxy that keeps failing
+    still fails once the bounded retries run out. 500/502/503/504 stay
+    first-class failures: at this layer a 5xx from the proxy is
+    indistinguishable from one it relayed, and retrying them could mask an
+    intermittently failing proxy. Widen the set only for a status that means
+    an overloaded provider, with an observed flake in hand.
 
     Also deliberately NOT retried: 429, because this suite asserts the proxy's
     own rate-limit and budget 429s; network errors and timeouts, because a

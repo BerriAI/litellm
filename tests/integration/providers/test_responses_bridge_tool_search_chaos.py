@@ -1215,7 +1215,8 @@ async def test_upstream_outage_mid_burst_fails_only_its_calls_and_every_replay_l
         assert len(served) == len(calls)
         for item in served:
             if item.call.marker in down:
-                assert item.status == 503 and _BRIDGE_OUTAGE in item.text, item.text
+                assert item.status == (529 if item.call.endpoint == "messages" else 503), item.text
+                assert _BRIDGE_OUTAGE in item.text, item.text
                 assert rv.answer(item.call.marker) not in item.text, item.text
             else:
                 _bridge_assert_answered(item)

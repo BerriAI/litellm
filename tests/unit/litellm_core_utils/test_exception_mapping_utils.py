@@ -1010,12 +1010,12 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
 
 
 class _UpstreamHTTPError(Exception):
-    def __init__(self, status_code: int) -> None:
-        super().__init__("upstream failure")
-        self.message = "upstream failure"
+    def __init__(self, status_code: int, message: str = "upstream failure") -> None:
+        super().__init__(message)
+        self.message = message
         self.status_code = status_code
         self.request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
-        self.response = httpx.Response(status_code=status_code, request=self.request, text="upstream failure")
+        self.response = httpx.Response(status_code=status_code, request=self.request, text=message)
 
 
 UPSTREAM_STATUS_CODES = (400, 401, 402, 403, 404, 408, 422, 429, 500, 503)
@@ -1211,6 +1211,50 @@ def test_an_already_mapped_litellm_exception_passes_through_untouched(provider, 
     )
 
     assert returned is already_mapped
+
+
+@pytest.mark.parametrize(
+    "message",
+    ['{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}', "upstream failure"],
+)
+def test_an_anthropic_529_stays_an_internal_server_error_that_carries_the_529(message, quiet_exception_mapping):
+    """An Anthropic overload keeps the InternalServerError class and 500 status that retry and allowed-fails
+    policies and SDK callers key on, and carries the provider's 529 for the Anthropic-shaped routes to answer."""
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=529, message=message),
+            custom_llm_provider="anthropic",
+        )
+
+    assert (type(raised.value), raised.value.status_code, raised.value.provider_status_code) == (
+        litellm.InternalServerError,
+        500,
+        529,
+    )
+
+
+@pytest.mark.parametrize("status_code", [400, 404])
+def test_an_anthropic_client_error_naming_overloaded_carries_no_overload_status(status_code, quiet_exception_mapping):
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=status_code, message="model: claude-Overloaded"),
+            custom_llm_provider="anthropic",
+        )
+
+    assert raised.value.provider_status_code is None
+
+
+def test_an_anthropic_500_carries_its_own_status_as_the_provider_status(quiet_exception_mapping):
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=500),
+            custom_llm_provider="anthropic",
+        )
+
+    assert (raised.value.status_code, raised.value.provider_status_code) == (500, 500)
 
 
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
