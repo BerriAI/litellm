@@ -796,7 +796,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     # logic becomes shared across providers.
 
     #### CALL HOOKS - proxy only ####
-    def _load_credentials(self, bearer_token: str | None = None):
+    def _load_credentials(self, api_key: str | None = None):
         try:
             from botocore.credentials import Credentials
         except ImportError:
@@ -820,7 +820,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         credentials: Final[Credentials | None] = (
             None
-            if bearer_token is not None
+            if bedrock_bearer_token(api_key) is not None
             else self.get_credentials(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
@@ -1017,9 +1017,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         start_time: "datetime",
         allow_chunking: bool,
     ) -> BedrockGuardrailResponse:
-        credentials, aws_region_name = await run_aws_signing(
-            self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
-        )
+        credentials, aws_region_name = await run_aws_signing(self._load_credentials, api_key=api_key)
 
         completed_chunk_usages: Final[list[BedrockGuardrailUsage]] = []  # mutable-ok: billed-chunk usage accumulator
         try:
@@ -1960,9 +1958,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return BedrockGuardrailResponse()
 
         api_key: Final[str | None] = request_data.get("api_key") if request_data else None
-        credentials, aws_region_name = await run_aws_signing(
-            self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
-        )
+        credentials, aws_region_name = await run_aws_signing(self._load_credentials, api_key=api_key)
         body: Final[dict[str, object]] = {"messages": checks_messages, "checks": self.checks}
 
         prepared_request: Final = await run_aws_signing(

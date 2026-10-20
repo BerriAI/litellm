@@ -337,10 +337,7 @@ class BedrockRealtime(BaseAWSLLM):
 
         # Get AWS region
         if aws_region_name is None:
-            optional_params: Final = {
-                "aws_region_name": aws_region_name,
-            }
-            aws_region_name = self._get_aws_region_name(optional_params, model)
+            aws_region_name = await run_aws_signing(self.get_aws_region_name, {}, model)
 
         # Get endpoint URL
         if api_base is not None:
