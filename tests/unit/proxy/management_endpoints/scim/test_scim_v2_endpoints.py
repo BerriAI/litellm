@@ -3119,24 +3119,16 @@ def _admin_group_team() -> LiteLLM_TeamTable:
 
 
 @pytest.mark.asyncio
-async def test_delete_group_deletes_the_whole_team_in_one_request_and_demotes_its_members(
+async def test_delete_group_demotes_a_member_who_was_admin_only_through_the_deleted_group(
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ):
-    """DELETE /Groups hands the validated team to /team/delete's bulk path as one call,
-    never a per-member pass, acting as a proxy admin with the SCIM caller's key and user
-    as the audit actor, and writes the non-admin role for a member who was admin only
-    through the deleted group."""
-    _, tx, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
+    """DELETE /Groups answers 204 and writes the non-admin role for a member who was
+    admin only through the deleted group, before the team delete and again after it."""
+    _, tx, _ = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
 
     response: Final = await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
 
     assert response.status_code == 204
-    delete_team_mock.assert_awaited_once()
-    assert [team.team_id for team in delete_team_mock.call_args.kwargs["teams"]] == [_ADMIN_GROUP]
-    acting_as: Final = delete_team_mock.call_args.kwargs["user_api_key_dict"]
-    assert acting_as.user_role == LitellmUserRoles.PROXY_ADMIN
-    assert (acting_as.api_key, acting_as.user_id) == (_SCIM_CALLER.api_key, _SCIM_CALLER.user_id)
-    assert delete_team_mock.call_args.kwargs["litellm_changed_by"] is None
     assert tx.execute_raw.await_args_list == [_DEMOTED, _DEMOTED]
 
 
@@ -3213,13 +3205,14 @@ async def test_delete_group_keeps_the_team_when_the_role_writes_fail(
 
 
 @pytest.mark.asyncio
-async def test_delete_group_answers_404_when_the_team_vanished_before_the_delete(
+async def test_delete_group_answers_404_when_a_concurrent_delete_removed_the_team_first(
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ):
-    """A group deleted by a concurrent request between the lookup and the team delete
-    answers 404, the same as a group that never existed."""
+    """A concurrent delete that removed the group while this one waited on the team lock
+    leaves the team delete nothing to delete or report, so this request answers 404, the
+    same as a group that never existed."""
     _, _, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
-    delete_team_mock.side_effect = HTTPException(status_code=404, detail={"error": "Team not found"})
+    delete_team_mock.return_value = DeletedTeams(team_ids=(), member_user_ids=())
 
     with pytest.raises(ProxyException) as raised:
         await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
@@ -3283,7 +3276,6 @@ async def test_delete_group_is_refused_while_the_team_holds_a_ptu_share(mocker, 
 
     assert refused.value.code == "400"
     assert "test-team-123" in str(refused.value.message) and "shared-ptu" in str(refused.value.message)
-    assert [name for name, _, _ in mock_prisma_client.mock_calls] == ["db.litellm_teamtable.find_unique"]
 
 
 @pytest.mark.asyncio

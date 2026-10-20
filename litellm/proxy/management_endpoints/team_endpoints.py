@@ -425,6 +425,9 @@ class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
     @property
     def litellm_teammembership(self) -> "TableActions[prisma_models.LiteLLM_TeamMembership]": ...
 
+    @property
+    def litellm_deletedteamtable(self) -> "TableActions[prisma_models.LiteLLM_DeletedTeamTable]": ...
+
 
 _LOCK_DELETED_TEAM_MEMBERS_SQL: Final = """
 SELECT user_id, teams FROM "LiteLLM_UserTable" WHERE teams && $1::text[] ORDER BY user_id COLLATE "C" FOR UPDATE
@@ -4603,9 +4606,11 @@ async def delete_validated_teams(
 ) -> DeletedTeams:
     """
     What ``/team/delete`` does once the teams exist and the caller may delete them: the
-    deleted-team records, the audit rows, the teams' keys and BYOK models, then the team
-    rows with their membership rows and user references under every team's advisory lock,
-    then the cache evictions. ``member_user_ids`` names every user the deletion touched:
+    audit rows, the teams' keys and BYOK models, then under every team's advisory lock the
+    deleted-team records and rows of the teams still there with their membership rows and
+    user references, then the cache evictions. ``team_ids`` names the teams this call
+    deleted, so one a concurrent delete removed first is left out and recorded only once.
+    ``member_user_ids`` names every user the deletion touched:
     the rosters as the caller read them plus the users the locked sweep detached, which
     includes a member a concurrent roster write added after that read.
     """
@@ -4621,12 +4626,6 @@ async def delete_validated_teams(
     )
 
     team_ids: Final = [team.team_id for team in teams]
-    await _persist_deleted_team_records(
-        teams=teams,
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by=litellm_changed_by,
-    )
 
     if is_audit_logging_enabled():
         # make an audit log for each team deleted
@@ -4725,11 +4724,12 @@ async def delete_validated_teams(
     # the lock before this transaction starts, in which case this sweep reaches what it wrote,
     # or is still waiting on the lock, in which case its own re-read happens after this commits
     # and sees the row gone before it writes anything.
-    delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": team_ids}}
     async with prisma_client.tx(timeout=timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)) as tx:
         for team_id in sorted(team_ids):
             await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
-        await tx.litellm_teamtable.delete_many(where=delete_filter)
+        present: Final = await _delete_present_teams_tx(
+            teams=teams, tx=tx, user_api_key_dict=user_api_key_dict, litellm_changed_by=litellm_changed_by
+        )
         detached_per_team: Final = await _sweep_deleted_team_references_tx(team_ids=team_ids, tx=tx)
 
     member_ids_per_team: Final = _members_per_deleted_team(rostered_per_team, detached_per_team)
@@ -4754,7 +4754,7 @@ async def delete_validated_teams(
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return DeletedTeams(
-        team_ids=tuple(team_ids),
+        team_ids=tuple(team_id for team_id in team_ids if team_id in present),
         member_user_ids=tuple(dict.fromkeys(chain.from_iterable(user_ids for _, user_ids in member_ids_per_team))),
     )
 
@@ -4766,6 +4766,24 @@ def _members_per_deleted_team(
     return tuple(
         (team_id, tuple(dict.fromkeys((*user_ids, *detached_by_team[team_id])))) for team_id, user_ids in rostered
     )
+
+
+async def _delete_present_teams_tx(
+    teams: Sequence[LiteLLM_TeamTable],
+    tx: _TeamDeleteTx,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: str | None,
+) -> frozenset[str]:
+    delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": [team.team_id for team in teams]}}
+    present: Final = frozenset(team.team_id for team in await tx.litellm_teamtable.find_many(where=delete_filter))
+    await _persist_deleted_team_records(
+        teams=tuple(team for team in teams if team.team_id in present),
+        deleted_teams=tx.litellm_deletedteamtable,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
+    await tx.litellm_teamtable.delete_many(where=delete_filter)
+    return present
 
 
 async def _sweep_deleted_team_references_tx(
@@ -4944,17 +4962,17 @@ def _transform_teams_to_deleted_records(
 
 async def _save_deleted_team_records(
     records: list[dict[str, object]],
-    prisma_client: PrismaClient,
+    deleted_teams: "TableActions[prisma_models.LiteLLM_DeletedTeamTable]",
 ) -> None:
     """Save deleted team records to the database."""
     if not records:
         return
-    await _deleted_team_db(prisma_client).create_many(data=records)
+    await deleted_teams.create_many(data=records)
 
 
 async def _persist_deleted_team_records(
     teams: Sequence[LiteLLM_TeamTable],
-    prisma_client: PrismaClient,
+    deleted_teams: "TableActions[prisma_models.LiteLLM_DeletedTeamTable]",
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
 ) -> None:
@@ -4966,7 +4984,7 @@ async def _persist_deleted_team_records(
     )
     await _save_deleted_team_records(
         records=records,
-        prisma_client=prisma_client,
+        deleted_teams=deleted_teams,
     )
 
 

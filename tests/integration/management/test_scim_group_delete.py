@@ -55,6 +55,7 @@ DEMOTED_ROLE: Final = "internal_user_viewer"
 MASTER_KEY_USER: Final = "default_user_id"
 BURST_GROUPS: Final = 20
 OWNED_PROXY_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 120)
+DELETED_TEAM_RECORDS_SQL: Final = 'SELECT team_id FROM "LiteLLM_DeletedTeamTable" WHERE team_id = %s'
 DELETED_AUDIT_ROWS_SQL: Final = """
 SELECT table_name, action, object_id, changed_by, changed_by_api_key
 FROM "LiteLLM_AuditLog"
@@ -257,6 +258,20 @@ def test_deleting_a_group_twice_is_404_the_second_time(gateway: Gateway) -> None
         assert "error" in body(second), second.text
         assert gateway.request("GET", f"/scim/v2/Groups/{team}").status_code == 404
         assert membership_user_ids(team) == frozenset()
+
+
+def test_two_deletes_racing_on_one_group_answer_204_then_404_and_record_the_team_once(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=2) as pool:
+        users: Final = seed_users(scenario, 2)
+        team: Final = created_team(scenario, create_group(gateway, users))
+
+        with held_team_lock(team) as holder:
+            deletes: Final = (pool.submit(delete_group, gateway, team), pool.submit(delete_group, gateway, team))
+            eventually(lambda: waiters_on_lock_held_by(holder), lambda waiting: waiting == 2, seconds=30)
+
+        assert sorted(delete.result().status_code for delete in deletes) == [204, 404]
+        assert len(read_rows(DELETED_TEAM_RECORDS_SQL, (team,))) == 1
+        assert gateway.request("GET", f"/scim/v2/Groups/{team}").status_code == 404
 
 
 def test_deleting_a_group_with_a_non_admin_key_is_refused(gateway: Gateway) -> None:

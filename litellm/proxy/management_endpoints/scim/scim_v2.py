@@ -323,9 +323,13 @@ async def _check_team_exists(team_id: str) -> LiteLLM_TeamTable:
     team: Final = await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
 
     if not team:
-        raise HTTPException(status_code=404, detail={"error": f"Group not found with ID: {team_id}"})
+        raise _group_not_found(team_id)
 
     return team
+
+
+def _group_not_found(team_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail={"error": f"Group not found with ID: {team_id}"})
 
 
 def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
@@ -3098,6 +3102,8 @@ async def delete_group(
             litellm_changed_by=None,
         )
         await _recompute_scim_member_roles(prisma_client, deleted.member_user_ids, without_team_id=group_id)
+        if group_id not in deleted.team_ids:
+            raise _group_not_found(group_id)
 
         return Response(status_code=204)
 
