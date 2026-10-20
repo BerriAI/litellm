@@ -3993,32 +3993,19 @@ def test_require_managed_files_rejects_raw_provider_file_id(
     mock_call.assert_not_called()
 
 
-def test_get_file_content_model_routed_passes_the_deployment_bucket_to_the_sdk(
+def test_get_file_content_model_routed_reads_from_the_deployment_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A managed batch output id routes by model, so Bedrock batch output retrieval only
-    works when the deployment's s3_bucket_name reaches litellm.afile_content. Without it
-    every retrieval fails with "S3 bucket_name is required"."""
+    works when the deployment's s3_bucket_name reaches the SDK. Without it every
+    retrieval fails with "S3 bucket_name is required"."""
     import base64
-    from types import MappingProxyType
 
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
     from litellm.types.utils import SpecialEnums
 
-    calls: list[MappingProxyType] = []
-
-    async def _sdk_afile_content(**kwargs):
-        calls.append(MappingProxyType(dict(kwargs)))
-        return HttpxBinaryResponseContent(
-            response=httpx.Response(
-                status_code=200,
-                content=b'{"recordId":"req-1"}',
-                headers={"content-type": "application/octet-stream"},
-            )
-        )
-
-    monkeypatch.setattr(litellm, "afile_content", _sdk_afile_content)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     router = Router(
         model_list=[
@@ -4026,6 +4013,8 @@ def test_get_file_content_model_routed_passes_the_deployment_bucket_to_the_sdk(
                 "model_name": "anthropic.batch.claude-4.5-haiku",
                 "litellm_params": {
                     "model": "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
                     "aws_region_name": "us-east-1",
                     "s3_bucket_name": "configured-batch-bucket",
                 },
@@ -4053,7 +4042,7 @@ def test_get_file_content_model_routed_passes_the_deployment_bucket_to_the_sdk(
         "application/jsonl",
         "unified-output-id",
         "anthropic.batch.claude-4.5-haiku",
-        "llm_output_file_id,s3://configured-batch-bucket/out/batch.jsonl",
+        "s3://configured-batch-bucket/litellm-batch-outputs/job/output.jsonl",
         "bedrock-batch-deployment-id",
     )
     encoded_id = base64.urlsafe_b64encode(unified_id.encode()).decode().rstrip("=")
@@ -4064,16 +4053,22 @@ def test_get_file_content_model_routed_passes_the_deployment_bucket_to_the_sdk(
         user_id="test-user",
     )
     try:
-        response = client.get(
-            f"/v1/files/{encoded_id}/content",
-            headers={"Authorization": "Bearer test-key", "custom-llm-provider": "bedrock"},
-        )
+        with respx.mock(assert_all_called=False) as s3:
+            s3_read: Final = s3.get(url__regex=r"https://.*amazonaws\.com/.*").mock(
+                return_value=httpx.Response(200, content=b'{"recordId":"req-1"}')
+            )
+            response = client.get(
+                f"/v1/files/{encoded_id}/content",
+                headers={"Authorization": "Bearer test-key", "custom-llm-provider": "bedrock"},
+            )
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
     assert response.status_code == 200, response.text
-    assert len(calls) == 1, f"expected exactly one routed retrieval, got {len(calls)}"
-    assert calls[0]["s3_bucket_name"] == "configured-batch-bucket"
+    assert response.content == b'{"recordId":"req-1"}'
+    assert [call.request.url.path for call in s3_read.calls] == [
+        "/configured-batch-bucket/litellm-batch-outputs/job/output.jsonl"
+    ]
 
 
 def _unified_managed_file_id() -> str:
