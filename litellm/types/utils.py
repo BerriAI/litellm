@@ -2062,6 +2062,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         setattr(self, key, value)
 
 
+class UnreportedUsage(Usage):
+    pass
+
+
 class StreamingChoices(OpenAIObject):
     def __init__(
         self,
