@@ -29769,6 +29769,11 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supported_regions": [
+            "global",
+            "us",
+            "eu"
+        ],
         "supports_audio_input": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
@@ -75527,6 +75532,11 @@
         ],
         "supported_output_modalities": [
             "text"
+        ],
+        "supported_regions": [
+            "global",
+            "us",
+            "eu"
         ],
         "supports_audio_input": true,
         "supports_function_calling": true,

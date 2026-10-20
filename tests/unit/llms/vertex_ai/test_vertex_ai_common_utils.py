@@ -1032,6 +1032,7 @@ def test_get_vertex_region_global_only_model(model_cost_entry, vertex_region, ex
         assert result == expected_region
 
 
+@pytest.mark.parametrize("model", ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-4-argon"])
 @pytest.mark.parametrize(
     "vertex_region, expected_region",
     [
@@ -1040,15 +1041,21 @@ def test_get_vertex_region_global_only_model(model_cost_entry, vertex_region, ex
         ("us", "us"),
         ("eu", "eu"),
         ("us-central1", "us-central1"),
+        ("europe-west1", "europe-west1"),
     ],
 )
-def test_get_vertex_region_gemini_3_7_flash(vertex_region, expected_region):
+def test_gemini_defaults_to_global_and_preserves_explicit_regions(
+    model: str, vertex_region: str | None, expected_region: str
+) -> None:
+    """Location availability verified 2026-10-19:
+
+    https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-7-flash
+    https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-8-flash
+    https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+    """
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
-    assert (
-        VertexBase.get_vertex_region(vertex_region=vertex_region, model="gemini-3.7-flash")
-        == expected_region
-    )
+    assert VertexBase.get_vertex_region(vertex_region=vertex_region, model=model) == expected_region
 
 
 def test_vertex_filter_format_uri():
