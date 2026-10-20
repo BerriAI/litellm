@@ -109,11 +109,11 @@ def _zstd_bomb(decoded_mib: int) -> bytes:
 @pytest.mark.parametrize(
     ("compressed", "content_encoding"),
     [
-        (gzip.compress(REQUEST_JSON, mtime=0), "gzip"),
-        (zstd.compress(REQUEST_JSON), "zstd"),
-        (gzip.compress(REQUEST_JSON, mtime=0), " GZip "),
-        (zstd.compress(REQUEST_JSON), "ZSTD"),
-        (gzip.compress(REQUEST_JSON, mtime=0), "x-gzip"),
+        pytest.param(gzip.compress(REQUEST_JSON, mtime=0), "gzip", id="gzip"),
+        pytest.param(zstd.compress(REQUEST_JSON), "zstd", id="zstd"),
+        pytest.param(gzip.compress(REQUEST_JSON, mtime=0), " GZip ", id="gzip-mixed-case-padded"),
+        pytest.param(zstd.compress(REQUEST_JSON), "ZSTD", id="zstd-upper-case"),
+        pytest.param(gzip.compress(REQUEST_JSON, mtime=0), "x-gzip", id="x-gzip"),
     ],
 )
 def test_supported_encoding_reaches_the_app_decoded(compressed: bytes, content_encoding: str):
@@ -130,13 +130,13 @@ def test_supported_encoding_reaches_the_app_decoded(compressed: bytes, content_e
 @pytest.mark.parametrize(
     ("body", "content_encodings"),
     [
-        (gzip.compress(REQUEST_JSON, mtime=0), ()),
-        (gzip.compress(REQUEST_JSON, mtime=0), ("identity",)),
-        (b"\x1b\x00brotli-ish", ("br",)),
-        (REQUEST_JSON, ("compress",)),
-        (zlib.compress(REQUEST_JSON), ("deflate",)),
-        (gzip.compress(REQUEST_JSON, mtime=0), ("gzip, zstd",)),
-        (gzip.compress(REQUEST_JSON, mtime=0), ("gzip", "gzip")),
+        pytest.param(gzip.compress(REQUEST_JSON, mtime=0), (), id="no-header"),
+        pytest.param(gzip.compress(REQUEST_JSON, mtime=0), ("identity",), id="identity"),
+        pytest.param(b"\x1b\x00brotli-ish", ("br",), id="br"),
+        pytest.param(REQUEST_JSON, ("compress",), id="compress"),
+        pytest.param(zlib.compress(REQUEST_JSON), ("deflate",), id="deflate"),
+        pytest.param(gzip.compress(REQUEST_JSON, mtime=0), ("gzip, zstd",), id="stacked-in-one-header"),
+        pytest.param(gzip.compress(REQUEST_JSON, mtime=0), ("gzip", "gzip"), id="two-headers"),
     ],
 )
 def test_other_encodings_reach_the_app_untouched(body: bytes, content_encodings: tuple[str, ...]):
@@ -153,13 +153,13 @@ def test_other_encodings_reach_the_app_untouched(body: bytes, content_encodings:
 @pytest.mark.parametrize(
     ("body", "content_encoding"),
     [
-        (REQUEST_JSON, "gzip"),
-        (REQUEST_JSON, "zstd"),
-        (gzip.compress(REQUEST_JSON, mtime=0), "zstd"),
-        (zstd.compress(REQUEST_JSON), "gzip"),
-        (_low_entropy_text(2 * int(CAP_MB * MIB)), "gzip"),
-        (_low_entropy_text(2 * int(CAP_MB * MIB)), "zstd"),
-        (b"{}", "zstd"),
+        pytest.param(REQUEST_JSON, "gzip", id="plain-labeled-gzip"),
+        pytest.param(REQUEST_JSON, "zstd", id="plain-labeled-zstd"),
+        pytest.param(gzip.compress(REQUEST_JSON, mtime=0), "zstd", id="gzip-labeled-zstd"),
+        pytest.param(zstd.compress(REQUEST_JSON), "gzip", id="zstd-labeled-gzip"),
+        pytest.param(_low_entropy_text(2 * int(CAP_MB * MIB)), "gzip", id="plain-past-the-cap-labeled-gzip"),
+        pytest.param(_low_entropy_text(2 * int(CAP_MB * MIB)), "zstd", id="plain-past-the-cap-labeled-zstd"),
+        pytest.param(b"{}", "zstd", id="tiny-plain-labeled-zstd"),
     ],
 )
 def test_body_that_is_not_in_its_labeled_encoding_reaches_the_app_as_sent(body: bytes, content_encoding: str):
@@ -271,26 +271,53 @@ def _gzip_declaring_a_smaller_size(content: bytes) -> bytes:
 @pytest.mark.parametrize(
     ("body", "content_encoding", "message"),
     [
-        (GZIP_MAGIC + b"not gzip at all", "gzip", "Request body is not valid gzip data: "),
-        (ZSTD_FRAME_MAGIC + b"not zstd at all", "zstd", "Request body is not valid zstd data: "),
-        (gzip.compress(REQUEST_JSON, mtime=0)[:-8], "gzip", "Request body ends before the end of its gzip stream"),
-        (zstd.compress(REQUEST_JSON)[:-8], "zstd", "Request body ends before the end of its zstd stream"),
-        (
+        pytest.param(
+            GZIP_MAGIC + b"not gzip at all", "gzip", "Request body is not valid gzip data: ", id="corrupt-gzip"
+        ),
+        pytest.param(
+            ZSTD_FRAME_MAGIC + b"not zstd at all", "zstd", "Request body is not valid zstd data: ", id="corrupt-zstd"
+        ),
+        pytest.param(
+            gzip.compress(REQUEST_JSON, mtime=0)[:-8],
+            "gzip",
+            "Request body ends before the end of its gzip stream",
+            id="truncated-gzip",
+        ),
+        pytest.param(
+            zstd.compress(REQUEST_JSON)[:-8],
+            "zstd",
+            "Request body ends before the end of its zstd stream",
+            id="truncated-zstd",
+        ),
+        pytest.param(
             gzip.compress(REQUEST_JSON, mtime=0) + b"{}",
             "gzip",
             "Request body has data after the end of its gzip stream",
+            id="gzip-trailing-data",
         ),
-        (zstd.compress(REQUEST_JSON) + b"{}", "zstd", "Request body has data after the end of its zstd stream"),
-        (_zstd_frame_needing_a_window_over_the_rfc_9659_limit(), "zstd", "Request body is not valid zstd data: "),
-        (
+        pytest.param(
+            zstd.compress(REQUEST_JSON) + b"{}",
+            "zstd",
+            "Request body has data after the end of its zstd stream",
+            id="zstd-trailing-data",
+        ),
+        pytest.param(
+            _zstd_frame_needing_a_window_over_the_rfc_9659_limit(),
+            "zstd",
+            "Request body is not valid zstd data: ",
+            id="zstd-window-over-the-rfc-limit",
+        ),
+        pytest.param(
             _zstd_skippable_frame(b"meta") + zstd.compress(REQUEST_JSON),
             "zstd",
             "Request body has data after the end of its zstd stream",
+            id="zstd-skippable-frame-first",
         ),
-        (
+        pytest.param(
             _gzip_declaring_a_smaller_size(REQUEST_JSON),
             "gzip",
             "Request body decodes past the size its gzip data declares",
+            id="gzip-declaring-a-smaller-size",
         ),
     ],
 )
