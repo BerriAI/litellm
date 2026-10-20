@@ -1607,6 +1607,52 @@ def _pdf_data_url_with_xobjects(
     return PDF_DATA_URL_PREFIX + base64.b64encode(header + b"".join(object_chunks) + xref + trailer).decode()
 
 
+def _pdf_data_url_with_shared_xobjects(
+    page_contents: tuple[bytes, ...],
+    xobject_objects: tuple[bytes, ...],
+) -> str:
+    page_count: Final = len(page_contents)
+    page_object_numbers: Final = tuple(5 + index for index in range(page_count))
+    content_object_numbers: Final = tuple(5 + page_count + index for index in range(page_count))
+    first_xobject_object_number: Final = 5 + 2 * page_count
+    page_references: Final = b" ".join(f"{number} 0 R".encode() for number in page_object_numbers)
+    xobject_references: Final = b" ".join(
+        f"/Fm{index} {first_xobject_object_number + index} 0 R".encode()
+        for index in range(len(xobject_objects))
+    )
+    page_objects: Final = tuple(
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 4 0 R /Contents "
+        + f"{content_object} 0 R >>".encode()
+        for content_object in content_object_numbers
+    )
+    content_objects: Final = tuple(_pdf_stream(content) for content in page_contents)
+    object_bodies: Final = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids ["
+        + page_references
+        + f"] /Count {page_count} >>".encode(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Font << /F1 3 0 R >> /XObject << " + xobject_references + b" >> >>",
+        *page_objects,
+        *content_objects,
+        *xobject_objects,
+    )
+    object_chunks: Final = tuple(
+        f"{index} 0 obj\n".encode() + body + b"\nendobj\n"
+        for index, body in enumerate(object_bodies, start=1)
+    )
+    header: Final = b"%PDF-1.4\n"
+    offsets: Final = accumulate((len(header), *(len(chunk) for chunk in object_chunks[:-1])))
+    xref: Final = f"xref\n0 {len(object_chunks) + 1}\n0000000000 65535 f \n".encode() + b"".join(
+        f"{offset:010d} 00000 n \n".encode() for offset in offsets
+    )
+    trailer: Final = (
+        f"trailer\n<< /Size {len(object_chunks) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{len(header) + sum(len(chunk) for chunk in object_chunks)}\n%%EOF\n"
+    ).encode()
+    return PDF_DATA_URL_PREFIX + base64.b64encode(header + b"".join(object_chunks) + xref + trailer).decode()
+
+
 def _pdf_source(pdf_base64: str) -> dict[str, str]:
     return {"type": "base64", "media_type": "application/pdf", "data": pdf_base64}
 
@@ -1805,6 +1851,88 @@ def test_pdf_image_xobject_does_not_trigger_the_content_limit():
 
     assert priced is not None
     assert any("small page text" in call.args[0] for call in count_function.call_args_list)
+
+
+def test_pdf_pages_with_shared_resources_price_only_the_form_they_draw():
+    page_count: Final = 20
+    string_operand: Final = b"(text)"
+    text_operator: Final = string_operand + b" Tj\n"
+    repetitions: Final = 2_800 // len(string_operand)
+    page_contents: Final = tuple(f"/Fm{index} Do\n".encode() for index in range(page_count))
+    form_objects: Final = tuple(
+        _pdf_stream(
+            text_operator * repetitions,
+            b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+        )
+        for _ in range(page_count)
+    )
+    data_url: Final = _pdf_data_url_with_shared_xobjects(page_contents, form_objects)
+    blank_data_url: Final = _pdf_data_url_with_shared_xobjects((b"",) * page_count, ())
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    rendering_tokens: Final = _count_inline_pdf_tokens(blank_data_url, len)
+    string_operand_bytes: Final = page_count * len(string_operand) * repetitions
+
+    assert priced is not None
+    assert rendering_tokens is not None
+    assert priced <= string_operand_bytes * 3 // 2 + rendering_tokens
+
+
+def test_pdf_form_without_resources_inherits_page_xobjects():
+    string_operand: Final = b"(inherited form text)"
+    text_operator: Final = string_operand + b" Tj\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_operator) + 1
+    nested_form_content: Final = text_operator * repetitions
+    inherited_form: Final = _pdf_stream(
+        nested_form_content,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    unused_form: Final = _pdf_stream(
+        nested_form_content,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    form_without_resources: Final = _pdf_stream(
+        b"/Fm2 Do\n",
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792]",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1 Do\n",
+        b"<< /Fm1 6 0 R /Fm2 7 0 R /Fm3 8 0 R >>",
+        (form_without_resources, inherited_form, unused_form),
+    )
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    rendering_tokens: Final = _count_inline_pdf_tokens(blank_data_url, len)
+    string_operand_bytes: Final = len(string_operand) * repetitions
+
+    assert priced is not None
+    assert rendering_tokens is not None
+    assert priced >= string_operand_bytes
+    assert priced <= string_operand_bytes * 3 // 2 + rendering_tokens
+
+
+def test_oversized_pdf_string_operand_scan_is_linear_after_escaped_parentheses():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    padding_repetitions: Final = PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator)
+    padding_bytes: Final = padding_repetitions * len(path_operator)
+    padding: Final = path_operator * padding_repetitions + b" " * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES - padding_bytes)
+    content: Final = padding + b"%" + b"\\(" * 8_192 + path_operator * 1_000
+    page: Final = _fake_pdf_page(content_bytes=content)
+
+    started: Final = time.perf_counter()
+    _price_pdf_pages((page,), len)
+    elapsed: Final = time.perf_counter() - started
+
+    assert elapsed < 1.0
+
+
+def test_oversized_pdf_string_operand_counts_escaped_newline_continuations():
+    escaped_newlines: Final = b"a\\\n" * 10_000
+    literal_content: Final = b"(" + escaped_newlines + b"a" * 50_000 + b") Tj\n"
+    page: Final = _fake_pdf_page(content_bytes=literal_content)
+
+    priced: Final = _price_pdf_pages((page,), len)
+
+    assert priced >= 60_000
 
 
 def test_dense_pdf_page_is_priced_without_extracting_its_full_text():
