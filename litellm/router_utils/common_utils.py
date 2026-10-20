@@ -23,7 +23,12 @@ from litellm.types.router import (
     LiteLLM_Params,
     SkippedFallbackTarget,
 )
-from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo
+from litellm.types.utils import (
+    AdminApiKeySecretReference,
+    LlmProviders,
+    ProviderSpecificModelInfo,
+    admin_api_key_secret_reference,
+)
 
 _V = TypeVar("_V")
 
@@ -33,6 +38,19 @@ _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapt
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
+
+
+def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
+    if deployment.model_info.get("team_id") is not None or isinstance(
+        deployment.litellm_params.api_key, AdminApiKeySecretReference
+    ):
+        return deployment
+    params: Final = admin_api_key_secret_reference(deployment.litellm_params.model_dump(exclude_none=True))
+    if not isinstance(params.get("api_key"), AdminApiKeySecretReference):
+        return deployment
+    return deployment.model_copy(
+        update={"litellm_params": deployment.litellm_params.model_copy(update={"api_key": params["api_key"]})}
+    )
 
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:

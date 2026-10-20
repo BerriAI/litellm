@@ -72,6 +72,8 @@ class WireRecord(BaseModel):
     call_id: str | None
     error: str | None
     response_id: str | None = None
+    litellm_overhead_ms: float | None = None
+    litellm_response_ms: float | None = None
 
 
 def response_id(payload: Mapping[str, object]) -> str | None:

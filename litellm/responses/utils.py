@@ -1,6 +1,6 @@
 import base64
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
@@ -73,6 +73,26 @@ def _as_input_text_part(part: object) -> object:
 
 
 _RequestInputT: Final = TypeVar("_RequestInputT")
+
+
+def _provider_mapped_params(
+    config: BaseResponsesAPIConfig,
+    params: ResponsesAPIOptionalRequestParams,
+    model: str,
+    drop_params: bool,
+    declared_reasoning_efforts: Collection[str],
+) -> Mapping[str, object]:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    if (
+        declared_reasoning_efforts
+        and isinstance(config, OpenAIResponsesAPIConfig)
+        and type(config).map_openai_params is OpenAIResponsesAPIConfig.map_openai_params
+    ):
+        return config.map_openai_params_for_deployment(
+            params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
+        )
+    return config.map_openai_params(response_api_optional_params=params, model=model, drop_params=drop_params)
 
 
 class ResponsesAPIRequestUtils:
@@ -202,6 +222,7 @@ class ResponsesAPIRequestUtils:
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: list[str] | None = None,
         drop_params: bool | None = None,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict:
         """
         Get optional parameters for the responses API.
@@ -234,10 +255,12 @@ class ResponsesAPIRequestUtils:
 
         # Map parameters to provider-specific format
         mapped_params: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
-            responses_api_provider_config.map_openai_params(
-                response_api_optional_params=response_api_optional_params,
-                model=model,
-                drop_params=should_drop_params,
+            _provider_mapped_params(
+                responses_api_provider_config,
+                response_api_optional_params,
+                model,
+                should_drop_params,
+                declared_reasoning_efforts,
             ),
             strict=True,
         )
@@ -1236,6 +1259,7 @@ class ResponseAPILoggingUtils:
                     ),
                     video_tokens=getattr(response_api_usage.input_tokens_details, "video_tokens", None),
                     cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
+                    cache_type=getattr(response_api_usage.input_tokens_details, "cache_type", None),
                     web_search_requests=getattr(response_api_usage.input_tokens_details, "web_search_requests", None),
                     google_maps_grounding_requests=getattr(
                         response_api_usage.input_tokens_details, "google_maps_grounding_requests", None

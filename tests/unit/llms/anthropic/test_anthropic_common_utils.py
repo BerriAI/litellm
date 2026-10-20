@@ -4491,3 +4491,34 @@ def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal
     error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
 
     assert type(error) is litellm.InternalServerError
+
+
+_NON_NUMERIC_BUDGETS: Final = (True, False, None, "", "lots", [4096])
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("budget_tokens", _NON_NUMERIC_BUDGETS)
+def test_shared_legacy_thinking_translation_rejects_a_non_numeric_budget(budget_tokens: object) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"thinking\.budget_tokens must be a number"):
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model="claude-opus-5",
+            optional_params={"thinking": {"type": "enabled", "budget_tokens": budget_tokens}},
+            custom_llm_provider="azure_ai",
+            drop_params=False,
+        )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("budget_tokens", _NON_NUMERIC_BUDGETS)
+def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_drop_params(budget_tokens: object) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    optional_params: Final = {"thinking": {"type": "enabled", "budget_tokens": budget_tokens}}
+
+    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+        model="claude-opus-5", optional_params=optional_params, custom_llm_provider="azure_ai", drop_params=True
+    )
+
+    assert optional_params == {"thinking": {"type": "adaptive"}}
