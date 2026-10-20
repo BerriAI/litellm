@@ -19,8 +19,9 @@ from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 class TestAgentCoreAcceptHeader:
@@ -1269,3 +1270,80 @@ def test_agentcore_runtime_response_becomes_assistant_message(
     assert json.loads(route.calls[0].request.content)["prompt"] == "Explain machine learning in simple terms"
     assert response.choices[0].message.content == "Machine learning lets computers learn from data."
     assert response.choices[0].finish_reason == "stop"
+
+
+_AGENTCORE_RUNTIME_URL: Final = (
+    "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/"
+    "arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A888602223428%3Aruntime%2Fhosted_agent_13sf6-cALnp38iZD/invocations"
+)
+_AGENTCORE_DELTAS: Final = (
+    'data: {"event":{"contentBlockDelta":{"delta":{"text":"Machine learning lets "}}}}\n\n'
+    'data: {"event":{"contentBlockDelta":{"delta":{"text":"computers learn from data."}}}}\n\n'
+)
+
+
+async def _stream_agentcore(body: str, sync_mode: bool) -> list[tuple[str | None, str | None]]:
+    """Stream `body` from the runtime as SSE and return each chunk's (content, finish_reason)."""
+    kwargs: Final = {
+        "model": "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/"
+        "hosted_agent_13sf6-cALnp38iZD",
+        "messages": [{"role": "user", "content": "Explain machine learning in simple terms"}],
+        "aws_access_key_id": "AKIAAGENTCOREKEY",
+        "aws_secret_access_key": "agentcore-secret",
+        "stream": True,
+    }
+    if sync_mode:
+        return [
+            (chunk.choices[0].delta.content, chunk.choices[0].finish_reason)
+            for chunk in litellm.completion(**kwargs, client=HTTPHandler())
+        ]
+    return [
+        (chunk.choices[0].delta.content, chunk.choices[0].finish_reason)
+        async for chunk in await litellm.acompletion(**kwargs, client=AsyncHTTPHandler())
+    ]
+
+
+@pytest.mark.parametrize(
+    "ending",
+    [
+        pytest.param('data: {"event":{"messageStop":{"stopReason":"end_turn"}}}\n\n', id="message_stop"),
+        pytest.param(
+            'data: {"event":{"messageStop":{"stopReason":"end_turn"}}}\n\n'
+            'data: {"event":{"metadata":{"usage":{"inputTokens":9,"outputTokens":7,"totalTokens":16}}}}\n\n'
+            'data: {"message":{"role":"assistant","content":[{"text":"Machine learning lets computers learn from data."}]}}\n\n',
+            id="strands_full",
+        ),
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.respx(assert_all_called=True)
+async def test_agentcore_stream_that_signals_its_end_completes(
+    ending: str, sync_mode: bool, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(_AGENTCORE_RUNTIME_URL).mock(
+        return_value=httpx.Response(
+            200, content=(_AGENTCORE_DELTAS + ending).encode(), headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    chunks: Final = await _stream_agentcore(_AGENTCORE_DELTAS + ending, sync_mode)
+
+    assert "".join(content for content, _ in chunks if content) == "Machine learning lets computers learn from data."
+    assert [finish for _, finish in chunks if finish] == ["stop"]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.respx(assert_all_called=True)
+async def test_agentcore_stream_cut_before_it_signals_its_end_raises(
+    sync_mode: bool, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(_AGENTCORE_RUNTIME_URL).mock(
+        return_value=httpx.Response(
+            200, content=_AGENTCORE_DELTAS.encode(), headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    with pytest.raises(MidStreamFallbackError, match="Stream ended before a finish_reason was received"):
+        await _stream_agentcore(_AGENTCORE_DELTAS, sync_mode)
