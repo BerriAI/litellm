@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -22,6 +23,8 @@ from litellm.llms.anthropic.pass_through.messages.streaming_iterator import aclo
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
     PassThroughStreamingHandler,
 )
+from litellm.proxy.utils import _failure_fields_to_lift
+from litellm.router_utils.fallback_event_handlers import carry_superseded_attempt_usage
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 
@@ -958,8 +961,6 @@ async def test_chunk_processor_logs_a_provider_error_frame_as_a_failure_when_clo
     assert received == list(frames)
     assert recorder.success_kwargs == []
     assert logging_obj.model_call_details.get("has_dispatched_final_stream_success") is not True
-    assert "combined_usage_object" not in logging_obj.model_call_details
-    assert "response_cost" not in logging_obj.model_call_details
     assert logging_obj.should_run_logging("async_failure")
     assert len(recorder.failure_kwargs) == 1
     failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
@@ -1093,6 +1094,31 @@ async def test_superseded_attempt_failure_log_keeps_its_own_deployment_when_the_
 
 
 @pytest.mark.asyncio
+async def test_error_frame_then_exhausted_retry_bills_both_attempts() -> None:
+    recorder: Final = _EventRecorder()
+    logging_obj: Final = _anthropic_messages_logging_obj(recorder, "test-error-frame-terminal-billing")
+    superseded: Final = _anthropic_messages_attempt(
+        logging_obj, _anthropic_stream_of((_anthropic_message_start_frame("msg_a1", 52), _anthropic_overloaded_error_frame()))
+    )
+    async for chunk in superseded:
+        if b"event: error" in chunk:
+            break
+    await aclose_superseded_attempt(superseded)
+    carry_superseded_attempt_usage({"litellm_logging_obj": logging_obj})
+    await _drop_after_message_start(logging_obj, "msg_a2", 9)
+    await _settle(recorder.failure_kwargs, count=2)
+
+    failures: Final = tuple(event["standard_logging_object"] for event in recorder.failure_kwargs)
+    assert tuple(event["prompt_tokens"] for event in failures) == (52, 9)
+    terminal: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj})
+    usage: Final = terminal["combined_usage_object"]
+    assert isinstance(usage, litellm.Usage)
+    assert usage.prompt_tokens == sum(event["prompt_tokens"] for event in failures)
+    assert usage.completion_tokens == sum(event["completion_tokens"] for event in failures)
+    assert terminal["response_cost"] == pytest.approx(sum(event["response_cost"] for event in failures))
+
+
+@pytest.mark.asyncio
 async def test_retry_success_log_carries_its_own_usage_after_a_provider_error_frame():
     """Both attempts of a retried /v1/messages stream log through the request's one logging object. The
     superseded attempt's failure log must not leave the usage it consumed behind, or the retry's success
@@ -1126,6 +1152,7 @@ async def test_retry_success_log_carries_its_own_usage_after_a_provider_error_fr
         if b"event: error" in chunk:
             break
     await aclose_superseded_attempt(superseded)
+    carry_superseded_attempt_usage({"litellm_logging_obj": logging_obj})
     await _settle(recorder.failure_kwargs)
     retry = attempt((_anthropic_message_start_frame("msg_a2", 7), *_anthropic_completed_stream_tail()))
     async for _ in retry:
