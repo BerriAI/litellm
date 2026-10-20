@@ -5435,14 +5435,12 @@ def test_empty_content():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_removal_for_non_gemini():
+def test_thought_signature_removal_for_non_gemini(respx_mock: respx.MockRouter) -> None:
     """
     Test that thought signatures are removed from tool call IDs when sending to non-Gemini models
     """
-    rules_obj = Rules()
-
     # Create messages with thought signatures (as would come from Gemini)
-    messages = [
+    messages: Final[list[AllMessageValues]] = [
         {"role": "user", "content": "What's the weather?"},
         {
             "role": "assistant",
@@ -5464,19 +5462,16 @@ def test_thought_signature_removal_for_non_gemini():
         },
     ]
 
-    # Call function_setup with OpenAI model (non-Gemini)
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="gpt-4",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="openai",
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json={
+            "id": "response",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Sunny"}, "finish_reason": "stop"}],
+        }
     )
-
-    # Verify thought signatures were removed
-    processed_messages = kwargs["messages"]
+    litellm.completion(
+        model="gpt-4", messages=messages, custom_llm_provider="openai", api_key="test-key", num_retries=0
+    )
+    processed_messages: Final = json.loads(route.calls.last.request.content)["messages"]
     assert processed_messages[1]["tool_calls"][0]["id"] == "call_123"
     assert processed_messages[2]["tool_call_id"] == "call_123"
     assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
@@ -5531,13 +5526,11 @@ def test_thought_signature_preserved_for_gemini():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_removal_with_multiple_tool_calls():
+def test_thought_signature_removal_with_multiple_tool_calls(respx_mock: respx.MockRouter) -> None:
     """
     Test that thought signatures are removed from multiple tool calls
     """
-    rules_obj = Rules()
-
-    messages = [
+    messages: Final[list[AllMessageValues]] = [
         {"role": "user", "content": "Get weather and time"},
         {
             "role": "assistant",
@@ -5554,35 +5547,30 @@ def test_thought_signature_removal_with_multiple_tool_calls():
                 },
             ],
         },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-            "content": "Sunny",
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-            "content": "3:00 PM",
-        },
+        {"role": "tool", "tool_call_id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1", "content": "Sunny"},
+        {"role": "tool", "tool_call_id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2", "content": "3:00 PM"},
     ]
 
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="claude-3-opus",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="anthropic",
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "response",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3-opus",
+            "content": [{"type": "text", "text": "Sunny at 3 PM"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
     )
+    litellm.completion(
+        model="claude-3-opus", messages=messages, custom_llm_provider="anthropic", api_key="test-key", num_retries=0
+    )
+    processed_messages: Final = json.loads(route.calls.last.request.content)["messages"]
 
-    processed_messages = kwargs["messages"]
-
-    # Check all tool call IDs are cleaned
-    assert processed_messages[1]["tool_calls"][0]["id"] == "call_1"
-    assert processed_messages[1]["tool_calls"][1]["id"] == "call_2"
-    assert processed_messages[2]["tool_call_id"] == "call_1"
-    assert processed_messages[3]["tool_call_id"] == "call_2"
+    assert processed_messages[1]["content"][0]["id"] == "call_1"
+    assert processed_messages[1]["content"][1]["id"] == "call_2"
+    assert processed_messages[2]["content"][0]["tool_use_id"] == "call_1"
+    assert processed_messages[2]["content"][1]["tool_use_id"] == "call_2"
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
