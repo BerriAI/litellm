@@ -393,7 +393,6 @@ async def test_route_request_with_router_settings_override():
             "timeout": 30,
             "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
             "routing_strategy": "least-busy",
-            # This setting should be ignored (not a per-request router setting in route_llm_request)
             "model_group_alias": {"alias": "real_model"},
         },
     }
