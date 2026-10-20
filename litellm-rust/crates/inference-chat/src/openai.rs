@@ -141,7 +141,7 @@ impl ChatCompletionsRoute {
         stream,
         outcome
     ))]
-    pub(crate) async fn run_openai(
+    pub async fn run_openai(
         &self,
         call: OpenAiChatCall,
         context: CallContext<'_, impl Interceptors<Error>>,

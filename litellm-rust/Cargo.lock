@@ -4100,6 +4100,7 @@ dependencies = [
  "litellm-host-native",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-chat",
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
