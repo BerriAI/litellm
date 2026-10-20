@@ -372,6 +372,9 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 	if allowedRoutesNotConfigured(d) {
 		key.AllowedRoutes = nil
 	}
+	if !d.HasChange("allowed_passthrough_routes") {
+		key.AllowedPassthroughRoutes = nil
+	}
 	if !d.HasChange("duration") {
 		key.Duration = ""
 	}
