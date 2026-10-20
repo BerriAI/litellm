@@ -32,6 +32,7 @@ from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+import litellm
 from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_name,
     process_audio_file,
@@ -48,6 +49,7 @@ from litellm.llms.nvidia_riva.common_utils import (
     NvidiaRivaException,
     grpc_error_to_litellm_exception,
 )
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import FileTypes, TranscriptionResponse
 from litellm.utils import convert_to_model_response_object
 
@@ -132,6 +134,23 @@ def _auth_factory(riva_module: _RivaClientModule) -> Callable[..., _RivaAuth]:
 
 def _audio_encoding(riva_asr_module: _RivaAsrModule) -> _AudioEncoding:
     return riva_asr_module.AudioEncoding
+
+
+def _parse_riva_offline(value: object, drop_params: bool) -> bool:
+    match value:
+        case None:
+            return False
+        case bool():
+            return value
+        case str() if (parsed := str_to_bool(value)) is not None:
+            return parsed
+        case _ if drop_params:
+            return False
+        case _:
+            raise NvidiaRivaException(
+                status_code=400,
+                message=f"riva_offline must be true or false, got {value!r}. Set drop_params to ignore it.",
+            )
 
 
 class NvidiaRivaAudioTranscription:
@@ -265,7 +284,11 @@ class NvidiaRivaAudioTranscription:
 
         response_format: Final = request_payload.get("response_format") or "json"
         timestamp_granularities: Final = request_payload.get("timestamp_granularities")
-        riva_offline: Final = bool(optional_params.get("riva_offline", False))
+        riva_offline: Final = _parse_riva_offline(
+            optional_params.get("riva_offline"),
+            drop_params=("drop_params" in litellm_params and litellm_params["drop_params"] is True)
+            or litellm.drop_params is True,
+        )
 
         riva_module, riva_asr_module = _import_riva()
         auth_obj: Final = self._construct_auth(

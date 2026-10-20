@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-
+import litellm
 from litellm.llms.nvidia_riva.audio_transcription import handler as handler_mod
 from litellm.llms.nvidia_riva.audio_transcription.handler import (
     NvidiaRivaAudioTranscription,
@@ -255,7 +255,6 @@ def test_riva_offline_uses_unary_recognize_and_keeps_results_without_is_final(mo
     assert response["words"][1]["end"] == pytest.approx(0.87)
     assert response._hidden_params["audio_transcription_duration"] == pytest.approx(1.0, abs=0.05)
     assert mock_riva.streaming_calls == []
-    # 1 s of 16 kHz int16 mono sent as one buffer, not chunked.
     assert len(mock_riva.offline_calls["audio_bytes"]) == pytest.approx(32000, abs=1600)
     assert mock_riva.offline_calls["config"]._kwargs["language_code"] == "multi"
     assert logging_obj.pre_call.call_args.kwargs["additional_args"]["complete_input_dict"]["riva_offline"] is True
@@ -283,6 +282,117 @@ def test_default_mode_streams_and_never_calls_offline_recognize(mock_riva, loggi
     assert len(mock_riva.streaming_calls) == 1
     assert logging_obj.pre_call.call_args.kwargs["additional_args"]["complete_input_dict"]["riva_offline"] is False
 
+
+
+@pytest.mark.parametrize(("riva_offline", "expect_offline"), [("false", False), ("False", False), ("true", True)])
+def test_riva_offline_string_from_multipart_form_is_parsed(mock_riva, logging_obj, riva_offline, expect_offline):
+    mock_riva.responses["value"] = [
+        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
+    ]
+    mock_riva.offline_response["value"] = _fake_response(
+        results=[SimpleNamespace(alternatives=[_fake_alternative("offline")])]
+    )
+
+    response = NvidiaRivaAudioTranscription().audio_transcriptions(
+        model="m",
+        audio_file=_make_wav_bytes(),
+        optional_params={"language_code": "en-US", "riva_offline": riva_offline},
+        litellm_params={},
+        model_response=TranscriptionResponse(),
+        timeout=60,
+        logging_obj=logging_obj,
+        api_key=None,
+        api_base="localhost:50051",
+    )
+
+    assert response.text == ("offline" if expect_offline else "streamed")
+    assert (mock_riva.offline_calls != {}) is expect_offline
+
+
+@pytest.mark.parametrize("riva_offline", ["yes", "", 1])
+def test_riva_offline_malformed_value_is_rejected_before_any_rpc(mock_riva, logging_obj, riva_offline):
+    with pytest.raises(NvidiaRivaException) as excinfo:
+        NvidiaRivaAudioTranscription().audio_transcriptions(
+            model="m",
+            audio_file=_make_wav_bytes(),
+            optional_params={"language_code": "en-US", "riva_offline": riva_offline},
+            litellm_params={},
+            model_response=TranscriptionResponse(),
+            timeout=60,
+            logging_obj=logging_obj,
+            api_key=None,
+            api_base="localhost:50051",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "riva_offline" in excinfo.value.message
+    assert mock_riva.offline_calls == {}
+    assert mock_riva.streaming_calls == []
+
+
+def test_riva_offline_malformed_value_is_dropped_under_drop_params(mock_riva, logging_obj):
+    mock_riva.responses["value"] = [
+        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
+    ]
+
+    response = NvidiaRivaAudioTranscription().audio_transcriptions(
+        model="m",
+        audio_file=_make_wav_bytes(),
+        optional_params={"language_code": "en-US", "riva_offline": "yes"},
+        litellm_params={"drop_params": True},
+        model_response=TranscriptionResponse(),
+        timeout=60,
+        logging_obj=logging_obj,
+        api_key=None,
+        api_base="localhost:50051",
+    )
+
+    assert response.text == "streamed"
+    assert mock_riva.offline_calls == {}
+
+
+def test_deployment_riva_offline_reaches_the_handler_through_transcription(mock_riva):
+    mock_riva.offline_response["value"] = _fake_response(
+        results=[SimpleNamespace(alternatives=[_fake_alternative("offline")])]
+    )
+
+    response = litellm.transcription(
+        model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
+        file=("clip.wav", _make_wav_bytes(), "audio/wav"),
+        api_base="localhost:50051",
+        riva_offline=True,
+    )
+
+    assert response.text == "offline"
+    assert mock_riva.streaming_calls == []
+    assert mock_riva.offline_calls != {}
+
+
+def test_oversized_offline_audio_is_a_non_retryable_413(mock_riva, logging_obj):
+    class FakeGrpcError(Exception):
+        def code(self):
+            return SimpleNamespace(name="RESOURCE_EXHAUSTED")
+
+        def details(self):
+            return "SERVER: Received message larger than max (4348825 vs. 4194304)"
+
+    mock_riva.offline_error["value"] = FakeGrpcError("rpc fail")
+
+    with pytest.raises(NvidiaRivaException) as excinfo:
+        NvidiaRivaAudioTranscription().audio_transcriptions(
+            model="m",
+            audio_file=_make_wav_bytes(),
+            optional_params={"language_code": "en-US", "riva_offline": True},
+            litellm_params={},
+            model_response=TranscriptionResponse(),
+            timeout=60,
+            logging_obj=logging_obj,
+            api_key=None,
+            api_base="localhost:50051",
+        )
+
+    assert excinfo.value.status_code == 413
+    assert litellm.utils.should_retry(excinfo.value.status_code) is False
 
 def test_riva_offline_grpc_error_is_wrapped(mock_riva, logging_obj):
     class FakeGrpcError(Exception):
