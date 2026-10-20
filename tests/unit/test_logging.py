@@ -329,6 +329,24 @@ def test_json_formatter_extra_component_not_overwritten():
     assert obj["component"] == "auth-service", f"User-supplied component was overwritten, got {obj['component']!r}"
 
 
+def test_json_formatter_extra_fields_win_over_a_dict_a_caller_put_in_the_message():
+    record = logging.LogRecord(
+        name="LiteLLM Proxy",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="token count - litellm_call_id=%s input_tokens=%s status_code=%s",
+        args=("{'input_tokens': 0, 'status_code': 200, 'injected': 'yes'}", None, 400),
+        exc_info=None,
+    )
+    record.input_tokens = None
+    record.status_code = 400
+
+    obj = json.loads(JsonFormatter().format(record))
+
+    assert (obj["input_tokens"], obj["status_code"], obj["injected"]) == (None, 400, "yes")
+
+
 def test_initialize_loggers_with_handler_sets_propagate_false():
     """
     Test that the initialize_loggers_with_handler function sets propagate to False for all loggers

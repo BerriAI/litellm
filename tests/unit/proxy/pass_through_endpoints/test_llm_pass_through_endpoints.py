@@ -2142,7 +2142,6 @@ class TestBedrockPassthroughAwsErrors:
         assert exc_info.value.aws_error_type == "ValidationException"
         assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
 
-
     @pytest.mark.asyncio
     async def test_bedrock_request_check_is_raised_with_the_aws_error_type_it_carries(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2183,6 +2182,7 @@ class TestBedrockPassthroughAwsErrors:
             await self._answer(error)
 
         assert (exc_info.value.code, exc_info.value.headers.get("x-model-group")) == ("403", "modèle")
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error", "message", "code"),
@@ -7247,6 +7247,88 @@ async def test_bedrock_count_tokens_error_forwards_provider_headers():
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-count-tokens-500"
+
+
+_BEDROCK_COUNT_ALIAS: Final = "count-log-bedrock"
+_BEDROCK_COUNT_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+async def _bedrock_native_count(monkeypatch: pytest.MonkeyPatch, counted: AsyncMock) -> dict[str, object]:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        litellm.Router(
+            model_list=[{"model_name": _BEDROCK_COUNT_ALIAS, "litellm_params": {"model": _BEDROCK_COUNT_MODEL}}]
+        ),
+    )
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/bedrock/model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            "headers": [(b"x-litellm-call-id", b"bedrock-native-count")],
+        }
+    )
+    with patch(  # test-quality-ok: the native route counts through this handler, which signs and calls AWS
+        "litellm.llms.bedrock.count_tokens.handler.BedrockCountTokensHandler.handle_count_tokens_request",
+        new=counted,
+    ):
+        return await handle_bedrock_count_tokens(
+            endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_model(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    result: Final = await _bedrock_native_count(monkeypatch, AsyncMock(return_value={"input_tokens": 12}))
+
+    assert result == {"input_tokens": 12}
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-count",
+            "request_model": _BEDROCK_COUNT_ALIAS,
+            "model_used": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "input_tokens": 12,
+            "count_source": "provider",
+            "status_code": 200,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_count_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    rejected: Final = AsyncMock(
+        side_effect=BedrockError(status_code=400, message="The provided model doesn't support counting tokens.")
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _bedrock_native_count(monkeypatch, rejected)
+
+    assert exc_info.value.status_code == 400
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-count",
+            "request_model": _BEDROCK_COUNT_ALIAS,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
 
 
 class _AzureGroupRouter:

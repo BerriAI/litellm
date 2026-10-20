@@ -3980,3 +3980,19 @@ def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
             "status_code": 400,
         },
     )
+
+
+def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newline(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    forged_model: Final = "count-log-gpt\ntoken count - litellm_call_id=forged input_tokens=1"
+
+    _utils_token_counter(monkeypatch, {**_COUNTED_HELLO, "model": forged_model}, {"x-litellm-call-id": "count log"})
+
+    (line,) = token_count_log_lines()
+    (message,) = (record.getMessage() for record in caplog.records if "count_source" in record.__dict__)
+    assert line["request_model"] == forged_model
+    assert "\n" not in message
+    assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
