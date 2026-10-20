@@ -1259,6 +1259,7 @@ class ResponseAPILoggingUtils:
                     ),
                     video_tokens=getattr(response_api_usage.input_tokens_details, "video_tokens", None),
                     cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
+                    cache_type=getattr(response_api_usage.input_tokens_details, "cache_type", None),
                     web_search_requests=getattr(response_api_usage.input_tokens_details, "web_search_requests", None),
                     google_maps_grounding_requests=getattr(
                         response_api_usage.input_tokens_details, "google_maps_grounding_requests", None

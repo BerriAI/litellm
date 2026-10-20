@@ -297,6 +297,10 @@
           "format": "date",
           "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
         },
+        "explicit_cache_read_input_token_cost": {
+          "type": "number",
+          "minimum": 0
+        },
         "gemini_audio_only_live": {
           "type": "boolean"
         },

@@ -356,7 +356,7 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
     )
 
 
-def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict | None:
+def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict[str, object] | None:
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if not isinstance(tiered_pricing, list) or not tiered_pricing:
         return None
@@ -543,6 +543,71 @@ class TokenRates:
     @property
     def billed_reasoning_rate(self) -> float:
         return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
+
+
+def resolve_explicit_cache_read_cost_rate(
+    model_info: ModelInfo,
+    usage: Usage,
+    current_time: datetime | None,
+    service_tier: str | None = None,
+) -> float | None:
+    cache_read_cost_key: Final = "explicit_cache_read_input_token_cost"
+    service_cache_read_cost_key: Final = _get_service_tier_cost_key(cache_read_cost_key, service_tier)
+    if (
+        model_info.get(service_cache_read_cost_key) is None
+        and model_info.get(cache_read_cost_key) is None
+        and model_info.get("tiered_pricing") is None
+        and model_info.get("off_peak_pricing") is None
+    ):
+        return None
+
+    prompt_tokens_details: Final = usage.prompt_tokens_details
+    cache_type: Final = (
+        getattr(prompt_tokens_details, "cache_type", None) if prompt_tokens_details is not None else None
+    )
+    if parse_prompt_tokens_details(usage)["cache_hit_tokens"] <= 0 or cache_type != "ephemeral":
+        return None
+
+    tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
+    off_peak: Final = _open_off_peak_block(model_info, current_time)
+    model_cache_read_cost_rate: Final = _get_cost_per_unit(
+        model_info,
+        service_cache_read_cost_key,
+        default_value=None,
+    )
+    tier_has_explicit_rate: Final = tier is not None and cache_read_cost_key in tier
+    off_peak_has_explicit_rate: Final = (
+        off_peak is not None and _parse_off_peak_rate(off_peak.get(cache_read_cost_key)) is not None
+    )
+    if model_cache_read_cost_rate is None and not tier_has_explicit_rate and not off_peak_has_explicit_rate:
+        return None
+
+    cache_read_cost_rate: Final = (
+        tier_rate(tier, cache_read_cost_key)
+        if tier is not None and tier_has_explicit_rate
+        else tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
+        if tier is not None
+        else model_cache_read_cost_rate
+        if model_cache_read_cost_rate is not None
+        else _get_cost_per_unit(
+            model_info,
+            _get_service_tier_cost_key("cache_read_input_token_cost", service_tier),
+            default_value=_get_cost_per_unit(model_info, "input_cost_per_token") or 0.0,
+        )
+        or 0.0
+    )
+
+    if off_peak is None:
+        return cache_read_cost_rate
+    mode_specific_off_peak_rate: Final = _parse_off_peak_rate(off_peak.get(cache_read_cost_key))
+    generic_off_peak_rate: Final = _parse_off_peak_rate(off_peak.get("cache_read_input_token_cost"))
+    return (
+        mode_specific_off_peak_rate
+        if mode_specific_off_peak_rate is not None
+        else generic_off_peak_rate
+        if generic_off_peak_rate is not None
+        else cache_read_cost_rate
+    )
 
 
 def _parse_off_peak_rate(value: object) -> float | None:
@@ -1458,12 +1523,19 @@ def generic_cost_per_token(
         current_time=billing_time,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
+    resolved_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
+        model_info=resolved_model_info,
+        usage=usage,
+        current_time=billing_time,
+        service_tier=service_tier,
+    )
+    effective_cache_read_cost: Final = cache_read_cost if resolved_cache_read_cost is None else resolved_cache_read_cost
 
     prompt_cost = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
         model_info=resolved_model_info,
         prompt_base_cost=prompt_base_cost,
-        cache_read_cost=cache_read_cost,
+        cache_read_cost=effective_cache_read_cost,
         cache_creation_cost=cache_creation_cost,
         cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
         service_tier=service_tier,
@@ -1658,6 +1730,16 @@ def _cost_map_billed_rates(
         current_time=billing_time,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
+    provider_cache_read_cost_rate: Final = resolve_explicit_cache_read_cost_rate(
+        model_info=model_info,
+        usage=usage,
+        current_time=billing_time,
+        service_tier=service_tier,
+    )
+    effective_cache_read_cost_rate: Final = (
+        cache_read_cost_rate if provider_cache_read_cost_rate is None else provider_cache_read_cost_rate
+    )
+
     reasoning_rate: Final = _resolve_billed_reasoning_rate(
         model_info=model_info,
         usage=usage,
@@ -1679,9 +1761,9 @@ def _cost_map_billed_rates(
     return BilledTokenRates(
         input_cost_per_token=prompt_base_cost,
         output_cost_per_token=completion_base_cost,
-        cache_read_input_token_cost=cache_read_cost_rate,
+        cache_read_input_token_cost=effective_cache_read_cost_rate,
         cache_read_input_audio_token_cost=(
-            audio_cache_read_rate if audio_cache_read_rate is not None else cache_read_cost_rate
+            audio_cache_read_rate if audio_cache_read_rate is not None else effective_cache_read_cost_rate
         ),
         cache_creation_input_token_cost=cache_creation_cost_rate,
         cache_creation_input_token_cost_above_1hr=cache_creation_cost_above_1hr_rate,
@@ -1806,6 +1888,13 @@ def calculate_prompt_caching_savings(
         current_time=billed_at,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
+    provider_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
+        model_info=model_info,
+        usage=usage,
+        current_time=billed_at,
+        service_tier=service_tier,
+    )
+    effective_cache_read_cost: Final = cache_read_cost if provider_cache_read_cost is None else provider_cache_read_cost
     write_rate: Final = cache_creation_cost or prompt_base_cost
     write_rate_1h: Final = cache_creation_cost_above_1hr or write_rate
     prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
@@ -1820,7 +1909,7 @@ def calculate_prompt_caching_savings(
         if details is not None
         else None
     )
-    read_discount: Final = cache_read_tokens * max(prompt_base_cost - cache_read_cost, 0.0)
+    read_discount: Final = cache_read_tokens * max(prompt_base_cost - effective_cache_read_cost, 0.0)
     write_premium: Final = calculate_cache_writing_cost(
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_details,
