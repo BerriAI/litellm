@@ -11098,7 +11098,7 @@ class Router:
         both are folded back in here. That keeps this reproducible from a
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
-        model_info: Final = dict(  # mutable-ok: existing inheritance helpers fill missing rates in place
+        model_info: Final = dict(
             _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
         )
         for field in CustomPricingLiteLLMParams.model_fields:
