@@ -8557,7 +8557,7 @@ async def _create_spend_logs_with_poison_isolation(
         await repo.table.create_many(data=rows, skip_duplicates=True)
         return failure_budget
     except Exception as e:
-        if not PrismaDBExceptionHandler.is_prisma_data_error(e):
+        if not (PrismaDBExceptionHandler.is_prisma_data_error(e) or isinstance(e, UnicodeEncodeError)):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
             raise

@@ -191,6 +191,23 @@ def is_otlp_trace_request(request: HTTPConnection) -> bool:
     return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
 
 
+def _parse_form_metadata(raw_metadata: str) -> object:
+    """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
+    400 because no provider or database can encode it. ``json.loads`` accepts
+    the escape, so the multipart ``metadata`` field gets the same check."""
+    parsed: Final = json.loads(raw_metadata)
+    try:
+        json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise ProxyException(
+            message=f"Invalid form payload: metadata {e}",
+            type="invalid_request_error",
+            param="metadata",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
+    return parsed
+
+
 async def read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
@@ -240,7 +257,7 @@ async def read_request_body(request: Request | None) -> dict:
                 )
             parsed_body = dict(form_data)
             if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
-                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
+                parsed_body["metadata"] = _parse_form_metadata(parsed_body["metadata"])
         else:
             # Read the request body
             body: Final = await request.body()
