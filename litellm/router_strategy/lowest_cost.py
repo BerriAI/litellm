@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -39,7 +39,7 @@ def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float 
     """Input and output per-token prices from the first cost-map row among the deployment's
     pricing models that carries one; (None, None) when no row does, so the caller falls back to
     its unmapped default."""
-    cost_map: Final = cast("Mapping[str, object]", litellm.model_cost)
+    cost_map: Final[Mapping[str, object]] = litellm.model_cost
     rows: Final = (_str_keyed(cost_map.get(model)) for model in _deployment_pricing_models(_str_keyed(deployment)))
     row: Final = next((row for row in rows if _declares_token_price(row)), _EMPTY)
     return _as_rate(row.get("input_cost_per_token")), _as_rate(row.get("output_cost_per_token"))
@@ -284,7 +284,8 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
-            map_input_cost, map_output_cost = _deployment_cost_map_rates(cast(object, _deployment))
+            deployment_view: Final[object] = _deployment
+            map_input_cost, map_output_cost = _deployment_cost_map_rates(deployment_view)
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
