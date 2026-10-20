@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import itertools
 import json
 import logging
 import re
@@ -35,6 +36,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
+from litellm.proxy.spend_tracking.savings import compute_savings_spend
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -1438,6 +1440,128 @@ async def test_failed_project_enqueue_is_reported_and_does_not_drop_the_rest_of_
     assert transactions["tag_list_transactions"] == {"tag-1": 0.25}
     assert transactions["key_list_transactions"] == {"t1": 0.25}
     assert transactions["team_list_transactions"] == {"team-1": 0.25}
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_prices_savings_once_for_every_daily_rollup():
+    db_writer: Final = DBSpendUpdateWriter()
+    prisma_client: Final = MagicMock()
+    prisma_client.get_request_status = MagicMock(return_value="success")
+    payload: Final = {
+        "request_id": "req-daily",
+        "user": "user-1",
+        "team_id": "team-1",
+        "end_user": "end-user-1",
+        "agent_id": "agent-1",
+        "request_tags": ["tag-a", "tag-b"],
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "key-1",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "prompt_tokens": 1000,
+        "completion_tokens": 10,
+        "spend": 0.01,
+        "metadata": json.dumps({"usage_object": {"prompt_tokens": 1000, "cache_read_input_tokens": 800}}),
+    }
+
+    with patch("litellm.proxy.db.db_spend_update_writer.compute_savings_spend", wraps=compute_savings_spend) as savings:
+        await db_writer._batch_database_updates(
+            response_cost=0.01,
+            user_id="user-1",
+            hashed_token="key-1",
+            team_id="team-1",
+            org_id="org-1",
+            end_user_id="end-user-1",
+            prisma_client=prisma_client,
+            litellm_proxy_budget_name=None,
+            payload=payload,
+        )
+
+    assert savings.call_count == 1
+    queues: Final = {
+        "user_id": db_writer.daily_spend_update_queue,
+        "team_id": db_writer.daily_team_spend_update_queue,
+        "organization_id": db_writer.daily_org_spend_update_queue,
+        "end_user_id": db_writer.daily_end_user_spend_update_queue,
+        "agent_id": db_writer.daily_agent_spend_update_queue,
+        "tag": db_writer.daily_tag_spend_update_queue,
+    }
+    rows: Final = {
+        entity: tuple(
+            sorted((await queue.flush_and_get_aggregated_daily_spend_update_transactions()).values(), key=str)
+        )
+        for entity, queue in queues.items()
+    }
+    assert {entity: tuple(row[entity] for row in entity_rows) for entity, entity_rows in rows.items()} == {
+        "user_id": ("user-1",),
+        "team_id": ("team-1",),
+        "organization_id": ("org-1",),
+        "end_user_id": ("end-user-1",),
+        "agent_id": ("agent-1",),
+        "tag": ("tag-a", "tag-b"),
+    }
+    all_rows: Final = tuple(itertools.chain.from_iterable(rows.values()))
+    savings_columns: Final = {
+        (row["prompt_caching_savings_spend"], row["cache_read_input_tokens"], row["spend"]) for row in all_rows
+    }
+    assert len(savings_columns) == 1
+    assert next(iter(savings_columns))[0] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides, dropped, has_prisma",
+    [
+        ({"metadata": "{not json"}, (), True),
+        ({}, (), False),
+        ({}, ("api_key",), True),
+        ({}, ("model",), True),
+        ({}, ("model_group",), True),
+    ],
+)
+async def test_batch_database_updates_skips_daily_rows_it_cannot_build_but_keeps_key_spend(
+    overrides: dict[str, str], dropped: tuple[str, ...], has_prisma: bool
+):
+    db_writer: Final = DBSpendUpdateWriter()
+    prisma_client: Final = MagicMock() if has_prisma else None
+    if prisma_client is not None:
+        prisma_client.get_request_status = MagicMock(return_value="success")
+    complete_payload: Final = {
+        "request_id": "req-bad",
+        "user": "user-1",
+        "team_id": "team-1",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "key-1",
+        "model": "gpt-4o-mini",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4o-mini",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.01,
+        "metadata": '{"usage_object": {}}',
+        **overrides,
+    }
+    payload: Final = {key: value for key, value in complete_payload.items() if key not in dropped}
+
+    await db_writer._batch_database_updates(
+        response_cost=0.01,
+        user_id="user-1",
+        hashed_token="key-1",
+        team_id="team-1",
+        org_id=None,
+        end_user_id=None,
+        prisma_client=prisma_client,
+        litellm_proxy_budget_name=None,
+        payload=payload,
+    )
+
+    assert await db_writer.daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions() == {}
+    assert (
+        await db_writer.daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions() == {}
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["key_list_transactions"] == ({"key-1": 0.01} if has_prisma else {})
 
 
 @pytest.mark.asyncio
