@@ -63357,7 +63357,8 @@
         "litellm_provider": "openai",
         "mode": "audio_transcription",
         "provider_specific_entry": {
-            "transcription_json_only": 1
+            "transcription_json_only": 1,
+            "transcription_usage_duration": 1
         },
         "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
@@ -71189,7 +71190,8 @@
         "provider_specific_entry": {
             "realtime_ga_only": 1,
             "transcription_deployment_api": 1,
-            "transcription_json_only": 1
+            "transcription_json_only": 1,
+            "transcription_usage_duration": 1
         },
         "supports_native_streaming": true
     },

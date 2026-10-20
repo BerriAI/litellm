@@ -165,6 +165,7 @@ class TestCostCalculatorReadsDurationFromHiddenParams:
     ):
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
         monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+        monkeypatch.setitem(litellm.model_cost, model, {**litellm.model_cost[model], "input_cost_per_second": 0.0125})
         response = TranscriptionResponse(
             text="test",
             usage={"type": "duration", "seconds": 60.0},
@@ -178,7 +179,7 @@ class TestCostCalculatorReadsDurationFromHiddenParams:
             custom_llm_provider=provider,
         )
 
-        assert actual == pytest.approx(0.0045)
+        assert actual == pytest.approx(60.0 * 0.0125)
 
     @patch("litellm.cost_calculator.openai_cost_per_second")
     def test_completion_cost_uses_hidden_params_duration(self, mock_cost_fn):

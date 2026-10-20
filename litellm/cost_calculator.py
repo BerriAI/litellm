@@ -1888,13 +1888,28 @@ def completion_cost(
                     # the response attribute (for verbose_json responses that
                     # naturally include duration from the provider).
                     _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    audio_transcription_file_duration = _hidden.get(
-                        "audio_transcription_duration",
-                        getattr(completion_response, "duration", 0.0),
-                    ) or (
-                        (_get_transcription_usage_duration(completion_response) or 0.0)
-                        if _bills_provider_transcription_seconds(requested_model, custom_llm_provider)
-                        else 0.0
+                    provider_duration: Final = _get_transcription_usage_duration(completion_response)
+                    transcription_info: Final = (
+                        _get_model_info_or_none(requested_model, custom_llm_provider)
+                        if requested_model is not None and custom_llm_provider is not None
+                        else None
+                    )
+                    transcription_metadata: Final = (
+                        as_str_mapping(transcription_info.get("provider_specific_entry"))
+                        if transcription_info is not None
+                        else None
+                    )
+                    audio_transcription_file_duration = (
+                        provider_duration
+                        if provider_duration is not None
+                        and transcription_metadata is not None
+                        and transcription_metadata.get("transcription_usage_duration") == 1
+                        else _hidden.get("audio_transcription_duration", getattr(completion_response, "duration", 0.0))
+                        or (
+                            (provider_duration or 0.0)
+                            if _bills_provider_transcription_seconds(requested_model, custom_llm_provider)
+                            else 0.0
+                        )
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
