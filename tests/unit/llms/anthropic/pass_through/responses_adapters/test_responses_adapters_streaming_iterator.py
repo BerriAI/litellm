@@ -793,16 +793,17 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
     def test_a_client_disconnect_during_the_failure_hook_lets_the_hook_finish(self):
         hook_started = anyio.Event()
+        hook_released = anyio.Event()
         finished: list[Exception] = []
 
-        async def _slow_hook(failure: Exception) -> None:
+        async def _held_hook(failure: Exception) -> None:
             hook_started.set()
-            await anyio.sleep(0.05)
+            await hook_released.wait()
             finished.append(failure)
 
         async def _disconnect_mid_hook() -> None:
             wrapper = AnthropicResponsesStreamWrapper(
-                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=_logging_obj_with_failure_hook(_slow_hook)
+                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=_logging_obj_with_failure_hook(_held_hook)
             )
 
             async def _consume() -> None:
@@ -813,6 +814,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
                 task_group.start_soon(_consume)
                 await hook_started.wait()
                 task_group.cancel_scope.cancel()
+                hook_released.set()
 
         asyncio.run(_disconnect_mid_hook())
         assert len(finished) == 1

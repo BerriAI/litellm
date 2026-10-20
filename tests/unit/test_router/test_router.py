@@ -3745,7 +3745,6 @@ async def test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fall
     )
     _ = [event async for event in response]
     await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
-    await asyncio.sleep(0.5)
 
     success: Final = recorder.successes[-1]
     assert (success["prompt_tokens"], success["completion_tokens"]) == (1000, 700)
