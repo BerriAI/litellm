@@ -541,25 +541,34 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
 
 _NATIVE_REDACTED_DATA: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
 _CONVERSE_REDACTED_DATA: Final = base64.b64encode(_NATIVE_REDACTED_DATA.encode()).decode()
+REASONING_PLACEMENTS: Final = pytest.mark.parametrize("placement", ["thinking_blocks", "content", "both"])
+
+
+def _assistant_with_reasoning(
+    placement: str, reasoning: Sequence[Mapping[str, object]], text: str
+) -> Mapping[str, object]:
+    in_content: Final = {"role": "assistant", "content": [*reasoning, {"type": "text", "text": text}]}
+    return {
+        "thinking_blocks": {"role": "assistant", "content": text, "thinking_blocks": list(reasoning)},
+        "content": in_content,
+        "both": {**in_content, "thinking_blocks": list(reasoning)},
+    }[placement]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
-@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@REASONING_PLACEMENTS
 async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(use_async: bool, placement: str):
     """A redacted_thinking block that Bedrock returned must go back as reasoningContent.redactedContent,
-    in order, ahead of text and toolUse. It used to collapse into an empty unsigned reasoningText and get dropped."""
+    in order, ahead of text and toolUse. It used to collapse into an empty unsigned reasoningText and get dropped.
+    Sent twice, when the history carries it in content and thinking_blocks, Bedrock 400s that it was modified."""
     bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
         {"reasoningText": {"text": "Let me look this up.", "signature": "sig-abc"}},
         {"redactedContent": _CONVERSE_REDACTED_DATA},
     ]
     thinking_blocks: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
     assistant_text: Final = "Checking the weather."
-    assistant_message: Final = (
-        {"role": "assistant", "content": assistant_text, "thinking_blocks": thinking_blocks}
-        if placement == "thinking_blocks"
-        else {"role": "assistant", "content": [*thinking_blocks, {"type": "text", "text": assistant_text}]}
-    )
+    assistant_message: Final = _assistant_with_reasoning(placement, thinking_blocks, assistant_text)
     messages: Final = [
         {"role": "user", "content": "What's the weather in Paris?"},
         {
@@ -813,17 +822,16 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     )
 
 
+@REASONING_PLACEMENTS
 @pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
-def test_anthropic_messages_pt_replays_redacted_thinking_as_claude_native_data(data: str):
+def test_anthropic_messages_pt_replays_redacted_thinking_as_claude_native_data(data: str, placement: str):
     """Histories saved from Converse before its replies were decoded hold the data base64-wrapped, and the
-    Anthropic API, Vertex and Bedrock Invoke 400 on it with "Invalid `data` in `redacted_thinking` block"."""
+    Anthropic API, Vertex and Bedrock Invoke 400 on it with "Invalid `data` in `redacted_thinking` block".
+    A redacted block in the content list, the shape the Anthropic SDK replays, used to be dropped."""
+    redacted: Final = {"type": "redacted_thinking", "data": data, "cache_control": {"type": "ephemeral"}}
     messages: Final = [
         {"role": "user", "content": "hi"},
-        {
-            "role": "assistant",
-            "content": "hello",
-            "thinking_blocks": [{"type": "redacted_thinking", "data": data, "cache_control": {"type": "ephemeral"}}],
-        },
+        _assistant_with_reasoning(placement, [redacted], "hello"),
         {"role": "user", "content": "again"},
     ]
 
