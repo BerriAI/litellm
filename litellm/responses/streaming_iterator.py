@@ -582,7 +582,7 @@ class BaseResponsesAPIStreamingIterator:
                         else openai_responses_api_chunk.model_copy(update={"response": _billed_response})
                     )
                     self.completed_response = _terminal_chunk
-                    _stamp_responses_usage_cost(_billed_response, self.logging_obj)
+                    stamp_responses_usage_cost(_billed_response, self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -1062,7 +1062,7 @@ class BaseResponsesAPIStreamingIterator:
                 "output": _partial_output_items(self._generated_content),
             }
         )
-        _stamp_responses_usage_cost(partial, self.logging_obj)
+        stamp_responses_usage_cost(partial, self.logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
@@ -1733,7 +1733,7 @@ def _estimate_usage_safely(
         return None
 
 
-def _stamp_responses_usage_cost(
+def stamp_responses_usage_cost(
     response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
 ) -> None:
     if response_obj is None or logging_obj is None:
@@ -1783,7 +1783,7 @@ def build_synthetic_response_events(
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = get_openai_response_types()
-    _stamp_responses_usage_cost(transformed, logging_obj)
+    stamp_responses_usage_cost(transformed, logging_obj)
 
     events: Final[list[ResponsesAPIStreamingResponse]] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
