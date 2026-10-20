@@ -451,6 +451,52 @@ def test_gemini_count_tokens_route_reports_the_runtime_total_for_a_model_bedrock
         assert mantle.drain() == ()
 
 
+def test_runtime_404_on_claude_falls_back_to_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
+    gateway: Final = counting_proxy.gateway
+    system: Final = f"{_SYSTEM} status=404"
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = _count(gateway, {**_bare(model), "system": system, "tools": _TOOLS})
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
+
+
+def test_runtime_404_and_mantle_404_surface_provider_error(counting_proxy: OwnedProxy, mantle_port: int) -> None:
+    gateway: Final = counting_proxy.gateway
+    system: Final = f"{_SYSTEM} status=404"
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(_rejecting(404)), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = _count(gateway, {**_bare(model), "system": system, "tools": _TOOLS})
+        assert response.status_code == 404, response.text
+        assert _REJECTION in response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
+
+
+def test_runtime_404_on_nova_does_not_call_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url, _NOVA)
+        body: Final = {**_bare(model), "messages": [{"role": "user", "content": "status=404"}]}
+        response: Final = _count(gateway, body)
+        assert response.status_code == 404, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert mantle.drain() == ()
+
+
 def test_responses_input_tokens_counts_through_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
     gateway: Final = counting_proxy.gateway
     with (
