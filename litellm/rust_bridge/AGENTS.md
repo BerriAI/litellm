@@ -13,7 +13,8 @@
 
 # Routing
 
-- `catalog.py` decides, `detectors.py` describes the request, `dispatch.py` applies the decision
+- `catalog.py` decides, the detectors describe the request, `dispatch.py` applies the decision
+- Shared detectors live in `detectors.py`; route-only detectors live in `<route>/detectors.py`
 - The first matching rule wins. A context no rule matches stays on Python
 - Every Python-only exclusion for a route (a `targets` or `features` rule) sits above any Rust rule for that route
 - A route whose Python side is `NO_PYTHON` resolves to `RUST_REQUIRED` for every context it can produce

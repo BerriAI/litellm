@@ -13,8 +13,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge import detectors
+from litellm.rust_bridge.chat_completions import detectors as chat_detectors
+from litellm.rust_bridge.messages import detectors as messages_detectors
 from litellm.rust_bridge.public_call import NativeCall
-from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+from litellm.rust_bridge.responses import detectors as responses_detectors
+from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 GATEWAY_TOOL: Final = {"type": "mcp", "server_label": "gateway", "server_url": "litellm_proxy"}
 REMOTE_TOOL: Final = {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}
@@ -41,6 +44,25 @@ def call(**kwargs: object) -> NativeCall:
     return NativeCall(args=(), kwargs=kwargs, base={"model": "gpt-5"})
 
 
+@pytest.mark.parametrize(
+    ("model", "provider", "tools", "expected"),
+    (
+        ("deepseek/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
+        ("anthropic/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], False),
+        ("test-model", "anthropic", [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], False),
+        ("unresolved-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
+        ("deepseek/test-model", None, [{"type": "function", "name": "f"}], False),
+        ("deepseek/test-model", None, ["not-a-tool"], False),
+        ("deepseek/test-model", None, [], False),
+        ("deepseek/test-model", None, None, False),
+    ),
+)
+def test_messages_interception_matches_tools_and_resolved_provider(
+    model: str, provider: str | None, tools: object, expected: bool
+) -> None:
+    assert messages_detectors.intercepted(call(model=model, custom_llm_provider=provider, tools=tools)) is expected
+
+
 def _wrap_nested_level(value: object, depth: int) -> object:
     return {"nested": value} if depth % 2 else [value]
 
@@ -51,17 +73,21 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.mock_response, {"mock_response": "hi"}, True),
         (detectors.mock_response, {"mock_response": None}, False),
         (detectors.mock_response, {"mock_tool_calls": [{"id": "call_1"}]}, False),
-        (detectors.chat_mock_response, {"mock_response": "hi"}, True),
-        (detectors.chat_mock_response, {"mock_tool_calls": [{"id": "call_1"}]}, True),
-        (detectors.chat_mock_response, {"mock_timeout": True}, True),
-        (detectors.chat_mock_response, {"mock_tool_calls": [], "mock_timeout": False}, False),
-        (detectors.client_headers, {"headers": {"x-tenant": "a"}}, True),
-        (detectors.client_headers, {"headers": {}}, False),
-        (detectors.client_headers, {"headers": None}, False),
-        (detectors.model_list, {"model_list": [{"model_name": "gpt-5", "litellm_params": {"model": "gpt-5"}}]}, True),
-        (detectors.model_list, {"model_list": None}, False),
-        (detectors.chat_retries_fallbacks, {"context_window_fallback_dict": {"gpt-5": "gpt-5-mini"}}, True),
-        (detectors.chat_retries_fallbacks, {"fallbacks": ["gpt-5-mini"]}, True),
+        (chat_detectors.chat_mock_response, {"mock_response": "hi"}, True),
+        (chat_detectors.chat_mock_response, {"mock_tool_calls": [{"id": "call_1"}]}, True),
+        (chat_detectors.chat_mock_response, {"mock_timeout": True}, True),
+        (chat_detectors.chat_mock_response, {"mock_tool_calls": [], "mock_timeout": False}, False),
+        (responses_detectors.client_headers, {"headers": {"x-tenant": "a"}}, True),
+        (responses_detectors.client_headers, {"headers": {}}, False),
+        (responses_detectors.client_headers, {"headers": None}, False),
+        (
+            chat_detectors.model_list,
+            {"model_list": [{"model_name": "gpt-5", "litellm_params": {"model": "gpt-5"}}]},
+            True,
+        ),
+        (chat_detectors.model_list, {"model_list": None}, False),
+        (chat_detectors.chat_retries_fallbacks, {"context_window_fallback_dict": {"gpt-5": "gpt-5-mini"}}, True),
+        (chat_detectors.chat_retries_fallbacks, {"fallbacks": ["gpt-5-mini"]}, True),
         (detectors.retries_fallbacks, {"context_window_fallback_dict": {"gpt-5": "gpt-5-mini"}}, False),
         (detectors.prompt_management, {"model": "litellm_agent/gpt-5"}, True),
         (detectors.prompt_management, {"model": "gpt-5"}, False),
@@ -74,18 +100,22 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.extra_body, {"extra_body": {}}, False),
         (detectors.extra_body, {"extra_body": None}, False),
         (detectors.extra_body, {}, False),
-        (detectors.provider_affinity, {"provider_affinity_header": "X-Session-ID", "session_id": "session-1"}, True),
-        (detectors.provider_affinity, {"provider_affinity_header": "X-Session-ID"}, True),
         (
-            detectors.provider_affinity,
+            responses_detectors.provider_affinity,
+            {"provider_affinity_header": "X-Session-ID", "session_id": "session-1"},
+            True,
+        ),
+        (responses_detectors.provider_affinity, {"provider_affinity_header": "X-Session-ID"}, True),
+        (
+            responses_detectors.provider_affinity,
             {"provider_affinity_header": "X-Session-ID", "extra_headers": {"x-session-id": "session-1"}},
             True,
         ),
-        (detectors.provider_affinity, {"provider_affinity_header": "Authorization"}, True),
-        (detectors.provider_affinity, {"provider_affinity_header": "invalid header"}, True),
-        (detectors.provider_affinity, {"provider_affinity_header": ""}, True),
-        (detectors.provider_affinity, {"provider_affinity_header": None, "session_id": "session-1"}, False),
-        (detectors.provider_affinity, {}, False),
+        (responses_detectors.provider_affinity, {"provider_affinity_header": "Authorization"}, True),
+        (responses_detectors.provider_affinity, {"provider_affinity_header": "invalid header"}, True),
+        (responses_detectors.provider_affinity, {"provider_affinity_header": ""}, True),
+        (responses_detectors.provider_affinity, {"provider_affinity_header": None, "session_id": "session-1"}, False),
+        (responses_detectors.provider_affinity, {}, False),
         (detectors.streaming, {"stream": True}, True),
         (detectors.streaming, {"stream": False}, False),
         (detectors.timeout_variants, {"request_timeout": 5}, True),
@@ -98,12 +128,12 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.proxy_mcp_tools, {"tools": None}, False),
         (detectors.prompt_management, {"prompt_id": "welcome"}, True),
         (detectors.prompt_management, {"prompt_variables": {"name": "x"}}, False),
-        (detectors.text_format, {"text_format": dict}, True),
-        (detectors.text_format, {}, False),
-        (detectors.chat_completions_bridge, {"use_chat_completions_api": True}, True),
-        (detectors.chat_completions_bridge, {"use_chat_completions_api": False}, False),
-        (detectors.chat_completions_bridge, {"model": "openai/chat_completions/gpt-5"}, True),
-        (detectors.chat_completions_bridge, {"model": "openai/gpt-5"}, False),
+        (responses_detectors.text_format, {"text_format": dict}, True),
+        (responses_detectors.text_format, {}, False),
+        (responses_detectors.chat_completions_bridge, {"use_chat_completions_api": True}, True),
+        (responses_detectors.chat_completions_bridge, {"use_chat_completions_api": False}, False),
+        (responses_detectors.chat_completions_bridge, {"model": "openai/chat_completions/gpt-5"}, True),
+        (responses_detectors.chat_completions_bridge, {"model": "openai/gpt-5"}, False),
         (detectors.retries_fallbacks, {"num_retries": 0}, True),
         (detectors.retries_fallbacks, {"max_retries": 2}, True),
         (detectors.retries_fallbacks, {"fallbacks": ["gpt-5-mini"]}, True),
@@ -111,27 +141,51 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.retries_fallbacks, {}, False),
         (detectors.prompt_management, {"knowledge_bases": ["kb-1"]}, True),
         (detectors.prompt_management, {"vector_store_ids": []}, False),
-        (detectors.managed_resource_ids, {"input": MAPPED_FILE_INPUT, **MAPPED_FILE}, True),
-        (detectors.managed_resource_ids, {"input": MAPPED_FILE_INPUT}, False),
-        (detectors.managed_resource_ids, {"input": "hi"}, False),
-        (detectors.cache_control_marks, {"input": [{"role": "user", "content": [CACHED_TEXT]}]}, True),
-        (detectors.cache_control_marks, {"tools": [{"type": "function", "name": "f", "cache_control": {}}]}, True),
-        (detectors.cache_control_marks, {"input": [{"role": "user", "content": [{"type": "input_text"}]}]}, False),
-        (detectors.anthropic_tool_search, {"tools": [{"type": TOOL_SEARCH_TYPE, "name": "tool_search"}]}, True),
-        (detectors.anthropic_tool_search, {"tools": [{"type": "function", "name": "f"}]}, False),
-        (detectors.tool_schema_repair, {"tools": [function_tool('{"type": "object"}')]}, True),
-        (detectors.tool_schema_repair, {"tools": [function_tool({"type": "string", "pattern": r"\p{L}"})]}, True),
-        (detectors.tool_schema_repair, {"tools": [function_tool({"type": "object"})]}, False),
-        (detectors.tool_schema_repair, {}, False),
-        (detectors.model_param_gating, {"max_output_tokens": 1}, True),
-        (detectors.model_param_gating, {"max_output_tokens": 1024}, False),
+        (responses_detectors.managed_resource_ids, {"input": MAPPED_FILE_INPUT, **MAPPED_FILE}, True),
+        (responses_detectors.managed_resource_ids, {"input": MAPPED_FILE_INPUT}, False),
+        (responses_detectors.managed_resource_ids, {"input": "hi"}, False),
+        (responses_detectors.cache_control_marks, {"input": [{"role": "user", "content": [CACHED_TEXT]}]}, True),
+        (
+            responses_detectors.cache_control_marks,
+            {"tools": [{"type": "function", "name": "f", "cache_control": {}}]},
+            True,
+        ),
+        (
+            responses_detectors.cache_control_marks,
+            {"input": [{"role": "user", "content": [{"type": "input_text"}]}]},
+            False,
+        ),
+        (
+            responses_detectors.anthropic_tool_search,
+            {"tools": [{"type": TOOL_SEARCH_TYPE, "name": "tool_search"}]},
+            True,
+        ),
+        (responses_detectors.anthropic_tool_search, {"tools": [{"type": "function", "name": "f"}]}, False),
+        (responses_detectors.tool_schema_repair, {"tools": [function_tool('{"type": "object"}')]}, True),
+        (
+            responses_detectors.tool_schema_repair,
+            {"tools": [function_tool({"type": "string", "pattern": r"\p{L}"})]},
+            True,
+        ),
+        (responses_detectors.tool_schema_repair, {"tools": [function_tool({"type": "object"})]}, False),
+        (responses_detectors.tool_schema_repair, {}, False),
+        (responses_detectors.model_param_gating, {"max_output_tokens": 1}, True),
+        (responses_detectors.model_param_gating, {"max_output_tokens": 1024}, False),
         (detectors.cache_control_injection, {"enable_prompt_caching": True}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": [{"location": "message"}]}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": []}, False),
-        (detectors.thinking_signature_retry, {"messages": [THINKING_TURN]}, True),
-        (detectors.thinking_signature_retry, {"messages": [{"role": "assistant", "content": [REDACTED]}]}, True),
-        (detectors.thinking_signature_retry, {"messages": [{"role": "assistant", "content": "done"}]}, False),
-        (detectors.thinking_signature_retry, {"messages": [{"role": "user", "content": [{"type": "text"}]}]}, False),
+        (messages_detectors.thinking_signature_retry, {"messages": [THINKING_TURN]}, True),
+        (
+            messages_detectors.thinking_signature_retry,
+            {"messages": [{"role": "assistant", "content": [REDACTED]}]},
+            True,
+        ),
+        (messages_detectors.thinking_signature_retry, {"messages": [{"role": "assistant", "content": "done"}]}, False),
+        (
+            messages_detectors.thinking_signature_retry,
+            {"messages": [{"role": "user", "content": [{"type": "text"}]}]},
+            False,
+        ),
         (detectors.drop_params, {"drop_params": True}, True),
         (detectors.drop_params, {"drop_params": False}, False),
         (detectors.drop_params, {"drop_params": " True "}, True),
@@ -139,13 +193,25 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.drop_params, {"drop_params": "maybe"}, False),
         (detectors.drop_params, {"additional_drop_params": ["metadata.user_id"]}, True),
         (detectors.drop_params, {"additional_drop_params": []}, False),
-        (detectors.deployment_response_id, {"litellm_metadata": {"model_info": {"id": "deployment-1"}}}, True),
-        (detectors.deployment_response_id, {"litellm_metadata": {"model_info": {}}}, False),
-        (detectors.deployment_response_id, {"litellm_metadata": None}, False),
-        (detectors.encoded_item_ids, {"input": [{"type": "reasoning", "id": ENCODED_ID}]}, True),
-        (detectors.encoded_item_ids, {"input": [{"type": "reasoning", "encrypted_content": WRAPPED_CONTENT}]}, True),
-        (detectors.encoded_item_ids, {"input": [{"type": "reasoning", "id": "rs_1", "encrypted_content": "x"}]}, False),
-        (detectors.encoded_item_ids, {"input": "hi"}, False),
+        (
+            responses_detectors.deployment_response_id,
+            {"litellm_metadata": {"model_info": {"id": "deployment-1"}}},
+            True,
+        ),
+        (responses_detectors.deployment_response_id, {"litellm_metadata": {"model_info": {}}}, False),
+        (responses_detectors.deployment_response_id, {"litellm_metadata": None}, False),
+        (responses_detectors.encoded_item_ids, {"input": [{"type": "reasoning", "id": ENCODED_ID}]}, True),
+        (
+            responses_detectors.encoded_item_ids,
+            {"input": [{"type": "reasoning", "encrypted_content": WRAPPED_CONTENT}]},
+            True,
+        ),
+        (
+            responses_detectors.encoded_item_ids,
+            {"input": [{"type": "reasoning", "id": "rs_1", "encrypted_content": "x"}]},
+            False,
+        ),
+        (responses_detectors.encoded_item_ids, {"input": "hi"}, False),
     ),
 )
 def test_request_detectors(
@@ -156,7 +222,7 @@ def test_request_detectors(
 
 def test_cache_control_marks_handles_deeply_nested_input() -> None:
     nested_input: Final = reduce(_wrap_nested_level, range(5_000), {"cache_control": {}})
-    assert detectors.cache_control_marks(call(input=nested_input))
+    assert responses_detectors.cache_control_marks(call(input=nested_input))
 
 
 @pytest.mark.parametrize(
@@ -206,7 +272,7 @@ def test_cache_control_marks_handles_deeply_nested_input() -> None:
 )
 def test_input_rewrite_preserves_caller_input(input_value: object, expected: bool) -> None:
     original: Final = deepcopy(input_value)
-    assert detectors.input_rewrite(call(input=input_value)) is expected
+    assert responses_detectors.input_rewrite(call(input=input_value)) is expected
     assert input_value == original
 
 
@@ -217,11 +283,11 @@ def test_input_rewrite_preserves_caller_input(input_value: object, expected: boo
         (detectors.modify_params, "modify_params", True, {}),
         (detectors.retries_fallbacks, "num_retries", 3, {}),
         (detectors.cache_control_injection, "enable_anthropic_prompt_caching", True, {}),
-        (detectors.stream_cost_injection, "include_cost_in_streaming_usage", True, {"stream": True}),
-        (detectors.stream_cost_injection, "include_cost_in_streaming_usage", "true", {"stream": True}),
-        (detectors.chat_retries_fallbacks, "model_fallbacks", [{"gpt-5": ["gpt-5-mini"]}], {}),
-        (detectors.chat_retries_fallbacks, "num_retries", 3, {}),
-        (detectors.model_alias_map, "model_alias_map", {"gpt-5": "openai/gpt-5"}, {}),
+        (messages_detectors.stream_cost_injection, "include_cost_in_streaming_usage", True, {"stream": True}),
+        (messages_detectors.stream_cost_injection, "include_cost_in_streaming_usage", "true", {"stream": True}),
+        (chat_detectors.chat_retries_fallbacks, "model_fallbacks", [{"gpt-5": ["gpt-5-mini"]}], {}),
+        (chat_detectors.chat_retries_fallbacks, "num_retries", 3, {}),
+        (chat_detectors.model_alias_map, "model_alias_map", {"gpt-5": "openai/gpt-5"}, {}),
     ),
 )
 def test_global_settings_are_detected(
@@ -243,13 +309,13 @@ def test_global_settings_are_detected(
 
 def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
-    assert not detectors.stream_cost_injection(call())
+    assert not messages_detectors.stream_cost_injection(call())
 
 
 def test_model_alias_map_applies_only_to_the_requested_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_alias_map", {"fast": "openai/gpt-5-mini"})
-    assert detectors.model_alias_map(call(model="fast"))
-    assert not detectors.model_alias_map(call())
+    assert chat_detectors.model_alias_map(call(model="fast"))
+    assert not chat_detectors.model_alias_map(call())
 
 
 @pytest.mark.parametrize(
@@ -270,7 +336,7 @@ def test_chat_model_param_gating_follows_the_provider_param_rules(
     monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object], expected: bool
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    assert detectors.chat_model_param_gating(call(**kwargs)) is expected
+    assert chat_detectors.chat_model_param_gating(call(**kwargs)) is expected
 
 
 def test_openai_workload_identity_applies_only_without_a_static_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -283,9 +349,9 @@ def test_openai_workload_identity_applies_only_without_a_static_key(monkeypatch:
         "openai_service_account_id": "sa-1",
         "openai_identity_token_file": "/var/run/token",
     }
-    assert detectors.openai_workload_identity(call(**identity))
-    assert not detectors.openai_workload_identity(call(**identity, api_key="sk-static"))
-    assert not detectors.openai_workload_identity(call())
+    assert responses_detectors.openai_workload_identity(call(**identity))
+    assert not responses_detectors.openai_workload_identity(call(**identity, api_key="sk-static"))
+    assert not responses_detectors.openai_workload_identity(call())
 
 
 def test_anthropic_workload_identity_applies_only_without_a_static_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -297,9 +363,9 @@ def test_anthropic_workload_identity_applies_only_without_a_static_key(monkeypat
     ):
         monkeypatch.delenv(name, raising=False)
     federation: Final = {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"}
-    assert detectors.anthropic_workload_identity(call(**federation))
-    assert not detectors.anthropic_workload_identity(call(**federation, api_key="sk-ant-static"))
-    assert not detectors.anthropic_workload_identity(call(anthropic_federation_rule_id="rule-1"))
+    assert messages_detectors.anthropic_workload_identity(call(**federation))
+    assert not messages_detectors.anthropic_workload_identity(call(**federation, api_key="sk-ant-static"))
+    assert not messages_detectors.anthropic_workload_identity(call(anthropic_federation_rule_id="rule-1"))
 
 
 class _Logger(CustomLogger):
@@ -335,18 +401,18 @@ class _Deployment(CustomLogger):
 @pytest.mark.parametrize(
     ("detector", "callbacks", "expected"),
     (
-        (detectors.pre_request_hook, [_Rewrite()], True),
-        (detectors.pre_request_hook, [_InheritedRewrite()], True),
-        (detectors.pre_request_hook, [_Logger(), _Agentic()], False),
-        (detectors.pre_request_hook, ["not-a-logger"], False),
+        (messages_detectors.pre_request_hook, [_Rewrite()], True),
+        (messages_detectors.pre_request_hook, [_InheritedRewrite()], True),
+        (messages_detectors.pre_request_hook, [_Logger(), _Agentic()], False),
+        (messages_detectors.pre_request_hook, ["not-a-logger"], False),
         (detectors.agentic_loop_hook, [_Agentic()], True),
         (detectors.agentic_loop_hook, [_Logger(), _Rewrite()], False),
         (detectors.agentic_loop_hook, [_ChatAgentic()], False),
-        (detectors.chat_agentic_loop_hook, [_ChatAgentic()], True),
-        (detectors.chat_agentic_loop_hook, [_Agentic()], True),
-        (detectors.chat_agentic_loop_hook, [_Logger(), _Deployment()], False),
-        (detectors.deployment_hook, [_Deployment()], True),
-        (detectors.deployment_hook, [_Logger(), _Agentic(), _Rewrite()], False),
+        (chat_detectors.chat_agentic_loop_hook, [_ChatAgentic()], True),
+        (chat_detectors.chat_agentic_loop_hook, [_Agentic()], True),
+        (chat_detectors.chat_agentic_loop_hook, [_Logger(), _Deployment()], False),
+        (responses_detectors.deployment_hook, [_Deployment()], True),
+        (responses_detectors.deployment_hook, [_Logger(), _Agentic(), _Rewrite()], False),
     ),
 )
 def test_callback_detectors_need_an_override(
@@ -376,9 +442,9 @@ def _logging_with(callback: CustomLogger) -> Logging:
         (detectors.agentic_loop_hook, {"success_callback": [_Agentic()]}, True),
         (detectors.agentic_loop_hook, {"litellm_logging_obj": _logging_with(_Agentic())}, True),
         (detectors.agentic_loop_hook, {"success_callback": [_Logger()]}, False),
-        (detectors.pre_request_hook, {"success_callback": [_Rewrite()]}, False),
-        (detectors.chat_agentic_loop_hook, {"litellm_logging_obj": _logging_with(_ChatAgentic())}, True),
-        (detectors.deployment_hook, {"success_callback": [_Deployment()]}, True),
+        (messages_detectors.pre_request_hook, {"success_callback": [_Rewrite()]}, False),
+        (chat_detectors.chat_agentic_loop_hook, {"litellm_logging_obj": _logging_with(_ChatAgentic())}, True),
+        (responses_detectors.deployment_hook, {"success_callback": [_Deployment()]}, True),
     ),
     ids=(
         "success-callback",
@@ -403,9 +469,9 @@ def test_websearch_interception_needs_the_interception_logger(monkeypatch: pytes
     from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 
     monkeypatch.setattr(litellm, "callbacks", [_Rewrite()])
-    assert not detectors.websearch_interception(call())
+    assert not messages_detectors.websearch_interception(call())
     monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger()])
-    assert detectors.websearch_interception(call())
+    assert messages_detectors.websearch_interception(call())
 
 
 @pytest.mark.parametrize(

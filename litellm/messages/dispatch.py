@@ -6,11 +6,10 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
-from litellm.llms.anthropic.pass_through.messages.interceptors import get_messages_interceptors
-from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
 from litellm.rust_bridge import detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.messages import detectors as route_detectors
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -21,7 +20,6 @@ from litellm.rust_bridge.public_call import (
     bind,
     native_call,
     native_call_hook,
-    optional_mapping,
     optional_sequence,
     optional_str,
     signature,
@@ -102,36 +100,25 @@ def _target(request: NativeCall, model: str, provider: str | None) -> Target:
     return Target.CHAT_COMPLETIONS
 
 
-def _intercepted(request: NativeCall) -> bool:
-    tools: Final = optional_sequence(request.resolved.get("tools"))
-    if not tools:
-        return False
-    mappings: Final = tuple(mapping for mapping in map(optional_mapping, tools) if mapping is not None)
-    provider: Final = _resolved(request)[1]
-    return any(interceptor.can_handle(mappings, provider) for interceptor in get_messages_interceptors())
-
-
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **detectors.COMMON,
-        Feature.SAFEGUARDS_CLASSIFIER: lambda request: native_route_classifies(
-            str(request.resolved["model"]), request.resolved.get("safeguards")
-        ),
+        Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
         Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
-        Feature.WORKLOAD_IDENTITY: detectors.anthropic_workload_identity,
+        Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
-        Feature.STREAM_COST_INJECTION: detectors.stream_cost_injection,
-        Feature.THINKING_SIGNATURE_RETRY: detectors.thinking_signature_retry,
+        Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
+        Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
     }
 )
 
 _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **_FEATURES,
-        Feature.PRE_REQUEST_HOOK: detectors.pre_request_hook,
-        Feature.WEBSEARCH_INTERCEPTION: detectors.websearch_interception,
-        Feature.MESSAGES_INTERCEPTOR: _intercepted,
+        Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
+        Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
+        Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
     }
 )
 

@@ -19,6 +19,7 @@ from litellm.rust_bridge.public_call import (
     optional_str,
     signature,
 )
+from litellm.rust_bridge.responses import detectors as route_detectors
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
     NATIVE_RESPONSES,
@@ -80,27 +81,27 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.STREAMING: detectors.streaming,
         Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
-        Feature.TEXT_FORMAT: detectors.text_format,
-        Feature.CHAT_COMPLETIONS_BRIDGE: detectors.chat_completions_bridge,
+        Feature.TEXT_FORMAT: route_detectors.text_format,
+        Feature.CHAT_COMPLETIONS_BRIDGE: route_detectors.chat_completions_bridge,
         Feature.RETRIES_FALLBACKS: detectors.retries_fallbacks,
-        Feature.DEPLOYMENT_RESPONSE_ID: detectors.deployment_response_id,
-        Feature.ENCODED_ITEM_IDS: detectors.encoded_item_ids,
-        Feature.INPUT_REWRITE: detectors.input_rewrite,
+        Feature.DEPLOYMENT_RESPONSE_ID: route_detectors.deployment_response_id,
+        Feature.ENCODED_ITEM_IDS: route_detectors.encoded_item_ids,
+        Feature.INPUT_REWRITE: route_detectors.input_rewrite,
         Feature.EXTRA_BODY: detectors.extra_body,
-        Feature.PROVIDER_AFFINITY: detectors.provider_affinity,
+        Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
         Feature.RESPONSE_CACHE: detectors.response_cache,
-        Feature.MANAGED_RESOURCE_IDS: detectors.managed_resource_ids,
-        Feature.CACHE_CONTROL_MARKS: detectors.cache_control_marks,
-        Feature.ANTHROPIC_TOOL_SEARCH: detectors.anthropic_tool_search,
-        Feature.TOOL_SCHEMA_REPAIR: detectors.tool_schema_repair,
-        Feature.MODEL_PARAM_GATING: detectors.model_param_gating,
-        Feature.WORKLOAD_IDENTITY: detectors.openai_workload_identity,
-        Feature.CLIENT_HEADERS: detectors.client_headers,
+        Feature.MANAGED_RESOURCE_IDS: route_detectors.managed_resource_ids,
+        Feature.CACHE_CONTROL_MARKS: route_detectors.cache_control_marks,
+        Feature.ANTHROPIC_TOOL_SEARCH: route_detectors.anthropic_tool_search,
+        Feature.TOOL_SCHEMA_REPAIR: route_detectors.tool_schema_repair,
+        Feature.MODEL_PARAM_GATING: route_detectors.model_param_gating,
+        Feature.WORKLOAD_IDENTITY: route_detectors.openai_workload_identity,
+        Feature.CLIENT_HEADERS: route_detectors.client_headers,
     }
 )
 
 _SYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
-    {**_FEATURES, Feature.DEPLOYMENT_HOOK: detectors.deployment_hook}
+    {**_FEATURES, Feature.DEPLOYMENT_HOOK: route_detectors.deployment_hook}
 )
 
 

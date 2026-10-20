@@ -6,6 +6,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm import main
 from litellm.rust_bridge import detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext
+from litellm.rust_bridge.chat_completions import detectors as route_detectors
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
@@ -68,19 +69,19 @@ def _public_request(
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **detectors.COMMON,
-        Feature.MOCK_RESPONSE: detectors.chat_mock_response,
-        Feature.AGENTIC_LOOP_HOOK: detectors.chat_agentic_loop_hook,
+        Feature.MOCK_RESPONSE: route_detectors.chat_mock_response,
+        Feature.AGENTIC_LOOP_HOOK: route_detectors.chat_agentic_loop_hook,
         Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.STREAMING: detectors.streaming,
         Feature.DROP_PARAMS: detectors.drop_params,
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.EXTRA_BODY: detectors.extra_body,
-        Feature.RETRIES_FALLBACKS: detectors.chat_retries_fallbacks,
+        Feature.RETRIES_FALLBACKS: route_detectors.chat_retries_fallbacks,
         Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
-        Feature.MODEL_PARAM_GATING: detectors.chat_model_param_gating,
-        Feature.MODEL_LIST: detectors.model_list,
-        Feature.MODEL_ALIAS_MAP: detectors.model_alias_map,
+        Feature.MODEL_PARAM_GATING: route_detectors.chat_model_param_gating,
+        Feature.MODEL_LIST: route_detectors.model_list,
+        Feature.MODEL_ALIAS_MAP: route_detectors.model_alias_map,
     }
 )
 
