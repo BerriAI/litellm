@@ -257,6 +257,25 @@ def test_explicit_region_overrides_arn(patched_boto3):
     assert kwargs["region_name"] == "eu-central-1"
 
 
+def test_status_client_uses_regional_host_when_no_control_plane_endpoint(
+    patched_boto3: tuple[MagicMock, MagicMock],
+) -> None:
+    _, boto_client_factory = patched_boto3
+    BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
+    _, kwargs = boto_client_factory.call_args
+    assert kwargs["endpoint_url"] is None
+
+
+def test_status_client_uses_configured_control_plane_endpoint(patched_boto3: tuple[MagicMock, MagicMock]) -> None:
+    _, boto_client_factory = patched_boto3
+    BedrockBatchesHandler.handle_model_invocation_job_status(
+        batch_id=JOB_ARN,
+        aws_bedrock_control_plane_endpoint="https://bedrock-gateway.internal/",
+    )
+    _, kwargs = boto_client_factory.call_args
+    assert kwargs["endpoint_url"] == "https://bedrock-gateway.internal"
+
+
 def test_failure_message_propagates(patched_boto3):
     fake_client, _ = patched_boto3
     failed_response = _fake_boto3_response(status="Failed")
@@ -477,6 +496,29 @@ def test_litellm_cancel_batch_dispatches_to_bedrock(patched_boto3):
 
     fake_client.stop_model_invocation_job.assert_called_once_with(jobIdentifier=JOB_ARN)
     assert batch.status == "cancelled"
+
+
+def test_litellm_batch_calls_send_every_bedrock_client_to_the_configured_endpoint(
+    patched_boto3: tuple[MagicMock, MagicMock],
+) -> None:
+    import litellm
+
+    fake_client, boto_client_factory = patched_boto3
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Stopped")
+
+    litellm.cancel_batch(
+        batch_id=JOB_ARN,
+        custom_llm_provider="bedrock",
+        aws_bedrock_control_plane_endpoint="https://bedrock-gateway.internal",
+    )
+    litellm.retrieve_batch(
+        batch_id=JOB_ARN,
+        custom_llm_provider="bedrock",
+        aws_bedrock_control_plane_endpoint="https://bedrock-gateway.internal",
+    )
+
+    endpoints: Final = tuple(call.kwargs["endpoint_url"] for call in boto_client_factory.call_args_list)
+    assert endpoints == ("https://bedrock-gateway.internal",) * 3
 
 
 class _TagGatedSTSClient:
