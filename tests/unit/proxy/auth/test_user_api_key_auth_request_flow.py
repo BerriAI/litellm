@@ -5207,10 +5207,12 @@ async def test_centralized_common_checks_enforces_team_model_max_budget_from_the
     "general_settings, expected_grants",
     [
         ({"model_access_group_deny_by_default": True}, frozenset({"group-x"})),
-        ({"model_access_group_deny_by_default": "true"}, None),
+        ({"model_access_group_deny_by_default": "true"}, frozenset({"group-x"})),
+        ({"model_access_group_deny_by_default": "not-a-bool"}, frozenset({"group-x"})),
+        ({"model_access_group_deny_by_default": False}, None),
         ({}, None),
     ],
-    ids=["deny-by-default", "setting-not-true", "setting-absent"],
+    ids=["deny-by-default", "quoted-true", "invalid-value-fails-closed", "setting-false", "setting-absent"],
 )
 async def test_centralized_common_checks_stamps_the_team_model_access_group_grants_on_the_token(
     monkeypatch: pytest.MonkeyPatch,
@@ -5238,20 +5240,12 @@ async def test_centralized_common_checks_stamps_the_team_model_access_group_gran
     }.items():
         monkeypatch.setattr(proxy_server, name, value)
 
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
-        ),  # test-quality-ok: stubs the sibling check so only the grant stamping is under test
-        patch(  # test-quality-ok: stubs the budget reservation so only the grant stamping is under test
-            "litellm.proxy.auth.user_api_key_auth._reserve_budget_after_common_checks", new_callable=AsyncMock
-        ),
-    ):
-        await run_centralized_common_checks(
-            user_api_key_auth_obj=token,
-            request=request,
-            request_data={"model": "group-x"},
-            route="/chat/completions",
-        )
+    await run_centralized_common_checks(
+        user_api_key_auth_obj=token,
+        request=request,
+        request_data={"model": "group-x"},
+        route="/chat/completions",
+    )
 
     assert token.model_access_group_grants == expected_grants
 

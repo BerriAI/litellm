@@ -52,7 +52,7 @@ def _is_granted(deployment: Mapping[str, object], requested_model: str, grants: 
     return not groups or requested_model in grants or row.model_name in grants or not grants.isdisjoint(groups)
 
 
-def _denied(model: str) -> litellm.PermissionDeniedError:
+def model_access_denied(model: str) -> litellm.PermissionDeniedError:
     from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
 
     return litellm.PermissionDeniedError(
@@ -63,22 +63,17 @@ def _denied(model: str) -> litellm.PermissionDeniedError:
     )
 
 
-def require_granted_deployment(
-    deployment: _Deployment, requested_model: str, request_kwargs: Mapping[str, object] | None
-) -> _Deployment:
+def deployment_is_granted(
+    deployment: Mapping[str, object], requested_model: str, request_kwargs: Mapping[str, object] | None
+) -> bool:
     grants: Final = request_model_access_group_grants(request_kwargs)
-    if grants is None or _is_granted(deployment, requested_model, grants):
-        return deployment
-    raise _denied(requested_model)
+    return grants is None or _is_granted(deployment, requested_model, grants)
 
 
-def drop_ungranted_deployments(
+def granted_deployments(
     deployments: Sequence[_Deployment], requested_model: str, request_kwargs: Mapping[str, object] | None
 ) -> tuple[_Deployment, ...]:
     grants: Final = request_model_access_group_grants(request_kwargs)
     if grants is None:
         return tuple(deployments)
-    granted: Final = tuple(deployment for deployment in deployments if _is_granted(deployment, requested_model, grants))
-    if deployments and not granted:
-        raise _denied(requested_model)
-    return granted
+    return tuple(deployment for deployment in deployments if _is_granted(deployment, requested_model, grants))

@@ -5931,6 +5931,25 @@ def personal_key_team_model_access_applies(valid_token: UserAPIKeyAuth | None) -
 _MODEL_NAMES: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 
 
+def model_access_group_deny_by_default(general_settings: Mapping[str, object]) -> bool:
+    """
+    Startup rejects a non-boolean value from the config file. A non-boolean value that reaches
+    general_settings another way enables the policy, so only access-group models are denied.
+    """
+    try:
+        return ConfigGeneralSettings.model_validate(
+            MappingProxyType(
+                {
+                    "model_access_group_deny_by_default": general_settings.get(
+                        "model_access_group_deny_by_default", False
+                    )
+                }
+            )
+        ).model_access_group_deny_by_default
+    except ValidationError:
+        return True
+
+
 async def model_access_group_grants(
     deny_by_default: bool,
     valid_token: UserAPIKeyAuth,

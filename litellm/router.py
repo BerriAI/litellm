@@ -296,7 +296,11 @@ from litellm.router_utils.kubernetes_pod_discovery import (
     resolve_pods_after,
     resolve_pods_after_bound,
 )
-from litellm.router_utils.model_access_group_grants import drop_ungranted_deployments, require_granted_deployment
+from litellm.router_utils.model_access_group_grants import (
+    deployment_is_granted,
+    granted_deployments,
+    model_access_denied,
+)
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
@@ -14328,11 +14332,16 @@ class Router:
         resolved_model, deployments = self._resolve_available_deployments(
             model=model, specific_deployment=specific_deployment, request_kwargs=request_kwargs
         )
-        if isinstance(deployments, Sequence):
-            return resolved_model, list(drop_ungranted_deployments(deployments, model, request_kwargs))
-        return resolved_model, cast(  # cast-ok: contract requires a plain dict for a single deployment
-            dict[str, object], require_granted_deployment(deployments, model, request_kwargs)
-        )
+        if not isinstance(deployments, Sequence):
+            if not deployment_is_granted(deployments, model, request_kwargs):
+                raise model_access_denied(model)
+            return resolved_model, cast(  # cast-ok: contract requires a plain dict for a single deployment
+                dict[str, object], deployments
+            )
+        granted: Final = granted_deployments(deployments, model, request_kwargs)
+        if deployments and not granted:
+            raise model_access_denied(model)
+        return resolved_model, list(granted)
 
     def _resolve_available_deployments(
         self,
@@ -15552,8 +15561,8 @@ class Router:
         )
         definition: Final = selected_strategy.deployment
         strategy_source: Final = marker if marker is not None else definition.model_dump() if definition else None
-        if strategy_source is not None:
-            _ = require_granted_deployment(strategy_source, model, request_kwargs)
+        if strategy_source is not None and not deployment_is_granted(strategy_source, model, request_kwargs):
+            raise model_access_denied(model)
         config_id: Final = definition.model_info.id if definition else None
         updated_at: Final = definition.model_info.updated_at if definition else None
         router_kind: Final = classify_strategy_router_model(definition.litellm_params.model) if definition else None
