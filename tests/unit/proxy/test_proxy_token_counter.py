@@ -3236,9 +3236,16 @@ def _gemini_router(drop_params: bool = False) -> Router:
         ({"drop_params": True}, {}, {}, False),
         ({}, {"drop_params": True}, {}, False),
         ({}, {}, {"drop_params": True}, False),
+        ({}, {}, {"drop_params": "true"}, False),
         ({}, {}, {}, True),
     ),
-    ids=("deployment-drop-params", "router-default-drop-params", "request-drop-params", "litellm-drop-params"),
+    ids=(
+        "deployment-drop-params",
+        "router-default-drop-params",
+        "request-drop-params",
+        "request-drop-params-string",
+        "litellm-drop-params",
+    ),
 )
 async def test_gemini_messages_count_tokens_counts_the_unedited_body_when_drop_params_drops_an_invalid_edit(
     deployment_params: dict[str, JsonValue],
