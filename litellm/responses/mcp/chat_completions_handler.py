@@ -351,7 +351,7 @@ async def acompletion_with_mcp(
                     return self._add_mcp_list_tools_to_chunk(chunk)
                 return chunk
 
-            async def _finish_initial_turn(self):
+            async def _finish_initial_turn(self) -> None:
                 await self._process_tool_calls()
                 if self.tool_results and self.complete_response:
                     await self._prepare_follow_up_call()
