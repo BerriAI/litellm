@@ -31,13 +31,7 @@ def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float 
     """Input and output per-token prices from the first cost-map row among the deployment's
     pricing models that carries one; (None, None) when no row does, so the caller falls back to
     its unmapped default."""
-    view: Final = _str_keyed(deployment)
-    params: Final = _str_keyed(view.get("litellm_params"))
-    info: Final = _str_keyed(view.get("model_info"))
-    pricing_models: Final = deployment_pricing_models(
-        info.get("base_model") or params.get("base_model"), params.get("model")
-    )
-    rows: Final = (_str_keyed(_cost_map().get(model)) for model in pricing_models)
+    rows: Final = (_str_keyed(_cost_map().get(model)) for model in deployment_pricing_models(deployment))
     row: Final = next((row for row in rows if _declares_token_price(row)), _EMPTY)
     return _as_rate(row.get("input_cost_per_token")), _as_rate(row.get("output_cost_per_token"))
 
