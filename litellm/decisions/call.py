@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 from types import MappingProxyType
@@ -711,11 +711,23 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
 
 
 def _caller_answers(call: DecisionsCall, answers: Sequence[DecisionsIRAnswer]) -> tuple[DecisionsIRAnswer, ...]:
-    sent_answers: Final = iter(answers)
-    return tuple(
-        next(sent_answers) if question in call.ir_request.questions else DecisionsIRRefusal()
-        for question in call.caller_questions
-    )
+    return tuple(_answers_in_caller_order(call.caller_questions, call.ir_request.questions, answers))
+
+
+def _answers_in_caller_order(
+    caller_questions: Sequence[DecisionsIRQuestion],
+    sent_questions: Sequence[DecisionsIRQuestion],
+    answers: Sequence[DecisionsIRAnswer],
+) -> Iterator[DecisionsIRAnswer]:
+    unanswered: Final = iter(caller_questions)
+    for sent, answer in zip(sent_questions, answers, strict=True):
+        for question in unanswered:
+            if question == sent:
+                yield answer
+                break
+            yield DecisionsIRRefusal()
+    for _ in unanswered:
+        yield DecisionsIRRefusal()
 
 
 def _formatted_response(
