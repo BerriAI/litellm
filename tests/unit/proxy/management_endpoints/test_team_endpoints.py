@@ -50,7 +50,9 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    _LOCK_DELETED_TEAM_MEMBERS_SQL,
     _STRIP_DELETED_TEAMS_FROM_USERS_SQL,
+    DeletedTeams,
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
     _build_team_list_where_conditions,
@@ -63,6 +65,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _validate_team_member_reset_spend_value,
     aggregated_date_range_error,
     delete_team,
+    delete_validated_teams,
     list_available_teams,
     new_team,
     reset_team_member_budget_fn,
@@ -215,13 +218,14 @@ def _wire_member_delete_tx(prisma_client):
 def _wire_team_delete_tx(prisma_client):
     """`/team/delete` deletes the team rows and runs its post-delete reference sweep under
     every team's advisory lock in one transaction, so a mocked client has to hand its own
-    table mocks (and db-level execute_raw) back out of `tx()` for existing per-table
-    assertions on `prisma_client.db.*` to keep seeing those calls."""
+    table mocks back out of `tx()` for existing per-table assertions on `prisma_client.db.*`
+    to keep seeing those calls. The locked sweep reads the users it detaches through a
+    `query_raw` whose rows name them and their teams, so the default answers none."""
     tx = SimpleNamespace(
         litellm_teamtable=prisma_client.db.litellm_teamtable,
         litellm_teammembership=prisma_client.db.litellm_teammembership,
         query_raw=AsyncMock(return_value=[]),
-        execute_raw=prisma_client.db.execute_raw,
+        execute_raw=AsyncMock(return_value=0),
     )
     tx_cm = MagicMock()
     tx_cm.__aenter__ = AsyncMock(return_value=tx)
@@ -9325,24 +9329,23 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
         litellm_changed_by="admin-user",
     )
 
-    assert mock_execute_raw.await_args_list == [
-        call(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, ["team-doomed"]),
-        call(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, ["team-doomed"]),
+    assert mock_execute_raw.await_args_list == [], (
+        "no sweep runs outside the lock: one there strips a member a concurrent roster write added "
+        "after the caller read the team, before the locked sweep can report them"
+    )
+
+    # one pass for the membership rows, under the lock alongside the delete
+    assert mock_membership_delete_many.await_args_list == [call(where={"team_id": {"in": ("team-doomed",)}})]
+
+    assert mock_lock_tx.query_raw.await_args_list == [
+        call(TEAM_ADVISORY_LOCK_SQL, "team-doomed"),
+        call(_LOCK_DELETED_TEAM_MEMBERS_SQL, ["team-doomed"]),
     ], (
-        "the unlocked sweep must run once to catch pre-existing drift, and the locked sweep "
-        "(alongside the delete, under the same advisory lock member_add takes) must run again "
-        "so a member_add that wrote its reference just before losing the lock is still reaped"
+        "the advisory lock must be acquired before the team row is deleted, and the user sweep "
+        "runs under it (the same lock member_add takes) so a member_add that wrote its "
+        "reference just before losing the lock is still reaped"
     )
-
-    # same two passes for the membership rows, the second under the lock alongside the delete
-    assert mock_membership_delete_many.await_args_list == [
-        call(where={"team_id": {"in": ("team-doomed",)}}),
-        call(where={"team_id": {"in": ("team-doomed",)}}),
-    ]
-
-    assert mock_lock_tx.query_raw.await_args_list == [call(TEAM_ADVISORY_LOCK_SQL, "team-doomed")], (
-        "the advisory lock must be acquired before the team row is deleted"
-    )
+    assert mock_lock_tx.execute_raw.await_args_list == [call(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, ["team-doomed"])]
 
     assert fresh_cache.get_cache(key="team_id:team-doomed") is None
     assert fresh_cache.get_cache(key="team_alias:doomed-team") is None
@@ -9462,6 +9465,79 @@ async def test_delete_team_evicts_member_caches_with_one_transaction(
 
 
 @pytest.mark.asyncio
+async def test_delete_validated_teams_reports_and_evicts_the_members_the_locked_sweep_detached(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    """
+    A roster write that lands between the caller's read of the team and the locked delete
+    leaves a user referencing the team that the roster never named. The locked sweep's
+    RETURNING rows are the only complete list of who was detached, so the result names the
+    roster plus those rows, once each, and the late member's cache is evicted like the rest.
+    """
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team = LiteLLM_TeamTable(
+        team_id="team-doomed",
+        team_alias="doomed-team",
+        members_with_roles=[Member(user_id="member-1", role="user")],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_keys": 0})
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.execute_raw = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
+    mock_prisma_client.tx.return_value.__aenter__.return_value.query_raw = AsyncMock(
+        side_effect=[
+            [],
+            [
+                {"user_id": "late-member", "teams": ["team-doomed"]},
+                {"user_id": "member-1", "teams": ["team-kept", "team-doomed"]},
+            ],
+        ]
+    )
+
+    fresh_cache = UserApiKeyCache()
+    for user_id in ("member-1", "late-member", "bystander-user"):
+        fresh_cache.set_cache(key=user_id, value=UserAPIKeyAuth(user_id=user_id))
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    deleted = await delete_validated_teams(
+        teams=(team,),
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    assert deleted == DeletedTeams(team_ids=("team-doomed",), member_user_ids=("member-1", "late-member"))
+    assert fresh_cache.get_cache(key="member-1") is None
+    assert fresh_cache.get_cache(key="late-member") is None, (
+        "a member the roster never named but the locked sweep detached must lose its cached user object too"
+    )
+    assert fresh_cache.get_cache(key="bystander-user") is not None
+
+
+@pytest.mark.asyncio
 async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(
     monkeypatch,
     disable_audit_logging_for_mocked_team,
@@ -9558,8 +9634,7 @@ async def test_delete_team_failing_locked_sweep_rolls_back_the_delete_and_leaves
     mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
-    # the unlocked pre-delete sweep succeeds, the locked post-delete sweep blows up
-    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[None, ConnectionError("db went away")])
+    mock_prisma_client.db.execute_raw = AsyncMock()
 
     mock_tx = AsyncMock()
     mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
@@ -9568,6 +9643,10 @@ async def test_delete_team_failing_locked_sweep_rolls_back_the_delete_and_leaves
     mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
     _wire_team_delete_tx(mock_prisma_client)
+    # the advisory lock is taken, then the locked post-delete user sweep blows up
+    mock_prisma_client.tx.return_value.__aenter__.return_value.query_raw = AsyncMock(
+        side_effect=[[], ConnectionError("db went away")]
+    )
 
     fresh_cache = UserApiKeyCache()
     cached_obj = LiteLLM_TeamTableCachedObj(team_id="team-doomed", team_alias="doomed-team")
