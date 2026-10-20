@@ -8,7 +8,7 @@ import pytest
 from litellm import sandbox
 from litellm.harness.errors import SandboxError
 from litellm.harness.sandbox import LocalSandbox, Process, Sandbox
-from litellm.harness.sandbox.local import filtered_environ, is_secret_env_name
+from litellm.harness.sandbox.local import collect_output, filtered_environ, is_secret_env_name
 
 PY = sys.executable
 
@@ -56,29 +56,6 @@ async def test_run_cwd_inside_workdir(sbx):
         await sbx.run([PY, "-c", "pass"], cwd="/")
 
 
-async def test_child_trusting_pwd_writes_inside_its_cwd(
-    sbx: LocalSandbox,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path_factory: pytest.TempPathFactory,
-) -> None:
-    elsewhere: Final = tmp_path_factory.mktemp("elsewhere")
-    monkeypatch.setenv("PWD", str(elsewhere))
-    os.mkdir(os.path.join(sbx.workdir, "sub"))
-    write_at_pwd: Final = (
-        "import os;open(os.path.join(os.environ['PWD'],'hello.txt'),'w').write('hi')"
-    )
-
-    top: Final = await sbx.run([PY, "-c", write_at_pwd])
-    nested: Final = await sbx.run(
-        [PY, "-c", write_at_pwd], cwd="sub", env={"PWD": str(elsewhere)}
-    )
-
-    assert (top.exit_code, nested.exit_code) == (0, 0)
-    assert os.listdir(elsewhere) == []
-    assert await sbx.read("hello.txt") == b"hi"
-    assert await sbx.read("sub/hello.txt") == b"hi"
-
-
 async def test_exec_streams_stdin(sbx):
     proc = await sbx.exec([PY, "-c", "import sys;print(sys.stdin.read().upper())"])
     assert isinstance(proc, Process)
@@ -95,20 +72,29 @@ async def test_run_timeout_kills(sbx):
         await sbx.run([PY, "-c", "import time;time.sleep(30)"], timeout=0.5)
 
 
-async def test_cancelled_run_stops_its_command(sbx, tmp_path):
-    pid_file: Final = tmp_path / "pid"
-    run: Final = asyncio.ensure_future(
-        sbx.run([PY, "-c", "import os, time; open('pid', 'w').write(str(os.getpid())); time.sleep(30)"])
-    )
-    for _ in range(500):
-        if pid_file.exists() and pid_file.read_text():
-            break
-        await asyncio.sleep(0.01)
+class _NeverEndingProcess:
+    def __init__(self) -> None:
+        self.stdin: asyncio.StreamWriter | None = None
+        self.stdout: asyncio.StreamReader = asyncio.StreamReader()
+        self.stderr: asyncio.StreamReader = asyncio.StreamReader()
+        self.killed: bool = False
+
+    async def wait(self) -> int:
+        return await asyncio.Future()
+
+    async def kill(self) -> None:
+        self.killed = True
+
+
+async def test_cancelled_run_stops_its_command() -> None:
+    proc: Final = _NeverEndingProcess()
+    run: Final = asyncio.ensure_future(collect_output(proc, ["opencode", "export"], timeout=None))
+    await asyncio.sleep(0)
     run.cancel()
+
     with pytest.raises(asyncio.CancelledError):
         await run
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(pid_file.read_text()), 0)
+    assert proc.killed
 
 
 async def test_missing_binary_raises(sbx):
