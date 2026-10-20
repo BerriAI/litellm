@@ -9340,3 +9340,18 @@ def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_e
 
     assert optional_params["extra_body"] == {"kept": True}
     assert "cache_control_injection_points" not in optional_params
+
+
+def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_litellm_proxy():
+    """A litellm_proxy deployment calls the downstream proxy through the OpenAI SDK, and that proxy
+    applies cache_control_injection_points itself, so the point must ride along in extra_body."""
+    point: Final = {"location": "tool_config", "control": {"type": "ephemeral"}}
+    optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="litellm_proxy",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[point],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
