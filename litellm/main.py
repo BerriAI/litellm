@@ -9166,7 +9166,7 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import (  # noqa: 
     stream_chunk_builder as stream_chunk_builder,  # noqa: PLC0414  # pyright: ignore[reportUnknownVariableType]  # chunks is an untyped list
 )
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import (  # noqa: E402  # re-export after the move
-    stream_chunk_builder_text_completion as stream_chunk_builder_text_completion,  # noqa: PLC0414  # pyright: ignore[reportUnknownVariableType]  # chunks is an untyped list
+    stream_chunk_builder_text_completion as stream_chunk_builder_text_completion,  # noqa: PLC0414  # re-export after the move
 )
 
 ########## Token Counting API ##########
