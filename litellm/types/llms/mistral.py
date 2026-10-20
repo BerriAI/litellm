@@ -28,3 +28,8 @@ class MistralRequestRouting(TypedDict, total=False):
     api_base: ReadOnly[object]
     drop_params: ReadOnly[object]
     allowed_openai_params: ReadOnly[object]
+    custom_llm_provider: ReadOnly[object]
+
+
+class MistralCacheKeyParams(TypedDict, total=False):
+    prompt_cache_key: ReadOnly[object]

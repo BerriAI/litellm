@@ -1168,13 +1168,15 @@ def test_prompt_cache_key_reaches_the_mistral_request_body(
 AZURE_HOSTED_MISTRAL_API_BASE: Final = "https://my-resource.services.ai.azure.com/openai/v1"
 
 
-def _transform_with_prompt_cache_key(litellm_params: dict[str, object]) -> Mapping[str, object]:
+def _transform_with_prompt_cache_key(
+    litellm_params: dict[str, object], prompt_cache_key: object = "session-1"
+) -> Mapping[str, object]:
     return cast(
         Mapping[str, object],
         MistralConfig().transform_request(
             model="mistral-small-latest",
             messages=[{"role": "user", "content": "hi"}],
-            optional_params={"prompt_cache_key": "session-1", "temperature": 0.2},
+            optional_params={"prompt_cache_key": prompt_cache_key, "temperature": 0.2},
             litellm_params=litellm_params,
             headers={},
         ),
@@ -1197,6 +1199,35 @@ def test_prompt_cache_key_for_another_host_is_rejected_without_drop_params(api_b
 
     upstream_host: Final = urlparse(api_base).hostname or api_base
     assert upstream_host not in str(rejection.value)
+
+
+UNSENDABLE_PROMPT_CACHE_KEYS: Final = ("Büro-Sitzung-42", "日本", 123, ["session-1"])
+
+
+@pytest.mark.parametrize("prompt_cache_key", UNSENDABLE_PROMPT_CACHE_KEYS)
+def test_prompt_cache_key_the_mistral_api_cannot_take_is_rejected_without_drop_params(
+    prompt_cache_key: object,
+) -> None:
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="ASCII"):
+        _transform_with_prompt_cache_key({"api_base": "https://api.mistral.ai/v1"}, prompt_cache_key)
+
+
+@pytest.mark.parametrize("prompt_cache_key", UNSENDABLE_PROMPT_CACHE_KEYS)
+def test_prompt_cache_key_the_mistral_api_cannot_take_is_dropped_under_drop_params(prompt_cache_key: object) -> None:
+    request: Final = _transform_with_prompt_cache_key(
+        {"api_base": "https://api.mistral.ai/v1", "drop_params": True}, prompt_cache_key
+    )
+
+    assert "prompt_cache_key" not in request
+    assert request["temperature"] == 0.2
+
+
+def test_prompt_cache_key_with_ascii_punctuation_reaches_the_mistral_api() -> None:
+    request: Final = _transform_with_prompt_cache_key({}, "team a/session:42")
+
+    assert request["prompt_cache_key"] == "team a/session:42"
 
 
 def test_prompt_cache_key_allowlisted_for_another_purpose_is_still_rejected_for_another_host() -> None:
@@ -1264,6 +1295,32 @@ async def test_prompt_cache_key_is_dropped_from_an_async_codestral_call_to_anoth
     )
 
     assert "prompt_cache_key" not in json.loads(azure_route.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+async def test_prompt_cache_key_rejection_for_an_async_codestral_call_names_codestral(
+    respx_mock: respx.MockRouter,
+) -> None:
+    import litellm
+
+    azure_route: Final = respx_mock.post(f"{AZURE_HOSTED_MISTRAL_API_BASE}/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=r"codestral does not support parameters: \['prompt_cache_key'\]"):
+        await litellm.acompletion(
+            model="codestral/codestral-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=AZURE_HOSTED_MISTRAL_API_BASE,
+            api_key="azure-key",
+            prompt_cache_key="session-1",
+            max_retries=0,
+            client=AsyncOpenAI(
+                api_key="azure-key", base_url=AZURE_HOSTED_MISTRAL_API_BASE, http_client=httpx.AsyncClient()
+            ),
+        )
+
+    assert not azure_route.called
 
 
 def test_prompt_cache_key_for_another_host_is_dropped_under_drop_params() -> None:

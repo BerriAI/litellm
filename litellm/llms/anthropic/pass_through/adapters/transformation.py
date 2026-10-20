@@ -990,7 +990,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 )
 
     @staticmethod
-    def _supports_prompt_cache_key(model: str | None, custom_llm_provider: str | None, api_base: str | None) -> bool:
+    def _supports_prompt_cache_key(
+        prompt_cache_key: str, model: str | None, custom_llm_provider: str | None, api_base: str | None
+    ) -> bool:
         if not model or not custom_llm_provider:
             return False
         if custom_llm_provider in PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND:
@@ -1005,7 +1007,10 @@ class LiteLLMAnthropicMessagesAdapter:
         _, _, _, resolved_api_base = litellm.get_llm_provider(
             model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
         )
-        return litellm.MistralConfig().accepts_prompt_cache_key_at(resolved_api_base)
+        mistral_config: Final = litellm.MistralConfig()
+        return mistral_config.takes_prompt_cache_key_value(
+            prompt_cache_key
+        ) and mistral_config.accepts_prompt_cache_key_at(resolved_api_base)
 
     @staticmethod
     def _target_declares_reasoning_effort(model: str, custom_llm_provider: str | None) -> bool:
@@ -1047,7 +1052,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_kwargs["user"] = metadata["user_id"]
                 prompt_cache_key: Final = prompt_cache_key_from_user_id(metadata["user_id"])
                 if prompt_cache_key is not None and self._supports_prompt_cache_key(
-                    anthropic_message_request.get("model"), custom_llm_provider, api_base
+                    prompt_cache_key, anthropic_message_request.get("model"), custom_llm_provider, api_base
                 ):
                     new_kwargs["prompt_cache_key"] = prompt_cache_key
 

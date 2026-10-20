@@ -32,7 +32,12 @@ from litellm.router_utils.reasoning_effort_capability import (
     nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.mistral import MistralRequestRouting, MistralThinkingBlock, MistralToolCallMessage
+from litellm.types.llms.mistral import (
+    MistralCacheKeyParams,
+    MistralRequestRouting,
+    MistralThinkingBlock,
+    MistralToolCallMessage,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
@@ -60,6 +65,7 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
 _MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
+_MISTRAL_CACHE_KEY_PARAMS: Final = TypeAdapter(MistralCacheKeyParams)
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -225,24 +231,37 @@ class MistralConfig(OpenAIGPTConfig):
         hostname: Final = urlparse(resolved_api_base).hostname or ""
         return hostname == "mistral.ai" or hostname.endswith(".mistral.ai")
 
-    def _prompt_cache_key_withheld(self, model: str, routing: MistralRequestRouting) -> bool:
+    @staticmethod
+    def takes_prompt_cache_key_value(prompt_cache_key: object) -> bool:
+        return isinstance(prompt_cache_key, str) and prompt_cache_key.isascii()
+
+    def _prompt_cache_key_rejection(self, prompt_cache_key: object, api_base: str | None) -> str | None:
+        if not self.accepts_prompt_cache_key_at(api_base):
+            return "since only the Mistral API (*.mistral.ai) takes it"
+        if not self.takes_prompt_cache_key_value(prompt_cache_key):
+            return "since the Mistral API takes it only as a string of ASCII characters"
+        return None
+
+    def _prompt_cache_key_withheld(self, model: str, prompt_cache_key: object, routing: MistralRequestRouting) -> bool:
         requested_api_base: Final = routing.get("api_base")
         api_base: Final = requested_api_base if isinstance(requested_api_base, str) else None
         allowed_openai_params: Final = routing.get("allowed_openai_params")
         if isinstance(allowed_openai_params, (list, tuple)) and "prompt_cache_key" in allowed_openai_params:
             return False
-        if self.accepts_prompt_cache_key_at(api_base):
+        rejection: Final = self._prompt_cache_key_rejection(prompt_cache_key, api_base)
+        if rejection is None:
             return False
         if litellm.drop_params is True or routing.get("drop_params") is True:
             return True
+        requested_provider: Final = routing.get("custom_llm_provider")
+        provider: Final = requested_provider if isinstance(requested_provider, str) else self.custom_llm_provider
         raise UnsupportedParamsError(
             message=(
-                f"{self.custom_llm_provider} does not support parameters: ['prompt_cache_key'], for model={model}, "
-                "since only the Mistral API (*.mistral.ai) takes it. To send it anyway, pass "
-                "`allowed_openai_params=['prompt_cache_key']`. To drop it, set "
+                f"{provider} does not support parameters: ['prompt_cache_key'], for model={model}, {rejection}. "
+                "To send it anyway, pass `allowed_openai_params=['prompt_cache_key']`. To drop it, set "
                 "`litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
             ),
-            llm_provider=self.custom_llm_provider,
+            llm_provider=provider,
             model=model,
         )
 
@@ -668,10 +687,13 @@ class MistralConfig(OpenAIGPTConfig):
         if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
             messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
 
+        cache_key_params: Final = _MISTRAL_CACHE_KEY_PARAMS.validate_python(optional_params)
         withheld_params: Final = (
             ("client_metadata", "prompt_cache_key")
-            if "prompt_cache_key" in optional_params
-            and self._prompt_cache_key_withheld(model, _MISTRAL_REQUEST_ROUTING.validate_python(litellm_params))
+            if "prompt_cache_key" in cache_key_params
+            and self._prompt_cache_key_withheld(
+                model, cache_key_params["prompt_cache_key"], _MISTRAL_REQUEST_ROUTING.validate_python(litellm_params)
+            )
             else ("client_metadata",)
         )
         upstream_params: Final = {key: value for key, value in optional_params.items() if key not in withheld_params}

@@ -114,3 +114,27 @@ def test_prepare_completion_kwargs_derives_prompt_cache_key_for_codestral_only_o
     completion_kwargs: Final = _prepare("codestral/codestral-latest", {"custom_llm_provider": "codestral"})
 
     assert ("prompt_cache_key" in completion_kwargs) is derives_key
+
+
+def test_prepare_completion_kwargs_derives_no_prompt_cache_key_mistral_cannot_take_from_a_non_ascii_session() -> None:
+    non_ascii_user_id: Final = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "sitzung-ü"})
+
+    mistral_kwargs: Final = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="mistral/mistral-small-latest",
+        metadata={"user_id": non_ascii_user_id},
+        thinking=None,
+        extra_kwargs={"custom_llm_provider": "mistral"},
+    )[0]
+    openai_kwargs: Final = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        metadata={"user_id": non_ascii_user_id},
+        thinking=None,
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )[0]
+
+    assert "prompt_cache_key" not in mistral_kwargs
+    assert openai_kwargs["prompt_cache_key"] == "sitzung-ü"
