@@ -2,7 +2,6 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import litellm
 import pytest
 
 from litellm import Router
@@ -206,9 +205,10 @@ async def test_e2e_auth_zero_cost_primary_populates_member_budget_and_refuses_pa
     (so skip_budget_checks=True), verify team member budget and spend are populated onto the token,
     and assert is_token_within_budget_for_model refuses the paid fallback target when spend >= budget.
     """
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy.auth.user_api_key_auth import run_centralized_common_checks
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
