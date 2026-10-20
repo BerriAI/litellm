@@ -97,7 +97,7 @@ async def apply_search_free_tier(
     model_info: Final = sl_object["model_map_information"]["model_map_value"]
     allowance: Final = model_info.get("search_free_requests") if model_info is not None else None
     usage: Final = _usage_of(completion_response)
-    if model_info is None or allowance is None or usage is None:
+    if model_info is None or allowance is None or usage is None or sl_object["cache_hit"]:
         return response_cost
     units: Final = _billable_units(usage, model_info)
     if units == 0 or kwargs.get(_COUNTED_KWARG):
@@ -119,5 +119,5 @@ async def apply_search_free_tier(
     freed: Final = freed_units(allowance["count"], units, int(total_after))
     if freed == 0:
         return response_cost
-    freed_cost: Final = cost_per_web_search_request(usage, model_info) * freed / units
+    freed_cost: Final = min(response_cost, cost_per_web_search_request(usage, model_info) * freed / units)
     return _record_freed_cost(kwargs, sl_object, response_cost, freed_cost)

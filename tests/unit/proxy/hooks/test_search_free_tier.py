@@ -48,9 +48,10 @@ def _response(queries: int | None) -> ModelResponse:
     )
 
 
-def _call(model_info: dict, response_cost: float) -> tuple[dict, dict]:
+def _call(model_info: dict, response_cost: float, cache_hit: bool | None = None) -> tuple[dict, dict]:
     sl_object = {
         "response_cost": response_cost,
+        "cache_hit": cache_hit,
         "cost_breakdown": {"input_cost": 0.1, "output_cost": 0.2, "tool_usage_cost": 0.5, "total_cost": response_cost},
         "model_map_information": {"model_map_key": "gemini-test", "model_map_value": model_info},
     }
@@ -171,4 +172,23 @@ async def test_a_second_callback_run_on_the_same_request_counts_it_once():
     first = await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), counter, NOW)
     second = await apply_search_free_tier(kwargs, sl_object, first, _response(5), counter, NOW)
     assert first == second == pytest.approx(1.0 - 5 * RATE)
+    assert counter.totals == {"litellm:search_free_tier:test-group:2026-10": 5}
+
+
+@pytest.mark.asyncio
+async def test_a_cache_hit_with_grounded_usage_is_not_counted_and_stays_at_zero():
+    counter = _Counter()
+    kwargs, sl_object = _call(_model_info("per_query", count=100), response_cost=0.0, cache_hit=True)
+    assert await apply_search_free_tier(kwargs, sl_object, 0.0, _response(2), counter, NOW) == 0.0
+    assert counter.totals == {}
+    assert "discount_amount" not in sl_object["cost_breakdown"]
+
+
+@pytest.mark.asyncio
+async def test_freed_cost_never_exceeds_the_billed_cost():
+    counter = _Counter()
+    billed = 3 * RATE
+    kwargs, sl_object = _call(_model_info("per_query", count=100), response_cost=billed)
+    assert await apply_search_free_tier(kwargs, sl_object, billed, _response(5), counter, NOW) == 0.0
+    assert sl_object["cost_breakdown"]["discount_amount"] == pytest.approx(billed)
     assert counter.totals == {"litellm:search_free_tier:test-group:2026-10": 5}
