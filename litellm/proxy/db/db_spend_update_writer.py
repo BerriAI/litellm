@@ -2809,11 +2809,12 @@ class DBSpendUpdateWriter:
         if not date:
             return
         metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])
+        internal_origin: Final = bool(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
         request_error_accumulator.record(
             payload=payload,
             request_status=prisma_client.get_request_status(payload),  # pyright: ignore[reportUnknownMemberType]  # legacy payload union; this caller supplies a typed spend payload
             date=date.split("T")[0],
-            is_internal_call=bool(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)),  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
+            is_internal_call=internal_origin or _is_billed_retry_attempt(metadata),
         )
 
     async def _common_add_spend_log_transaction_to_daily_transaction(
