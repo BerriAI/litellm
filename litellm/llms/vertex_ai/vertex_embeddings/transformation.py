@@ -1,8 +1,7 @@
 import types
-from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Annotated, Final, Literal
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
@@ -20,20 +19,25 @@ class _PredictResponseMetadata(TypedDict, total=False):
     metadata: ReadOnly[_PredictMetadata]
 
 
-_PREDICT_RESPONSE_METADATA: Final = TypeAdapter(_PredictResponseMetadata)
+class _PredictResponseWithoutBillableCount(TypedDict, total=False):
+    pass
 
 
-def billable_character_count(response: Mapping[str, object]) -> int | None:
+_PredictResponse = Annotated[
+    _PredictResponseMetadata | _PredictResponseWithoutBillableCount, Field(union_mode="left_to_right")
+]
+_PREDICT_RESPONSE_METADATA: Final[TypeAdapter[_PredictResponse]] = TypeAdapter(_PredictResponse)
+
+
+def billable_character_count(response: _PredictResponse) -> int | None:
     """
     `metadata.billableCharacterCount` of a Vertex text embedding predict response, the count Google
     bills per-character embedding models (text-embedding-005, text-multilingual-embedding-002) on.
     A missing, null or non-integer count is reported as absent so the embedding itself still comes back.
     """
-    try:
-        validated: Final = _PREDICT_RESPONSE_METADATA.validate_python(response)
-    except ValidationError:
+    if "metadata" not in response:
         return None
-    return validated.get("metadata", {}).get("billableCharacterCount")
+    return response["metadata"].get("billableCharacterCount")
 
 
 class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
@@ -275,7 +279,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        billable_characters: Final = billable_character_count(response)
+        billable_characters: Final = billable_character_count(_PREDICT_RESPONSE_METADATA.validate_python(response))
         usage: Final = Usage(
             prompt_tokens=input_tokens,
             completion_tokens=0,
