@@ -1386,8 +1386,9 @@ def _timed_out_reading_from_provider(exception: Exception) -> bool:
 
 
 def _client_disconnected(exception: Exception) -> bool:
-    """The 499 the proxy raises when the caller hung up while the provider was still working on the request."""
-    return getattr(exception, "status_code", None) == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+    """The 499 the proxy itself raises when the caller hung up while the provider was still working on the
+    request. A provider's own 499 arrives as a litellm exception and is a plain upstream failure."""
+    return isinstance(exception, HTTPException) and exception.status_code == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
 
 
 def _provider_billed_the_failure(exception: Exception) -> bool:
@@ -1409,17 +1410,19 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
     _base_model: Final = get_base_model_from_metadata(model_call_details=_model_call_details)
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
+    _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
+    _billed: Final = provider_billed and not _success_already_logged
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,
         request_body=request_data,
         dispatched=_first_handoff is not None,
-        provider_billed=provider_billed,
+        provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
     )
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data)
-        if provider_billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
+        if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
         else None
     )
     _earlier_attempts: Final = (

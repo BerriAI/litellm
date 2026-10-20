@@ -796,6 +796,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.defer_async_logging: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
+        self._async_success_enqueued: bool = False
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
@@ -2479,6 +2480,16 @@ class Logging(LiteLLMLoggingBaseClass):
             return True
         except Exception:
             return True
+
+    @property
+    def async_success_log_enqueued(self) -> bool:
+        """True once the success log task was actually created, not merely claimed, so a later failure raised
+        around it (a disconnect cancelling a still-pending guardrail task) must not bill the prompt a second
+        time. A claimed log parked in the deferred slot never runs once a 499 interrupts, so it stays False."""
+        return self._async_success_enqueued
+
+    def mark_async_success_log_enqueued(self) -> None:
+        self._async_success_enqueued = True
 
     def claim_async_success_log(self) -> bool:
         """One async success log per request. The innermost @client wrapper always exits first,
