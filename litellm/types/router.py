@@ -313,7 +313,6 @@ class ModelInfo(MirroredPricingParams):
     # in the spend log row's metadata. Set it on every deployment of the group.
     internal_router_model: bool | None = None
 
-    # Maximum number of inputs accepted by a single embeddings request.
     max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:

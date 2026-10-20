@@ -1,6 +1,6 @@
 """Validate the number of inputs in a single embeddings request."""
 
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Collection, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Final
@@ -82,6 +82,23 @@ def _str_keyed_or_empty(value: object) -> Mapping[str, object]:
     return value if _is_str_keyed_mapping(value) else {}
 
 
+def _deployment_id(deployment: Mapping[str, object]) -> str | None:
+    model_info: Final = deployment.get("model_info")
+    deployment_id: Final = model_info.get("id") if _is_str_keyed_mapping(model_info) else None
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
+def _is_cooling_deployment_admitting_batch(
+    deployment: Mapping[str, object],
+    cooldown_ids: Collection[str],
+    input: object,
+    request_kwargs: Mapping[str, object],
+) -> bool:
+    return _deployment_id(deployment) in cooldown_ids and _deployment_admits_embedding_batch(
+        deployment, input, request_kwargs
+    )
+
+
 @contextmanager
 def embedding_deployment_selection() -> Generator[None]:
     """Apply the input limit to deployment selection inside this block, which only embedding calls enter."""
@@ -96,15 +113,23 @@ def deployments_admitting_embedding_batch(
     deployments: list[dict[str, object]],  # mutable-ok: router deployment-list contract
     input: object,
     request_kwargs: object,
+    before_cooldown: Sequence[Mapping[str, object]],
+    cooldown_ids: Collection[str],
 ) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
-    """Keep the deployments whose input limit admits the request, or all of them when none does."""
+    """Keep the deployments whose input limit admits the request, none while only cooling ones do, else all."""
     if not _SELECTING_FOR_EMBEDDING.get():
         return deployments
     kwargs: Final = _str_keyed_or_empty(request_kwargs)
     admitting: Final = [
         deployment for deployment in deployments if _deployment_admits_embedding_batch(deployment, input, kwargs)
     ]
-    return admitting or deployments
+    if admitting:
+        return admitting
+    cooling_admits: Final = any(
+        _is_cooling_deployment_admitting_batch(deployment, cooldown_ids, input, kwargs)
+        for deployment in before_cooldown
+    )
+    return [] if cooling_admits else deployments
 
 
 def embedding_batch_too_large_error(
@@ -124,7 +149,6 @@ def embedding_batch_too_large_error(
     if input_count <= limit:
         return None
 
-    provider: Final = _litellm_param(deployment, "custom_llm_provider")
     return litellm.BadRequestError(
         message=(
             f"Embedding request has {input_count} inputs, which exceeds "
@@ -132,5 +156,5 @@ def embedding_batch_too_large_error(
             "Split the input into smaller batches."
         ),
         model=model,
-        llm_provider=provider if isinstance(provider, str) else "",
+        llm_provider="",
     )
