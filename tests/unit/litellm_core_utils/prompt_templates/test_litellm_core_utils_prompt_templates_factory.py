@@ -770,6 +770,61 @@ async def test_bedrock_converse_skips_a_thinking_blocks_entry_that_is_not_a_bloc
     assert result[1] == {"role": "assistant", "content": [{"text": "hello"}]}
 
 
+MALFORMED_THINKING: Final = pytest.mark.parametrize(
+    "malformed",
+    [
+        {"type": "thinking", "thinking": {"a": 1}},
+        {"type": "thinking", "thinking": ["a"], "signature": ""},
+        {"type": "thinking", "thinking": "draft", "signature": ["a"]},
+    ],
+    ids=["dict-thinking", "list-thinking", "list-signature"],
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@REASONING_PLACEMENTS
+@MALFORMED_THINKING
+async def test_bedrock_converse_replays_redacted_thinking_once_beside_a_malformed_thinking_item(
+    use_async: bool, placement: str, malformed: dict[str, object]
+):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_reasoning(
+            placement, [{"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}, malformed], "hello"
+        ),
+        {"role": "user", "content": "again"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert result[1]["content"].count({"reasoningContent": {"redactedContent": _CONVERSE_REDACTED_DATA}}) == 1
+
+
+@REASONING_PLACEMENTS
+@MALFORMED_THINKING
+def test_anthropic_messages_pt_replays_redacted_thinking_once_beside_a_malformed_thinking_item(
+    placement: str, malformed: dict[str, object]
+):
+    redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_reasoning(placement, [redacted, malformed], "hello"),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[1]["content"].count(redacted) == 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize("drop_params", [False, True])

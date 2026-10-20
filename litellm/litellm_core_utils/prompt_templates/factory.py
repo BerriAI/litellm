@@ -2572,15 +2572,23 @@ def _as_thinking_block(item: object) -> ChatCompletionThinkingBlock | ChatComple
             return None
 
 
-def _thinking_identity(item: object) -> tuple[object, ...] | None:
+def _thinking_identity(item: object) -> tuple[str | None, ...] | None:
     match item:
         case {"type": "redacted_thinking", "data": str() as data}:
             return ("redacted_thinking", native_redacted_thinking_data(data))
         case {"type": "thinking", "signature": str() as signature} if signature:
             return ("thinking", signature)
-        case {"type": "thinking" | "redacted_thinking"}:
+        case {"type": str() as kind} if kind in ("thinking", "redacted_thinking"):
             fields: Final = cast(Mapping[str, object], item)  # cast-ok: the mapping pattern matched
-            return (fields.get("type"), fields.get("thinking"), fields.get("signature"))
+            return _unsigned_thinking_identity(kind, fields.get("thinking"), fields.get("signature"))
+        case _:
+            return None
+
+
+def _unsigned_thinking_identity(kind: str, thinking: object, signature: object) -> tuple[str | None, ...] | None:
+    match thinking, signature:
+        case (str() | None as text, str() | None as signed):
+            return (kind, text, signed)
         case _:
             return None
 
