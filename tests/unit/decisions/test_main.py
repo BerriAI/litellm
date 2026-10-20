@@ -3477,6 +3477,32 @@ async def test_box_questions_are_dropped_under_drop_params_and_answered_as_refus
     assert response.model_dump(mode="json")["answers"] == _DROPPED_BOX_ANSWERS[api]
 
 
+@pytest.mark.asyncio
+async def test_dropped_box_questions_keep_each_answer_in_its_callers_position(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        api_key="caller-key",
+        drop_params=True,
+        input="review",
+        questions=(
+            {"type": "box", "name": "crack", "instructions": "the crack on the screen"},
+            *_PREDICATE_QUESTIONS,
+            {"type": "box", "name": "dent", "instructions": "the dent on the case"},
+        ),
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == {
+        "is_defect": {"type": "noul", "instructions": "Is this a defect?"}
+    }
+    assert response.model_dump(mode="json")["answers"] == [
+        {"type": "refusal", "name": "crack"},
+        {"type": "predicate", "name": "is_defect", "probability": 0.9},
+        {"type": "refusal", "name": "dent"},
+    ]
+
+
 _CRACK_BOX_QUESTION: Final[Mapping[str, object]] = MappingProxyType(
     {"type": "box", "name": "crack", "instructions": "the crack on the screen"}
 )
