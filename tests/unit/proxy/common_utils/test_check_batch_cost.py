@@ -2921,6 +2921,79 @@ class TestPollPageStarvation:
 
         assert [await _batches_polled_in_one_cycle() for _ in range(4)] == [("batch_new", "batch_old")] * 4
 
+    def _unbilled_rows(self, ages: dict[str, timedelta]) -> tuple[SimpleNamespace, ...]:
+        now: Final = datetime.now(timezone.utc)
+        return tuple(
+            SimpleNamespace(
+                id=f"job-{name}",
+                unified_object_id=self._encode(f"litellm_proxy;model_id:model-123;llm_batch_id:batch_{name}"),
+                created_by="user-1",
+                created_at=now - age,
+                updated_at=now,
+                status="in_progress",
+            )
+            for name, age in ages.items()
+        )
+
+    async def _cycles_on_a_two_row_page(self, monkeypatch, ages: dict[str, timedelta], cycles: int):
+        from litellm_enterprise.proxy.common_utils import check_batch_cost
+
+        monkeypatch.setattr(check_batch_cost, "MAX_OBJECTS_PER_POLL_CYCLE", 2)
+        prisma: Final = self._prisma([])
+        prisma.db.litellm_managedobjecttable = _FakeManagedObjectPages(self._unbilled_rows(ages))
+        llm_router: Final = MagicMock()
+        llm_router.aretrieve_batch = AsyncMock(return_value=MagicMock(status="in_progress"))
+        poller: Final = self._instance(prisma, llm_router)
+
+        async def _batches_polled_in_one_cycle() -> frozenset[str]:
+            llm_router.aretrieve_batch.reset_mock()
+            await poller.check_batch_cost()
+            return frozenset(call.kwargs["batch_id"] for call in llm_router.aretrieve_batch.await_args_list)
+
+        return [await _batches_polled_in_one_cycle() for _ in range(cycles)]
+
+    @pytest.mark.asyncio
+    async def test_an_old_batch_is_polled_every_other_cycle_while_new_batches_fill_the_page(self, monkeypatch):
+        new_batches: Final = {f"new{n}": timedelta(hours=5 - n) for n in range(1, 5)}
+        polled: Final = await self._cycles_on_a_two_row_page(
+            monkeypatch, {"old": timedelta(days=3), **new_batches}, cycles=8
+        )
+
+        assert all("batch_old" in pair[0] | pair[1] for pair in zip(polled, polled[1:]))
+        assert all(f"batch_{name}" in frozenset().union(*polled[:4]) for name in new_batches)
+
+    @pytest.mark.asyncio
+    async def test_old_batches_that_fill_the_page_never_push_a_new_batch_out_after_boot(self, monkeypatch):
+        polled: Final = await self._cycles_on_a_two_row_page(
+            monkeypatch,
+            {"old1": timedelta(days=3, hours=1), "old2": timedelta(days=3), "new": timedelta(hours=1)},
+            cycles=6,
+        )
+
+        assert all("batch_new" in cycle for cycle in polled[1:])
+        assert frozenset({"batch_old1", "batch_old2"}) <= frozenset().union(*polled[1:])
+
+    @pytest.mark.asyncio
+    async def test_a_failed_expiry_write_leaves_the_rest_of_the_page_polled(self):
+        rows: Final = self._unbilled_rows(
+            {"old": timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS, hours=1), "new": timedelta(hours=1)}
+        )
+        table: Final = _FakeManagedObjectPages(rows)
+        table.update_many = AsyncMock(side_effect=RuntimeError("database unavailable"))
+        prisma: Final = self._prisma([])
+        prisma.db.litellm_managedobjecttable = table
+        llm_router: Final = MagicMock()
+        llm_router.aretrieve_batch = AsyncMock(return_value=MagicMock(status="in_progress"))
+        poller: Final = self._instance(prisma, llm_router)
+
+        await poller.check_batch_cost()
+
+        assert [call.kwargs["batch_id"] for call in llm_router.aretrieve_batch.await_args_list] == [
+            "batch_old",
+            "batch_new",
+        ]
+        assert table.update_many.await_count == 1
+
 
 class _FakeManagedObjectPages:
     """A LiteLLM_ManagedObjectTable double over several unbilled rows that pages them the way Postgres would:
