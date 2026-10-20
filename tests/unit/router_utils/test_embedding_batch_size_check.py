@@ -10,6 +10,7 @@ import litellm
 from litellm import Router
 from litellm.router_utils.embedding_batch_size_check import (
     count_embedding_inputs,
+    deployments_admitting_embedding_batch,
     effective_embedding_input,
     raise_if_embedding_batch_too_large,
 )
@@ -18,6 +19,7 @@ _MODEL: Final = "embed-group"
 _PROVIDER: Final = "openai"
 _OPENAI_EMBED_BASE: Final = "https://batch-limit-embed.local/v1"
 _VLLM_EMBED_BASE: Final = "https://batch-limit-vllm.local/v1"
+_UNCAPPED_EMBED_BASE: Final = "https://batch-limit-uncapped.local/v1"
 
 
 def _model_info(max_embedding_batch_size: int | None) -> dict[str, object]:
@@ -26,12 +28,19 @@ def _model_info(max_embedding_batch_size: int | None) -> dict[str, object]:
     return {"max_embedding_batch_size": max_embedding_batch_size}
 
 
+def _deployment(limit: int | None, extra_body: dict[str, object] | None = None) -> dict[str, object]:
+    return {
+        "model_info": _model_info(limit),
+        "litellm_params": {} if extra_body is None else {"extra_body": extra_body},
+    }
+
+
 def _raise_batch(input_value: str | list, limit: int | None) -> None:
     raise_if_embedding_batch_too_large(
+        deployment={"model_info": _model_info(limit), "litellm_params": {"custom_llm_provider": _PROVIDER}},
         input=input_value,
-        model_info=_model_info(limit),
+        request_kwargs={},
         model=_MODEL,
-        llm_provider=_PROVIDER,
     )
 
 
@@ -39,7 +48,7 @@ def _embedding_router(
     *,
     provider_model: str,
     api_base: str,
-    max_embedding_batch_size: int,
+    max_embedding_batch_size: int | None,
     deployment_id: str,
     litellm_params_extra: dict[str, object] | None = None,
 ) -> Router:
@@ -55,7 +64,7 @@ def _embedding_router(
             {
                 "model_name": "embed",
                 "litellm_params": litellm_params,
-                "model_info": {"id": deployment_id, "max_embedding_batch_size": max_embedding_batch_size},
+                "model_info": {"id": deployment_id, **_model_info(max_embedding_batch_size)},
             }
         ],
         num_retries=0,
@@ -153,20 +162,45 @@ class TestEffectiveEmbeddingInput:
         assert effective_embedding_input("ok", extra_body) == ["a", "b"]
 
 
-class TestRaiseIfEmbeddingBatchTooLarge:
+class TestDeploymentsAdmittingEmbeddingBatch:
     @pytest.mark.parametrize(
-        "input_value",
+        ("input_value", "limit"),
         [
-            "hello",
-            ["a", "b"],
-            ["a", "b", "c"],
-            [1, 2, 3, 4, 5],
-            [[1, 2, 3], [4, 5, 6]],
+            ("hello", 1),
+            (["a", "b"], 2),
+            (["a", "b", "c"], 3),
+            ([1, 2, 3, 4, 5], 1),
+            ([[1, 2, 3], [4, 5, 6]], 2),
         ],
     )
-    def test_accepts_inputs_at_or_below_limit(self, input_value: str | list) -> None:
-        limit: Final = max(1, count_embedding_inputs(input_value))
-        _raise_batch(input_value, limit)
+    def test_keeps_deployments_whose_limit_admits_the_batch(self, input_value: str | list, limit: int) -> None:
+        capped: Final = _deployment(limit)
+        uncapped: Final = _deployment(None)
+        assert deployments_admitting_embedding_batch([capped, uncapped], input_value, None) == [capped, uncapped]
+
+    def test_drops_deployments_whose_limit_is_below_the_batch(self) -> None:
+        capped: Final = _deployment(2)
+        uncapped: Final = _deployment(None)
+        assert deployments_admitting_embedding_batch([capped, uncapped], ["a", "b", "c"], None) == [uncapped]
+
+    def test_keeps_every_deployment_when_none_admits_the_batch(self) -> None:
+        smaller: Final = _deployment(1)
+        small: Final = _deployment(2)
+        assert deployments_admitting_embedding_batch([smaller, small], ["a", "b", "c"], None) == [smaller, small]
+
+    def test_request_without_embedding_input_keeps_every_deployment(self) -> None:
+        capped: Final = _deployment(1)
+        uncapped: Final = _deployment(None)
+        assert deployments_admitting_embedding_batch([capped, uncapped], None, None) == [capped, uncapped]
+
+    def test_request_extra_body_replaces_the_deployment_extra_body(self) -> None:
+        capped: Final = _deployment(2, extra_body={"input": ["a", "b", "c"]})
+        uncapped: Final = _deployment(None)
+        assert deployments_admitting_embedding_batch([capped, uncapped], "ok", None) == [uncapped]
+        assert deployments_admitting_embedding_batch([capped, uncapped], "ok", {"extra_body": {}}) == [capped, uncapped]
+
+
+class TestRaiseIfEmbeddingBatchTooLarge:
 
     @pytest.mark.parametrize(
         ("input_value", "limit", "message_match"),
@@ -203,9 +237,6 @@ class TestRaiseIfEmbeddingBatchTooLarge:
         if message_match is not None:
             assert f"max_embedding_batch_size={limit}" in excinfo.value.message
 
-    def test_no_limit_configured_is_no_op(self) -> None:
-        _raise_batch(["a"] * 100, None)
-
 
 class TestRouterEmbeddingBatchLimit:
     @pytest.fixture(autouse=True)
@@ -234,6 +265,63 @@ class TestRouterEmbeddingBatchLimit:
                     input=["one", "two", "three"],
                 )
             assert route.call_count == 0
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_no_limit_configured_forwards_any_batch(self, sync: bool) -> None:
+        router: Final = _embedding_router(
+            provider_model="hosted_vllm/bge-m3",
+            api_base=_VLLM_EMBED_BASE,
+            max_embedding_batch_size=None,
+            deployment_id="vllm-embed-uncapped",
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
+                return_value=_vllm_embedding_response(100)
+            )
+            await _call_embedding(router, sync=sync, model="embed", input=["a"] * 100)
+            assert len(json.loads(route.calls.last.request.content)["input"]) == 100
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_oversized_batch_goes_to_the_group_deployment_that_admits_it(self, sync: bool) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "hosted_vllm/bge-m3",
+                        "api_key": "sk-fake",
+                        "api_base": _VLLM_EMBED_BASE,
+                        "weight": 1000,
+                    },
+                    "model_info": {"id": "vllm-embed-capped", "max_embedding_batch_size": 2},
+                },
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "hosted_vllm/bge-m3",
+                        "api_key": "sk-fake",
+                        "api_base": _UNCAPPED_EMBED_BASE,
+                        "weight": 1,
+                    },
+                    "model_info": {"id": "vllm-embed-uncapped"},
+                },
+            ],
+            num_retries=0,
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
+                return_value=_vllm_embedding_response(3)
+            )
+            uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
+                return_value=_vllm_embedding_response(3)
+            )
+            for _ in range(5):
+                await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
+            assert (capped_route.call_count, uncapped_route.call_count) == (0, 5)
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     @pytest.mark.asyncio

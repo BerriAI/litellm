@@ -229,7 +229,7 @@ from litellm.router_utils.cooldown_handlers import (
     set_cooldown_deployments,
 )
 from litellm.router_utils.embedding_batch_size_check import (
-    effective_embedding_input,
+    deployments_admitting_embedding_batch,
     raise_if_embedding_batch_too_large,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -6728,7 +6728,7 @@ class Router:
         except Exception as e:
             raise e
 
-    def _embedding(self, input: str | list, model: str, **kwargs):
+    def _embedding(self, input: str | list[object], model: str, **kwargs):
         model_name = None
         try:
             verbose_router_logger.debug("Inside embedding()- model: %s; kwargs: %s", model, kwargs)
@@ -6741,12 +6741,11 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
             model_name = data["model"]
-            custom_llm_provider: Final = data.get("custom_llm_provider")
             raise_if_embedding_batch_too_large(
-                input=effective_embedding_input(input, kwargs.get("extra_body", data.get("extra_body"))),
-                model_info=kwargs["model_info"],
+                deployment=_OPAQUE_VALUE_ADAPTER.validate_python(deployment),
+                input=input,
+                request_kwargs=_OPAQUE_VALUE_ADAPTER.validate_python(kwargs),
                 model=model,
-                llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else "",
             )
 
             potential_model_client: Final = self._get_client(deployment=deployment, kwargs=kwargs, client_type="sync")
@@ -6810,7 +6809,7 @@ class Router:
             )
             raise e
 
-    async def _aembedding(self, input: str | list, model: str, **kwargs):
+    async def _aembedding(self, input: str | list[object], model: str, **kwargs):
         model_name = None
         try:
             verbose_router_logger.debug("Inside _aembedding()- model: %s; kwargs: %s", model, kwargs)
@@ -6824,12 +6823,11 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
             model_name = data["model"]
-            custom_llm_provider: Final = data.get("custom_llm_provider")
             raise_if_embedding_batch_too_large(
-                input=effective_embedding_input(input, kwargs.get("extra_body", data.get("extra_body"))),
-                model_info=kwargs["model_info"],
+                deployment=_OPAQUE_VALUE_ADAPTER.validate_python(deployment),
+                input=input,
+                request_kwargs=_OPAQUE_VALUE_ADAPTER.validate_python(kwargs),
                 model=model,
-                llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else "",
             )
             model_client: Final = self._get_async_openai_model_client(
                 deployment=deployment,
@@ -14342,7 +14340,12 @@ class Router:
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            cast(list[dict], healthy_deployments), target_order=_target_order
+            deployments_admitting_embedding_batch(
+                cast(list[dict[str, object]], healthy_deployments),
+                _OPAQUE_VALUE_ADAPTER.validate_python(input),
+                _OPAQUE_VALUE_ADAPTER.validate_python(request_kwargs),
+            ),
+            target_order=_target_order,
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
@@ -15530,7 +15533,10 @@ class Router:
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            healthy_deployments, target_order=_target_order
+            deployments_admitting_embedding_batch(
+                healthy_deployments, _OPAQUE_VALUE_ADAPTER.validate_python(input), routing_kwargs
+            ),
+            target_order=_target_order,
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
