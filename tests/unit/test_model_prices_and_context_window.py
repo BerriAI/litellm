@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.fallback_generalizations import match_capability
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+from litellm.types.utils import SearchFreeRequests
 
 REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -719,3 +720,30 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return MappingProxyType(
+        {key: row for key, row in prices.items() if isinstance(row, dict) and "search_free_requests" in row}
+    )
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_search_free_requests_rows_are_grounding_rows_with_one_allowance_per_group(path: Path) -> None:
+    rows = _search_free_requests_rows(path)
+    assert rows
+    allowances = {
+        key: TypeAdapter(SearchFreeRequests).validate_python(row["search_free_requests"]) for key, row in rows.items()
+    }
+    for key, row in rows.items():
+        assert row.get("supports_web_search") is True, key
+        assert row.get("search_context_cost_per_query"), key
+        assert allowances[key]["count"] > 0, key
+    for group in {allowance["shared_group"] for allowance in allowances.values()}:
+        same_group = {(a["count"], a["period"]) for a in allowances.values() if a["shared_group"] == group}
+        assert len(same_group) == 1, (group, same_group)
+
+
+def test_search_free_requests_backup_rows_match_the_main_catalog() -> None:
+    assert _search_free_requests_rows(BACKUP_PRICES_PATH) == _search_free_requests_rows(PRICES_PATH)
