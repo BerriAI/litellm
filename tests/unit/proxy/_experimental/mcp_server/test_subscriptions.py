@@ -10,7 +10,7 @@ from mcp.server.context import ServerRequestContext
 from mcp.server.session import ServerSession
 from mcp.server.subscriptions import ListenHandler
 from mcp.shared.subscriptions import PromptsListChanged, ToolsListChanged
-from mcp.types import SubscriptionFilter, SubscriptionsListenRequestParams
+from mcp.types import ListToolsRequest, ListToolsResult, SubscriptionFilter, SubscriptionsListenRequestParams
 
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server import subscriptions
@@ -43,6 +43,18 @@ def context(session: ServerSession, revision: str = "2026-07-28") -> ServerReque
         method="subscriptions/listen",
         request_id="listener",
     )
+
+
+class _ListingGateway:
+    def __init__(self, *, result: ListToolsResult | None = None, error: MCPError | None = None) -> None:
+        self._result: ListToolsResult | None = result
+        self._error: MCPError | None = error
+
+    async def execute(self, _operation: ListToolsRequest, _context: OperationContext) -> ListToolsResult:
+        if self._error is not None:
+            raise self._error
+        assert self._result is not None
+        return self._result
 
 
 @pytest.mark.asyncio
@@ -486,3 +498,39 @@ async def test_legacy_listener_catalog_refreshes_do_not_consume_server_rate_limi
     finally:
         listener.cancel()
         await asyncio.gather(listener, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_all_failed_tools_listing_keeps_empty_catalog_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server.catalog import ToolListingFailedOutright
+
+    listener_context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="listener"))
+    empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.operations.GatewayOperations", lambda: empty_gateway
+    )
+    empty_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
+
+    failed_gateway: Final = _ListingGateway(
+        error=ToolListingFailedOutright(code=-32603, message="Every MCP server in scope failed")
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.operations.GatewayOperations", lambda: failed_gateway
+    )
+    failed_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
+
+    assert failed_digest == empty_digest
+
+
+@pytest.mark.asyncio
+async def test_tools_listing_propagates_other_mcp_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    failure: Final = MCPError(code=-32602, message="Bad cursor")
+    gateway: Final = _ListingGateway(error=failure)
+    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.operations.GatewayOperations", lambda: gateway)
+    listener_context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="listener"))
+
+    expected_error: Final = pytest.raises(MCPError)
+    with expected_error as exc_info:
+        await subscriptions._listing(ToolsListChanged(), listener_context)
+
+    assert exc_info.value is failure

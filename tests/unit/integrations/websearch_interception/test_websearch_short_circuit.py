@@ -23,9 +23,17 @@ class TestTryShortCircuitSearch:
     """Tests for WebSearchInterceptionLogger.try_short_circuit_search"""
 
     @pytest.mark.asyncio
-    async def test_short_circuits_single_web_search_tool(self):
+    @pytest.mark.parametrize(
+        ("provider", "model"),
+        [
+            ("github_copilot", "github_copilot/claude-sonnet-5.5"),
+            ("databricks", "databricks/databricks-claude-sonnet-5-5"),
+            ("databricks", "databricks/system.ai.claude-sonnet-5-5"),
+        ],
+    )
+    async def test_short_circuits_single_web_search_tool(self, provider, model):
         """Single web_search_20250305 tool → short-circuit fires"""
-        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        logger = WebSearchInterceptionLogger(enabled_providers=[provider])
 
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
@@ -36,14 +44,14 @@ class TestTryShortCircuitSearch:
             )
 
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-5.5",
+                model=model,
                 messages=[
                     {"role": "user", "content": "Search for Claude Code releases"}
                 ],
                 tools=[
                     {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
                 ],
-                custom_llm_provider="github_copilot",
+                custom_llm_provider=provider,
             )
 
         assert result is not None

@@ -22,6 +22,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _INPUT_RATE: Final = 0.000001
 _OUTPUT_RATE: Final = 0.00001
 _MAX_BUDGET: Final = 0.0001
