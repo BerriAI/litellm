@@ -4,10 +4,11 @@ from typing import Final
 
 import pytest
 from anthropic.types import Message, MessageParam
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from sdk_clients import SdkClients
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -37,6 +38,15 @@ def _register_model(proxy: ProxyClient, resources: ResourceManager) -> tuple[str
 
 class TestBedrockKimiK3Messages:
     @pytest.mark.covers("llm.messages.bedrock_converse.basic.nonstream.works_for_kimi_k3_max_tokens_1")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_model_switch_probe_max_tokens_1_returns_message(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -54,6 +64,7 @@ class TestBedrockKimiK3Messages:
             messages=[message_param],
             extra_headers={"anthropic-beta": MODEL_SWITCH_BETA},
             extra_query={"beta": "true"},
+            extra_body=NO_PROXY_CACHE,
         )
 
         assert isinstance(message, Message)
