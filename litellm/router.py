@@ -296,6 +296,7 @@ from litellm.router_utils.kubernetes_pod_discovery import (
     resolve_pods_after,
     resolve_pods_after_bound,
 )
+from litellm.router_utils.model_access_group_grants import drop_ungranted_deployments, require_granted_deployment
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
@@ -1327,7 +1328,7 @@ class Router:
         self.assistants_config = assistants_config
         self.search_tools = search_tools or []
         self.guardrail_list = guardrail_list or []
-        self.deployment_names: list[str] = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
+        self.deployment_names: list = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
         cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
@@ -14323,6 +14324,22 @@ class Router:
         specific_deployment: bool | None = False,
         request_kwargs: Mapping[str, object] | None = None,
     ) -> tuple[str, list | dict]:
+        """The candidates `_resolve_available_deployments` picks, less any the caller's model access grants miss"""
+        resolved_model, deployments = self._resolve_available_deployments(
+            model=model, specific_deployment=specific_deployment, request_kwargs=request_kwargs
+        )
+        if isinstance(deployments, Sequence):
+            return resolved_model, list(drop_ungranted_deployments(deployments, model, request_kwargs))
+        return resolved_model, cast(  # cast-ok: contract requires a plain dict for a single deployment
+            dict[str, object], require_granted_deployment(deployments, model, request_kwargs)
+        )
+
+    def _resolve_available_deployments(
+        self,
+        model: str,
+        specific_deployment: bool | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> tuple[str, Sequence[DeploymentTypedDict] | Mapping[str, object]]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
 

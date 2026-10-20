@@ -203,6 +203,15 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
+    model_access_group_grants: frozenset[str] | None = Field(
+        default=None,
+        exclude=True,
+        description=(
+            "Server-only. Set by auth under general_settings.model_access_group_deny_by_default to the model and "
+            "access group names the caller was explicitly granted; the router then drops tagged deployments these "
+            "names miss. None means no such restriction"
+        ),
+    )
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
     created_by_user: Any | None = None  # Expanded created_by user when expand=user is used
@@ -240,6 +249,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("invoked_agent_policy", None)
         values.pop("agent_invocation_cost", None)
         values.pop("billing_agent_policy", None)
+        values.pop("model_access_group_grants", None)
         api_key: Final = values.get("api_key")
         if api_key is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(api_key)})  # pyright: ignore[reportArgumentType]  # non-str fails in the hasher

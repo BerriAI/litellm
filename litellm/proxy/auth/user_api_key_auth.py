@@ -84,6 +84,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     jwt_key_mapping_cache_key,
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
+    model_access_group_grants,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
     route_skips_budget_checks,
@@ -3792,6 +3793,19 @@ async def run_centralized_common_checks(
         )
 
     bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
+    grants: Final = await model_access_group_grants(
+        deny_by_default=(
+            "model_access_group_deny_by_default" in general_settings
+            and general_settings["model_access_group_deny_by_default"] is True
+        ),
+        valid_token=user_api_key_auth_obj,
+        team_object=typed_team_object,
+        user_object=user_object if isinstance(user_object, LiteLLM_UserTable) else None,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    user_api_key_auth_obj.model_access_group_grants = grants  # rebind-ok: carries server-only grants to the router
     try:
         _ = await common_checks(
             request=request,

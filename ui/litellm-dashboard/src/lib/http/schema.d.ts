@@ -30150,7 +30150,7 @@ export interface components {
             missing_session_id?: ("generate" | "reject" | "omit") | null;
             /**
              * Model Access Group Deny By Default
-             * @description When True, a model tagged with model_info.access_groups is only reachable by a caller whose grant names one of its groups or the model itself. The grant that counts is the team's for a team key, the user's for a personal key, and the key's own for a key with neither. An empty models list, '*', all-proxy-models and wildcard patterns no longer reach these models. Untagged models are unaffected, and proxy admins' personal access is exempt
+             * @description When True, a model tagged with model_info.access_groups is only reachable by a caller whose grant names one of its groups or the model itself. The grant that counts is the team's for a team key, the user's for a personal key, and the key's own for a key with neither. An empty models list, '*', all-proxy-models and wildcard patterns no longer reach these models, by any name, alias, deployment id, routing group or fallback. A model name with both tagged and untagged deployments serves only the untagged ones to such callers. Untagged models are unaffected, and the master key and proxy admins are exempt
              * @default false
              */
             model_access_group_deny_by_default: boolean;

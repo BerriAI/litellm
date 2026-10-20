@@ -1416,7 +1416,6 @@ async def test_find_team_with_model_access_model_group(monkeypatch):
 
     proxy_server_module = types.ModuleType("proxy_server")
     proxy_server_module.llm_router = router
-    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     team = LiteLLM_TeamTable(team_id="team-1", models=["test-group"])
@@ -1468,7 +1467,6 @@ async def test_find_team_with_model_access_resolves_team_model_alias(monkeypatch
     router = Router(model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}])
     proxy_server_module = types.ModuleType("proxy_server")
     proxy_server_module.llm_router = router
-    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     team = LiteLLM_TeamTable(
@@ -1528,7 +1526,6 @@ async def test_find_team_with_model_access_v1_messages_default_routes(monkeypatc
 
     proxy_server_module = types.ModuleType("proxy_server")
     proxy_server_module.llm_router = router
-    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     team = LiteLLM_TeamTable(team_id="coding-team", models=["coding_only_models"])
@@ -1600,7 +1597,6 @@ async def test_find_team_with_model_access_reports_team_route_allowlist_denial()
     prisma_team_table.find_unique = AsyncMock()
     proxy_server_module: Final = ModuleType("proxy_server")
     proxy_server_module.llm_router = None
-    proxy_server_module.general_settings = {}
 
     with patch.dict(sys.modules, {"litellm.proxy.proxy_server": proxy_server_module}):
         with pytest.raises(HTTPException) as exc_info:
@@ -3711,7 +3707,6 @@ async def test_find_team_with_model_access_unresolved_group_claim_returns_none(
     )
     proxy_server_module = types.ModuleType("proxy_server")
     proxy_server_module.llm_router = router
-    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     async def raise_404(*_args, **_kwargs):
@@ -3849,7 +3844,6 @@ async def test_find_team_with_model_access_resolved_team_without_model_still_rai
     )
     proxy_server_module = types.ModuleType("proxy_server")
     proxy_server_module.llm_router = router
-    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     team = LiteLLM_TeamTable(team_id="real-team", models=["gpt-3.5-turbo"])
@@ -3931,7 +3925,6 @@ async def test_find_team_with_model_access_unresolved_group_claim_default_raises
     )
     proxy_server_module = types.ModuleType("proxy_server")
     proxy_server_module.llm_router = router
-    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     async def raise_404(*_args, **_kwargs):
