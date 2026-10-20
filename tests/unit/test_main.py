@@ -1043,6 +1043,50 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat
     assert model_info.get("mode") != "responses"
 
 
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, reasoning_effort",
+    [
+        ("gpt-6.1-sol", "openai", "none"),
+        ("gpt-6.1-sol", "openai", {"effort": "none"}),
+        ("gpt-6-astra", "azure", "none"),
+    ],
+)
+def test_responses_api_bridge_check_tools_with_a_none_the_row_refuses_routes_to_responses(
+    local_model_cost_map: None, model: str, custom_llm_provider: str, reasoning_effort: object
+) -> None:
+    """The ``none`` escape hatch only holds when the chat gate forwards it. These rows refuse
+    ``none``, so the gate drops it (or refuses the call) and the provider runs its default effort,
+    under which Chat Completions rejects function tools; the bridge has to fire the way it does
+    for an unset effort. Row-derived: the test follows the flag, never the vendor's answer."""
+    from litellm.main import responses_api_bridge_check
+
+    row_key: Final = model if custom_llm_provider == "openai" else f"{custom_llm_provider}/{model}"
+    assert litellm.model_cost[row_key]["supports_none_reasoning_effort"] is False
+
+    model_info, _ = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=reasoning_effort,
+    )
+
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_a_none_the_row_refuses_stays_chat_without_tools(
+    local_model_cost_map: None,
+) -> None:
+    """Without function tools nothing forces the Responses route: the dropped ``none`` leaves a
+    plain chat call at the default effort, as for any other dropped level."""
+    from litellm.main import responses_api_bridge_check
+
+    model_info, _ = responses_api_bridge_check(
+        model="gpt-6.1-sol", custom_llm_provider="openai", reasoning_effort="none"
+    )
+
+    assert model_info.get("mode") != "responses"
+
+
 def test_responses_api_bridge_check_reasoning_none_with_summary_still_routes_to_responses():
     """A reasoning summary is Responses-only regardless of effort value."""
     from litellm.main import responses_api_bridge_check
@@ -1419,11 +1463,15 @@ _FOUNDRY_FUNCTION_TOOL: Final = ({"type": "function", "function": {"name": "get_
         pytest.param("gpt-6-astra", "https://myresource.openai.azure.com", None, id="gpt-6-azure-openai-host"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "low", id="gpt-5.6-explicit-effort"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, {"effort": "high"}, id="gpt-5.6-explicit-effort-dict"),
+        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "none", id="gpt-6-row-refused-none"),
     ],
 )
 def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_responses(
     model_name, api_base, reasoning_effort
 ):
+    """The explicit ``none`` only keeps a Foundry gpt-6 request on chat while the deployment takes
+    it; the ``azure_ai/gpt-6-astra`` row says it does not, so the gate drops it and the call runs at
+    the default effort, under which Foundry rejects function tools from gpt-6 on."""
     from litellm.main import responses_api_bridge_check
 
     model_info, model = responses_api_bridge_check(
@@ -1441,7 +1489,6 @@ def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_res
 @pytest.mark.parametrize(
     "model_name, api_base, reasoning_effort",
     [
-        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "none", id="explicit-none-stays-chat"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, None, id="gpt-5.6-unset-effort-stays-chat"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "none", id="gpt-5.6-explicit-none-stays-chat"),
         pytest.param("gpt-5.5", _FOUNDRY_API_BASE, "high", id="gpt-5.5-explicit-effort-stays-chat"),
