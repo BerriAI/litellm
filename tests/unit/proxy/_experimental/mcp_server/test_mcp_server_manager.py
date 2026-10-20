@@ -11,7 +11,7 @@ import anyio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final, Literal, Optional, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -4642,17 +4642,28 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("source", ["config", "database"])
-    async def test_startup_discovery_gives_up_on_metadata_that_never_finishes(
+    async def test_startup_discovery_moves_past_metadata_that_never_finishes(
         self, source: str, monkeypatch: pytest.MonkeyPatch
     ):
         body: Final = _OpenEventStream()
+        documents: Final = MappingProxyType(
+            {
+                "/.well-known/oauth-protected-resource": {"authorization_servers": ["https://stuck.example.com"]},
+                "/.well-known/oauth-authorization-server": {
+                    "issuer": "https://stuck.example.com",
+                    "authorization_endpoint": "https://stuck.example.com/authorize",
+                    "token_endpoint": "https://stuck.example.com/token",
+                },
+            }
+        )
 
         def respond(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/mcp":
                 return httpx.Response(200)
             if request.url.path == "/.well-known/oauth-protected-resource/mcp":
                 return httpx.Response(200, headers={"Content-Type": "application/json"}, stream=body)
-            return httpx.Response(404)
+            document: Final = documents.get(request.url.path)
+            return httpx.Response(404) if document is None else httpx.Response(200, json=document)
 
         monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "1")
         manager: Final = MCPServerManager()
@@ -4698,8 +4709,8 @@ class TestMCPServerManager:
                 )
 
         assert body.read_started.is_set()
-        assert server.authorization_url is None
-        assert server.token_url is None
+        assert server.authorization_url == "https://stuck.example.com/authorize"
+        assert server.token_url == "https://stuck.example.com/token"
 
     @pytest.mark.asyncio
     async def test_fetch_single_authorization_server_metadata_supports_azure_issuer_path(
