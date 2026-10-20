@@ -2483,7 +2483,7 @@ async def test_completed_success_preserves_generic_logger_configuration(
     monkeypatch.setattr(litellm, "generic_api_use_v1", False)
     logging_obj: Final = _async_request_logging_obj("distinct-generic-loggers", [])
     response: Final = ModelResponse(id="chatcmpl-distinct-generic-loggers")
-    now: Final = datetime.datetime.now()
+    now: Final = datetime.datetime(2026, 1, 1)
 
     await logging_obj.async_success_handler(response, now, now)
 

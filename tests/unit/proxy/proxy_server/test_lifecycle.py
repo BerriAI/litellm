@@ -731,7 +731,7 @@ async def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(
     assert len(litellm.callbacks) == 2
     assert sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks) == 1
     assert len(litellm._async_success_callback) == 1
-    now: Final = datetime.now()
+    now: Final = datetime(2026, 1, 1)
     logging_obj, _ = function_setup(
         "acompletion",
         Rules(),
