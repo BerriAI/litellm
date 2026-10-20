@@ -6,6 +6,7 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MemoryRow } from "@/components/networking";
+import { uiHref } from "@/utils/uiHref";
 
 import { MemoryView } from "./MemoryView";
 
@@ -86,6 +87,12 @@ describe("MemoryView", () => {
     expect(screen.getByRole("heading", { name: "Memory" })).toBeInTheDocument();
     expect(screen.getByText("/v1/memory")).toBeInTheDocument();
     expect(screen.getByText(/Scoped to memories visible to your user \/ team \(admins see all\)/)).toBeInTheDocument();
+  });
+
+  it("should link to the shared knowledge demo from Memory", () => {
+    renderView(null);
+
+    expect(screen.getByRole("link", { name: "Shared knowledge demo" })).toHaveAttribute("href", uiHref("memory/demo"));
   });
 
   it("opens the create modal from the New memory button", async () => {
