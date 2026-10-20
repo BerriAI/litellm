@@ -1141,6 +1141,73 @@ class TestReadRequestBodyFormParseFailure:
         assert str(exc_info.value.code) == "400"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content_type, partial_body",
+    [
+        ("application/json", b'{"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "'),
+        (
+            "multipart/form-data; boundary=litellm",
+            b'--litellm\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhi',
+        ),
+        ("application/x-protobuf", b"\x0a\x05"),
+    ],
+)
+async def test_client_disconnect_mid_upload_raises_499_and_caches_nothing(content_type: str, partial_body: bytes):
+    messages: Final = iter(
+        (
+            {"type": "http.request", "body": partial_body, "more_body": True},
+            {"type": "http.disconnect"},
+        )
+    )
+
+    async def receive() -> Mapping[str, object]:
+        return next(messages)
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages",
+            "headers": [(b"content-type", content_type.encode())],
+        },
+        receive,
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await read_request_body(request)
+
+    assert exc_info.value.code == "499"
+    assert exc_info.value.type == "client_disconnect"
+    assert _safe_get_request_parsed_body(request) is None
+
+
+@pytest.mark.asyncio
+async def test_auth_pre_read_defers_client_disconnect_instead_of_returning_an_empty_body():
+    from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
+
+    messages: Final = iter(
+        (
+            {"type": "http.request", "body": b'{"model": "claude-sonnet-4-5", "messa', "more_body": True},
+            {"type": "http.disconnect"},
+        )
+    )
+
+    async def receive() -> Mapping[str, object]:
+        return next(messages)
+
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/v1/messages", "headers": [(b"content-type", b"application/json")]},
+        receive,
+    )
+
+    parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
+
+    assert parsed == {}
+    assert parse_error is not None
+    assert parse_error.code == "499"
+
+
 class TestGetRequestBody:
     @pytest.mark.asyncio
     async def test_json_with_charset_param_parses_as_json(self):
