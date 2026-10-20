@@ -3082,7 +3082,8 @@ async def test_ambiguous_history_does_not_prevent_latest_tool_compression(
     callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE)
     part_type: Final = "input_text" if surface == "responses" else "text"
     history: Final = {"role": "user", "content": [
-        {"type": part_type, "text": "First paragraph\n\nSecond paragraph", **({} if surface == "messages" else {"source": "first"})},
+        {"type": part_type, "text": "First paragraph\n\nSecond paragraph",
+         **({} if surface == "messages" else {"source": "first"})},
         {"type": part_type, "text": "Other block", **({} if surface == "messages" else {"source": "second"})},
     ]}
     tool_text: Final = "file.py\n" * 1000
@@ -3098,7 +3099,9 @@ async def test_ambiguous_history_does_not_prevent_latest_tool_compression(
     ]
     anthropic_rows: Final = [*prefix, {"role": "user", "content": "List files"},
         {"role": "assistant", "content": [{"type": "tool_use", "id": "call_files", "name": "list_files", "input": {}}]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_files", "content": tool_text, "is_error": True}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "call_files", "content": tool_text, "is_error": True},
+        ]},
     ]
     request: Final = {"input": native_items} if surface == "responses" else {
         "messages": anthropic_rows if surface == "messages" else chat_rows
@@ -3109,7 +3112,9 @@ async def test_ambiguous_history_does_not_prevent_latest_tool_compression(
     })
     handler: Final = (OpenAIResponsesHandler() if surface == "responses" else
                      AnthropicMessagesHandler() if surface == "messages" else OpenAIChatCompletionsHandler())
-    result: Final = await handler.process_input_messages({**request, "model": "test-model", "max_tokens": 100}, callback)
+    result: Final = await handler.process_input_messages(
+        {**request, "model": "test-model", "max_tokens": 100}, callback
+    )
     assert json.loads(route.calls.last.request.content)["messages"] == [
         {"role": "tool", "tool_call_id": "call_files", "content": tool_text},
     ]
@@ -3171,7 +3176,9 @@ async def test_tool_text_patch_retains_original_metadata(
     respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(200, json={"messages": [
         {"role": "tool", "tool_call_id": "files", "name": "changed", "content": "short summary"},
     ]})
-    result: Final = await callback.apply_guardrail(GenericGuardrailAPIInputs(structured_messages=messages), {}, "request")
+    result: Final = await callback.apply_guardrail(
+        GenericGuardrailAPIInputs(structured_messages=messages), {}, "request"
+    )
     assert result["structured_messages"] == [messages[0], {
         "role": "tool", "tool_call_id": "files", "name": "read", "content": [
             {"type": "text", "text": "short summary", "source": "original"},

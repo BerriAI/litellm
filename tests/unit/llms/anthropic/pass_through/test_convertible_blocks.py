@@ -225,7 +225,9 @@ def test_tool_result_rewrite_preserves_native_metadata(content: object, is_error
     result: Final = keep_non_string_tool_result_texts(rewritten, original, preserve_metadata=True)
     assert result == [{"role": "user", "content": [{
         "type": "tool_result", "tool_use_id": "read", "is_error": is_error,
-        "content": "summary" if isinstance(content, str) else [{"type": "text", "text": "summary", "trace": "original"}],
+        "content": "summary" if isinstance(content, str) else [
+            {"type": "text", "text": "summary", "trace": "original"},
+        ],
     }]}]
     assert keep_non_string_tool_result_texts(rewritten, original) is rewritten
 
