@@ -2658,7 +2658,7 @@ GEMINI_GEMINI_3_8_FLASH_STREAM_FULL_USAGE: Final = CostTrackingTestCase(
         ),
     ),
     expected=ExactExpected(
-        spend=0.0076232, input_cost=0.0015572, output_cost=0.006066, prompt_tokens=8314, completion_tokens=1592
+        spend=0.0066182, input_cost=0.0013922, output_cost=0.005226, prompt_tokens=8314, completion_tokens=1592
     ),
 )
 

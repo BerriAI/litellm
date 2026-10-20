@@ -16,7 +16,6 @@ from integration._support.client import (
     list_value,
     object_value,
 )
-from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
@@ -202,7 +201,7 @@ def test_guarded_text_completion_stream_reaches_the_caller_whole_with_its_usage(
     ], stream.frames
     assert _posted_targets(rig.wire) == ("/v1/completions",)
     (row,) = eventually(
-        lambda: read_rows(
+        lambda: rig.proxy.gateway.rows(
             'SELECT prompt_tokens, completion_tokens, metadata FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
             (identity,),
         ),

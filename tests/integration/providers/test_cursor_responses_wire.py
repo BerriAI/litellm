@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from importlib.resources import files
 from typing import Final
 
 import pytest
@@ -16,8 +17,16 @@ _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-cursor-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
-_THINKING_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
-_CHAT_THINKING_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "max")
+_COST_MAP: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
+_MODEL_ROW: Final = _COST_MAP.validate_json(
+    (files("litellm") / "model_prices_and_context_window_backup.json").read_bytes()
+)[_MODEL]
+_THINKING_LEVELS: Final = tuple(
+    level
+    for level in ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+    if _MODEL_ROW.get(f"supports_{level}_reasoning_effort") is not False
+)
+_CHAT_THINKING_LEVELS: Final = tuple(level for level in _THINKING_LEVELS if level != "xhigh")
 _RESPONSES_SUFFIXES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = tuple(
     (f"-thinking-{level}", {"reasoning": {"effort": level}}) for level in _THINKING_LEVELS
 ) + (
