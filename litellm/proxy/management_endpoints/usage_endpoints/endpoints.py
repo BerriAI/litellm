@@ -52,6 +52,7 @@ async def usage_ai_chat(
     )
     from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
         check_usage_ai_chat_model_access,
+        resolve_usage_ai_chat_model,
         stream_usage_ai_chat,
     )
 
@@ -63,12 +64,13 @@ async def usage_ai_chat(
     messages: Final = [{"role": m.role, "content": m.content} for m in data.messages]
 
     await check_usage_ai_chat_model_access(user_api_key_dict=user_api_key_dict, model=data.model)
+    routed_model: Final = await resolve_usage_ai_chat_model(user_api_key_dict=user_api_key_dict, model=data.model)
 
     return StreamingResponse(
         wrap_sse_stream_with_keepalive_pings(
             stream_usage_ai_chat(
                 messages=messages,
-                model=data.model,
+                model=routed_model,
                 user_id=user_id,
                 is_admin=is_admin,
                 user_api_key_dict=user_api_key_dict,

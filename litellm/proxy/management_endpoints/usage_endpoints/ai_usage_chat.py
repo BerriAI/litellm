@@ -11,12 +11,12 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, TypeAlias, cast, overload
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL, UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -487,18 +487,15 @@ def _router_route(
     return "deployment" if model in router.deployment_names else None
 
 
-def _billed_caller(user_api_key_dict: "UserAPIKeyAuth") -> "UserAPIKeyAuth":
-    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-
-    if user_api_key_dict.team_id != UI_SESSION_TOKEN_TEAM_ID:
-        return user_api_key_dict
-    return user_api_key_dict.model_copy(update={"team_id": None})
-
-
 class _TaggedMetadata(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     tags: tuple[object, ...] | None = None
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _ignore_non_list_tags(cls, tags: object) -> object:
+        return tags if isinstance(tags, (list, tuple)) else None
 
 
 class _CallerTagSources(BaseModel):
@@ -517,17 +514,54 @@ def _caller_routing_tags(user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]
     return tuple(dict.fromkeys(tag for tag in tags if isinstance(tag, str)))
 
 
-def _caller_metadata(caller: "UserAPIKeyAuth") -> Mapping[str, object]:
-    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+def _caller_identity_metadata(user_api_key_dict: "UserAPIKeyAuth") -> Mapping[str, object]:
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, sanitized_user_api_key_auth
 
-    billing_metadata: Final = cast(  # cast-ok: the shared helper returns the request dict untyped
+    if user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID:
+        return MappingProxyType({"user_api_key_auth": sanitized_user_api_key_auth(user_api_key_dict)})
+    return cast(  # cast-ok: the shared helper returns the request dict untyped
         "Mapping[str, object]",
         LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(  # pyright: ignore[reportUnknownMemberType]  # the shared billing helper takes and returns a bare dict
-            data={"metadata": {}}, user_api_key_dict=caller, _metadata_variable_name="metadata"
+            data={"metadata": {}}, user_api_key_dict=user_api_key_dict, _metadata_variable_name="metadata"
         )["metadata"],
     )
-    caller_tags: Final = _caller_routing_tags(caller)
-    return MappingProxyType({**billing_metadata, **({"tags": list(caller_tags)} if caller_tags else {})})
+
+
+def _caller_metadata(user_api_key_dict: "UserAPIKeyAuth") -> Mapping[str, object]:
+    caller_tags: Final = _caller_routing_tags(user_api_key_dict)
+    return MappingProxyType(
+        {**_caller_identity_metadata(user_api_key_dict), **({"tags": list(caller_tags)} if caller_tags else {})}
+    )
+
+
+async def resolve_usage_ai_chat_model(user_api_key_dict: "UserAPIKeyAuth", model: str | None) -> str:
+    from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
+    from litellm.proxy.common_request_processing import (
+        _resolve_per_request_model_group_alias,  # pyright: ignore[reportPrivateUsage]  # the key and team alias rule /chat/completions applies
+    )
+    from litellm.proxy.litellm_pre_call_utils import resolve_team_model_alias
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+
+    team_aliased_model: Final = resolve_team_model_alias(_resolve_model(model), user_api_key_dict)
+    global_aliased_model: Final = litellm.model_alias_map.get(team_aliased_model, team_aliased_model)
+    key_aliases: Final = key_model_aliases_for_auth_check(user_api_key_dict)
+    key_aliased_model: Final = (
+        key_aliases.get(global_aliased_model, global_aliased_model) if key_aliases is not None else global_aliased_model
+    )
+    if llm_router is None:
+        return key_aliased_model
+    router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=user_api_key_dict, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    if router_settings is None:
+        return key_aliased_model
+    group_alias_target: Final = await _resolve_per_request_model_group_alias(
+        requested_model=key_aliased_model,
+        router_settings=router_settings,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    return group_alias_target or key_aliased_model
 
 
 async def _acompletion(
@@ -537,33 +571,21 @@ async def _acompletion(
     stream: bool = False,
     user_api_key_dict: "UserAPIKeyAuth | None" = None,
 ) -> ModelResponse | CustomStreamWrapper:
-    from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
-    from litellm.proxy.litellm_pre_call_utils import resolve_team_model_alias
     from litellm.proxy.proxy_server import llm_router
-    from litellm.router_utils.common_utils import is_proxy_admin_request
+    from litellm.router_utils.common_utils import get_request_team_id, is_proxy_admin_request
     from litellm.types.llms.openai import AllMessageValues
 
     completion_messages: Final = cast(  # cast-ok: acompletion accepts the same Mapping messages it already receives
         list[AllMessageValues], messages
     )
-    team_aliased_model: Final = (
-        resolve_team_model_alias(model, user_api_key_dict) if user_api_key_dict is not None else model
-    )
-    model_aliases: Final = (
-        key_model_aliases_for_auth_check(user_api_key_dict) if user_api_key_dict is not None else None
-    )
-    resolved_model: Final = (
-        model_aliases.get(team_aliased_model, team_aliased_model) if model_aliases is not None else team_aliased_model
-    )
-    caller: Final = _billed_caller(user_api_key_dict) if user_api_key_dict is not None else None
     caller_metadata: Final[Mapping[str, object]] = (
-        _caller_metadata(caller) if caller is not None else MappingProxyType({})
+        _caller_metadata(user_api_key_dict) if user_api_key_dict is not None else MappingProxyType({})
     )
     route: Final = (
         _router_route(
             llm_router,
-            resolved_model,
-            caller.team_id if caller is not None else None,
+            model,
+            get_request_team_id({"metadata": caller_metadata}),
             is_proxy_admin_request({"metadata": caller_metadata}),
         )
         if llm_router is not None
@@ -572,7 +594,7 @@ async def _acompletion(
     if llm_router is not None and route is not None:
         if stream:
             return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
-                model=resolved_model,
+                model=model,
                 messages=completion_messages,
                 tools=tools,
                 stream=True,
@@ -583,7 +605,7 @@ async def _acompletion(
                 specific_deployment=route == "deployment",
             )
         return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
-            model=resolved_model,
+            model=model,
             messages=completion_messages,
             tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
@@ -593,7 +615,7 @@ async def _acompletion(
             specific_deployment=route == "deployment",
         )
     return await litellm.acompletion(
-        model=resolved_model,
+        model=model,
         messages=completion_messages,
         tools=tools,
         stream=stream,

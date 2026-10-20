@@ -12,7 +12,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 
-from litellm.proxy._types import LitellmUserRoles
+from litellm.proxy._types import LitellmUserRoles, hash_token
 from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
     TOOL_HANDLERS,
     TOOLS_ADMIN,
@@ -24,6 +24,7 @@ from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
 )
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
 
@@ -1376,7 +1377,8 @@ class TestUsageAiChatTeamModelRouting:
         assert result.choices[0].message.content == "from the team-b deployment"
 
     @pytest.mark.asyncio
-    async def test_key_and_team_tags_pick_the_tagged_deployment(self):
+    @pytest.mark.parametrize("key_metadata", [{}, {"tags": "prod"}, {"tags": {"env": "prod"}}])
+    async def test_key_and_team_tags_pick_the_tagged_deployment(self, key_metadata: dict[str, object]):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             _acompletion,
@@ -1406,16 +1408,19 @@ class TestUsageAiChatTeamModelRouting:
                 model="tagged-model",
                 messages=[{"role": "user", "content": "hi"}],
                 user_api_key_dict=UserAPIKeyAuth(
-                    team_id="team-a", team_metadata={"tags": ["team-tag"]}, metadata={}, api_key="sk-test"
+                    team_id="team-a", team_metadata={"tags": ["team-tag"]}, metadata=key_metadata, api_key="sk-test"
                 ),
             )
 
         assert result.choices[0].message.content == "from the team-tag deployment"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(("team_id", "billed_team_id"), [("team-a", "team-a"), ("litellm-dashboard", None)])
-    async def test_ask_ai_spend_is_billed_to_the_calling_key_user_and_team(
-        self, monkeypatch: pytest.MonkeyPatch, team_id: str, billed_team_id: str | None
+    @pytest.mark.parametrize(
+        ("team_id", "billed_caller"),
+        [("team-a", (hash_token("sk-test"), "u1", "team-a")), ("litellm-dashboard", (None, None, None))],
+    )
+    async def test_ask_ai_bills_an_api_key_caller_and_never_an_admin_ui_session(
+        self, monkeypatch: pytest.MonkeyPatch, team_id: str, billed_caller: tuple[str | None, str | None, str | None]
     ):
         import asyncio
 
@@ -1448,7 +1453,7 @@ class TestUsageAiChatTeamModelRouting:
                 user_api_key_dict=caller,
             )
 
-        assert await asyncio.wait_for(logged.get(), timeout=10) == (caller.api_key, "u1", billed_team_id)
+        assert await asyncio.wait_for(logged.get(), timeout=10) == billed_caller
 
     @pytest.mark.asyncio
     async def test_team_public_model_name_without_team_id_uses_litellm(self):
@@ -1493,45 +1498,86 @@ class TestUsageAiChatTeamModelRouting:
         mock_litellm_acompletion.assert_awaited_once()
         router.acompletion.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_key_alias_resolves_to_router_model(self):
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
-            _acompletion,
+    @staticmethod
+    async def _endpoint_body(user_api_key_dict: "UserAPIKeyAuth") -> bytes:
+        from litellm.proxy.management_endpoints.usage_endpoints.endpoints import (
+            ChatMessage,
+            UsageAIChatRequest,
+            usage_ai_chat,
         )
         from litellm.router import Router
 
         router: Final = Router(
             model_list=[
                 {
-                    "model_name": "gpt-4o-mini",
-                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "sk-dummy"},
+                    "model_name": "prod-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-dummy",
+                        "mock_response": "from the aliased deployment",
+                    },
                 }
             ]
         )
-        expected_response: Final = MagicMock()
-        router.acompletion = AsyncMock(return_value=expected_response)
-        mock_litellm_acompletion = AsyncMock(return_value=MagicMock())
-
         with (
-            patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
+            patch(  # test-quality-ok: Ask AI reads the proxy_server.llm_router module global; no injection seam
                 "litellm.proxy.proxy_server.llm_router", router
             ),
-            patch(  # test-quality-ok: _acompletion calls the module-level litellm.acompletion directly; no injection seam
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
-                new=mock_litellm_acompletion,
+            patch(  # test-quality-ok: the check reads the proxy_server.llm_model_list module global; no injection seam
+                "litellm.proxy.proxy_server.llm_model_list", router.model_list
+            ),
+            patch(  # test-quality-ok: the check reads the proxy_server.prisma_client module global; no injection seam
+                "litellm.proxy.proxy_server.prisma_client", None
             ),
         ):
-            result: Final = await _acompletion(
-                model="my-alias",
-                messages=[{"role": "user", "content": "hi"}],
-                user_api_key_dict=UserAPIKeyAuth(aliases={"my-alias": "gpt-4o-mini"}),
+            response: Final = await usage_ai_chat(
+                data=UsageAIChatRequest(messages=[ChatMessage(role="user", content="hi")], model="prod-alias"),
+                request=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+            )
+            return b"".join(
+                [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
             )
 
-        assert result is expected_response
-        router.acompletion.assert_awaited_once()
-        assert router.acompletion.await_args.kwargs["model"] == "gpt-4o-mini"
-        mock_litellm_acompletion.assert_not_called()
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_settings", "global_aliases"),
+        [
+            ({"aliases": {"prod-alias": "prod-model"}}, {}),
+            ({}, {"prod-alias": "prod-model"}),
+            ({"router_settings": {"model_group_alias": {"prod-alias": "prod-model"}}}, {}),
+        ],
+    )
+    async def test_every_alias_layer_routes_to_its_target(
+        self, key_settings: dict[str, object], global_aliases: dict[str, str]
+    ):
+        import litellm
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        admin_key: Final = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", **key_settings
+        )
+        with patch.dict(litellm.model_alias_map, global_aliases):
+            body: Final = await self._endpoint_body(admin_key)
+
+        assert b'"content": "from the aliased deployment"' in body
+        assert b'"type": "error"' not in body
+
+    @pytest.mark.asyncio
+    async def test_group_alias_to_a_model_the_key_cannot_call_is_denied_before_streaming(self):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        limited_key: Final = UserAPIKeyAuth(
+            user_id="admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-test",
+            models=["prod-alias"],
+            router_settings={"model_group_alias": {"prod-alias": "prod-model"}},
+        )
+        with pytest.raises(ProxyException) as exc_info:
+            await self._endpoint_body(limited_key)
+
+        assert exc_info.value.code == "403"
 
     @pytest.mark.asyncio
     async def test_router_calls_receive_sanitized_caller_auth_for_access_group_filtering(self):
@@ -1586,6 +1632,7 @@ class TestUsageAiChatTeamModelRouting:
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             DEFAULT_COMPETITOR_DISCOVERY_MODEL,
             check_usage_ai_chat_model_access,
+            resolve_usage_ai_chat_model,
         )
         from litellm.router import Router
 
@@ -1628,11 +1675,12 @@ class TestUsageAiChatTeamModelRouting:
             ),
         ):
             await check_usage_ai_chat_model_access(user_api_key_dict=team_key, model=None)
+            routed_model: Final = await resolve_usage_ai_chat_model(user_api_key_dict=team_key, model=None)
             events: Final = [
                 json.loads(raw.removeprefix("data: "))
                 async for raw in stream_usage_ai_chat(
                     messages=[{"role": "user", "content": "hi"}],
-                    model=None,
+                    model=routed_model,
                     is_admin=True,
                     user_api_key_dict=team_key,
                 )
