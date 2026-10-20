@@ -1,4 +1,5 @@
 from functools import reduce
+from typing import Final
 from urllib.parse import quote
 
 import pytest
@@ -34,8 +35,12 @@ def test_is_managed_cloud_storage_uri_sees_through_percent_encoding(file_id: str
     assert is_managed_cloud_storage_uri(file_id)
 
 
+def _quote_once(current: str, _: int) -> str:
+    return quote(current, safe="")
+
+
 def _quoted_times(value: str, times: int) -> str:
-    return reduce(lambda current, _: quote(current, safe=""), range(times), value)
+    return reduce(_quote_once, range(times), value)
 
 
 def test_is_managed_cloud_storage_uri_decodes_up_to_the_pass_cap():
@@ -44,8 +49,8 @@ def test_is_managed_cloud_storage_uri_decodes_up_to_the_pass_cap():
 
 
 def test_is_managed_cloud_storage_uri_fails_closed_on_an_id_encoded_past_the_pass_cap():
-    nested_gs_id = "gs" + "%" + "25" * 5000 + "3A//bucket/x"
-    nested_plain_id = "%" + "25" * 5000
+    nested_gs_id: Final = "gs" + "%" + "25" * 5000 + "3A//bucket/x"
+    nested_plain_id: Final = "%" + "25" * 5000
 
     assert is_managed_cloud_storage_uri(_quoted_times("file-abc/x", MAX_FILE_ID_DECODE_PASSES + 1))
     assert is_managed_cloud_storage_uri(nested_gs_id)

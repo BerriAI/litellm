@@ -1,5 +1,6 @@
 import json
 from typing import Final, List, Optional
+from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
@@ -242,14 +243,18 @@ RAW_GCS_OUTPUT_FILE_ID: Final = (
 RAW_S3_OUTPUT_FILE_ID: Final = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
 
 
-def _raw_cloud_file_ids_in_every_encoding() -> tuple[tuple[str, str, str], ...]:
-    from urllib.parse import quote
+def _ids_a_server_hands_the_route_for(raw_id: str, provider: str) -> tuple[tuple[str, str], ...]:
+    encoded_once: Final = quote(raw_id, safe="")
+    return ((raw_id, provider), (encoded_once, provider), (quote(encoded_once, safe=""), provider))
 
-    return tuple(
-        (encoded_id, raw_id, provider)
-        for raw_id, provider in ((RAW_GCS_OUTPUT_FILE_ID, "vertex_ai"), (RAW_S3_OUTPUT_FILE_ID, "bedrock"))
-        for encoded_id in (quote(raw_id, safe=""), quote(quote(raw_id, safe=""), safe=""))
-    )
+
+RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM: Final = _ids_a_server_hands_the_route_for(
+    RAW_GCS_OUTPUT_FILE_ID, "vertex_ai"
+) + _ids_a_server_hands_the_route_for(RAW_S3_OUTPUT_FILE_ID, "bedrock")
+
+
+def _testclient_path_segment_delivering(route_file_id: str) -> str:
+    return quote(quote(route_file_id, safe=""), safe="")
 
 
 def _override_auth(
@@ -269,13 +274,12 @@ def _override_auth(
     return proxy_logging_obj
 
 
-@pytest.mark.parametrize(("encoded_id", "raw_id", "provider"), _raw_cloud_file_ids_in_every_encoding())
+@pytest.mark.parametrize(("route_file_id", "provider"), RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM)
 def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
     llm_router: Router,
-    encoded_id: str,
-    raw_id: str,
+    route_file_id: str,
     provider: str,
 ):
     import litellm.proxy.proxy_server as ps
@@ -286,7 +290,7 @@ def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
 
     try:
         response = client.get(
-            f"/v1/files/{encoded_id}/content?provider={provider}",
+            f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
             headers={"Authorization": "Bearer test-key"},
         )
     finally:
@@ -297,13 +301,12 @@ def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
     afile_content.assert_not_called()
 
 
-@pytest.mark.parametrize(("encoded_id", "raw_id", "provider"), _raw_cloud_file_ids_in_every_encoding())
+@pytest.mark.parametrize(("route_file_id", "provider"), RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM)
 def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
     llm_router: Router,
-    encoded_id: str,
-    raw_id: str,
+    route_file_id: str,
     provider: str,
 ):
     import litellm.proxy.proxy_server as ps
@@ -328,7 +331,7 @@ def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
 
     try:
         response = client.get(
-            f"/v1/files/{encoded_id}/content?provider={provider}",
+            f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
             headers={"Authorization": "Bearer test-key"},
         )
     finally:
@@ -338,7 +341,7 @@ def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
     assert response.content == content
     afile_content.assert_called_once()
     assert afile_content.call_args.kwargs["custom_llm_provider"] == provider
-    assert afile_content.call_args.kwargs["file_id"] == raw_id
+    assert afile_content.call_args.kwargs["file_id"] == route_file_id
 
 
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
