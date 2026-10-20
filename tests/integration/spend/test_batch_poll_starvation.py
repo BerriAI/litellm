@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timezone
 from functools import partial
 from hashlib import sha256
+from itertools import chain
 from typing import Final
 from uuid import uuid4
 
@@ -209,14 +210,22 @@ def _managed_rows(batch_ids: tuple[str, ...]) -> list[dict[str, JsonValue]]:
     )
 
 
-@pytest.mark.parametrize("retryable", [False, True])
-@pytest.mark.parametrize("old_completed", [False, True])
+@pytest.mark.parametrize(
+    ("retryable", "old_completed", "backlog"),
+    [(False, False, 0), (False, True, 0), (True, False, 0), (True, True, 0), (True, False, 1000)],
+)
 @pytest.mark.timeout(180)
 @pytest.mark.covers("quota_management.spend_tracking.batch_costs.uncostable_rows_retire_so_newer_batches_are_costed")
 def test_uncostable_batches_do_not_starve_billable_batches(
-    gateway: Gateway, retryable: bool, old_completed: bool
+    gateway: Gateway, retryable: bool, old_completed: bool, backlog: int
 ) -> None:
     with gateway.scenario() as scenario:
+        owner: Final = f"batch-backlog-{uuid4().hex}"
+        if backlog:
+            _insert_scan_rows(owner, "old", backlog, datetime(2000, 1, 1, tzinfo=timezone.utc))
+            scenario.cleanups.callback(
+                write_rows, 'DELETE FROM "LiteLLM_ManagedObjectTable" WHERE created_by = %s', (owner,)
+            )
         team_id: Final = scenario.team()
         key: Final = scenario.key(team_id=team_id)
         gone_batch_ids: Final = tuple(
@@ -294,6 +303,18 @@ def test_uncostable_batches_do_not_starve_billable_batches(
             assert balance == [{"spend": pytest.approx(expected_spend)}]
 
 
+def _insert_scan_rows(owner: str, group: str, size: int, created_at: datetime) -> tuple[str, ...]:
+    prefix: Final = f"{owner}-{group}-"
+    write_rows(
+        'INSERT INTO "LiteLLM_ManagedObjectTable" '
+        "(id, unified_object_id, model_object_id, file_object, file_purpose, status, created_by, created_at, updated_at) "
+        "SELECT %s || lpad(n::text, 8, '0'), %s || n, %s || n, '{}'::jsonb, 'batch', 'completed', %s, "
+        "%s::timestamptz, NOW() FROM generate_series(0, %s::int - 1) n",
+        (prefix, prefix, prefix, owner, created_at.isoformat(), str(size)),
+    )
+    return tuple(f"{prefix}{index:08}" for index in range(size))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("count", [2 * MAX_OBJECTS_PER_POLL_CYCLE, 2 * MAX_OBJECTS_PER_POLL_CYCLE + 1, 1000])
 async def test_arrivals_progress_while_retry_scan_advances_and_wraps(count: int) -> None:
@@ -304,19 +325,8 @@ async def test_arrivals_progress_while_retry_scan_advances_and_wraps(count: int)
 
     owner: Final = f"batch-scan-{uuid4().hex}"
 
-    def insert_rows(group: str, size: int, created_at: datetime) -> tuple[str, ...]:
-        prefix: Final = f"{owner}-{group}-"
-        write_rows(
-            'INSERT INTO "LiteLLM_ManagedObjectTable" '
-            '(id, unified_object_id, model_object_id, file_object, file_purpose, created_by, created_at, updated_at) '
-            "SELECT %s || lpad(n::text, 8, '0'), %s || n, %s || n, '{}'::jsonb, 'batch-scan-test', %s, "
-            "%s::timestamptz, NOW() FROM generate_series(0, %s::int - 1) n",
-            (prefix, prefix, prefix, owner, created_at.isoformat(), str(size)),
-        )
-        return tuple(f"{prefix}{index:08}" for index in range(size))
-
     try:
-        old_ids: Final = insert_rows("old", count, datetime(2000, 1, 1, tzinfo=timezone.utc))
+        old_ids: Final = _insert_scan_rows(owner, "old", count, datetime(2000, 1, 1, tzinfo=timezone.utc))
         async with connected_proxy_prisma() as prisma:
             logging: Final = ProxyLogging(UserApiKeyCache())
             router: Final = Router()
@@ -325,21 +335,76 @@ async def test_arrivals_progress_while_retry_scan_advances_and_wraps(count: int)
             first: Final = await poller._find_jobs(where)
             assert tuple(row.id for row in first) == old_ids[:MAX_OBJECTS_PER_POLL_CYCLE]
 
-            for start in range(MAX_OBJECTS_PER_POLL_CYCLE, count + 1, MAX_OBJECTS_PER_POLL_CYCLE):
-                new_ids: Final = insert_rows(str(start), MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
-                arrivals: Final = await poller._find_jobs(where)
-                assert tuple(row.id for row in arrivals) == new_ids
-                retries: Final = await poller._find_jobs(where)
-                assert tuple(row.id for row in retries) == old_ids[start : start + MAX_OBJECTS_PER_POLL_CYCLE]
+            recent_ids: Final = _insert_scan_rows(
+                owner, "recent", MAX_OBJECTS_PER_POLL_CYCLE + 1, datetime.now(timezone.utc)
+            )
 
-            revisited: Final = await poller._find_jobs(where)
-            assert tuple(row.id for row in revisited) == old_ids[:MAX_OBJECTS_PER_POLL_CYCLE]
-            latest_ids: Final = insert_rows("latest", MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
-            latest: Final = await poller._find_jobs(where)
-            assert tuple(row.id for row in latest) == latest_ids
+            async def poll_with_arrival(turn: int) -> tuple[str, ...]:
+                if turn % 4 == 0:
+                    _insert_scan_rows(owner, f"arrival-{turn}", 1, datetime.now(timezone.utc))
+                page: Final = await poller._find_jobs(where)
+                assert len(page) <= MAX_OBJECTS_PER_POLL_CYCLE
+                write_rows(
+                    'UPDATE "LiteLLM_ManagedObjectTable" SET batch_processed = true '
+                    "WHERE created_by = %s AND id = ANY(%s) AND id LIKE %s",
+                    (owner, [row.id for row in page], f"{owner}-arrival-%"),
+                )
+                return tuple(row.id for row in page)
+
+            pages: Final = tuple(
+                [await poll_with_arrival(turn) for turn in range(4 * (count // MAX_OBJECTS_PER_POLL_CYCLE + 2))]
+            )
+            selected: Final = tuple(chain.from_iterable(pages))
+            assert all(selected.count(identity) >= 2 for identity in recent_ids)
+            selected_old: Final = tuple(identity for identity in selected if identity in old_ids)
+            assert selected_old[: count - MAX_OBJECTS_PER_POLL_CYCLE] == old_ids[MAX_OBJECTS_PER_POLL_CYCLE:]
+            assert set(old_ids).issubset(selected_old)
+
+            latest_ids: Final = _insert_scan_rows(owner, "latest", 1, datetime.now(timezone.utc))
+            followups: Final = tuple([await poller._find_jobs(where) for _ in range(12)])
+            assert any(latest_ids[0] in tuple(row.id for row in page) for page in followups)
 
             restarted: Final = CheckBatchCost(logging, prisma, router)
             restart_page: Final = await restarted._find_jobs(where)
             assert tuple(row.id for row in restart_page) == old_ids[:MAX_OBJECTS_PER_POLL_CYCLE]
+    finally:
+        write_rows('DELETE FROM "LiteLLM_ManagedObjectTable" WHERE created_by = %s', (owner,))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("steady_arrivals", [False, True])
+@pytest.mark.parametrize("backlog", [0, 1000])
+async def test_recent_batches_are_revisited_without_scanning_old_backlog(steady_arrivals: bool, backlog: int) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    owner: Final = f"batch-repeat-{uuid4().hex}"
+    try:
+        _insert_scan_rows(owner, "old", backlog, datetime(2000, 1, 1, tzinfo=timezone.utc))
+        async with connected_proxy_prisma() as prisma:
+            poller: Final = CheckBatchCost(ProxyLogging(UserApiKeyCache()), prisma, Router())
+            where: Final = {"created_by": owner, "batch_processed": False}
+            await poller._find_jobs(where)
+            target: Final = _insert_scan_rows(owner, "target", 1, datetime.now(timezone.utc))[0]
+            assert target in tuple(row.id for row in await poller._find_jobs(where))
+            for cycle in range(3):
+                if steady_arrivals:
+                    _insert_scan_rows(owner, f"arrival-{cycle}", 1, datetime.now(timezone.utc))
+                pages: Final = tuple([await poller._find_jobs(where) for _ in range(4)])
+                assert any(target in tuple(row.id for row in page) for page in pages)
+                assert all(len(page) <= MAX_OBJECTS_PER_POLL_CYCLE for page in pages)
+            write_rows(
+                'UPDATE "LiteLLM_ManagedObjectTable" SET batch_processed = true WHERE created_by = %s AND id != %s',
+                (owner, target),
+            )
+            write_rows(
+                'UPDATE "LiteLLM_ManagedObjectTable" SET created_at = %s WHERE id = %s',
+                (datetime(2000, 1, 1, tzinfo=timezone.utc), target),
+            )
+            recovery: Final = tuple([await poller._find_jobs(where) for _ in range(4)])
+            assert any(target in tuple(row.id for row in page) for page in recovery)
+
     finally:
         write_rows('DELETE FROM "LiteLLM_ManagedObjectTable" WHERE created_by = %s', (owner,))

@@ -45,6 +45,7 @@ def _error_names_resource(error: Exception, resource_id: str) -> bool:
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
+RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
     "completed",
@@ -115,8 +116,9 @@ class CheckBatchCost:
         self._has_batch_processed_column: bool = True
         self.batch_processed_support_confirmed: bool = False
         self._poll_cursor: tuple[datetime, str] | None = None
-        self._poll_before: datetime | None = None
-        self._arrival_cursor: tuple[datetime, str] = (datetime.now(timezone.utc), "")
+        self._poll_before: datetime = datetime.now(timezone.utc)
+        self._arrival_cursor: tuple[datetime, str] | None = None
+        self._arrival_before: datetime = self._poll_before
         self._poll_arrivals: bool = False
         self._line_item_stores: Final[set[asyncio.Task[None]]] = set()
         self._line_item_store_turn: Final = asyncio.Lock()
@@ -198,12 +200,19 @@ class CheckBatchCost:
 
     async def _find_job_page(self, where: Mapping[str, object], *, arrivals: bool) -> Sequence[ManagedObjectRow]:
         cursor: Final = self._arrival_cursor if arrivals else self._poll_cursor
-        if not arrivals and cursor is None:
-            self._poll_before = datetime.now(timezone.utc)
+        if cursor is None:
+            if arrivals:
+                self._arrival_before = datetime.now(timezone.utc)
+            else:
+                self._poll_before = datetime.now(timezone.utc) - RECENT_BATCH_POLL_WINDOW
+        before: Final = self._arrival_before if arrivals else self._poll_before
         page: Final = await _managed_object_table(self.prisma_client).find_many(
             where={
                 **where,
-                "created_at": {"lte": datetime.now(timezone.utc) if arrivals else self._poll_before},
+                "created_at": {
+                    "lte": before,
+                    **({"gt": before - RECENT_BATCH_POLL_WINDOW} if arrivals else {}),
+                },
                 **(
                     {
                         "OR": [
@@ -218,11 +227,11 @@ class CheckBatchCost:
             take=MAX_OBJECTS_PER_POLL_CYCLE,
             order=[{"created_at": "asc"}, {"id": "asc"}],
         )
+        next_cursor: Final = (page[-1].created_at, page[-1].id) if len(page) == MAX_OBJECTS_PER_POLL_CYCLE else None
         if arrivals:
-            if page:
-                self._arrival_cursor = (page[-1].created_at, page[-1].id)
+            self._arrival_cursor = next_cursor
         else:
-            self._poll_cursor = (page[-1].created_at, page[-1].id) if len(page) == MAX_OBJECTS_PER_POLL_CYCLE else None
+            self._poll_cursor = next_cursor
         return page
 
     def _unprocessed_snapshot(self, job: ManagedObjectRow) -> Mapping[str, object]:
