@@ -1047,6 +1047,9 @@ def normalize_request_route(route: str) -> str:
     return route
 
 
+MAX_REQUEST_SIZE_MB_SETTING: Final = TypeAdapter[int | float | None](int | float | None)
+
+
 async def check_if_request_size_is_safe(request: Request) -> bool:
     """
     Enterprise Only:
@@ -1062,19 +1065,19 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
         ProxyException: If the request size is too large
 
     """
-    from litellm.proxy.proxy_server import general_settings, premium_user
+    from litellm.proxy.proxy_server import configured_max_request_size_mb, general_settings, premium_user
 
-    max_request_size_mb: Final = general_settings.get("max_request_size_mb", None)
-
-    if max_request_size_mb is not None:
-        # Check if premium user
-        if premium_user is not True:
+    if premium_user is not True:
+        if general_settings.get("max_request_size_mb") is not None:
             verbose_proxy_logger.warning(
                 "using max_request_size_mb - not checking -  this is an enterprise only feature. %s",
                 CommonProxyErrors.not_premium_user.value,
             )
-            return True
+        return True
 
+    max_request_size_mb: Final = configured_max_request_size_mb()
+
+    if max_request_size_mb is not None:
         # Get the request body
         content_length: Final = request.headers.get("content-length")
 
