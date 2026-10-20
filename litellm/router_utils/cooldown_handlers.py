@@ -38,6 +38,7 @@ from litellm.types.utils import (
     CooldownDeploymentInfo,
     InternalCallOrigin,
 )
+from litellm.types.videos.utils import VIDEO_ID_CALL_TYPES
 
 from .router_callbacks.track_deployment_metrics import (
     get_deployment_failures_for_current_minute,
@@ -101,6 +102,11 @@ def is_background_response_poll_not_found(exception: Exception, litellm_params: 
         and candidate.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) in _BACKGROUND_RESPONSE_POLL_CALL_ORIGINS
         for candidate in (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
     )
+
+
+def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
+    """Whether a call on an existing video id failed with a provider 404: the video is not on that account."""
+    return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
 
 
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
