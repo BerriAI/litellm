@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
+from litellm.proxy.db.health_check_latest import latest_by_model_name
 from litellm.proxy.utils import get_custom_url
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.router_strategy.complexity_router.fuse_presets import FusePresetCatalog, get_fuse_presets
@@ -295,13 +296,8 @@ async def public_model_hub():
     if prisma_client is not None:
         try:
             latest_checks: Final = await prisma_client.get_all_latest_health_checks()
-            for check in latest_checks:
-                key = check.model_id if check.model_id else check.model_name
-                if key:
-                    health_check_dict = convert_health_check_to_dict(check)
-                    health_checks_map[key] = health_check_dict
-                    if check.model_name:
-                        health_checks_map[check.model_name] = health_check_dict
+            for model_name, check in latest_by_model_name(latest_checks).items():
+                health_checks_map[model_name] = convert_health_check_to_dict(check)
         except Exception:
             pass
 
