@@ -317,7 +317,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, object] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> ResponsesAPIResponse: 
         ...
 
@@ -326,7 +326,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: dict[str, object],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, object] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -336,7 +336,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, Any] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Update the responses_api_response_id with model_id and custom_llm_provider.
 
@@ -1028,7 +1028,7 @@ class ResponsesAPIRequestUtils:
     def _update_container_ids_in_response(
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, Any] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Encode container IDs in the response output with provider/model info.
 
@@ -1218,7 +1218,7 @@ class ResponseAPILoggingUtils:
                 output_tokens: Final = usage_input.get("output_tokens")
                 if isinstance(input_tokens, int) and isinstance(output_tokens, int):
                     usage_input["total_tokens"] = input_tokens + output_tokens
-            response_api_usage = ResponseAPIUsage(**usage_input)
+            response_api_usage = ResponseAPIUsage.model_validate(usage_input)
         else:
             response_api_usage = usage_input
         prompt_tokens: Final[int] = response_api_usage.input_tokens or 0
