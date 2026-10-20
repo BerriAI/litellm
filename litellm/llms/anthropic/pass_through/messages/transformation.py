@@ -7,6 +7,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported_by_bundled_config
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.pass_through.convertible_blocks import drop_non_string_tool_result_texts
 from litellm.llms.anthropic.pass_through.safeguards import proxy_serves_safeguards
@@ -626,6 +627,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             litellm_params.drop_params is True,
         ):
             anthropic_messages_optional_request_params.pop("safeguards")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+
+        output_format: Final[object] = anthropic_messages_optional_request_params.get("output_format")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the request params arrive as a bare dict
+        if (
+            output_format is not None
+            and not isinstance(output_format, Mapping)
+            and drops_unsupported_params(litellm_params.drop_params)
+        ):
+            anthropic_messages_optional_request_params.pop("output_format")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
 
         self._translate_reasoning_effort_to_anthropic(
             model=model,
