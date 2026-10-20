@@ -5,8 +5,8 @@ import io
 import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from itertools import accumulate
-from typing import TYPE_CHECKING, Final, Literal, cast
+from itertools import accumulate, chain
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
 import anyio
 import anyio.lowlevel
@@ -29,6 +29,7 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS,
     PDF_DATA_URL_PREFIX,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
@@ -347,6 +348,29 @@ TokenCounterFunction = Callable[[str], int]
 Type for a function that counts tokens in a string.
 """
 
+PdfPagePricing: TypeAlias = Literal["openai", "claude"]
+
+
+class _PdfBox(Protocol):
+    @property
+    def width(self) -> float: ...
+
+    @property
+    def height(self) -> float: ...
+
+
+class _PdfPage(Protocol):
+    @property
+    def mediabox(self) -> _PdfBox: ...
+
+    def extract_text(self) -> str: ...
+
+
+class _PdfReader(Protocol):
+    @property
+    def pages(self) -> Sequence[_PdfPage]: ...
+
+
 EXTRAPOLATION_SAMPLES: Final = 16
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
@@ -392,6 +416,8 @@ class _MessageCountParams:
     A class to hold the parameters for counting tokens in messages.
     """
 
+    pdf_pricing: PdfPagePricing
+
     def __init__(
         self,
         model: str,
@@ -403,7 +429,7 @@ class _MessageCountParams:
         if uses_legacy_message_accounting(model):
             self.tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
             self.tokens_per_name = -1  # if there's a name, the role is omitted
-        elif actual_model in litellm.open_ai_chat_completion_models or actual_model in litellm.azure_llms:
+        elif _is_openai_chat_model(actual_model):
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         else:
@@ -412,6 +438,17 @@ class _MessageCountParams:
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
         self.tool_section = chat_template_tool_section(model)
+        self.pdf_pricing = _pdf_page_pricing(model)
+
+
+def _is_openai_chat_model(model: str) -> bool:
+    return model in litellm.open_ai_chat_completion_models or model in litellm.azure_llms
+
+
+def _pdf_page_pricing(model: str | None) -> PdfPagePricing:
+    name: Final = model or ""
+    bare_name: Final = name.removeprefix("openai/").removeprefix("azure/")
+    return "openai" if _is_openai_chat_model(name) or _is_openai_chat_model(bare_name) else "claude"
 
 
 def token_counter(
@@ -583,6 +620,7 @@ def _count_messages(
                     value,
                     use_default_image_token_count,
                     default_token_count,
+                    params.pdf_pricing,
                 )
             elif key == "search_results" and isinstance(value, list):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -860,7 +898,74 @@ def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
     return math.ceil(min(float(ANTHROPIC_IMAGE_MAX_PIXELS), area_at_max_edge) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
 
 
-def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
+def _pdf_dictionary(node: object) -> Mapping[str, object] | None:
+    return node if isinstance(node, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # read per key
+
+
+def _pdf_value(container: Mapping[str, object], key: str) -> object:
+    return container[key] if key in container else None  # noqa: SIM401  # pypdf resolves references only in []
+
+
+def _pdf_xobjects(container: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    resources: Final = _pdf_dictionary(_pdf_value(container, "/Resources"))
+    xobjects: Final = _pdf_dictionary(_pdf_value(resources, "/XObject")) if resources is not None else None
+    if xobjects is None:
+        return ()
+    resolved: Final = (_pdf_dictionary(xobjects[name]) for name in xobjects)
+    return tuple(xobject for xobject in resolved if xobject is not None)
+
+
+def _pdf_draws_raster_image(frontier: tuple[Mapping[str, object], ...], visited: frozenset[int]) -> bool:
+    if not frontier:
+        return False
+    xobjects: Final = tuple(chain.from_iterable(map(_pdf_xobjects, frontier)))
+    if any(_pdf_value(xobject, "/Subtype") == "/Image" for xobject in xobjects):
+        return True
+    seen: Final = visited | frozenset(map(id, frontier))
+    unseen_forms: Final = {
+        id(xobject): xobject
+        for xobject in xobjects
+        if _pdf_value(xobject, "/Subtype") == "/Form" and id(xobject) not in seen
+    }
+    return _pdf_draws_raster_image(tuple(unseen_forms.values()), seen)
+
+
+def _openai_page_image_tokens(width: float, height: float) -> int:
+    if width <= 0 or height <= 0:
+        return 0
+    resized_width, resized_height = resize_image_high_res(math.ceil(width), math.ceil(height))
+    base_tokens: Final = 85
+    return base_tokens + 2 * base_tokens * calculate_tiles_needed(resized_width, resized_height)
+
+
+def _openai_pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
+    text: Final = page.extract_text() or ""
+    text_tokens: Final = count_function(text) + OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS if text.strip() else 0
+    page_dictionary: Final = _pdf_dictionary(page)
+    if page_dictionary is None or not _pdf_draws_raster_image((page_dictionary,), frozenset()):
+        return text_tokens
+    return text_tokens + _openai_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
+
+
+def _claude_pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
+    return count_function(page.extract_text() or "") + _anthropic_rendered_page_image_tokens(
+        float(page.mediabox.width), float(page.mediabox.height)
+    )
+
+
+def _pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction, pdf_pricing: PdfPagePricing) -> int:
+    match pdf_pricing:
+        case "openai":
+            return _openai_pdf_page_tokens(page, count_function)
+        case "claude":
+            return _claude_pdf_page_tokens(page, count_function)
+
+
+def _count_inline_pdf_tokens(
+    data_url: str,
+    count_function: TokenCounterFunction,
+    pdf_pricing: PdfPagePricing = "claude",
+) -> int | None:
     if not data_url.startswith(PDF_DATA_URL_PREFIX):
         return None
     try:
@@ -869,12 +974,10 @@ def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction
         verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
         return None
     try:
-        reader: Final = PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
-        return sum(
-            count_function(page.extract_text() or "")
-            + _anthropic_rendered_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
-            for page in reader.pages
+        reader: Final = cast(  # cast-ok: pypdf's PdfReader satisfies _PdfReader, typed only where pypdf is installed
+            _PdfReader, PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
         )
+        return sum(_pdf_page_tokens(page, count_function, pdf_pricing) for page in reader.pages)
     except Exception as e:
         verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
         return None
@@ -884,8 +987,9 @@ def _count_opaque_document_tokens(
     data_url: str,
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
-    pdf_tokens: Final = _count_inline_pdf_tokens(data_url, count_function)
+    pdf_tokens: Final = _count_inline_pdf_tokens(data_url, count_function, pdf_pricing)
     if pdf_tokens is not None:
         return pdf_tokens
     return calculate_img_tokens(
@@ -900,6 +1004,7 @@ def _count_document_tokens(
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: int | None,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     source: Final = document["source"]
     metadata_tokens: Final = sum(
@@ -912,10 +1017,10 @@ def _count_document_tokens(
         if isinstance(content, str):
             return metadata_tokens + count_function(content)
         return metadata_tokens + _count_content_list(
-            count_function, content, use_default_image_token_count, default_token_count
+            count_function, content, use_default_image_token_count, default_token_count, pdf_pricing
         )
     return metadata_tokens + _count_opaque_document_tokens(
-        _anthropic_image_source_data(source), count_function, use_default_image_token_count
+        _anthropic_image_source_data(source), count_function, use_default_image_token_count, pdf_pricing
     )
 
 
@@ -923,6 +1028,7 @@ def _count_file_tokens(
     file_value: object,
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     """An OpenAI `file` block is the chat-completions spelling of a document, so it prices like one."""
     if not isinstance(file_value, Mapping):
@@ -932,7 +1038,9 @@ def _count_file_tokens(
     name_tokens: Final = count_function(filename) if isinstance(filename, str) and filename else 0
     if not isinstance(file_data, str) or not file_data:
         return name_tokens
-    return name_tokens + _count_opaque_document_tokens(file_data, count_function, use_default_image_token_count)
+    return name_tokens + _count_opaque_document_tokens(
+        file_data, count_function, use_default_image_token_count, pdf_pricing
+    )
 
 
 def _count_anthropic_content(
@@ -940,6 +1048,7 @@ def _count_anthropic_content(
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: int | None,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     """
     Count tokens in Anthropic-specific content blocks (tool_use, tool_result, etc.).
@@ -974,6 +1083,7 @@ def _count_anthropic_content(
                     field_value,
                     use_default_image_token_count,
                     default_token_count,
+                    pdf_pricing,
                 )
             elif isinstance(field_value, dict):
                 tokens += count_function(str(field_value))
@@ -997,6 +1107,7 @@ def _count_content_list(
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     """Recursively count tokens from a list of content blocks."""
     try:
@@ -1021,12 +1132,14 @@ def _count_content_list(
                     count_function,
                     use_default_image_token_count,
                     default_token_count,
+                    pdf_pricing,
                 )
             elif c["type"] == "file":
                 num_tokens += _count_file_tokens(
                     c.get("file"),
                     count_function,
                     use_default_image_token_count,
+                    pdf_pricing,
                 )
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
@@ -1034,6 +1147,7 @@ def _count_content_list(
                     count_function,
                     use_default_image_token_count,
                     default_token_count,
+                    pdf_pricing,
                 )
             elif c["type"] in ("thinking", "redacted_thinking"):
                 # Claude extended thinking content block
