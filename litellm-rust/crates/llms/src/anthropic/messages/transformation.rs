@@ -140,11 +140,14 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &AnthropicMessagesRequest) -> Headers {
-        update_headers_with_anthropic_beta(headers, request)
+        merge_beta_headers(
+            update_headers_with_anthropic_beta(headers, request),
+            safeguards_betas(&request.params),
+        )
     }
 }
 
-fn update_headers_with_anthropic_beta(
+pub(crate) fn update_headers_with_anthropic_beta(
     headers: Headers,
     request: &AnthropicMessagesRequest,
 ) -> Headers {
@@ -197,6 +200,20 @@ fn uses_structured_output(params: &AnthropicMessagesOptionalParams) -> bool {
             .as_ref()
             .and_then(Recognized::known)
             .is_some_and(|config| config.format.is_some())
+}
+
+fn safeguards_betas(params: &AnthropicMessagesOptionalParams) -> BetaSet {
+    carries_safeguards(params)
+        .then_some(AnthropicBeta::DangerousToolUse20260903)
+        .into_iter()
+        .collect()
+}
+
+fn carries_safeguards(params: &AnthropicMessagesOptionalParams) -> bool {
+    params
+        .extra
+        .get("safeguards")
+        .is_some_and(|value| !value.is_null())
 }
 
 fn messages_carry_output_config(messages: &[AnthropicMessage]) -> bool {
@@ -1047,6 +1064,12 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]}),
         &[("anthropic-beta", "claude-code-20250219,context-management-2025-06-27,effort-2025-11-24,interleaved-thinking-2025-05-14,per-turn-control-2026-07-01")],
     )]
+    #[case::safeguards_add_the_dangerous_tool_use_beta(
+        &[("anthropic-beta", "claude-code-20250219")],
+        json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
+        &[("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03")],
+    )]
+    #[case::null_safeguards_add_no_beta(&[("x-api-key", "k")], json!({"safeguards": null}), &[("x-api-key", "k")])]
     fn request_headers_merge_the_feature_betas(
         #[case] input: &[(&str, &str)],
         #[case] fields: Value,
