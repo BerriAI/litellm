@@ -6,15 +6,19 @@ import pytest
 import respx
 
 
-from collections.abc import Iterator
+from collections.abc import Coroutine, Iterator, Mapping
+from datetime import datetime
 from types import SimpleNamespace
+from uuid import uuid4
 from typing import Final
 from unittest.mock import MagicMock
 
 from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError, _route_user_config_request, route_request
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm.types.router import RouterRateLimitError
 
 
 @pytest.mark.parametrize(
@@ -1998,40 +2002,116 @@ def fake_redis_port() -> Iterator[int]:
     server.server_close()
 
 
-async def _user_config_request_outcome(redis_port: int) -> str:
+async def _wait_out_a_rate_limit_minute_rollover() -> None:
+    seconds_left: Final = 60 - datetime.now().second
+    if seconds_left < 10:
+        await asyncio.sleep(seconds_left)
+
+
+def _proxy_logging_obj() -> LiteLLMLoggingObj:
+    return LiteLLMLoggingObj(
+        model="rate-limited",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id=str(uuid4()),
+        function_id="user-config",
+    )
+
+
+async def _user_config_request_outcome(
+    redis_port: int,
+    routing_settings: Mapping[str, object],
+    deployment_limits: Mapping[str, int],
+    logging_obj: LiteLLMLoggingObj | None,
+) -> str:
     data: Final = {
         "model": "rate-limited",
         "messages": [{"role": "user", "content": "hi"}],
         "num_retries": 0,
+        **({"litellm_logging_obj": logging_obj} if logging_obj is not None else {}),
         "user_config": {
-            "routing_strategy": "usage-based-routing-v2",
+            **routing_settings,
             "redis_host": "127.0.0.1",
             "redis_port": redis_port,
             "model_list": [
                 {
                     "model_name": "rate-limited",
-                    "rpm": 2,
+                    **deployment_limits,
                     "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test", "mock_response": "ok"},
                 }
             ],
         },
     }
     try:
-        await _route_user_config_request(data, "acompletion")
-    except litellm.RateLimitError:
+        await (await route_request(data, None, None, "acompletion"))
+    except (litellm.RateLimitError, RouterRateLimitError):
         return "429"
     finally:
         await asyncio.sleep(0.3)
     return "200"
 
 
+def _no_router_callbacks_left() -> bool:
+    return all(getattr(litellm, list_name) == [] for list_name in ("callbacks", "input_callback"))
+
+
+@pytest.mark.parametrize(
+    "routing_settings, deployment_limits",
+    [
+        ({"routing_strategy": "usage-based-routing-v2"}, {"rpm": 2}),
+        ({"routing_strategy": "usage-based-routing-v2"}, {"tpm": 30}),
+        ({"routing_strategy": "usage-based-routing"}, {"rpm": 2}),
+        ({"optional_pre_call_checks": ["enforce_model_rate_limits"]}, {"rpm": 2}),
+    ],
+)
+@pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
 @pytest.mark.asyncio
-async def test_user_config_router_enforces_its_rpm_limit_across_requests(fake_redis_port: int) -> None:
-    outcomes: Final = [await _user_config_request_outcome(fake_redis_port) for _ in range(5)]
+async def test_user_config_router_enforces_its_limit_across_proxy_requests(
+    fake_redis_port: int,
+    routing_settings: Mapping[str, object],
+    deployment_limits: Mapping[str, int],
+    arrives_with_logging_obj: bool,
+) -> None:
+    await _wait_out_a_rate_limit_minute_rollover()
+    outcomes: Final = [
+        await _user_config_request_outcome(
+            fake_redis_port,
+            routing_settings,
+            deployment_limits,
+            _proxy_logging_obj() if arrives_with_logging_obj else None,
+        )
+        for _ in range(6)
+    ]
 
     assert outcomes[0] == "200"
     assert "429" in outcomes, outcomes
-    assert all(getattr(litellm, list_name) == [] for list_name in ("callbacks", "input_callback")), (
-        litellm.callbacks,
-        litellm.input_callback,
-    )
+    assert _no_router_callbacks_left(), (litellm.callbacks, litellm.input_callback)
+
+
+@pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
+@pytest.mark.asyncio
+async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_limit(
+    fake_redis_port: int, arrives_with_logging_obj: bool
+) -> None:
+    messages: Final = [{"role": "user", "content": "hi"}]
+    probe: Final = await litellm.acompletion(model="openai/gpt-5.5", messages=messages, mock_response="ok")
+    assert isinstance(probe, litellm.ModelResponse)
+    probe_usage: Final = getattr(probe, "usage", None)
+    assert isinstance(probe_usage, litellm.Usage)
+    tpm_for_three_requests: Final = 2 * probe_usage.total_tokens + litellm.token_counter(messages=messages)
+
+    def request() -> Coroutine[None, None, str]:
+        return _user_config_request_outcome(
+            fake_redis_port,
+            {"routing_strategy": "usage-based-routing-v2"},
+            {"tpm": tpm_for_three_requests},
+            _proxy_logging_obj() if arrives_with_logging_obj else None,
+        )
+
+    await _wait_out_a_rate_limit_minute_rollover()
+    concurrent_outcomes: Final = await asyncio.gather(request(), request())
+    later_outcomes: Final = [await request() for _ in range(2)]
+
+    assert [*concurrent_outcomes, *later_outcomes] == ["200", "200", "200", "429"]

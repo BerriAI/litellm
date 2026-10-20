@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import is_proxy_admin_request
 
@@ -48,10 +49,15 @@ async def _route_user_config_request(data: dict, route_type: str):
     filtered_config: Final = {k: v for k, v in router_config.items() if k in valid_args}
 
     user_router: Final = litellm.Router(**filtered_config)
-    try:
-        return await getattr(user_router, f"{route_type}")(**data)
-    finally:
-        user_router.discard()
+    logging_obj: Final = JSON_OBJECT_ADAPTER.validate_python(data).get("litellm_logging_obj")
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        try:
+            return await getattr(user_router, f"{route_type}")(**data)
+        finally:
+            user_router.discard()
+    user_router.discard()
+    user_router.bind_to_request_logging(logging_obj)
+    return await getattr(user_router, f"{route_type}")(**data)
 
 
 def _is_a2a_agent_model(model_name: object) -> bool:

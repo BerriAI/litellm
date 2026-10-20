@@ -16,10 +16,12 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
 from litellm.types.litellm_params import RoutingStrategyName
-from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
+from litellm.types.router import AlertingConfig, Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.types.utils import (
     CallTypes,
     ModelResponse,
@@ -2049,6 +2051,84 @@ async def test_discard_releases_per_request_override_selector():
 
     assert selector_ref() is None
 
+
+
+def test_discard_registers_the_selector_of_a_same_strategy_survivor_built_without_a_model_list():
+    retired: Final = Router(model_list=[], routing_strategy="latency-based-routing")
+    survivor: Final = Router(routing_strategy="latency-based-routing")
+    assert not _is_registered(survivor.lowestlatency_logger)
+
+    retired.discard()
+
+    assert _is_registered(survivor.lowestlatency_logger)
+    survivor.discard()
+
+
+def test_discard_drops_its_slack_alerting_callbacks():
+    router: Final = Router(model_list=_GROUPED_MODEL_LIST, alerting_config=AlertingConfig(webhook_url="test"))
+    assert any(isinstance(callback, SlackAlerting) for callback in litellm.callbacks)
+
+    router.discard()
+
+    assert all(getattr(litellm, list_name) == [] for list_name in _CALLBACK_LIST_NAMES)
+
+
+def _adaptive_router_model_list(name: str) -> list[DeploymentTypedDict]:
+    return [
+        {"model_name": "gpt-5.5", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}},
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": "auto_router/adaptive_router",
+                "adaptive_router_config": {"available_models": ["gpt-5.5"]},
+            },
+        },
+    ]
+
+
+def _registered_adaptive_router_strategies() -> tuple[object, ...]:
+    return tuple(
+        callback.adaptive_router for callback in litellm.callbacks if isinstance(callback, AdaptiveRouterPostCallHook)
+    )
+
+
+def test_discard_drops_its_adaptive_router_hook():
+    router: Final = Router(model_list=_adaptive_router_model_list("adaptive"), ignore_invalid_deployments=True)
+    assert _registered_adaptive_router_strategies()
+
+    router.discard()
+
+    assert _registered_adaptive_router_strategies() == ()
+
+
+def test_discard_registers_the_adaptive_router_hook_of_a_survivor():
+    survivor: Final = Router(model_list=_adaptive_router_model_list("adaptive"), ignore_invalid_deployments=True)
+    retired: Final = Router(model_list=_adaptive_router_model_list("adaptive"), ignore_invalid_deployments=True)
+
+    retired.discard()
+
+    survivor_strategies: Final = tuple(tagged.strategy for tagged in survivor.adaptive_routers["adaptive"])
+    assert _registered_adaptive_router_strategies() == survivor_strategies
+    survivor.discard()
+
+
+@pytest.mark.asyncio
+async def test_discard_releases_its_router_budget_limiter():
+    def build_budget_limiter_then_discard() -> weakref.ReferenceType[object]:
+        router: Final = Router(
+            model_list=_GROUPED_MODEL_LIST,
+            provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}},
+        )
+        budget_limiter: Final = router.get_router_deployment_budget_limiter()
+        assert budget_limiter is not None
+        router.discard()
+        return weakref.ref(budget_limiter)
+
+    budget_limiter_ref: Final = build_budget_limiter_then_discard()
+    await asyncio.sleep(0)
+    gc.collect()
+
+    assert budget_limiter_ref() is None
 
 def test_initialize_assistants_endpoint(model_list):
     """Test if the 'initialize_assistants_endpoint' function is working correctly"""

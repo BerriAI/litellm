@@ -139,9 +139,13 @@ ignored_function_names = [
     "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
     "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
     "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
-    "_drop_from_global_callback_lists",  # Run by discard, tested through the discard tests in test_router_helper_utils.py
     "_callback_selectors",  # Run by discard, tested through the discard tests in test_router_helper_utils.py
-    "_register_global_callbacks",  # Run by discard, tested through the survivor discard tests in test_router_helper_utils.py
+    "bind_to_request_logging",  # Run by the proxy user_config route, tested through the user_config tests in test_route_llm_request.py
+    "_routing_callbacks",  # Read by the pre-call checks, tested through the user_config limit tests in test_route_llm_request.py
+    "retire_routing_state",  # Run by discard and after a user_config request, tested through the budget limiter discard test
+    "_slack_alerting_loggers",  # Run by discard, tested through the Slack alerting discard test in test_router_helper_utils.py
+    "_adaptive_router_hooks",  # Run by discard, tested through the adaptive router discard tests in test_router_helper_utils.py
+    "_global_callback_candidates",  # Run by discard, tested through the survivor discard tests in test_router_helper_utils.py
 ]
 
 
