@@ -6,6 +6,7 @@ in expected_responses_api_request/.
 
 import copy
 import json
+import logging
 from pathlib import Path
 from importlib import import_module
 from typing import Final
@@ -16,6 +17,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
@@ -277,6 +279,103 @@ async def test_acompletion_with_tools_forwards_non_enum_reasoning_effort_over_th
     request_body: Final = json.loads(upstream.calls[0].request.read())
     assert request_body["reasoning"] == {"effort": 5}
     assert response.id == "resp_bridge_int"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, api_base",
+    [
+        ("hosted_vllm/my-kimi", "https://vllm.example.test/v1"),
+        ("azure_ai/my-kimi", "https://kimi.services.ai.azure.com/openai/v1"),
+    ],
+)
+async def test_aresponses_sends_the_declared_reasoning_effort_level_rounded_up(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    model: str,
+    api_base: str,
+):
+    verbose_logger.addHandler(caplog.handler)
+    verbose_logger.propagate = False
+    verbose_logger.setLevel(logging.INFO)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(url__regex=rf"{api_base}/responses.*").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_declared_effort", "my-kimi"))
+    )
+
+    response: Final = await litellm.aresponses(
+        model=model,
+        api_base=api_base,
+        api_key="fake-api-key",
+        input="hi",
+        reasoning={"effort": "minimal", "summary": "auto"},
+        model_info={"id": "kimi-1", "reasoning_effort_levels": ["low", "high", "max", "none"]},
+        litellm_metadata={"model_group": "kimi-k3"},
+    )
+
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["reasoning"] == {"effort": "low", "summary": "auto"}
+    assert response.output[0].content[0].text == "Done."
+    assert [
+        (
+            getattr(record, "reasoning_effort_deployment_id"),
+            getattr(record, "reasoning_effort_model_group"),
+            getattr(record, "reasoning_effort_sent"),
+        )
+        for record in caplog.records
+        if hasattr(record, "reasoning_effort_sent")
+    ] == [("kimi-1", "kimi-k3", "low")]
+
+
+def _effort_levels_disabled_by(entry: dict) -> tuple[str, ...]:
+    return tuple(level for level in ("none", "minimal", "low") if entry.get(f"supports_{level}_reasoning_effort") is False)
+
+
+def _gpt_5_row_disabling_a_level(provider: str) -> tuple[str, str]:
+    return next(
+        (key.removeprefix(f"{provider}/"), _effort_levels_disabled_by(entry)[0])
+        for key, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == provider and "gpt-5" in key and _effort_levels_disabled_by(entry)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider, api_base",
+    [("openai", "https://gpt5-gateway.example.test/v1"), ("azure", "https://gpt5.openai.azure.com")],
+)
+async def test_aresponses_sends_a_declared_level_the_model_map_disables(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    provider: str,
+    api_base: str,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model, level = _gpt_5_row_disabling_a_level(provider)
+    upstream: Final = respx_mock.post(url__regex=rf"{api_base}/.*responses.*").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_declared_disabled", model))
+    )
+    request: Final = {
+        "model": f"{provider}/{model}",
+        "api_base": api_base,
+        "api_version": "2025-04-01-preview",
+        "api_key": "fake-api-key",
+        "input": "hi",
+        "reasoning": {"effort": level},
+    }
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await litellm.aresponses(**request, model_info={"id": "undeclared"})
+    await litellm.aresponses(**request, model_info={"id": "declared", "reasoning_effort_levels": [level, "high"]})
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read())["reasoning"] == {"effort": level}
 
 
 @pytest.mark.asyncio
