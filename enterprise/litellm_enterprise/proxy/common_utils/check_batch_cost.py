@@ -151,27 +151,6 @@ class CheckBatchCost:
             return
         self.batch_processed_support_confirmed = True
 
-    async def _cleanup_stale_managed_objects(self) -> None:
-        """
-        Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
-        in non-terminal states as 'stale_expired'. These will never complete and
-        should not be polled.
-        """
-        cutoff: Final = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
-        result: Final = await _managed_object_table(self.prisma_client).update_many(
-            where={
-                "file_purpose": "batch",
-                "status": {"not_in": list(TERMINAL_MANAGED_OBJECT_STATUSES)},
-                "created_at": {"lt": cutoff},
-            },
-            data={"status": "stale_expired"},
-        )
-        if result > 0:
-            verbose_proxy_logger.warning(
-                f"CheckBatchCost: marked {result} stale managed objects "
-                f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
-            )
-
     async def _fallback_find_jobs(self) -> "Sequence[ManagedObjectRow]":
         """Query batch jobs without the batch_processed filter (for older schemas)."""
         return await self._find_jobs(
@@ -191,14 +170,20 @@ class CheckBatchCost:
         )
 
     async def _find_jobs(self, where: Mapping[str, object]) -> Sequence[ManagedObjectRow]:
-        arrivals: Final = self._poll_arrivals
-        page: Final = await self._find_job_page(where, arrivals=arrivals)
-        self._poll_arrivals = not arrivals if page else arrivals
-        if page:
-            return page
-        return await self._find_job_page(where, arrivals=not arrivals)
+        arrivals_first: Final = self._poll_arrivals
+        first: Final = await self._find_job_page(where, arrivals=arrivals_first, take=MAX_OBJECTS_PER_POLL_CYCLE)
+        rest: Final = await self._find_job_page(
+            where, arrivals=not arrivals_first, take=MAX_OBJECTS_PER_POLL_CYCLE - len(first)
+        )
+        self._poll_arrivals = not (arrivals_first and len(first) == MAX_OBJECTS_PER_POLL_CYCLE)
+        first_ids: Final = frozenset(job.id for job in first)
+        return (*first, *(job for job in rest if job.id not in first_ids))
 
-    async def _find_job_page(self, where: Mapping[str, object], *, arrivals: bool) -> Sequence[ManagedObjectRow]:
+    async def _find_job_page(
+        self, where: Mapping[str, object], *, arrivals: bool, take: int
+    ) -> Sequence[ManagedObjectRow]:
+        if take == 0:
+            return ()
         cursor: Final = self._arrival_cursor if arrivals else self._poll_cursor
         if cursor is None:
             if arrivals:
@@ -224,10 +209,10 @@ class CheckBatchCost:
                     else {}
                 ),
             },
-            take=MAX_OBJECTS_PER_POLL_CYCLE,
+            take=take,
             order=[{"created_at": "asc"}, {"id": "asc"}],
         )
-        next_cursor: Final = (page[-1].created_at, page[-1].id) if len(page) == MAX_OBJECTS_PER_POLL_CYCLE else None
+        next_cursor: Final = (page[-1].created_at, page[-1].id) if len(page) == take else None
         if arrivals:
             self._arrival_cursor = next_cursor
         else:
@@ -235,11 +220,30 @@ class CheckBatchCost:
         return page
 
     def _unprocessed_snapshot(self, job: ManagedObjectRow) -> Mapping[str, object]:
-        return {
-            "id": job.id,
-            "updated_at": job.updated_at,
-            **({"batch_processed": False} if self._has_batch_processed_column else {}),
-        }
+        if self._has_batch_processed_column:
+            return {"id": job.id, "batch_processed": False}
+        return {"id": job.id, "updated_at": job.updated_at}
+
+    async def _expire_if_stale(self, job: ManagedObjectRow) -> None:
+        cutoff: Final = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+        if job.status in TERMINAL_MANAGED_OBJECT_STATUSES or job.created_at >= cutoff:
+            return
+        try:
+            expired: Final = await _managed_object_table(self.prisma_client).update_many(
+                where={
+                    **self._unprocessed_snapshot(job),
+                    "status": {"not_in": list(TERMINAL_MANAGED_OBJECT_STATUSES)},
+                },
+                data={"status": "stale_expired"},
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(f"CheckBatchCost: failed to mark stale job {job.id} as stale_expired: {db_err}")
+            return
+        if expired > 0:
+            verbose_proxy_logger.warning(
+                f"CheckBatchCost: job {job.id} is older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days "
+                "and still not finished, so it is marked stale_expired and no longer polled"
+            )
 
     async def _retire_job(self, job: "ManagedObjectRow", reason: str) -> None:
         """
@@ -360,15 +364,22 @@ class CheckBatchCost:
     def _is_output_file_gone_at_provider(error: Exception, output_file_id: Optional[str]) -> bool:
         """A 404 naming the output file means there is nothing to fetch on this or any
         later poll: providers like Vertex AI advertise an output path for every batch,
-        including terminal ones that never wrote it. Any other failure may be
-        transient, so it keeps retrying until the staleness sweep bounds it."""
+        including terminal ones that never wrote it. Storage backends name a gs:// or s3://
+        object without its scheme. Any other failure may be transient, so it keeps retrying."""
         import openai
 
         from litellm.exceptions import NotFoundError
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
         if not output_file_id:
             return False
-        return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, output_file_id)
+        is_not_found: Final = isinstance(error, (NotFoundError, openai.NotFoundError)) or (
+            isinstance(error, BaseLLMException) and error.status_code == 404
+        )
+        return is_not_found and (
+            _error_names_resource(error, output_file_id)
+            or _error_names_resource(error, output_file_id.split("://", 1)[-1])
+        )
 
     async def _finalize_unbilled_terminal_job(
         self, job: "ManagedObjectRow", response: "LiteLLMBatch"
@@ -1096,13 +1107,6 @@ class CheckBatchCost:
 
         processed_models: List[Tuple[Optional[str], Optional[str]]] = []
 
-        try:
-            await self._cleanup_stale_managed_objects()
-        except Exception as cleanup_err:
-            verbose_proxy_logger.warning(
-                f"CheckBatchCost: stale cleanup failed (poll will continue): {cleanup_err}"
-            )
-
         # Look for all batches that have not yet been processed by CheckBatchCost.
         # self._has_batch_processed_column is cached after the first probe so that
         # older schemas don't pay a guaranteed-failing primary query + warning on
@@ -1144,6 +1148,8 @@ class CheckBatchCost:
             if routing is None:
                 if self._has_unified_id_without_model(job):
                     await self._retire_job(job, "unified object id has no model id")
+                else:
+                    await self._expire_if_stale(job)
                 continue
             model_id, batch_id = routing
 
@@ -1168,6 +1174,8 @@ class CheckBatchCost:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
+                else:
+                    await self._expire_if_stale(job)
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
@@ -1230,6 +1238,8 @@ class CheckBatchCost:
                     )
                     continue
                 await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
+            else:
+                await self._expire_if_stale(job)
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:

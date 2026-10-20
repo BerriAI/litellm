@@ -6,6 +6,7 @@ import base64
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -39,6 +40,7 @@ from litellm.constants import (
     BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS,
     BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
+    MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_FILE_LIST_LIMIT,
     PENDING_RESPONSE_STATUSES,
 )
@@ -2379,6 +2381,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "file_purpose": "batch",
                 "batch_processed": False,
                 "status": {"not_in": ["failed", "expired", "cancelled"]},
+                "created_at": {
+                    "gte": datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+                },
             },
             take=MAX_MATCHES_TO_RETURN,
             order={"created_at": "desc"},
