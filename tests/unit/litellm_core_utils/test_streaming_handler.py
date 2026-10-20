@@ -2873,12 +2873,17 @@ async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("ends_with_finish_chunk", [True, False])
+@pytest.mark.parametrize("reported_tokens", [(30, 12), (0, 0)])
 @pytest.mark.asyncio
 async def test_stream_with_provider_usage_hands_that_usage_to_the_last_chunk(
-    logging_obj: Logging, sync_mode: bool, ends_with_finish_chunk: bool
+    logging_obj: Logging, sync_mode: bool, ends_with_finish_chunk: bool, reported_tokens: tuple[int, int]
 ) -> None:
     model: Final = "gpt-4o"
-    reported: Final = Usage(prompt_tokens=30, completion_tokens=12, total_tokens=42)
+    reported: Final = Usage(
+        prompt_tokens=reported_tokens[0],
+        completion_tokens=reported_tokens[1],
+        total_tokens=sum(reported_tokens),
+    )
     content_chunk: Final = ModelResponseStream(
         id="chatcmpl-with-usage",
         created=1741037890,
@@ -2917,9 +2922,9 @@ async def test_stream_with_provider_usage_hands_that_usage_to_the_last_chunk(
 
     last_chunk, usage_when_yielded = yielded[-1]
     assert usage_when_yielded is not None
-    assert (usage_when_yielded.prompt_tokens, usage_when_yielded.completion_tokens) == (30, 12)
+    assert (usage_when_yielded.prompt_tokens, usage_when_yielded.completion_tokens) == reported_tokens
     usage_after_drain: Final = last_chunk._hidden_params["usage"]
-    assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == (30, 12)
+    assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == reported_tokens
 
 
 @pytest.mark.asyncio
