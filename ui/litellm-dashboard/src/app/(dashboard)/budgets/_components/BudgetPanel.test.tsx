@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/http/client";
 
-import BudgetPanel from "./budget_panel";
+import BudgetPanel from "./BudgetPanel";
 
 const { getMock, budgetDeleteMock } = vi.hoisted(() => ({
   getMock: vi.fn(),

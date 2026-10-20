@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import BudgetModal from "./budget_modal";
+import BudgetModal from "./BudgetModal";
 import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
