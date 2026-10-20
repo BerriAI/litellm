@@ -215,7 +215,7 @@ from litellm.proxy.management_helpers.utils import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.chunked_in import delete_many_in, find_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -4774,15 +4774,20 @@ async def _delete_present_teams_tx(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
 ) -> frozenset[str]:
-    delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": [team.team_id for team in teams]}}
-    present: Final = frozenset(team.team_id for team in await tx.litellm_teamtable.find_many(where=delete_filter))
+    requested: Final = tuple(team.team_id for team in teams)
+    present: Final = frozenset(team.team_id for team in await find_many_in(tx.litellm_teamtable, "team_id", requested))
     await _persist_deleted_team_records(
         teams=tuple(team for team in teams if team.team_id in present),
         deleted_teams=tx.litellm_deletedteamtable,
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=litellm_changed_by,
     )
-    await tx.litellm_teamtable.delete_many(where=delete_filter)
+    await delete_many_in(
+        tx.litellm_teamtable,
+        "team_id",
+        tuple(team_id for team_id in requested if team_id in present),
+        atomicity="caller_transaction",
+    )
     return present
 
 

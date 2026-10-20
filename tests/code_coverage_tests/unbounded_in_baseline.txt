@@ -86,7 +86,6 @@ litellm/proxy/management_endpoints/team_endpoints.py _team_member_delete prisma 
 litellm/proxy/management_endpoints/team_endpoints.py _team_member_delete prisma user_id.in `sorted(user_ids_to_delete)` 1
 litellm/proxy/management_endpoints/team_endpoints.py _team_user_spend_sql raw-sql sl.team_id.IN `IN ({team_placeholders})` 0
 litellm/proxy/management_endpoints/team_endpoints.py delete_validated_teams prisma team_id.in `team_ids` 0
-litellm/proxy/management_endpoints/team_endpoints.py delete_validated_teams prisma team_id.in `team_ids` 1
 litellm/proxy/management_endpoints/team_endpoints.py get_all_team_memberships prisma team_id.in `team_ids` 0
 litellm/proxy/management_endpoints/team_endpoints.py list_available_teams prisma team_id.in `available_teams` 0
 litellm/proxy/management_endpoints/tool_management_endpoints.py get_tool_spend prisma tool_name.in `[row.tool_name for row in top_tools]` 0
