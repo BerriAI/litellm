@@ -120,7 +120,7 @@ async def test_langfuse_proxy_route_tags_pass_through_as_langfuse_provider(monke
     monkeypatch.setattr(langfuse_endpoints, "create_pass_through_route", create_route)
 
     request = MagicMock()
-    request.headers = {"Authorization": "Basic " + base64.b64encode(b"x:sk-1234").decode()}
+    request.headers = {"Authorization": "Basic " + base64.b64encode(b"x:sk-virtual-key").decode()}
     request.query_params = {}
 
     await langfuse_endpoints.langfuse_proxy_route(
