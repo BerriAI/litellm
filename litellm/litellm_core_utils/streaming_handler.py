@@ -1913,7 +1913,10 @@ class CustomStreamWrapper:
 
     @staticmethod
     def _stream_eof_error() -> httpx.RemoteProtocolError:
-        return httpx.RemoteProtocolError("Stream ended before a finish_reason was received")
+        return httpx.RemoteProtocolError(
+            "Stream ended before a finish_reason was received",
+            request=httpx.Request(method="POST", url="https://docs.litellm.ai/docs"),
+        )
 
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
         """
@@ -2090,6 +2093,7 @@ class CustomStreamWrapper:
                 eof_traceback: Final = traceback.format_exc()
                 self._record_partial_usage_for_failure()
                 threading.Thread(target=self.logging_obj.failure_handler, args=(error, eof_traceback)).start()
+                self.close()
                 self._handle_stream_fallback_error(error)
             if self.sent_last_chunk is True:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
@@ -2305,6 +2309,7 @@ class CustomStreamWrapper:
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             if self._should_fail_on_clean_eof():
+                await self.aclose()
                 self._log_stream_failure_and_raise(self._stream_eof_error())
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues

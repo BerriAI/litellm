@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
 )
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
@@ -1596,7 +1597,6 @@ async def test_async_openai_compatible_chat_clean_eof_without_finish_reason_rais
     logging_obj: Logging, custom_llm_provider: str
 ):
     """An OpenAI-compatible stream without a provider finish reason must fail at clean EOF."""
-    from litellm.exceptions import MidStreamFallbackError
 
     async def source():
         yield _incomplete_openai_chat_chunk()
@@ -1625,7 +1625,6 @@ def test_sync_openai_compatible_chat_clean_eof_without_finish_reason_raises_mids
     logging_obj: Logging, custom_llm_provider: str
 ):
     """The synchronous OpenAI-compatible stream must fail at clean EOF too."""
-    from litellm.exceptions import MidStreamFallbackError
 
     def source():
         yield _incomplete_openai_chat_chunk()
@@ -1647,6 +1646,117 @@ def test_sync_openai_compatible_chat_clean_eof_without_finish_reason_raises_mids
     assert excinfo.value.generated_content == '{"findings":[{"title":"unfinished'
     assert excinfo.value.is_pre_first_chunk is False
     assert response.received_finish_reason is None
+
+
+_ANTHROPIC_PARTIAL_EVENTS: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "message_start",
+        "message": {
+            "id": "msg_incomplete_eof",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [],
+            "stop_reason": None,
+            "usage": {"input_tokens": 9, "output_tokens": 1},
+        },
+    },
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": '{"findings":[{"title":"unfinished'},
+    },
+)
+_ANTHROPIC_TERMINAL_EVENTS: Final[tuple[dict[str, object], ...]] = (
+    {"type": "content_block_stop", "index": 0},
+    {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 7}},
+    {"type": "message_stop"},
+)
+
+
+def _anthropic_sse_lines(events: Sequence[Mapping[str, object]]) -> list[str]:
+    return [line for event in events for line in (f"event: {event['type']}", f"data: {json.dumps(event)}", "")]
+
+
+def _anthropic_stream(
+    events: Sequence[Mapping[str, object]], sync_mode: bool, logging_obj: Logging
+) -> CustomStreamWrapper:
+    lines: Final = _anthropic_sse_lines(events)
+
+    async def async_lines() -> AsyncIterator[str]:
+        for line in lines:
+            yield line
+
+    return CustomStreamWrapper(
+        completion_stream=AnthropicModelResponseIterator(
+            streaming_response=iter(lines) if sync_mode else async_lines(), sync_stream=sync_mode
+        ),
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        logging_obj=logging_obj,
+    )
+
+
+async def _collect(wrapper: CustomStreamWrapper, sync_mode: bool) -> list[ModelResponseStream]:
+    if sync_mode:
+        return list(wrapper)
+    return [chunk async for chunk in wrapper]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_anthropic_stream_that_ends_before_message_delta_fails_with_the_eof_message(
+    sync_mode: bool, logging_obj: Logging
+):
+    wrapper: Final = _anthropic_stream(_ANTHROPIC_PARTIAL_EVENTS, sync_mode, logging_obj)
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _collect(wrapper, sync_mode)
+
+    assert excinfo.value.generated_content == '{"findings":[{"title":"unfinished'
+    assert excinfo.value.is_pre_first_chunk is False
+    assert isinstance(excinfo.value.original_exception, litellm.APIConnectionError)
+    assert "AnthropicException - Stream ended before a finish_reason was received" in str(excinfo.value)
+    assert wrapper.received_finish_reason is None
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_anthropic_stream_with_message_stop_ends_with_its_finish_reason(sync_mode: bool, logging_obj: Logging):
+    wrapper: Final = _anthropic_stream(
+        (*_ANTHROPIC_PARTIAL_EVENTS, *_ANTHROPIC_TERMINAL_EVENTS), sync_mode, logging_obj
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
+    assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == (
+        '{"findings":[{"title":"unfinished'
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_generic_chunk_stream_without_a_finish_reason_keeps_the_default_stop(
+    sync_mode: bool, logging_obj: Logging
+):
+    """Providers that stream GenericStreamingChunks and never mark the last one finished still end with stop."""
+    chunks: Final = [
+        {"text": text, "tool_use": None, "is_finished": False, "finish_reason": "", "usage": None, "index": 0}
+        for text in ("partial", " reply")
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="sagemaker/tgi-endpoint",
+        custom_llm_provider="sagemaker",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
+    assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == "partial reply"
 
 
 def test_streaming_handler_with_created_time_propagation(
@@ -2899,11 +3009,8 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize("ends_with_finish_chunk", [True, False])
 @pytest.mark.asyncio
-async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
-    sync_mode: bool, ends_with_finish_chunk: bool
-) -> None:
+async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(sync_mode: bool) -> None:
     model: Final = "gpt-4o"
     messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
     text: Final = "The quick brown fox jumps over the lazy dog. " * 20
@@ -2920,9 +3027,7 @@ async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
         choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
     )
     wrapper: Final = CustomStreamWrapper(
-        completion_stream=ModelResponseListIterator(
-            model_responses=[content_chunk, finish_chunk] if ends_with_finish_chunk else [content_chunk]
-        ),
+        completion_stream=ModelResponseListIterator(model_responses=[content_chunk, finish_chunk]),
         model=model,
         custom_llm_provider="openai",
         logging_obj=Logging(
@@ -2959,6 +3064,55 @@ async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
     rates: Final = litellm.model_cost[model]
     spend: Final = expected[0] * rates["input_cost_per_token"] + expected[1] * rates["output_cost_per_token"]
     assert litellm.completion_cost(completion_response=assembled) == pytest.approx(spend)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_cut_before_a_finish_chunk_bills_the_token_estimate_on_its_failure(sync_mode: bool) -> None:
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    logging_obj: Final = Logging(
+        model=model,
+        messages=messages,
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+        litellm_call_id="cut-no-usage-call",
+        function_id="cut-no-usage-fn",
+    )
+    logging_obj.update_environment_variables(
+        model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "cut-no-usage-call"}
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                ModelResponseStream(
+                    id="chatcmpl-cut-no-usage",
+                    created=1741037890,
+                    model=model,
+                    choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                )
+            ]
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options=None,
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await _collect(wrapper, sync_mode)
+
+    expected: Final = (
+        litellm.token_counter(model=model, messages=messages),
+        litellm.token_counter(model=model, text=text, count_response_tokens=True),
+    )
+    usage: Final = logging_obj.model_call_details["combined_usage_object"]
+    assert (usage.prompt_tokens, usage.completion_tokens) == expected
+    rates: Final = litellm.model_cost[model]
+    spend: Final = expected[0] * rates["input_cost_per_token"] + expected[1] * rates["output_cost_per_token"]
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(spend)
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -7461,10 +7615,11 @@ async def test_no_synthetic_finish_reason_logged_when_provider_sent_none(sync_mo
         custom_llm_provider="bedrock",
         logging_obj=logging_obj,
     )
-    if sync_mode:
-        list(response)
-    else:
-        [c async for c in response]
+    with pytest.raises(MidStreamFallbackError):
+        if sync_mode:
+            list(response)
+        else:
+            [c async for c in response]
 
     assert response.received_finish_reason is None
     assert all(not (c.choices and c.choices[0].finish_reason) for c in response.chunks)
