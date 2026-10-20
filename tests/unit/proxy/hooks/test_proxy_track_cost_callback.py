@@ -3202,6 +3202,7 @@ def _grounded_gemini_kwargs(response_cost: float) -> dict:
             "response_cost": response_cost,
             "request_tags": None,
             "cache_hit": None,
+            "custom_llm_provider": "vertex_ai",
             "cost_breakdown": {
                 "input_cost": 0.0,
                 "output_cost": 0.0,
