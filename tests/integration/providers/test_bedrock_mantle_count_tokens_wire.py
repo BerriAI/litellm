@@ -12,6 +12,7 @@ from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import unquote
 
 import anthropic
 import httpx
@@ -19,10 +20,9 @@ import psutil
 import pytest
 import yaml
 from anthropic.types import MessageCountTokensToolParam, MessageParam
-from integration._support.bedrock_runtime_peer import answer, marker_of, target_of
-from integration._support.bedrock_runtime_peer import respond as runtime_generation
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
+from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -52,6 +52,11 @@ _SCRIPTED_STATUS: Final = re.compile(r"status=(\d{3})")
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
+_MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
+_NO_MARKER: Final = "0" * 32
+_CONVERSE: Final = re.compile(r"^/model/.+/converse$")
+_CONVERSE_STREAM: Final = re.compile(r"^/model/.+/converse-stream$")
+_EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 
 _SDK_MESSAGES: Final[list[MessageParam]] = [{"role": "user", "content": "Count this message"}]
 _MESSAGES: Final = _JSON_LIST.validate_json(json.dumps(_SDK_MESSAGES))
@@ -74,6 +79,52 @@ _SDK_TOOLS: Final[list[MessageCountTokensToolParam]] = [
 _TOOLS: Final = _JSON_LIST.validate_json(json.dumps(_SDK_TOOLS))
 _GEMINI_BODY: Final[dict[str, JsonValue]] = {"contents": [{"role": "user", "parts": [{"text": "Count this"}]}]}
 _GEMINI_MESSAGES: Final[list[JsonValue]] = [{"role": "user", "content": "Count this"}]
+
+
+def marker_of(request: Request) -> str:
+    found: Final = _MARKER.search(request.body.decode(errors="replace"))
+    return _NO_MARKER if found is None else found.group(1)
+
+
+def target_of(request: Request) -> str:
+    return unquote(request.target)
+
+
+def answer(marker: str) -> str:
+    return f"answer marker-{marker}"
+
+
+def _runtime_generation(request: Request) -> Reply:
+    target: Final = target_of(request)
+    marker: Final = marker_of(request)
+    if _CONVERSE.match(target):
+        return Reply(
+            body=json.dumps(
+                {
+                    "output": {"message": {"role": "assistant", "content": [{"text": answer(marker)}]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 9, "outputTokens": 5, "totalTokens": 14},
+                    "metrics": {"latencyMs": 1},
+                }
+            ).encode()
+        )
+    if _CONVERSE_STREAM.match(target):
+        events: Final[tuple[tuple[str, Mapping[str, JsonValue]], ...]] = (
+            ("messageStart", {"role": "assistant"}),
+            ("contentBlockDelta", {"delta": {"text": "answer "}, "contentBlockIndex": 0}),
+            ("contentBlockDelta", {"delta": {"text": f"marker-{marker}"}, "contentBlockIndex": 0}),
+            ("contentBlockStop", {"contentBlockIndex": 0}),
+            ("messageStop", {"stopReason": "end_turn"}),
+            (
+                "metadata",
+                {"usage": {"inputTokens": 9, "outputTokens": 5, "totalTokens": 14}, "metrics": {"latencyMs": 1}},
+            ),
+        )
+        return Reply(
+            content_type=_EVENT_STREAM,
+            chunks=tuple(_aws_event_frame(kind, payload, "sc", marker) for kind, payload in events),
+        )
+    return Reply(status=404, body=json.dumps({"message": f"unknown bedrock route {request.method} {target}"}).encode())
 
 
 def _mantle_body(**fields: JsonValue) -> dict[str, JsonValue]:
@@ -120,7 +171,7 @@ def _runtime(request: Request) -> Reply:
         return _runtime_count(request, counted.group(1))
     if _INVOKE_TARGET.match(target):
         return _invoke_reply(marker_of(request))
-    return runtime_generation(request)
+    return _runtime_generation(request)
 
 
 def _mantle_counted(_request: Request) -> Reply:
