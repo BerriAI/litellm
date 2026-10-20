@@ -502,7 +502,7 @@ class InternalUsageCache:
         key: str,
         local_only: bool = False,
         **kwargs: object,
-    ) -> Any:
+    ) -> object:
         return self.dual_cache.get_cache(
             key=key,
             local_only=local_only,
@@ -1031,9 +1031,7 @@ def _failure_usage_to_lift(
     at the rate the router registered under ``deployment_id`` (``Logging.get_router_model_id``)
     when the deployment declares one, else the cost map's rate for ``base_model`` (an Azure
     deployment's ``model_info.base_model``) or the deployment model; any other post-dispatch
-    failure stays at zero cost. The raw request body backfills
-    the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
-    chat-completions provider) without filling optional_params. Returns the
+    failure stays at zero cost. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
     recovered_usage: Final = model_call_details.get("combined_usage_object")
     failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
@@ -1047,6 +1045,22 @@ def _failure_usage_to_lift(
         # The proxy-only error handler stamps this flag on a client disconnect too, even though the
         # request had already reached the provider, so a billed failure keeps its estimate.
         return None
+    estimated_usage: Final = _estimated_prompt_usage(model_call_details, request_body)
+    if estimated_usage is None:
+        return None
+    if not provider_billed:
+        return estimated_usage, 0.0
+    return estimated_usage, _estimated_input_cost(
+        model_call_details, estimated_usage.prompt_tokens, deployment_id=deployment_id, base_model=base_model
+    )
+
+
+def _estimated_prompt_usage(
+    model_call_details: Mapping[str, object], request_body: Mapping[str, object]
+) -> Usage | None:
+    """The input-only Usage estimate for the prompt this request sent, or None when the call type has no
+    estimable input. The raw request body backfills the system prompt when the SDK bridges an endpoint
+    (e.g. /v1/messages on a chat-completions provider) without filling optional_params."""
     if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
     optional_params: Final = model_call_details.get("optional_params")
@@ -1056,17 +1070,118 @@ def _failure_usage_to_lift(
         else None
     )
     system_input: Final = dispatched_system or request_body.get("system") or request_body.get("instructions")
-    estimated_usage: Final = _estimate_dispatched_failure_usage(
+    return _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
         request_input=model_call_details.get("messages"),
         system_input=system_input,
     )
-    if estimated_usage is None:
-        return None
-    if not provider_billed:
-        return estimated_usage, 0.0
-    return estimated_usage, _estimated_input_cost(
-        model_call_details, estimated_usage.prompt_tokens, deployment_id=deployment_id, base_model=base_model
+
+
+@dataclass(frozen=True)
+class BilledFailedAttempt:
+    """An earlier retry attempt the provider also billed, written as its own spend row."""
+
+    attempted_retries: int
+    deployment_id: str | None
+    usage: Usage
+    response_cost: float
+
+
+_NO_RETRY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _retry_metadata_bucket(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
+    """The request metadata bucket the router writes retry state into, ``litellm_metadata`` when the
+    route carries one (/messages, /responses) and ``metadata`` otherwise, same order as the deployment id."""
+    if litellm_params is None:
+        return _NO_RETRY_METADATA
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = litellm_params.get(metadata_key)
+        if isinstance(metadata, dict):
+            return cast("Mapping[str, object]", metadata)  # cast-ok: untyped router dict, keys read with .get
+    return _NO_RETRY_METADATA
+
+
+def _attempt_number(record: Mapping[str, object], index: int) -> int:
+    """The attempt a retry record describes: its own ``attempted_retries`` count, else its position."""
+    recorded: Final = record.get("attempted_retries")
+    return recorded if isinstance(recorded, int) else index
+
+
+def _retry_attempt_records(litellm_params: Mapping[str, object] | None) -> tuple[Mapping[str, object], ...]:
+    """The router's ``RetryAttemptRecord`` breadcrumbs, one per failed attempt, read from the same bucket."""
+    if litellm_params is None:
+        return ()
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = litellm_params.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        records = cast("Mapping[str, object]", metadata).get("previous_models")  # cast-ok: untyped router dict
+        if isinstance(records, (list, tuple)):
+            return tuple(
+                cast("Mapping[str, object]", record)  # cast-ok: RetryAttemptRecord TypedDict, read with .get
+                for record in cast("Sequence[object]", records)  # cast-ok: untyped router tuple
+                if isinstance(record, dict)
+            )
+    return ()
+
+
+def _record_deployment_id(record: Mapping[str, object]) -> str | None:
+    deployment_id: Final = record.get("deployment_id")
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
+def _attempt_identity(record: Mapping[str, object]) -> tuple[str | None, int | None]:
+    """What tells one provider call from another across the request: the deployment that served it
+    and the retry count within its model group. Two records with the same identity describe the
+    same call (the fallback handler re-logs the attempt that exhausted the previous group)."""
+    attempted_retries: Final = record.get("attempted_retries")
+    return _record_deployment_id(record), attempted_retries if isinstance(attempted_retries, int) else None
+
+
+def _timed_out_earlier_records(
+    litellm_params: Mapping[str, object] | None, final_identity: tuple[str | None, int | None]
+) -> tuple[Mapping[str, object], ...]:
+    """The ``Timeout`` breadcrumbs for calls other than the final attempt, one per provider call."""
+    by_identity: Final = {
+        _attempt_identity(record): record
+        for record in _retry_attempt_records(litellm_params)
+        if record.get("exception_type") == litellm.Timeout.__name__
+    }
+    return tuple(record for identity, record in by_identity.items() if identity != final_identity)
+
+
+def _billed_earlier_attempts(
+    model_call_details: Mapping[str, object],
+    litellm_params: Mapping[str, object] | None,
+    estimated_usage: Usage,
+    base_model: str | None,
+    deployment_id: str | None,
+) -> tuple[BilledFailedAttempt, ...]:
+    """Every earlier retry attempt the provider also billed. The router records one
+    ``RetryAttemptRecord`` per failed attempt in ``metadata.previous_models``, the final attempt
+    included, which the failure row itself bills. The final attempt is the record with the
+    request's own deployment and retry count (``attempted_retries`` restarts at 0 after a fallback
+    hop, so the count alone cannot tell the groups apart). An earlier attempt that ended in a
+    ``Timeout`` had the same prompt accepted by its deployment, so it is billed like the final
+    attempt, at that deployment's input rate (else the cost map's rate for ``base_model`` or the
+    model). Only the exception class survives on the record, so an earlier connect timeout is
+    billed too; any other failure class is not."""
+    final_attempt: Final = _retry_metadata_bucket(litellm_params).get("attempted_retries")
+    final_identity: Final = (deployment_id, final_attempt if isinstance(final_attempt, int) else None)
+    return tuple(
+        BilledFailedAttempt(
+            attempted_retries=_attempt_number(record, index),
+            deployment_id=_record_deployment_id(record),
+            usage=estimated_usage,
+            response_cost=_estimated_input_cost(
+                model_call_details,
+                estimated_usage.prompt_tokens,
+                deployment_id=_record_deployment_id(record),
+                base_model=base_model,
+            ),
+        )
+        for index, record in enumerate(_timed_out_earlier_records(litellm_params, final_identity))
     )
 
 
@@ -1085,6 +1200,25 @@ def _deployment_cost_per_token(deployment_id: str | None, model: str) -> CostPer
     )
 
 
+def _priced_input_cost(
+    pricing_model: str,
+    custom_llm_provider: str | None,
+    prompt_tokens: int,
+    custom_cost_per_token: CostPerToken | None,
+) -> float | None:
+    try:
+        estimated_input_cost, _ = litellm.cost_per_token(
+            model=pricing_model,
+            custom_llm_provider=custom_llm_provider,
+            prompt_tokens=prompt_tokens,
+            custom_cost_per_token=custom_cost_per_token,
+        )
+    except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
+        verbose_proxy_logger.debug("failure spend estimate: could not price %s: %s", pricing_model, exc)
+        return None
+    return estimated_input_cost
+
+
 def _estimated_input_cost(
     model_call_details: Mapping[str, object],
     prompt_tokens: int,
@@ -1092,23 +1226,19 @@ def _estimated_input_cost(
     base_model: str | None,
 ) -> float:
     """Input price for the estimated prompt: the deployment's registered rate when it has one, else
-    the cost map's rate for ``base_model`` or the deployment model (an Azure deployment name is not
-    in the cost map, its ``base_model`` is). An unpriceable model keeps the row at $0 rather than
-    dropping the failure row."""
-    try:
-        model: Final = str(model_call_details.get("model") or "")
-        estimated_input_cost, _ = litellm.cost_per_token(
-            model=base_model or model,
-            custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
-            prompt_tokens=prompt_tokens,
-            custom_cost_per_token=_deployment_cost_per_token(deployment_id, model),
-        )
-    except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
-        verbose_proxy_logger.debug(
-            "failure spend estimate: could not price %s: %s", model_call_details.get("model"), exc
-        )
-        return 0.0
-    return estimated_input_cost
+    the cost map's rate for ``base_model``, else the deployment model, the same candidate order
+    ``completion_cost`` walks (an Azure deployment name is not in the cost map, its ``base_model``
+    is; a ``base_model`` the cost map does not know falls through to the deployment model). A model
+    no candidate can price keeps the row at $0 rather than dropping the failure row."""
+    model: Final = str(model_call_details.get("model") or "")
+    custom_llm_provider: Final = str(model_call_details.get("custom_llm_provider") or "") or None
+    custom_cost_per_token: Final = _deployment_cost_per_token(deployment_id, model)
+    pricing_models: Final = (base_model, model) if base_model is not None else (model,)
+    candidate_costs: Final = (
+        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens, custom_cost_per_token)
+        for pricing_model in pricing_models
+    )
+    return next((cost for cost in candidate_costs if cost is not None), 0.0)
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})
@@ -1265,13 +1395,26 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         return _EMPTY_LIFT
     _model_call_details: Final = getattr(_logging_obj, "model_call_details", {})
     _first_handoff: Final = _model_call_details.get("first_api_call_start_time")
+    _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
+    _base_model: Final = get_base_model_from_metadata(model_call_details=_model_call_details)
+    _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,
         request_body=request_data,
         dispatched=_first_handoff is not None,
         provider_billed=provider_billed,
-        deployment_id=_logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None,
-        base_model=get_base_model_from_metadata(model_call_details=_model_call_details),
+        deployment_id=_deployment_id,
+        base_model=_base_model,
+    )
+    _prompt_estimate: Final = (
+        _estimated_prompt_usage(_model_call_details, request_data)
+        if provider_billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
+        else None
+    )
+    _earlier_attempts: Final = (
+        _billed_earlier_attempts(_model_call_details, _litellm_params, _prompt_estimate, _base_model, _deployment_id)
+        if _prompt_estimate is not None
+        else ()
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
@@ -1280,6 +1423,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
+        ("billed_failed_attempts", _earlier_attempts or None),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 
@@ -8375,7 +8519,11 @@ MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH: Final = 256
 
 
 def _is_transient_spend_log_write_error(e: Exception) -> bool:
-    return PrismaDBExceptionHandler.is_database_transport_error(e) or PrismaDBExceptionHandler.is_deadlock_error(e)
+    return (
+        PrismaDBExceptionHandler.is_database_transport_error(e)
+        or PrismaDBExceptionHandler.is_prisma_engine_internal_error(e)
+        or PrismaDBExceptionHandler.is_deadlock_error(e)
+    )
 
 
 async def _create_spend_logs_with_poison_isolation(

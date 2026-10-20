@@ -1260,6 +1260,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
                 },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
+                },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
                     "type": "array",
@@ -2358,7 +2368,6 @@ def test_register_model_with_scientific_notation():
     _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
 @pytest.mark.usefixtures("isolated_openai_model_sets")
 @respx.mock
 def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
@@ -4803,8 +4812,7 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 @pytest.mark.parametrize("rate", (0.0, 0.000123))
 @pytest.mark.parametrize("updated_rate", (None, 0.0, 0.000456))
 def test_reapply_runtime_registrations_replays_register_model_overrides(
@@ -4833,7 +4841,8 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
     # installed would make this depend on when that happens.
     monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
 
-    saved_model_cost = litellm.model_cost
+    saved_model_cost: Final = litellm.model_cost
+    monkeypatch.setattr(litellm, "model_cost", dict(saved_model_cost))
     try:
         litellm.register_model(
             model_cost={
@@ -4871,8 +4880,7 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
         _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkeypatch):
     """
     Per-request custom pricing describes one call, so it must not be re-asserted
