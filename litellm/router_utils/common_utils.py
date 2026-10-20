@@ -25,6 +25,7 @@ from litellm.types.router import (
     SkippedFallbackTarget,
 )
 from litellm.types.utils import (
+    DEPLOYMENT_SCOPED_PRICING_FIELDS,
     AdminApiKeySecretReference,
     LlmProviders,
     ProviderSpecificModelInfo,
@@ -491,6 +492,15 @@ def warn_on_ignored_model_capability_flags(model_name: str, litellm_params: Mapp
     return warning
 
 
+_DEPLOYMENT_PRICING_FIELDS: Final[frozenset[str]] = (
+    frozenset(CustomPricingLiteLLMParams.model_fields) | DEPLOYMENT_SCOPED_PRICING_FIELDS
+)
+
+
+def _declares_own_prices(params: Mapping[str, object]) -> bool:
+    return any(params.get(field) is not None for field in _DEPLOYMENT_PRICING_FIELDS)
+
+
 def warn_on_unpriced_base_model(
     model_name: str, model_info: Mapping[str, object], litellm_params: Mapping[str, object]
 ) -> str | None:
@@ -502,7 +512,7 @@ def warn_on_unpriced_base_model(
     base_model: Final = model_info.get("base_model")
     if not isinstance(base_model, str) or not base_model:
         return None
-    if any(litellm_params.get(field) is not None for field in CustomPricingLiteLLMParams.model_fields):
+    if _declares_own_prices(litellm_params) or _declares_own_prices(model_info):
         return None
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
     if cost_map_declares_rates(base_model, custom_llm_provider if isinstance(custom_llm_provider, str) else None):

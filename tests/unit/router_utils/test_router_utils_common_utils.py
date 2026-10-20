@@ -722,15 +722,37 @@ class TestWarnOnUnpricedBaseModel:
             is None
         )
 
-    def test_silent_when_the_deployment_carries_its_own_prices(self):
+    @pytest.mark.parametrize("priced_section", ["litellm_params", "model_info"])
+    def test_silent_when_the_deployment_carries_its_own_prices(self, priced_section: str):
+        own_prices: Final = {"input_cost_per_token": 0.000002}
         assert (
             warn_on_unpriced_base_model(
                 model_name="eu-gpt",
-                model_info={"base_model": "azure/eu/gpt-9.9"},
-                litellm_params={"model": "azure/my-eu-deployment", "input_cost_per_token": 0.000002},
+                model_info={"base_model": "azure/eu/gpt-9.9", **(own_prices if priced_section == "model_info" else {})},
+                litellm_params={
+                    "model": "azure/my-eu-deployment",
+                    **(own_prices if priced_section == "litellm_params" else {}),
+                },
             )
             is None
         )
+
+    def test_add_deployment_warns_like_a_config_load_does(self, caplog: pytest.LogCaptureFixture):
+        """Database and UI upserts come in through add_deployment, not the config path"""
+        router: Final = Router(model_list=[])
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router.add_deployment(
+                Deployment(
+                    model_name="eu-gpt",
+                    litellm_params=LiteLLM_Params(
+                        model="azure/my-eu-deployment", api_key="x", api_base="https://example.openai.azure.com"
+                    ),
+                    model_info=ModelInfo(base_model="azure/eu/gpt-9.9"),
+                )
+            )
+
+        assert "model_info.base_model='azure/eu/gpt-9.9'" in caplog.text, caplog.text
 
 
 class TestWarnOnProviderCredentialMismatch:

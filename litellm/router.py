@@ -10985,6 +10985,11 @@ class Router:
         declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
         warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
         warn_on_ignored_model_capability_flags(model_name=deployment.model_name, litellm_params=declared_params)
+        warn_on_unpriced_base_model(
+            model_name=deployment.model_name,
+            model_info=deployment.model_info.model_dump(exclude_none=True),
+            litellm_params=declared_params,
+        )
         served: Final = with_admin_api_key_secret_reference(without_model_capability_flags(deployment))
 
         # add to model list
