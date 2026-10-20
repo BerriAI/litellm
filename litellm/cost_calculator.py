@@ -740,6 +740,15 @@ def cost_per_token(
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "bedrock":
+        registered_pricing_model: Final = _bedrock_registered_pricing_model(model)
+        if registered_pricing_model is not None:
+            return generic_cost_per_token(
+                model=model,
+                usage=usage_block,
+                custom_llm_provider="bedrock",
+                service_tier=service_tier,
+                model_info=_cost_map_model_info(registered_pricing_model, None),
+            )
         return bedrock_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "openai":
         return openai_cost_per_token(
@@ -869,6 +878,17 @@ def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
     )
 
 
+def _bedrock_registered_pricing_model(model: str) -> str | None:
+    return next(
+        (
+            key
+            for key, entry in runtime_model_cost_registrations(model, "bedrock")
+            if _bedrock_registration_has_prices(entry)
+        ),
+        None,
+    )
+
+
 def _declares_rates(model_info: ModelInfo | None) -> bool:
     entry: Final = _raw_cost_map_entry(model_info["key"]) if model_info is not None else None
     return entry is not None and _cost_map_entry_prices_anything(entry)
@@ -942,13 +962,10 @@ def select_model_name_for_cost_calc(
     configured_model: Final = model or (
         completion_response_model if isinstance(completion_response_model, str) else None
     )
-    registered_pricing: Final = (
-        runtime_model_cost_registrations(configured_model, "bedrock")
+    registered_pricing_model: Final = (
+        _bedrock_registered_pricing_model(configured_model)
         if invoked_model_info is not None and isinstance(configured_model, str)
-        else ()
-    )
-    registered_pricing_model: Final = next(
-        (key for key, entry in registered_pricing if _bedrock_registration_has_prices(entry)), None
+        else None
     )
     bedrock_pricing_model: Final = registered_pricing_model or (
         invoked_model_info["key"] if invoked_model_info is not None and _declares_rates(invoked_model_info) else None
@@ -2329,6 +2346,11 @@ def _layered_ocr_pricing(*sources: Mapping[str, object] | None) -> OCRPricing:
 
 def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     try:
+        registered_pricing_model: Final = (
+            _bedrock_registered_pricing_model(model) if custom_llm_provider == "bedrock" else None
+        )
+        if registered_pricing_model is not None:
+            return litellm.get_model_info(model=registered_pricing_model)
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None

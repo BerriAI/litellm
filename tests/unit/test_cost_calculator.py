@@ -9872,20 +9872,23 @@ def test_non_bedrock_cost_ignores_bedrock_model_id(_local_model_cost_map: None) 
 @pytest.mark.parametrize("rate", (0.0, 0.001))
 @pytest.mark.parametrize("persist_across_reloads", (True, False))
 @pytest.mark.parametrize("routed_response", (True, False))
+@pytest.mark.parametrize("metadata_prefix", ("bedrock/", "bedrock/converse/"))
 def test_bedrock_converse_profile_preserves_registered_price_override(
     _local_model_cost_map: None,
     monkeypatch: pytest.MonkeyPatch,
     rate: float,
     persist_across_reloads: bool,
     routed_response: bool,
+    metadata_prefix: str,
 ) -> None:
     import litellm.utils as model_utils
+    from litellm.cost_calculator import pricing_entry_for_cost_calc
 
     monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     catalog: Final = dict(litellm.model_cost)
     model: Final = "openai.gpt-5.6-sol"
     litellm.register_model(
-        {f"bedrock/converse/{model}": {"supports_function_calling": True}},
+        {f"{metadata_prefix}{model}": {"supports_function_calling": True}},
         persist_across_reloads=persist_across_reloads,
     )
     litellm.register_model(
@@ -9914,6 +9917,12 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
         custom_llm_provider="bedrock",
         optional_params={"model_id": f"us.{model}"},
     ) == pytest.approx(15 * rate)
+
+    entry: Final = pricing_entry_for_cost_calc(model, response, "bedrock", False, None, None, None, None)
+    assert entry is not None
+    assert entry[0] == model
+    assert entry[1]["input_cost_per_token"] == rate
+    assert entry[1]["output_cost_per_token"] == rate
 
     updated_rate: Final = rate + 0.002
     litellm.register_model(
