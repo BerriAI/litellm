@@ -414,6 +414,7 @@ jobs:
               tests/unit/images
               tests/unit/interactions
               tests/unit/messages
+              tests/unit/native
               tests/unit/ocr
               tests/unit/passthrough
               tests/unit/rag
