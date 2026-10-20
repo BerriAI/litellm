@@ -13,6 +13,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
@@ -278,6 +279,10 @@ def context_management_explicitly_dropped(additional_drop_params: object) -> boo
     ``drop_params`` only exists to drop genuinely unsupported params.
     """
     return isinstance(additional_drop_params, list) and "context_management" in additional_drop_params
+
+
+def _drops_invalid_edits(kwargs: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
 
 def _normalize_spec_edits(
@@ -721,13 +726,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
-        drop_invalid_edits: Final = litellm.drop_params is True or (
-            "drop_params" in kwargs and kwargs["drop_params"] is True
-        )
         litellm_router: Final[Router | None] = _router_or_proxy_fallback(kwargs.pop("litellm_router", None))
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
         request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+        drop_invalid_edits: Final = _drops_invalid_edits(request_kwargs)
         sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
         sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
 
@@ -857,9 +860,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # bridge to it via ``run_async_function``.
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
-        drop_invalid_edits: Final = litellm.drop_params is True or (
-            "drop_params" in kwargs and kwargs["drop_params"] is True
-        )
+        drop_invalid_edits: Final = _drops_invalid_edits(_REQUEST_KWARGS.validate_python(kwargs))
         # Deliberately do NOT auto-attach the proxy ``llm_router`` here:
         # ``run_async_function`` spawns a new event loop in a worker thread
         # to bridge to the async dispatcher, but the proxy router's httpx

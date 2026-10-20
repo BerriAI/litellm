@@ -139,15 +139,19 @@ def _blocks_by_id(
     return {block_id: block for block_id, block in pairs if block_id is not None}
 
 
+def _utf8_size(text: str) -> int:
+    return len(text.encode("utf-8", "surrogatepass"))
+
+
 def _text_bytes(content: object) -> int | None:
     """Return the UTF-8 size of a text-only result, or None when it holds anything but text."""
     if isinstance(content, str):
-        return len(content.encode("utf-8"))
+        return _utf8_size(content)
     parts: Final = _parse(_BLOCKS, content) or ()
     texts: Final = tuple(part.get("text") for part in parts)
     if any(part.get("type") != "text" or not isinstance(text, str) for part, text in zip(parts, texts)):
         return None
-    return sum(len(text.encode("utf-8")) for text in texts if isinstance(text, str))
+    return sum(_utf8_size(text) for text in texts if isinstance(text, str))
 
 
 def _is_tiny(content: object) -> bool:
@@ -280,11 +284,11 @@ def _clear_tool_results(
 
 
 def _without_input(block: Mapping[str, object], ids_to_clear: Set[str], tool_names: ToolNames) -> Mapping[str, object]:
-    if block.get("type") != "tool_use" or block.get("id") not in ids_to_clear:
-        return block
-    if isinstance(tool_names, frozenset) and block.get("name") not in tool_names:
-        return block
-    return {**block, "input": dict[str, object]()}
+    match _tool_use_ref(block):
+        case (block_id, name) if block_id in ids_to_clear and _clears_input(name, tool_names):
+            return {**block, "input": dict[str, object]()}
+        case _:
+            return block
 
 
 def _message_without_inputs(

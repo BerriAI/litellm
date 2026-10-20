@@ -457,6 +457,14 @@ def test_the_46_byte_cutoff_includes_46_and_counts_utf8_bytes():
     assert applied["cleared_tool_uses"] == 2
 
 
+def test_a_result_holding_a_lone_surrogate_is_sized_like_any_other_text():
+    messages = _make_history(5)
+    messages[2]["content"][0]["content"] = "\ud800"
+    new_messages, applied = _clear_with_keep_two(messages)
+    assert _cleared_ids(new_messages) == {"toolu_01", "toolu_02"}
+    assert applied is not None
+
+
 def _tool_inputs(messages: list[dict[str, object]]) -> dict[object, object]:
     return {block["id"]: block["input"] for block in _blocks_of(messages, "tool_use")}
 
@@ -504,6 +512,27 @@ def test_clear_tool_inputs_list_clears_only_the_named_tools():
         "toolu_01": {},
         "toolu_02": {"location": "City2"},
     }
+
+
+def test_a_tool_use_with_a_non_string_id_is_left_for_the_provider_to_reject():
+    messages = _make_history(n_pairs=4)
+    messages[1]["content"][0]["id"] = ["toolu_00"]
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+            "clear_tool_inputs": True,
+        },
+    )
+    assert applied is not None
+    assert new_messages[1] == messages[1]
+    assert _cleared_ids(new_messages) == {"toolu_01", "toolu_02"}
+    assert (new_messages[3]["content"][0]["input"], new_messages[5]["content"][0]["input"]) == ({}, {})
 
 
 async def _malformed_spec_error(edits: list[dict[str, object]]) -> AnthropicContextManagementError:
