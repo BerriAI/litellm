@@ -47,9 +47,8 @@ _JSON_DECODER: Final = json.JSONDecoder()
 _RAW_DECODED: Final = TypeAdapter(tuple[object, int])
 _NO_RECORD: Final = object()
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
-_TGI_ERROR_TYPE_STATUS: Final = MappingProxyType(
+_CLIENT_ERROR_TYPE_STATUS: Final = MappingProxyType(
     {
-        "generation": 424,
         "overloaded": 429,
         "validation": 422,
         "template_error": 422,
@@ -57,6 +56,7 @@ _TGI_ERROR_TYPE_STATUS: Final = MappingProxyType(
         "tool_error": 422,
     }
 )
+_CLIENT_ERROR_STATUSES: Final = frozenset(_CLIENT_ERROR_TYPE_STATUS.values())
 
 
 def _framing_end(text: str) -> int:
@@ -103,8 +103,8 @@ def _fields(value: object) -> Mapping[str, object]:
     return STR_KEYED_MAPPING.validate_python(value) if isinstance(value, Mapping) else _NO_FIELDS
 
 
-def _http_error_status(value: object) -> int | None:
-    return value if isinstance(value, int) and 400 <= value <= 599 else None
+def _client_error_status(value: object) -> int | None:
+    return value if isinstance(value, int) and value in _CLIENT_ERROR_STATUSES else None
 
 
 def _streamed_error_status(record: Mapping[str, object]) -> int:
@@ -113,9 +113,19 @@ def _streamed_error_status(record: Mapping[str, object]) -> int:
         detail.get("code"),
         detail.get("http_status_code"),
         record.get("code"),
-        _TGI_ERROR_TYPE_STATUS.get(str(record.get("error_type"))),
+        _CLIENT_ERROR_TYPE_STATUS.get(str(record.get("error_type"))),
     )
-    return next(filter(None, map(_http_error_status, candidates)), 500)
+    return next(filter(None, map(_client_error_status, candidates)), 500)
+
+
+def _failed_generation(record: Mapping[str, object]) -> "SagemakerError | None":
+    error_message: Final = _fields(record.get("token")).get("error_msg")
+    if not error_message and _fields(record.get("details")).get("finish_reason") != "error":
+        return None
+    return SagemakerError(
+        status_code=500,
+        message=f"SageMaker endpoint streamed a failed generation: {error_message or 'no error message'}",
+    )
 
 
 def _load_sagemaker_response_stream_shape():
@@ -258,6 +268,8 @@ class AWSEventStreamDecoder:
                 status_code=_streamed_error_status(fields),
                 message=f"SageMaker endpoint streamed an error: {json.dumps(record)}",
             )
+        if failed_generation := _failed_generation(fields):
+            return failed_generation
         try:
             if self.is_messages_api:
                 return self._chunk_parser_messages_api(
@@ -296,7 +308,7 @@ class AWSEventStreamDecoder:
         if isinstance(unparsed, SagemakerError):
             raise unparsed
         if unparsed:
-            verbose_logger.error("Warning: Unparseable JSON data remained: %s", unparsed)
+            verbose_logger.error("Warning: Unparseable JSON data remained, %d characters of it", len(unparsed))
             yield None
 
     async def aiter_bytes(
@@ -319,7 +331,7 @@ class AWSEventStreamDecoder:
         if isinstance(unparsed, SagemakerError):
             raise unparsed
         if unparsed:
-            verbose_logger.error("Warning: Unparseable JSON data remained: %s", unparsed)
+            verbose_logger.error("Warning: Unparseable JSON data remained, %d characters of it", len(unparsed))
             yield None
 
     def _parse_message_from_event(self, event: _EventStreamMessage) -> bytes | None:

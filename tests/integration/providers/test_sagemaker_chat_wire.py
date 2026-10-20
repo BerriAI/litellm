@@ -466,14 +466,14 @@ def test_sagemaker_chat_container_error_reaches_the_caller_after_one_attempt_wit
     assert_signed(request, ACCESS_KEY, REGION, None)
 
 
-def test_sagemaker_chat_container_error_record_answers_its_own_status_after_one_attempt(gateway: Gateway) -> None:
-    failure: Final = _sse({"error": {"message": "synthetic prompt too long", "type": "BadRequestError", "code": 400}})
+def test_sagemaker_chat_container_validation_error_record_answers_422_after_one_attempt(gateway: Gateway) -> None:
+    failure: Final = _sse({"error": {"message": "synthetic prompt too long", "http_status_code": 422}})
 
     with wire_server(lambda _request: event_stream_reply((failure,))) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, {})
         response: Final = _chat(gateway, model, marked_prompt(), {"stream": True})
         only_request(wire)
-    assert response.status_code == 400, response.text
+    assert response.status_code == 422, response.text
     assert "synthetic prompt too long" in response.text, response.text
 
 

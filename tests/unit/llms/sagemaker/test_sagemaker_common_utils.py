@@ -415,6 +415,7 @@ async def test_text_left_over_that_is_not_a_record_is_logged_once(mode: str, cap
     assert chunks[-1] is None
     assert "".join(chunk.choices[0].delta.content for chunk in chunks[:-1]) == "Héllo 👋"
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert "hiccup" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -449,7 +450,7 @@ async def test_text_left_over_that_is_not_a_record_is_logged_once(mode: str, cap
                 "data: [DONE]\n\n",
             ),
             True,
-            400,
+            500,
             id="vllm-400-error-event-in-its-own-part",
         ),
         pytest.param(
@@ -465,7 +466,7 @@ async def test_text_left_over_that_is_not_a_record_is_logged_once(mode: str, cap
                 ),
             ),
             True,
-            400,
+            500,
             id="legacy-vllm-flat-error-event",
         ),
         pytest.param(
@@ -476,6 +477,26 @@ async def test_text_left_over_that_is_not_a_record_is_logged_once(mode: str, cap
             True,
             422,
             id="tgi-messages-api-error-event",
+        ),
+        pytest.param(
+            (
+                _VLLM_EVENTS[1],
+                _sse({"error": {"message": "CUDA out of memory while decoding", "http_status_code": 424}}),
+            ),
+            True,
+            500,
+            id="tgi-messages-api-generation-error-event",
+        ),
+        pytest.param(
+            (
+                _VLLM_EVENTS[1],
+                _sse(
+                    {"error": {"message": "CUDA out of memory while decoding", "type": "RateLimitError", "code": 429}}
+                ),
+            ),
+            True,
+            429,
+            id="vllm-429-error-event",
         ),
         pytest.param(
             (_VLLM_EVENTS[1], _sse({"error": {"message": "CUDA out of memory while decoding", "code": "oom"}})),
@@ -489,7 +510,7 @@ async def test_text_left_over_that_is_not_a_record_is_logged_once(mode: str, cap
                 + f"data:{json.dumps({'error': 'CUDA out of memory while decoding', 'error_type': 'generation'})}\n\n",
             ),
             False,
-            424,
+            500,
             id="tgi-generation-error-event-shares-a-part-with-a-token",
         ),
         pytest.param(
@@ -521,6 +542,47 @@ async def test_container_error_event_raises_with_its_message_and_status_after_th
     with pytest.raises(SagemakerError, match="CUDA out of memory while decoding") as exc_info:
         await anext(stream)
     assert exc_info.value.status_code == status_code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    ("last_record", "message"),
+    [
+        pytest.param(
+            {
+                "token": {"id": 2, "text": "", "log_prob": 0.0, "error_msg": "CUDA out of memory while decoding"},
+                "generated_text": "Hél",
+                "details": {"finish_reason": "error"},
+            },
+            "SageMaker endpoint streamed a failed generation: CUDA out of memory while decoding",
+            id="token-error-message",
+        ),
+        pytest.param(
+            {
+                "token": {"id": 2, "text": "", "log_prob": 0.0},
+                "generated_text": "Hél",
+                "details": {"finish_reason": "error"},
+            },
+            "SageMaker endpoint streamed a failed generation: no error message",
+            id="error-finish-without-a-message",
+        ),
+    ],
+)
+async def test_lmi_failed_generation_raises_after_the_chunks_before_it(
+    last_record: Mapping[str, object], message: str, mode: str
+):
+    lines: Final = "".join(
+        f"{json.dumps(record, ensure_ascii=False)}\n"
+        for record in ({"token": {"id": 1, "text": "Hél", "log_prob": -0.1}}, last_record)
+    )
+    stream: Final = _stream_frames((_payload_part(lines),), False, mode)
+
+    assert _text(await anext(stream), False) == "Hél"
+    with pytest.raises(SagemakerError) as exc_info:
+        await anext(stream)
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.message == message
 
 
 @pytest.mark.asyncio
