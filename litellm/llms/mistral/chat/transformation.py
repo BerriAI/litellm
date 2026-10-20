@@ -87,6 +87,8 @@ class MistralConfig(OpenAIGPTConfig):
     - `response_format` (object or null): An object specifying the format that the model must output. Setting to { "type": "json_object" } enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message.
     """
 
+    _is_base_class = False
+
     temperature: int | None = None
     top_p: int | None = None
     max_tokens: int | None = None
@@ -226,6 +228,9 @@ class MistralConfig(OpenAIGPTConfig):
     def _prompt_cache_key_withheld(self, model: str, routing: MistralRequestRouting) -> bool:
         requested_api_base: Final = routing.get("api_base")
         api_base: Final = requested_api_base if isinstance(requested_api_base, str) else None
+        allowed_openai_params: Final = routing.get("allowed_openai_params")
+        if isinstance(allowed_openai_params, (list, tuple)) and "prompt_cache_key" in allowed_openai_params:
+            return False
         if self.accepts_prompt_cache_key_at(api_base):
             return False
         if litellm.drop_params is True or routing.get("drop_params") is True:
@@ -233,7 +238,8 @@ class MistralConfig(OpenAIGPTConfig):
         raise UnsupportedParamsError(
             message=(
                 f"{self.custom_llm_provider} does not support parameters: ['prompt_cache_key'], for model={model}, "
-                "since only the Mistral API (*.mistral.ai) takes it. To drop it, set "
+                "since only the Mistral API (*.mistral.ai) takes it. To send it anyway, pass "
+                "`allowed_openai_params=['prompt_cache_key']`. To drop it, set "
                 "`litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
             ),
             llm_provider=self.custom_llm_provider,

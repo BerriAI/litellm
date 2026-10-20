@@ -95,3 +95,21 @@ def test_prepare_completion_kwargs_derives_prompt_cache_key_only_for_a_mistral_h
 
     assert completion_kwargs["user"] == CLAUDE_CODE_USER_ID
     assert ("prompt_cache_key" in completion_kwargs) is derives_key
+
+
+@pytest.mark.parametrize(
+    ("codestral_api_base_env", "derives_key"),
+    [(None, True), ("https://my-resource.services.ai.azure.com/openai/v1", False)],
+)
+def test_prepare_completion_kwargs_derives_prompt_cache_key_for_codestral_only_on_its_mistral_host(
+    monkeypatch: pytest.MonkeyPatch, codestral_api_base_env: str | None, derives_key: bool
+):
+    monkeypatch.delenv("MISTRAL_AZURE_API_BASE", raising=False)
+    if codestral_api_base_env is None:
+        monkeypatch.delenv("CODESTRAL_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("CODESTRAL_API_BASE", codestral_api_base_env)
+
+    completion_kwargs = _prepare("codestral/codestral-latest", {"custom_llm_provider": "codestral"})
+
+    assert ("prompt_cache_key" in completion_kwargs) is derives_key

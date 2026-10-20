@@ -1,9 +1,13 @@
+import json
 from collections.abc import Mapping
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 
+import httpx
 import pytest
+import respx
+from openai import AsyncOpenAI
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.mistral.chat.transformation import (
@@ -1193,6 +1197,73 @@ def test_prompt_cache_key_for_another_host_is_rejected_without_drop_params(api_b
 
     upstream_host: Final = urlparse(api_base).hostname or api_base
     assert upstream_host not in str(rejection.value)
+
+
+def test_prompt_cache_key_allowlisted_for_another_purpose_is_still_rejected_for_another_host() -> None:
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="allowed_openai_params"):
+        _transform_with_prompt_cache_key(
+            {"api_base": AZURE_HOSTED_MISTRAL_API_BASE, "allowed_openai_params": ["reasoning_effort"]}
+        )
+
+
+def _chat_completion_reply() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "mistral-small-latest",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+def test_allowlisted_prompt_cache_key_reaches_a_gateway_in_front_of_mistral(respx_mock: respx.MockRouter) -> None:
+    import litellm
+
+    gateway_route: Final = respx_mock.post("https://gateway.example.com/mistral/v1/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    litellm.completion(
+        model="mistral/mistral-small-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://gateway.example.com/mistral/v1",
+        api_key="gateway-key",
+        prompt_cache_key="session-1",
+        allowed_openai_params=["prompt_cache_key"],
+        max_retries=0,
+    )
+
+    assert json.loads(gateway_route.calls.last.request.content)["prompt_cache_key"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_prompt_cache_key_is_dropped_from_an_async_codestral_call_to_another_host(
+    respx_mock: respx.MockRouter,
+) -> None:
+    import litellm
+
+    azure_route: Final = respx_mock.post(f"{AZURE_HOSTED_MISTRAL_API_BASE}/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    await litellm.acompletion(
+        model="codestral/codestral-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=AZURE_HOSTED_MISTRAL_API_BASE,
+        api_key="azure-key",
+        prompt_cache_key="session-1",
+        drop_params=True,
+        max_retries=0,
+        client=AsyncOpenAI(api_key="azure-key", base_url=AZURE_HOSTED_MISTRAL_API_BASE, http_client=httpx.AsyncClient()),
+    )
+
+    assert "prompt_cache_key" not in json.loads(azure_route.calls.last.request.content)
 
 
 def test_prompt_cache_key_for_another_host_is_dropped_under_drop_params() -> None:

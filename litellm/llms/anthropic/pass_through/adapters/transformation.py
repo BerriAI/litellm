@@ -1000,9 +1000,12 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         if "prompt_cache_key" not in (supported_params or ()):
             return False
-        return custom_llm_provider not in PROVIDERS_SERVED_BY_THE_MISTRAL_CHAT_CONFIG or (
-            litellm.MistralConfig().accepts_prompt_cache_key_at(api_base)
+        if custom_llm_provider not in PROVIDERS_SERVED_BY_THE_MISTRAL_CHAT_CONFIG:
+            return True
+        _, _, _, resolved_api_base = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
         )
+        return litellm.MistralConfig().accepts_prompt_cache_key_at(resolved_api_base)
 
     @staticmethod
     def _target_declares_reasoning_effort(model: str, custom_llm_provider: str | None) -> bool:

@@ -27,3 +27,4 @@ class MistralThinkingBlock(TypedDict):
 class MistralRequestRouting(TypedDict, total=False):
     api_base: ReadOnly[object]
     drop_params: ReadOnly[object]
+    allowed_openai_params: ReadOnly[object]

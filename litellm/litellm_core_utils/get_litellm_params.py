@@ -79,6 +79,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "github_copilot_user_session",
             "fireworks_forward_user_id",
             "responses_api_version",
+            "allowed_openai_params",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
