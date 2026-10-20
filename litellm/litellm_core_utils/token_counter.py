@@ -356,7 +356,7 @@ PDF_LITERAL_ESCAPE: Final = re.compile(rb"\\([nrtbf()\\]|[0-7]{1,3}|\r\n?|\n|[\s
 PDF_INLINE_IMAGE: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND
     + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|(?P<inline_image>(?<![^\s\]>)])BI(?=\s)"
-    + rb"[\s\S]*?(?:(?<=\s)ID\s[\s\S]*?(?:\sEI(?![^\s\[/<(%])|\Z)|\Z))"
+    + rb"[\s\S]*?(?:(?<=\s)ID\s[\s\S]*?(?P<image_end>\sEI(?![^\s\[/<(%]))|\Z))"
 )
 PDF_XOBJECT_INVOCATION: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND + rb"|%[^\r\n]*(?:[\r\n]|\Z)|/([^\s/\[\]()<>{}%]+)(?:\s|%[^\r\n]*(?:[\r\n]|\Z))+Do\b"
@@ -929,7 +929,9 @@ def _pdf_invocation_name(invocation: re.Match[bytes]) -> str | None:
 
 
 def _pdf_inline_image_replacement(match: re.Match[bytes]) -> bytes:
-    return b" " if match.group("inline_image") is not None else match.group(0)
+    inline_image: Final = match.group("inline_image")
+    image_end: Final = match.group("image_end")
+    return b" " if inline_image is not None and image_end is not None else match.group(0)
 
 
 def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStreamMetrics:
