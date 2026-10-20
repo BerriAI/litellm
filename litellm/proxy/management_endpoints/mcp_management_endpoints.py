@@ -46,7 +46,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, public_catalog_operation
@@ -122,22 +122,6 @@ def does_mcp_server_exist(mcp_server_records: Iterable[_HasServerId], mcp_server
 
 
 DEFAULT_MCP_REGISTRY_VERSION: Final = "1.0.0"
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _MCPRegistryServer(TypedDict, total=False):
-    name: ReadOnly[str]
-    title: ReadOnly[str]
-    description: ReadOnly[str]
-    category: ReadOnly[str]
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _MCPRegistry(TypedDict, total=False):
-    servers: ReadOnly[Sequence[_MCPRegistryServer]]
-
-
-_MCP_REGISTRY_ADAPTER: Final = TypeAdapter(_MCPRegistry)
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -3433,23 +3417,19 @@ if MCP_AVAILABLE:
         "mcp_registry.json",
     )
 
-    _mcp_registry_cache: _MCPRegistry | None = None
+    _mcp_registry_cache: Mapping[str, Sequence[Mapping[str, str]]] | None = None
 
-    def _load_mcp_registry() -> _MCPRegistry:
+    def _load_mcp_registry() -> Mapping[str, Sequence[Mapping[str, str]]]:
         """Load the curated MCP registry from disk. Cached after first read."""
         global _mcp_registry_cache
         if _mcp_registry_cache is not None:
             return _mcp_registry_cache
-
-        def _read_registry() -> _MCPRegistry:
-            try:
-                with open(_MCP_REGISTRY_PATH, "r") as f:
-                    return _MCP_REGISTRY_ADAPTER.validate_python(json.load(f))
-            except Exception as e:
-                verbose_proxy_logger.warning("Failed to load MCP registry from %s: %s", _MCP_REGISTRY_PATH, e)
-                return {"servers": []}
-
-        data: Final = _read_registry()
+        try:
+            with open(_MCP_REGISTRY_PATH, "r") as f:
+                data: Mapping[str, Sequence[Mapping[str, str]]] = json.load(f)
+        except Exception as e:
+            verbose_proxy_logger.warning("Failed to load MCP registry from %s: %s", _MCP_REGISTRY_PATH, e)
+            data = {"servers": []}
         _mcp_registry_cache = data
         return data
 

@@ -14,13 +14,10 @@ from __future__ import annotations
 
 import base64
 import os
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -40,17 +37,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _NovaCanvasSuccessResponse(TypedDict):
-    images: NotRequired[ReadOnly[Sequence[str] | None]]
-    errors: NotRequired[ReadOnly[object]]
-    message: NotRequired[ReadOnly[object]]
-    error: NotRequired[ReadOnly[object]]
-
-
-_NOVA_CANVAS_SUCCESS_RESPONSE: Final = TypeAdapter(_NovaCanvasSuccessResponse)
 
 
 def _nova_canvas_task_body(
@@ -415,7 +401,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         json_mode: bool | None = None,
     ) -> ImageResponse:
         try:
-            raw_response_data: Final[object] = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Nova Canvas image edit response: {e}",
@@ -425,13 +411,12 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
 
         if raw_response.status_code not in (200,):
             raise self.get_error_class(
-                error_message=f"Nova Canvas image edit error: {raw_response_data}",
+                error_message=f"Nova Canvas image edit error: {response_data}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
-        response_data: Final = _NOVA_CANVAS_SUCCESS_RESPONSE.validate_python(raw_response_data)
-        images: Final[Sequence[str]] = response_data.get("images") or []
+        images: Final[list[str]] = response_data.get("images") or []
 
         if "errors" in response_data and not images:
             raise self.get_error_class(

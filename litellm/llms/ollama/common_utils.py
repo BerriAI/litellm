@@ -12,19 +12,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 _PROVIDER_FIELDS: Final = TypeAdapter(dict[str, object])
-_OLLAMA_JSON: Final = TypeAdapter[object](object)
-_OLLAMA_FIELDS: Final = TypeAdapter[dict[str, object]](dict[str, object])
-_OLLAMA_ENTRIES: Final = TypeAdapter[list[object]](list[object])
-
-
-def _model_name_from_ollama_tag(entry: object) -> str | None:
-    if not isinstance(entry, dict):
-        return None
-    entry_fields: Final = _OLLAMA_FIELDS.validate_python(entry)
-    name: Final = entry_fields.get("name") or entry_fields.get("model")
-    if not isinstance(name, str):
-        return None
-    return name if name.startswith("ollama/") else f"ollama/{name}"
 
 
 class OllamaResponseIdNormalizer:
@@ -160,22 +147,24 @@ class OllamaModelInfo(BaseLLMModelInfo):
         api_key = self.get_api_key(api_key) if passed_api_base is None or api_key else None
         headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
+        names: Final[set[str]] = set()
         try:
             resp: Final = httpx.get(f"{base}/api/tags", headers=headers)
             resp.raise_for_status()
-            data: Final = _OLLAMA_JSON.validate_python(resp.json())
-            data_fields: Final = _OLLAMA_FIELDS.validate_python(data) if isinstance(data, dict) else None
-            model_field: Final = data_fields.get("models") if data_fields is not None else None
-            models_list: Final = (
-                _OLLAMA_ENTRIES.validate_python(model_field)
-                if isinstance(model_field, list)
-                else _OLLAMA_ENTRIES.validate_python(data)
-                if isinstance(data, list)
-                else []
-            )
-            names: Final = frozenset(
-                name for entry in models_list if (name := _model_name_from_ollama_tag(entry)) is not None
-            )
+            data: Final = resp.json()
+            # Expecting a dict with a 'models' list
+            models_list = []
+            if isinstance(data, dict) and "models" in data and isinstance(data["models"], list):
+                models_list = data["models"]
+            elif isinstance(data, list):
+                models_list = data
+            # Extract model names
+            for entry in models_list:
+                if not isinstance(entry, dict):
+                    continue
+                nm = entry.get("name") or entry.get("model")
+                if isinstance(nm, str):
+                    names.add(nm if nm.startswith("ollama/") else f"ollama/{nm}")
         except Exception as e:
             verbose_logger.warning("Error retrieving ollama tag endpoint: %s", e)
             # If tags endpoint fails, fall back to static list
@@ -212,13 +201,13 @@ class OllamaModelInfo(BaseLLMModelInfo):
         return any(name.lower() in model_cost_keys for name in potential_model_names)
 
     @staticmethod
-    def _supports_function_calling(ollama_model_info: dict[str, object]) -> bool:
+    def _supports_function_calling(ollama_model_info: dict) -> bool:
         _template: Final[str] = str(ollama_model_info.get("template", "") or "")
         return "tools" in _template.lower()
 
     @staticmethod
-    def _get_max_tokens(ollama_model_info: dict[str, object]) -> object:
-        _model_info: Final = _OLLAMA_FIELDS.validate_python(ollama_model_info.get("model_info", {}))
+    def _get_max_tokens(ollama_model_info: dict) -> int | None:
+        _model_info: Final[dict] = ollama_model_info.get("model_info", {})
 
         for key, value in _model_info.items():
             if "context_length" in key:
@@ -259,7 +248,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 "max_output_tokens": None,
             }
 
-        model_info: Final = _OLLAMA_FIELDS.validate_python(response.json())
+        model_info: Final = response.json()
         max_tokens: Final = self._get_max_tokens(model_info)
 
         return {

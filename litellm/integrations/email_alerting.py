@@ -5,21 +5,16 @@ Functions for sending Email Alerts
 import os
 from typing import Final
 
-from pydantic import ConfigDict, TypeAdapter
-
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.integrations.slack_alerting import WebhookEvent
-
-_QUERY_RAW_RESULT: Final = TypeAdapter(object, config=ConfigDict(strict=True))
-_EMAIL_QUERY_RESULT: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
 LITELLM_SUPPORT_CONTACT: Final = "support@berri.ai"
 
 
-async def get_all_team_member_emails(team_id: str | None = None) -> list[str]:
+async def get_all_team_member_emails(team_id: str | None = None) -> list:
     verbose_logger.debug("Email Alerting: Getting all team members for team_id=%s", team_id)
     if team_id is None:
         return []
@@ -56,21 +51,18 @@ async def get_all_team_member_emails(team_id: str | None = None) -> list[str]:
         WHERE user_id = ANY($1::TEXT[]);
     """
 
-    raw_result: Final = _QUERY_RAW_RESULT.validate_python(
-        await prisma_client.db.query_raw(sql_query, _team_member_user_ids)
-    )
-    result: Final = None if raw_result is None else _EMAIL_QUERY_RESULT.validate_python(raw_result)
+    _result: Final = await prisma_client.db.query_raw(sql_query, _team_member_user_ids)
 
-    verbose_logger.debug("Email Alerting: Got all Emails for team, emails=%s", raw_result)
+    verbose_logger.debug("Email Alerting: Got all Emails for team, emails=%s", _result)
 
-    if result is None:
+    if _result is None:
         return []
 
-    return [
-        user_email
-        for user in result
-        if user and isinstance(user, dict) and isinstance((user_email := user.get("user_email")), str)
-    ]
+    emails: Final = []
+    for user in _result:
+        if user and isinstance(user, dict) and user.get("user_email", None) is not None:
+            emails.append(user.get("user_email"))
+    return emails
 
 
 async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
