@@ -131,7 +131,7 @@ export default function CredentialModal({
     }
     const values = projectMountedValues(registry, form.getValues);
     const meta = {
-      credential_name: String(values.credential_name),
+      credential_name: String(values.credential_name).trim(),
       custom_llm_provider: String(values.custom_llm_provider),
       ...displayNameChange(values.display_name, existingCredential),
     };
