@@ -150,7 +150,8 @@ stt-vertex-chirp = [
 stt-nvidia-riva = [
     # NVIDIA Riva STT provider (gRPC). These are imported lazily inside the
     # provider handler so litellm core remains usable without them.
-    "nvidia-riva-client>=2.15.0",
+    # 2.17+ either pins an older grpcio or needs a newer one than the grpcio==1.78.0 pin above.
+    "nvidia-riva-client>=2.15.0,<2.17",
     "soundfile>=0.12.1",
     "audioread>=3.0.1",
     "numpy>=1.26.0",

@@ -12,6 +12,7 @@ import io
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import httpx
 import numpy as np
 import pytest
 import soundfile as sf
@@ -100,16 +101,16 @@ def mock_riva(monkeypatch):
     offline_calls = {}
 
     class FakeRecognizeFuture:
-        def result(self, timeout=None):
+        def result(self, timeout: float | None = None) -> object:
             offline_calls["timeout"] = timeout
             if offline_error_holder["value"] is not None:
                 raise offline_error_holder["value"]
             return offline_response_holder["value"]
 
-        def done(self):
+        def done(self) -> bool:
             return True
 
-        def cancel(self):
+        def cancel(self) -> bool:
             return False
 
     class FakeASRService:
@@ -121,7 +122,7 @@ def mock_riva(monkeypatch):
             streaming_calls.append(list(audio_chunks))
             yield from streaming_responses_holder["value"]
 
-        def offline_recognize(self, audio_bytes, config, future=False):
+        def offline_recognize(self, audio_bytes: bytes, config: object, future: bool = False) -> object:
             offline_calls["audio_bytes"] = audio_bytes
             offline_calls["config"] = config
             pending = offline_future_holder["value"] or FakeRecognizeFuture()
@@ -232,7 +233,9 @@ def test_sync_path_aggregates_only_final_results(mock_riva, logging_obj):
     )
 
 
-def test_riva_offline_uses_unary_recognize_and_keeps_results_without_is_final(mock_riva, logging_obj):
+def test_riva_offline_uses_unary_recognize_and_keeps_results_without_is_final(
+    mock_riva: SimpleNamespace, logging_obj: MagicMock
+) -> None:
     """
     Offline-only NIMs (Parakeet TDT, Whisper) reject StreamingRecognize. With
     ``riva_offline`` the handler must call ``offline_recognize`` with the whole
@@ -274,7 +277,9 @@ def test_riva_offline_uses_unary_recognize_and_keeps_results_without_is_final(mo
     assert logging_obj.pre_call.call_args.kwargs["additional_args"]["complete_input_dict"]["riva_offline"] is True
 
 
-def test_default_mode_streams_and_never_calls_offline_recognize(mock_riva, logging_obj):
+def test_default_mode_streams_and_never_calls_offline_recognize(
+    mock_riva: SimpleNamespace, logging_obj: MagicMock
+) -> None:
     mock_riva.responses["value"] = [
         _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
     ]
@@ -388,6 +393,28 @@ def test_deployment_riva_offline_reaches_the_handler_through_transcription(mock_
     assert mock_riva.offline_calls != {}
 
 
+@pytest.mark.parametrize(
+    ("timeout", "waited_for"), [("7.5", 7.5), (httpx.Timeout(30.0, read=7.5), 7.5), (None, None)]
+)
+def test_offline_recognition_waits_the_timeout_in_seconds_whatever_its_form(
+    mock_riva: SimpleNamespace, timeout: str | httpx.Timeout | None, waited_for: float | None
+) -> None:
+    mock_riva.offline_response["value"] = _fake_response(
+        results=[SimpleNamespace(alternatives=[_fake_alternative("offline")])]
+    )
+
+    response = litellm.transcription(
+        model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
+        file=("clip.wav", _make_wav_bytes(), "audio/wav"),
+        api_base="localhost:50051",
+        riva_offline=True,
+        timeout=timeout,
+    )
+
+    assert response.text == "offline"
+    assert mock_riva.offline_calls["timeout"] == waited_for
+
+
 def test_oversized_offline_audio_is_a_non_retryable_413(mock_riva: SimpleNamespace, logging_obj: MagicMock) -> None:
     class FakeGrpcError(Exception):
         def code(self) -> SimpleNamespace:
@@ -457,12 +484,12 @@ def test_stalled_offline_recognition_is_cancelled_and_times_out_as_408(
     assert stalled.waited_for == 7.5
     assert stalled.cancelled is True
 
-def test_riva_offline_grpc_error_is_wrapped(mock_riva, logging_obj):
+def test_riva_offline_grpc_error_is_wrapped(mock_riva: SimpleNamespace, logging_obj: MagicMock) -> None:
     class FakeGrpcError(Exception):
-        def code(self):
+        def code(self) -> SimpleNamespace:
             return SimpleNamespace(name="INVALID_ARGUMENT")
 
-        def details(self):
+        def details(self) -> str:
             return "Unavailable model requested"
 
     mock_riva.offline_error["value"] = FakeGrpcError("rpc fail")
@@ -624,9 +651,10 @@ def test_async_path_uses_to_thread(mock_riva, logging_obj):
     )
 
 
+@pytest.mark.parametrize("timeout", [12.5, "12.5", httpx.Timeout(60.0, read=12.5)])
 def test_timeout_is_forwarded_to_streaming_generator_when_supported(
-    mock_riva, logging_obj
-):
+    mock_riva: SimpleNamespace, logging_obj: MagicMock, timeout: float | str | httpx.Timeout
+) -> None:
     """
     Without a deadline the gRPC stream can block forever on a stalled Riva
     server. The handler must forward the call-level ``timeout`` to
@@ -655,7 +683,7 @@ def test_timeout_is_forwarded_to_streaming_generator_when_supported(
         optional_params={"language_code": "en-US"},
         litellm_params={},
         model_response=TranscriptionResponse(),
-        timeout=12.5,
+        timeout=timeout,
         logging_obj=logging_obj,
         api_key=None,
         api_base="localhost:50051",

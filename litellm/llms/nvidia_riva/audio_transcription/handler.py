@@ -32,11 +32,14 @@ from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+import httpx
+
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_name,
     process_audio_file,
 )
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.llms.nvidia_riva.audio_transcription.audio_utils import (
     resample_to_riva_pcm,
 )
@@ -160,6 +163,13 @@ def _parse_riva_offline(value: object, drop_params: bool) -> bool:
             )
 
 
+def _deadline_seconds(timeout: float | str | httpx.Timeout | None) -> float | None:
+    if timeout is None:
+        return None
+    limit: Final = CompletionTimeout.as_limit(timeout)
+    return limit.read if isinstance(limit, httpx.Timeout) else limit
+
+
 class NvidiaRivaAudioTranscription:
     """Sync + async entry point for Riva ASR."""
 
@@ -170,7 +180,7 @@ class NvidiaRivaAudioTranscription:
         optional_params: dict,
         litellm_params: dict,
         model_response: TranscriptionResponse,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None,
         api_base: str | None,
@@ -215,7 +225,7 @@ class NvidiaRivaAudioTranscription:
         optional_params: dict,
         litellm_params: dict,
         model_response: TranscriptionResponse,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None,
         api_base: str | None,
@@ -245,7 +255,7 @@ class NvidiaRivaAudioTranscription:
         optional_params: dict,
         litellm_params: dict,
         model_response: TranscriptionResponse,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None,
         api_base: str | None,
@@ -297,6 +307,8 @@ class NvidiaRivaAudioTranscription:
             or litellm.drop_params is True,
         )
 
+        deadline: Final = _deadline_seconds(timeout)
+
         riva_module, riva_asr_module = _import_riva()
         auth_obj: Final = self._construct_auth(
             riva_module=riva_module,
@@ -331,7 +343,7 @@ class NvidiaRivaAudioTranscription:
                     asr_service=asr_service,
                     pcm_bytes=resampled.pcm_bytes,
                     recognition_config=recognition_config,
-                    timeout=timeout,
+                    timeout=deadline,
                 )
                 if riva_offline
                 else self._streaming_responses(
@@ -339,7 +351,7 @@ class NvidiaRivaAudioTranscription:
                     riva_asr_module=riva_asr_module,
                     pcm_bytes=resampled.pcm_bytes,
                     recognition_config=recognition_config,
-                    timeout=timeout,
+                    timeout=deadline,
                 )
             )
             final_results: Final = self._collect_final_results(responses, require_final=not riva_offline)
