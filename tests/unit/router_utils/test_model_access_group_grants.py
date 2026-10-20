@@ -127,3 +127,28 @@ async def test_the_default_fallback_does_not_reach_a_tagged_deployment() -> None
 )
 def test_only_names_that_grant_one_thing_count_as_explicit(models: list[str], grants: frozenset[str]) -> None:
     assert explicit_model_grants(models) == grants
+
+
+@pytest.mark.parametrize(
+    ("model", "resolved_name", "deployment_ids"),
+    [
+        pytest.param("alias-to-private", "private-model", ("private-id",), id="alias"),
+        pytest.param("mixed-group", "mixed-group", ("private-id", "public-id"), id="routing-group"),
+    ],
+)
+def test_resolution_finds_tagged_deployments_for_any_caller(
+    model: str, resolved_name: str, deployment_ids: tuple[str, ...]
+) -> None:
+    name, deployments = _router()._resolve_available_deployments(
+        model=model, specific_deployment=False, request_kwargs={"metadata": _metadata(frozenset())}
+    )
+    assert isinstance(deployments, list)
+    assert (name, tuple(d["model_info"]["id"] for d in deployments)) == (resolved_name, deployment_ids)
+
+
+def test_resolution_finds_a_tagged_deployment_by_id_for_any_caller() -> None:
+    name, deployment = _router()._resolve_available_deployments(
+        model="private-id", specific_deployment=False, request_kwargs={"metadata": _metadata(frozenset())}
+    )
+    assert isinstance(deployment, dict)
+    assert (name, deployment["model_info"]["id"]) == ("openai/private-id-upstream", "private-id")
