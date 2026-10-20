@@ -1894,33 +1894,52 @@ async def test_route_request_read_through_recovers_model_created_on_sibling_repl
     assert table.find_many_wheres[0] == {"model_name": model_name}
 
 
-@pytest.mark.asyncio
-async def test_route_request_read_through_retry_keeps_key_router_settings(monkeypatch):
-    import litellm.proxy.proxy_server as proxy_server
-    from unittest.mock import AsyncMock, patch
+def _tagged_db_model_row(model_name: str, tag: str, order: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        model_id=f"{model_name}-{tag}-id",
+        model_name=model_name,
+        litellm_params={
+            "model": "openai/gpt-4o",
+            "api_key": "fake",
+            "mock_response": f"{tag}-deployment",
+            "tags": [tag],
+            "order": order,
+        },
+        model_info={},
+        blocked=False,
+    )
 
-    model_name = "sibling-replica-model-for-key-with-router-settings"
-    router = litellm.Router(
+
+@pytest.mark.asyncio
+async def test_route_request_read_through_retry_keeps_key_tag_filtering(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_name: Final = "sibling-replica-model-for-key-with-tag-filtering"
+    router: Final = litellm.Router(
         model_list=[{"model_name": "some-other-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
     )
-    fake_prisma, _ = _fake_prisma_client_with_models([_db_model_row(model_name, "hello-from-db")])
+    fake_prisma, _ = _fake_prisma_client_with_models(
+        [_tagged_db_model_row(model_name, "free", order=1), _tagged_db_model_row(model_name, "paid", order=2)]
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    data = {
-        "model": model_name,
-        "messages": [{"role": "user", "content": "hi"}],
-        "router_settings_override": {"enable_tag_filtering": True, "num_retries": 2},
-    }
 
-    with patch.object(router, "acompletion", new=AsyncMock(return_value="served_after_read_through")) as spy:
-        response = await (await route_request(data, router, None, "acompletion"))
+    response: Final = await (
+        await route_request(
+            {
+                "model": model_name,
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"tags": ["paid"]},
+                "router_settings_override": {"enable_tag_filtering": True},
+            },
+            router,
+            None,
+            "acompletion",
+        )
+    )
 
-    assert response == "served_after_read_through"
-    assert {key: spy.call_args.kwargs.get(key) for key in ("enable_tag_filtering", "num_retries")} == {
-        "enable_tag_filtering": True,
-        "num_retries": 2,
-    }
+    assert response.choices[0].message.content == "paid-deployment"
 
 
 @pytest.mark.asyncio
