@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 from datetime import datetime
 from typing import Any, Dict, Final, List, Optional, Union
 from unittest.mock import Mock
@@ -765,17 +764,19 @@ async def test_prepare_key_update_data():
         ({"NO_REDOC": "True"}, None),  # Redoc disabled
     ],
 )
-def test_get_redoc_url(env_vars, expected_url):
-    # Clear relevant environment variables
-    for key in ["REDOC_URL", "NO_REDOC"]:
-        os.environ.pop(key, None)
+def test_get_redoc_url(env_vars: dict[str, str], expected_url: str | None) -> None:
+    original_url: Final = get_redoc_url()
+    with pytest.MonkeyPatch.context() as environment:
+        for key in ("REDOC_URL", "NO_REDOC"):
+            environment.delenv(key, raising=False)
 
-    # Set test environment variables
-    for key, value in env_vars.items():
-        os.environ[key] = value
+        for key, value in env_vars.items():
+            environment.setenv(key, value)
 
-    result = get_redoc_url()
-    assert result == expected_url
+        result: Final = get_redoc_url()
+        assert result == expected_url
+
+    assert get_redoc_url() == original_url
 
 
 @pytest.mark.parametrize(
@@ -790,17 +791,19 @@ def test_get_redoc_url(env_vars, expected_url):
         ({"NO_DOCS": "True"}, None),  # docs disabled
     ],
 )
-def test_get_docs_url(env_vars, expected_url):
-    # Clear relevant environment variables
-    for key in ["DOCS_URL", "NO_DOCS"]:
-        os.environ.pop(key, None)
+def test_get_docs_url(env_vars: dict[str, str], expected_url: str | None) -> None:
+    original_url: Final = get_docs_url()
+    with pytest.MonkeyPatch.context() as environment:
+        for key in ("DOCS_URL", "NO_DOCS"):
+            environment.delenv(key, raising=False)
 
-    # Set test environment variables
-    for key, value in env_vars.items():
-        os.environ[key] = value
+        for key, value in env_vars.items():
+            environment.setenv(key, value)
 
-    result = get_docs_url()
-    assert result == expected_url
+        result: Final = get_docs_url()
+        assert result == expected_url
+
+    assert get_docs_url() == original_url
 
 
 @pytest.mark.parametrize(
@@ -815,17 +818,19 @@ def test_get_docs_url(env_vars, expected_url):
         ({"NO_OPENAPI": "True"}, None),  # openapi disabled
     ],
 )
-def test_get_openapi_url(env_vars, expected_url):
-    # Clear relevant environment variables
-    for key in ["OPENAPI_URL", "NO_OPENAPI"]:
-        os.environ.pop(key, None)
+def test_get_openapi_url(env_vars: dict[str, str], expected_url: str | None) -> None:
+    original_url: Final = get_openapi_url()
+    with pytest.MonkeyPatch.context() as environment:
+        for key in ("OPENAPI_URL", "NO_OPENAPI"):
+            environment.delenv(key, raising=False)
 
-    # Set test environment variables
-    for key, value in env_vars.items():
-        os.environ[key] = value
+        for key, value in env_vars.items():
+            environment.setenv(key, value)
 
-    result = get_openapi_url()
-    assert result == expected_url
+        result: Final = get_openapi_url()
+        assert result == expected_url
+
+    assert get_openapi_url() == original_url
 
 
 @pytest.mark.parametrize(
@@ -1881,11 +1886,11 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
         }
     },
 )
-def test_custom_openapi(mock_get_openapi_schema, monkeypatch):
+def test_custom_openapi(mock_get_openapi_schema: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy.proxy_server import app, custom_openapi
 
     monkeypatch.setattr(app, "openapi_schema", None)
-    openapi_schema = custom_openapi()
+    openapi_schema: Final = custom_openapi()
     assert openapi_schema is not None
 
 
@@ -2002,13 +2007,145 @@ def test_provider_specific_header():
         data=data,
         headers=headers,
     )
-    # Verify multi-provider support: anthropic headers work across multiple providers
-    assert data["provider_specific_header"] == {
-        "custom_llm_provider": "anthropic,bedrock,bedrock_mantle,vertex_ai",
-        "extra_headers": {
-            "anthropic-beta": "prompt-caching-2024-07-31",
+    from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+
+    for provider in ("anthropic", "bedrock", "bedrock_mantle", "vertex_ai"):
+        assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=data["provider_specific_header"], custom_llm_provider=provider
+        ) == {"anthropic-beta": "prompt-caching-2024-07-31"}
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=data["provider_specific_header"], custom_llm_provider="databricks"
+        )
+        == {}
+    )
+    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=data["provider_specific_header"],
+        custom_llm_provider="databricks",
+        native_anthropic_messages=True,
+    ) == {"anthropic-beta": "prompt-caching-2024-07-31"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_client_anthropic_betas_reach_databricks_claude_filtered_to_the_ones_the_workspace_accepts():
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    data: Final[dict] = {"model": "databricks-claude-sonnet-4-6"}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers={
+            "content-type": "application/json",
+            "anthropic-beta": "context-1m-2025-08-07,prompt-caching-scope-2026-01-05",
+            "anthropic-version": "2023-06-01",
         },
-    }
+    )
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what the proxy sent
+
+    def workspace_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_bdrk_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="databricks/databricks-claude-sonnet-4-6",
+            api_key="dapimykey",
+            api_base="https://my.workspace.cloud.databricks.com/serving-endpoints",
+            client=upstream,
+            provider_specific_header=data["provider_specific_header"],
+        )
+    finally:
+        await upstream.close()
+
+    assert received[0].headers["anthropic-beta"] == "context-1m-2025-08-07"
+
+
+_CLIENT_ANTHROPIC_HEADERS: Final = {
+    "content-type": "application/json",
+    "anthropic-beta": "context-1m-2025-08-07",
+    "anthropic-version": "2023-06-01",
+}
+_DATABRICKS_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-01",
+    "object": "chat.completion",
+    "created": 1760000000,
+    "model": "databricks-gpt-oss-120b",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18},
+}
+
+
+async def _databricks_chat_completion(provider_specific_header: object, upstream: object) -> None:
+    await litellm.acompletion(
+        model="databricks/databricks-gpt-oss-120b",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="dapimykey",
+        api_base="https://my.workspace.cloud.databricks.com/serving-endpoints",
+        client=upstream,
+        provider_specific_header=provider_specific_header,
+    )
+
+
+async def _databricks_messages_bridge(provider_specific_header: object, upstream: object) -> None:
+    await litellm.anthropic.messages.acreate(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="databricks/databricks-gpt-oss-120b",
+        api_key="dapimykey",
+        api_base="https://my.workspace.cloud.databricks.com/serving-endpoints",
+        client=upstream,
+        provider_specific_header=provider_specific_header,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_databricks",
+    [_databricks_chat_completion, _databricks_messages_bridge],
+    ids=["chat_completions", "messages_bridge"],
+)
+async def test_client_anthropic_headers_never_reach_databricks_chat_completions(call_databricks):
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    data: Final[dict] = {"model": "databricks-gpt-oss-120b"}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=data, headers=_CLIENT_ANTHROPIC_HEADERS)
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what the proxy sent
+
+    def workspace_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(status_code=200, json=_DATABRICKS_CHAT_COMPLETION, request=request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_answers))
+    try:
+        await call_databricks(data["provider_specific_header"], upstream)
+    finally:
+        await upstream.close()
+
+    assert [request.url.path for request in received] == ["/serving-endpoints/chat/completions"]
+    assert "anthropic-beta" not in received[0].headers
+    assert "anthropic-version" not in received[0].headers
 
 
 def test_provider_specific_header_multi_provider():
@@ -2075,10 +2212,10 @@ def test_provider_specific_header_multi_provider():
     # Verify that provider_specific_header contains comma-separated providers
     assert "provider_specific_header" in data
     assert (
-        data["provider_specific_header"]["custom_llm_provider"]
+        data["provider_specific_header"][0]["custom_llm_provider"]
         == "anthropic,bedrock,bedrock_mantle,vertex_ai"
     )
-    assert data["provider_specific_header"]["extra_headers"] == {
+    assert data["provider_specific_header"][0]["extra_headers"] == {
         "anthropic-beta": "context-1m-2025-08-07",
         "anthropic-version": "2023-06-01",
     }
@@ -3325,6 +3462,83 @@ def test_handle_exception_on_proxy_preserves_auth_error_status_code():
     result = handle_exception_on_proxy(auth_error)
 
     assert int(result.code) == 401, f"Expected 401, got {result.code}"
+
+
+def _anthropic_thinking_sse(deltas: int) -> list[bytes]:
+    def event(name: str, payload: dict) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    message: Final = {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5"}
+    return [
+        event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {**message, "content": [], "usage": {"input_tokens": 1, "output_tokens": 1}},
+            },
+        ),
+        event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+        ),
+        *(
+            event(
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": f"t{i} "}},
+            )
+            for i in range(deltas)
+        ),
+        event("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        ),
+        event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "final answer"}},
+        ),
+        event("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        event(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+        ),
+        event("message_stop", {"type": "message_stop"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_record_served_stream_output_lets_the_event_loop_run_while_assembling_the_stream():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.proxy.utils import ProxyLogging
+
+    logging_obj: Final = Logging(
+        model="claude-sonnet-4-5",
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="served-output",
+        function_id="served-output",
+    )
+    loop_turns: Final = []
+    done: Final = asyncio.Event()
+
+    async def count_loop_turns() -> None:
+        while not done.is_set():
+            loop_turns.append(None)
+            await asyncio.sleep(0)
+
+    counter: Final = asyncio.create_task(count_loop_turns())
+    await asyncio.sleep(0)
+    turns_before: Final = len(loop_turns)
+    await ProxyLogging._record_served_stream_output({"litellm_logging_obj": logging_obj}, _anthropic_thinking_sse(2000))
+    turns_during: Final = len(loop_turns) - turns_before
+    done.set()
+    await counter
+
+    assert logging_obj.model_call_details[SERVED_OUTPUT_TEXTS_KEY] == ("final answer",)
+    assert turns_during > 0
 
 
 class _RedisDown:

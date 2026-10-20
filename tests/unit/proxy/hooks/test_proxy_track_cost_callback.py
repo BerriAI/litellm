@@ -2,12 +2,14 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
@@ -27,7 +29,7 @@ from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, Usage
+from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
 @pytest.mark.asyncio
@@ -94,6 +96,65 @@ async def test_async_post_call_failure_hook():
 
 
 @pytest.mark.asyncio
+async def test_each_earlier_billed_attempt_gets_its_own_spend_row():
+    """A timed-out request that the router retried writes one row per billed attempt: the final
+    attempt under the request id, every earlier Timeout attempt under ``<id>-attempt-<n>`` with its
+    own cost, attempt number and deployment."""
+    from litellm.proxy.utils import BilledFailedAttempt
+
+    logger = ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key", user_id="u1", team_id="t1")
+    usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+    request_data = {
+        "model": "gpt-4.1",
+        "litellm_call_id": "call-1",
+        "standard_logging_object": {"id": "call-1", "model_id": "dep-final"},
+        "metadata": {
+            "attempted_retries": 2,
+            "model_info": {"id": "dep-final", "input_cost_per_token": 0.5},
+            "previous_models": ({"exception_type": "Timeout"}, {"exception_type": "Timeout"}),
+        },
+        "combined_usage_object": usage,
+        "response_cost": 0.5,
+        "billed_failed_attempts": (
+            BilledFailedAttempt(attempted_retries=0, deployment_id="dep-a", usage=usage, response_cost=0.25),
+            BilledFailedAttempt(attempted_retries=0, deployment_id="dep-final", usage=usage, response_cost=0.5),
+        ),
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=litellm.Timeout("Request timed out.", model="gpt-4.1", llm_provider="openai"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    rows = [call.kwargs for call in mock_update_database.call_args_list]
+    assert [row["response_cost"] for row in rows] == [0.5, 0.25, 0.5]
+    final_row, attempt_0, attempt_1 = (row["kwargs"] for row in rows)
+    assert final_row["litellm_call_id"] == "call-1"
+    assert final_row["litellm_params"]["metadata"]["attempted_retries"] == 2
+    assert attempt_0["litellm_call_id"] == "call-1-attempt-0"
+    assert attempt_0["standard_logging_object"]["id"] == "call-1-attempt-0"
+    assert attempt_0["litellm_params"]["metadata"]["attempted_retries"] == 0
+    assert attempt_0["litellm_params"]["metadata"]["model_info"]["id"] == "dep-a"
+    assert "previous_models" not in attempt_0["litellm_params"]["metadata"]
+    assert "billed_failed_attempts" not in attempt_0
+    assert attempt_0["combined_usage_object"] is usage
+    assert attempt_1["litellm_call_id"] == "call-1-attempt-1"
+    assert attempt_1["litellm_params"]["metadata"]["attempted_retries"] == 0
+    assert attempt_1["litellm_params"]["metadata"]["model_info"]["id"] == "dep-final"
+    assert final_row["litellm_params"]["metadata"]["model_info"]["id"] == "dep-final"
+    for row in rows:
+        assert row["token"] == "test_api_key"
+        assert row["user_id"] == "u1"
+        assert row["team_id"] == "t1"
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_metadata():
     """
     LIT-5650 regression: on a pre_call guardrail block the unified guardrail
@@ -132,6 +193,77 @@ async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_
         metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
         assert metadata["standard_logging_guardrail_information"] == guardrail_info
         assert metadata["original_key"] == "original_value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_buckets", "expected_model_group"),
+    [
+        ({"metadata": {}, "litellm_metadata": {"model_group": "ws-budget-sock"}}, "ws-budget-sock"),
+        ({"metadata": {"model_group": "caller-group"}, "litellm_metadata": {"model_group": "routed"}}, "caller-group"),
+        ({"metadata": {}, "litellm_metadata": {}}, ""),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_routed_model_group_on_the_failure_row(
+    metadata_buckets: dict[str, dict[str, str]], expected_model_group: str
+):
+    request_data: Final = {
+        "model": "ws-budget-sock",
+        "input": "Reply with exactly the word two",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data=request_data,
+        original_exception=litellm.RateLimitError(message="crossed budget", llm_provider="", model="ws-budget-sock"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=spend_writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert row["model_group"] == expected_model_group
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_buckets", "expected_tags"),
+    [
+        ({"metadata": {}, "litellm_metadata": {"tags": ["ws-tag"]}}, ["ws-tag"]),
+        ({"metadata": {"tags": ["caller-tag"]}, "litellm_metadata": {"tags": ["routed-tag"]}}, ["caller-tag"]),
+        ({"metadata": {}, "litellm_metadata": {"tags": "not-a-list"}}, []),
+        ({"metadata": {}, "litellm_metadata": {"tags": ["ws-tag", 1, {"a": 1}]}}, []),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_routed_tags_on_the_failure_row(
+    metadata_buckets: dict[str, dict[str, object]], expected_tags: list[str]
+):
+    request_data: Final = {
+        "model": "ws-budget-sock",
+        "input": "Reply with exactly the word two",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data=request_data,
+        original_exception=litellm.RateLimitError(message="crossed budget", llm_provider="", model="ws-budget-sock"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=spend_writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert json.loads(row["request_tags"]) == expected_tags
 
 
 @pytest.mark.asyncio
@@ -357,6 +489,79 @@ async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_str
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "snapshot_guardrail_information, expected_guardrail_names",
+    [
+        (None, ["detect-only-scanner"]),
+        ([], ["detect-only-scanner"]),
+        ([{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}], ["logged-before-the-failure"]),
+    ],
+)
+async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_after_the_failure_was_logged(
+    snapshot_guardrail_information: list[dict[str, str]] | None, expected_guardrail_names: list[str]
+):
+    """
+    A provider that drops a live stream mid-flight gets the failure logged at once, and only then does the
+    post_call scan of the chunks the client already received record its verdict, so the failure row showed no
+    guardrail at all while billing the scan's cost
+    """
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    failure_snapshot: Final = {
+        "metadata": {},
+        "hidden_params": {},
+        "model_map_information": {},
+        "guardrail_information": snapshot_guardrail_information,
+    }
+
+    await logger.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-5.6-sol",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {"guardrail_name": "detect-only-scanner", "guardrail_status": "success"}
+                ]
+            },
+            "litellm_logging_obj": SimpleNamespace(
+                model_call_details={"standard_logging_object": failure_snapshot}, litellm_trace_id="trace-1"
+            ),
+        },
+        original_exception=Exception("provider dropped the stream"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    logged_guardrails: Final = json.loads(row["metadata"])["guardrail_information"]
+    assert [entry["guardrail_name"] for entry in logged_guardrails] == expected_guardrail_names
+    assert failure_snapshot["guardrail_information"] == snapshot_guardrail_information
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("tracking_disabled", "expected_end_user_id"), [(True, None), (None, "session-abc123")])
+async def test_async_post_call_failure_hook_records_end_user_only_while_end_user_cost_tracking_is_on(
+    monkeypatch: pytest.MonkeyPatch, tracking_disabled: bool | None, expected_end_user_id: str | None
+):
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", tracking_disabled)
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+
+    await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
+        request_data={"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "Hello"}]},
+        original_exception=Exception("provider rejected the key"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", end_user_id="session-abc123"),
+    )
+
+    assert writer.update_database.call_args.kwargs["end_user_id"] == expected_end_user_id
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_non_llm_route():
     # Setup
     logger = ProxyDBLogger()
@@ -399,6 +604,35 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
         # Assert that update_database was NOT called for non-LLM routes
         mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "route", "written"),
+    [
+        ("litellm-dashboard", "/key/list", False),
+        ("litellm-dashboard", "/v2/user/info", False),
+        ("litellm-dashboard", "/chat/completions", True),
+        ("team-1", "/key/list", True),
+        (None, "/key/list", True),
+    ],
+)
+async def test_async_post_call_failure_hook_skips_dashboard_session_info_route_failures(  # test-quality-ok: update_database is the DB write boundary, so whether it is awaited is the observable outcome
+    team_id: str | None, route: str, written: bool
+) -> None:
+    """An expired Admin UI session key refetching dashboard info routes must not
+    write a failure SpendLog row, while its LLM calls and other keys' info calls still do."""
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data={},
+            original_exception=Exception("Authentication Error - Expired Key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-session", team_id=team_id, request_route=route),
+        )
+
+    assert mock_update_database.await_count == (1 if written else 0)
 
 
 @pytest.mark.asyncio
@@ -999,6 +1233,38 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 
         # failed_tracking_alert should NOT be called — this is not an error
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+class _FailedTrackingAlerts:
+    def __init__(self) -> None:
+        self.messages: tuple[str, ...] = ()
+
+    async def failed_tracking_alert(self, error_message: str, failing_model: str) -> None:
+        self.messages = (*self.messages, error_message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "alerted"), [("_aresponses_websocket", True), ("_arealtime", False)])
+async def test_track_cost_callback_alerts_on_a_websocket_turn_with_no_logging_object(call_type: str, alerted: bool):
+    kwargs: Final = {
+        "call_type": call_type,
+        "model": "gpt-5-mini",
+        "litellm_call_id": "turn-call-id",
+        "litellm_params": {},
+        "stream": False,
+    }
+    alerts: Final = _FailedTrackingAlerts()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", alerts):
+        await ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        await asyncio.sleep(0)
+
+    assert any(f"call_type: {call_type}" in message for message in alerts.messages) is alerted
 
 
 @pytest.mark.asyncio
@@ -2916,3 +3182,91 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
 
     assert update_database.await_count == 1, "the spend enqueue itself must still run"
     assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
+
+class _SharedCounter:
+    def __init__(self) -> None:
+        self.totals: dict[str, float] = {}
+
+    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
+        self.totals[key] = self.totals.get(key, 0) + value
+        return self.totals[key]
+
+
+def _grounded_gemini_kwargs(response_cost: float) -> dict:
+    return {
+        "model": "vertex_ai/gemini-test",
+        "call_type": "acompletion",
+        "response_cost": response_cost,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "user_api_key_user_id": "user-1"}},
+        "standard_logging_object": {
+            "response_cost": response_cost,
+            "request_tags": None,
+            "cache_hit": None,
+            "cost_breakdown": {
+                "input_cost": 0.0,
+                "output_cost": 0.0,
+                "tool_usage_cost": 0.5,
+                "total_cost": response_cost,
+            },
+            "model_map_information": {
+                "model_map_key": "vertex_ai/gemini-test",
+                "model_map_value": {
+                    "litellm_provider": "vertex_ai",
+                    "mode": "chat",
+                    "web_search_billing_unit": "per_query",
+                    "search_context_cost_per_query": {"search_context_size_medium": 0.1},
+                    "search_free_requests": {"count": 100, "period": "month", "shared_group": "test"},
+                },
+            },
+        },
+        "stream": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opted_in", [True, False])
+async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(monkeypatch, opted_in):
+    monkeypatch.setattr(litellm, "apply_search_free_tier", opted_in, raising=False)
+    counter = _SharedCounter()
+    kwargs = _grounded_gemini_kwargs(response_cost=1.0)
+    response = ModelResponse(
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=5),
+        )
+    )
+
+    with (
+        patch(  # test-quality-ok: increment_spend_counters is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: update_cache is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        mock_proxy_logging.internal_usage_cache.dual_cache.redis_cache = counter
+
+        await ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs, completion_response=response, start_time=datetime.now(), end_time=datetime.now()
+        )
+        await asyncio.sleep(0)
+
+        mock_proxy_logging.failed_tracking_alert.assert_not_called()
+        mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
+
+    breakdown = kwargs["standard_logging_object"]["cost_breakdown"]
+    if opted_in:
+        assert kwargs["response_cost"] == pytest.approx(1.0 - 5 * 0.1)
+        assert breakdown["original_cost"] == 1.0 and breakdown["discount_amount"] == pytest.approx(5 * 0.1)
+        assert sum(counter.totals.values()) == 5
+    else:
+        assert kwargs["response_cost"] == 1.0 and "discount_amount" not in breakdown
+        assert counter.totals == {}

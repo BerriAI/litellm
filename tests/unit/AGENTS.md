@@ -1,6 +1,9 @@
 # tests/unit
 
-In-process. No network, clock or subprocess
+In-process. No network or subprocess
+
+Unit tests must not depend on the current time or execution speed. Use fixed timestamps for fixtures
+and controlled clocks for time-dependent behavior. Incidental clock reads inside production code are allowed
 
 ## What good looks like
 
@@ -23,7 +26,7 @@ with patch.object(streamer, "_group_by_date") as mock_group, patch.object(stream
     assert mock_send.call_count == 2
 ```
 
-Green if `send_batched` drops every row. pydantic doubles in 12 of 203 files, fastapi 11 of 594;
+Green if `send_batched` drops every row. pydantic doubles in 12 of 203 files, fastapi 11 of 594.
 `tests/test_litellm` 59 percent. Exception: the count is the behaviour
 (`test_dual_cache_async_batch_get_cache_coalesces_concurrent_redis_reads`, fifty readers, `call_count == 1`)
 

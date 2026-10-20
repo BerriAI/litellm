@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
 from httpx import Headers, Response
@@ -16,6 +17,10 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ..common_utils import OpenAIError
+
+
+def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
+    return headers.get(key, default)
 
 
 class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -127,7 +132,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         try:
             raw_response_json: Final = raw_response.json()
         except json.JSONDecodeError:
-            content_type: Final = raw_response.headers.get("content-type", "").lower()
+            content_type: Final = _header_value(raw_response.headers, "content-type", "").lower()
             if "application/json" in content_type:
                 raise
             return TranscriptionResponse(text=raw_response.text)

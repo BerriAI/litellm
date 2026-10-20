@@ -29,6 +29,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     TextCompletionResponse,
     all_litellm_params,
+    is_decisions_model_mode,
     text_tokens_without_nested_reasoning,
 )
 
@@ -39,6 +40,14 @@ class _DictHiddenParamsAccessor(Protocol):
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None: ...
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    (("decisions", True), ("evaluation", True), ("chat", False), (None, False)),
+)
+def test_is_decisions_model_mode(mode: str | None, expected: bool) -> None:
+    assert is_decisions_model_mode(mode) is expected
 
 
 def test_rust_is_a_known_litellm_param():
@@ -198,6 +207,46 @@ def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
 
     non_int: Final = PromptTokensDetailsWrapper(cache_creation_input_tokens=None)
     assert not hasattr(non_int, "cache_write_tokens")
+
+
+def test_prompt_tokens_details_preserves_qwen_cache_type():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    details = PromptTokensDetailsWrapper(
+        cached_tokens=1889,
+        cache_creation_input_tokens=0,
+        cache_type="ephemeral",
+    )
+
+    assert details.cache_type == "ephemeral"
+    assert details.model_dump()["cache_type"] == "ephemeral"
+
+
+@pytest.mark.parametrize("cache_type", [1, {"mode": "explicit"}, ["ephemeral"]])
+def test_usage_ignores_a_non_string_cache_type(cache_type: object):
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        prompt_tokens_details={"cached_tokens": 600, "cache_type": cache_type},
+    )
+
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 600
+    assert getattr(usage.prompt_tokens_details, "cache_type", None) is None
+
+
+def test_custom_pricing_accepts_qwen_explicit_cache_rate():
+    from litellm.types.utils import CustomPricingLiteLLMParams
+
+    pricing = CustomPricingLiteLLMParams(
+        cache_read_input_token_cost=2e-07,
+        explicit_cache_read_input_token_cost=1e-07,
+    )
+
+    assert pricing.cache_read_input_token_cost == 2e-07
+    assert pricing.explicit_cache_read_input_token_cost == 1e-07
 
 
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():

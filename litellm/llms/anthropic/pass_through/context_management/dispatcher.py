@@ -9,12 +9,18 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.llms.anthropic import AppliedEdit
 
 from .constants import CLEAR_TOOL_USES_EDIT_TYPE, COMPACT_EDIT_TYPE
-from .editors import apply_clear_tool_uses_20250919, apply_compact_20260112
+from .editors import (
+    CheckedEdit,
+    apply_clear_tool_uses_20250919,
+    apply_compact_20260112,
+    check_clear_tool_uses_spec,
+)
 from .result import PolyfillResult
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.llms.anthropic.pass_through.utils import ProxySubCallLoggingKwargs
     from litellm.router import Router
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 EditorResult: TypeAlias = "PolyfillResult | tuple[list[dict[str, object]], AppliedEdit | None]"
 
@@ -72,6 +78,12 @@ def _wrap_editor_return(
     )
 
 
+def _checked_edit(index: int, edit_spec: dict[str, object]) -> CheckedEdit:
+    if edit_spec.get("type") != CLEAR_TOOL_USES_EDIT_TYPE:
+        return CheckedEdit(edit=edit_spec, error=None)
+    return check_clear_tool_uses_spec(edit_spec, index)
+
+
 async def apply_context_management(
     *,
     model: str,
@@ -82,8 +94,16 @@ async def apply_context_management(
     litellm_metadata: dict[str, object] | None = None,
     llm_router: "Router | None" = None,
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
+    sub_call_logging_kwargs: "ProxySubCallLoggingKwargs | None" = None,
+    parent_trace_id: str | None = None,
+    count_only: bool = False,
+    drop_invalid_edits: bool = False,
 ) -> PolyfillResult:
     """Run edits in order; return a single ``PolyfillResult``.
+
+    Every ``clear_tool_uses_20250919`` edit is validated before any editor runs, so a malformed one raises its 400
+    before a ``compact_20260112`` summary call is paid for, or runs without its malformed fields under
+    ``drop_invalid_edits``.
 
     The dispatcher is async so async editors (``compact_20260112``) can
     ``await`` the configured summarization model. Sync editors run in a
@@ -93,6 +113,11 @@ async def apply_context_management(
     edits: Final = normalize_spec(context_management_spec)
     if not edits:
         return PolyfillResult(messages=messages, system=system, applied_edits=[])
+    checked: Final = tuple(_checked_edit(index, edit_spec) for index, edit_spec in enumerate(edits))
+    first_error: Final = next((check.error for check in checked if check.error is not None), None)
+    if first_error is not None and not drop_invalid_edits:
+        raise first_error
+    well_formed_edits: Final = tuple(check.edit for check in checked)
 
     current_messages = messages
     current_system = system
@@ -100,7 +125,7 @@ async def apply_context_management(
     aggregated_compaction_block = None
     aggregated_iterations_usage = None
 
-    for edit_spec in edits:
+    for edit_spec in well_formed_edits:
         edit_type = edit_spec.get("type")
         editor = _EDITOR_REGISTRY.get(edit_type) if isinstance(edit_type, str) else None
         if editor is None:
@@ -123,6 +148,9 @@ async def apply_context_management(
                 litellm_metadata=litellm_metadata,
                 llm_router=llm_router,
                 user_api_key_auth=user_api_key_auth,
+                sub_call_logging_kwargs=sub_call_logging_kwargs,
+                parent_trace_id=parent_trace_id,
+                count_only=count_only,
             )
             if editor_is_async
             else await asyncify(editor)(

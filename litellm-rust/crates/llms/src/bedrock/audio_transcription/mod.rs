@@ -1,10 +1,14 @@
+use litellm_auth::AwsParams;
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
     resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
-use litellm_llms_types::formats::audio_transcription::AudioTranscriptionResponseData;
+use litellm_llms_types::{
+    formats::audio_transcription::AudioTranscriptionResponseData,
+    providers::bedrock::ConverseResponse,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use strum::IntoStaticStr;
@@ -18,7 +22,6 @@ use crate::{
         },
         auth::AuthScheme,
     },
-    bedrock::chat::converse_transformation::ConverseResponse,
 };
 
 const SUPPORTED_PARAMS: &[&str] = &["language", "prompt", "temperature", "response_format"];
@@ -85,7 +88,7 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 
 impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth_aws::constants::SECRET_NAMES.to_vec()
+        litellm_auth::AwsParams::secret_names().to_vec()
     }
 
     fn get_supported_openai_params(&self) -> &'static [&'static str] {
@@ -154,7 +157,11 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
-        let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
+        let region = resolve_bedrock_region(
+            model_region.as_deref(),
+            &AwsParams::from_optional_params(optional_params),
+            env_lookup,
+        );
         let endpoint = optional_params
             .get("aws_bedrock_runtime_endpoint")
             .and_then(Value::as_str)
@@ -181,19 +188,13 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
+        let params = AwsParams::from_optional_params(optional_params);
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(
-                    model_region.as_deref(),
-                    optional_params,
-                    env_lookup,
-                ),
+                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(
-                    optional_params,
-                    env_lookup,
-                )),
+                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
             },
         })
     }

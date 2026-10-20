@@ -9,11 +9,13 @@ hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
 import ast
 import asyncio
 import contextlib
+import contextvars
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
@@ -43,7 +45,8 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.model.config import ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
@@ -55,6 +58,7 @@ from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     reset_mcp_message_transport_span,
     set_mcp_message_trace_carrier,
     set_mcp_message_transport_span,
+    set_request_destinations,
     set_request_root_span,
 )
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN  # noqa: E402
@@ -490,6 +494,49 @@ def test_no_span_when_pre_call_never_ran():
     assert exporter.get_finished_spans() == ()  # no phantom LLM span
 
 
+def test_cache_hit_without_pre_call_emits_zero_cost_span():
+    """A response served from the litellm cache never hands off to a provider,
+    so ``pre_call`` never runs and ``api_call_start_time`` is never stamped,
+    but the completed call's payload still warrants a span, carrying the cache
+    attributes rather than being dropped like a gate rejection."""
+    logger, exporter = _logger()
+    payload: Final = _payload(
+        cache_hit=True,
+        response_cost=0.0,
+        saved_cache_cost=0.002,
+        cost_breakdown={"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0},
+    )
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[LiteLLM.CACHE_HIT] is True
+    assert span.attributes[LiteLLM.SAVED_CACHE_COST] == 0.002
+    assert {
+        name: span.attributes[f"{LiteLLM.COST_PREFIX}{name}"] for name in ("total", "input", "output", "tool_usage")
+    } == {"total": 0.0, "input": 0.0, "output": 0.0, "tool_usage": 0.0}
+    assert "server.address" not in span.attributes
+
+
+def test_cache_miss_span_reports_cache_hit_false():
+    logger, exporter = _logger()
+    _emit_llm(logger, _kwargs(payload=_payload(cache_hit=False, saved_cache_cost=0.0)))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[LiteLLM.CACHE_HIT] is False
+    assert LiteLLM.SAVED_CACHE_COST not in span.attributes
+
+
+def test_cache_miss_without_pre_call_still_emits_no_span():
+    """The cache-hit relaxation is not a general loosening: a success callback
+    with no ``pre_call`` carrier and no cache hit still emits nothing."""
+    logger, exporter = _logger()
+    payload: Final = _payload(cache_hit=False, response_cost=0.002)
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
+    assert exporter.get_finished_spans() == ()
+
+
 def test_real_llm_failure_still_emitted():
     """A genuine LLM failure: ``pre_call`` ran (the call was attempted), so the
     CLIENT span is opened at the boundary and closed ERROR."""
@@ -617,8 +664,6 @@ def _mcp_payload(**overrides):
 
 
 def _logger_capturing():
-    from litellm.integrations.otel.model.config import CaptureMessageContent
-
     cfg = OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=False,
@@ -682,6 +727,57 @@ def test_mcp_tool_call_captures_io_when_enabled():
     (span,) = exporter.get_finished_spans()
     assert '"Paris"' in span.attributes["gen_ai.tool.call.arguments"]
     assert "21" in span.attributes["gen_ai.tool.call.result"]
+
+
+@pytest.mark.parametrize(
+    ("capture_mode", "captures_content"),
+    [
+        (None, False),
+        (CaptureMessageContent.NO_CONTENT, False),
+        (CaptureMessageContent.SPAN_ONLY, True),
+        (CaptureMessageContent.EVENT_ONLY, False),
+        (CaptureMessageContent.SPAN_AND_EVENT, True),
+    ],
+)
+def test_only_a_request_destination_can_turn_on_llm_payload_content(
+    capture_mode: CaptureMessageContent | None, captures_content: bool
+) -> None:
+    config: Final = OpenTelemetryV2Config(
+        exporter="in_memory",
+        capture_message_content=CaptureMessageContent.NO_CONTENT,
+    )
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = OpenTelemetryV2(
+        config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter)
+    )
+    payload: Final = _payload(
+        messages=[{"role": "user", "content": "prompt marker"}],
+        response={
+            "id": "resp_1",
+            "model": "gpt-4o-2024",
+            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "answer marker"}}],
+        },
+    )
+    kwargs: Final = {
+        **_kwargs(payload),
+        "standard_callback_dynamic_params": {"capture_message_content": "span_only"},
+    }
+    destination: Final = OtelDestination(
+        endpoint="http://team.local/api/public/otel",
+        headers=MappingProxyType({"Authorization": "Basic dA=="}),
+        callback_name="langfuse_otel",
+        capture_message_content=capture_mode,
+    )
+
+    def emit() -> None:
+        set_request_destinations((destination,))
+        _emit_llm(logger, kwargs)
+
+    contextvars.copy_context().run(emit)
+
+    (span,) = exporter.get_finished_spans()
+    assert ("gen_ai.input.messages" in span.attributes) is captures_content
+    assert ("gen_ai.output.messages" in span.attributes) is captures_content
 
 
 def test_mcp_tool_call_failure_marks_error():
@@ -1832,6 +1928,7 @@ def test_service_span_is_named_by_purpose_when_the_producer_declares_a_target():
         ("async_batch_get_cache", "redis.mget auth_objects", "redis.mget"),
         ("async_set_cache_pipeline_with_ttls", "redis.set auth_objects", "redis.set"),
         ("async_increment_pipeline", "redis.incr auth_objects", "redis.incr"),
+        ("async_increment_if_present", "redis.incr auth_objects", "redis.incr"),
         ("async_delete_cache", "redis.delete auth_objects", "redis.delete"),
         ("async_scan_iter", "redis.scan auth_objects", "redis.scan"),
         ("request_redis_batch", "redis.pipeline auth_objects", "redis.pipeline"),

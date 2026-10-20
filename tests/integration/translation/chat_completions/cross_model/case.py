@@ -1,0 +1,290 @@
+from typing import Final
+
+from integration.translation.case import StreamingTranslationTestCase, TranslationTestCase
+from integration.translation.chat_completions.cross_model import (
+    anthropic,
+    azure,
+    azure_ai,
+    bedrock_converse,
+    gemini,
+    openai,
+    vertex_ai,
+)
+
+AgentCases = tuple[TranslationTestCase, TranslationTestCase, StreamingTranslationTestCase]
+
+SMALL: Final[tuple[AgentCases, ...]] = (
+    (
+        anthropic.CLAUDE_HAIKU_4_5_AGENT_TEST_CASE,
+        anthropic.CLAUDE_HAIKU_4_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        anthropic.CLAUDE_HAIKU_5_5_AGENT_TEST_CASE,
+        anthropic.CLAUDE_HAIKU_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure_ai.CLAUDE_HAIKU_4_5_AGENT_TEST_CASE,
+        azure_ai.CLAUDE_HAIKU_4_5_AGENT_FOLLOWUP_TEST_CASE,
+        azure_ai.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure_ai.CLAUDE_HAIKU_5_5_AGENT_TEST_CASE,
+        azure_ai.CLAUDE_HAIKU_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        azure_ai.CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_5_4_MINI_TEST_CASE,
+        azure.GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_5_6_LUNA_AGENT_TEST_CASE,
+        azure.GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_6_LUNA_AGENT_TEST_CASE,
+        azure.GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_HAIKU_4_5_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_HAIKU_4_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_HAIKU_5_5_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_HAIKU_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_5_6_LUNA_TEST_CASE,
+        bedrock_converse.GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_6_LUNA_TEST_CASE,
+        bedrock_converse.GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_HAIKU_4_5_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_HAIKU_4_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_MINI_TEST_CASE,
+        openai.GPT_5_MINI_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_MINI_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_4_MINI_TEST_CASE,
+        openai.GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_6_LUNA_AGENT_TEST_CASE,
+        openai.GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_6_LUNA_AGENT_TEST_CASE,
+        openai.GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+)
+
+MID: Final[tuple[AgentCases, ...]] = (
+    (
+        anthropic.CLAUDE_OPUS_5_5_AGENT_TEST_CASE,
+        anthropic.CLAUDE_OPUS_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        anthropic.CLAUDE_OPUS_5_TEST_CASE,
+        anthropic.CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_5_6_SOL_AGENT_TEST_CASE,
+        azure.GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_5_6_TERRA_AGENT_TEST_CASE,
+        azure.GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_6_1_SOL_AGENT_TEST_CASE,
+        azure.GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_OPUS_5_5_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_OPUS_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        anthropic.CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+        anthropic.CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_OPUS_5_TEST_CASE,
+        bedrock_converse.CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_5_6_SOL_TEST_CASE,
+        bedrock_converse.GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_5_6_TERRA_TEST_CASE,
+        bedrock_converse.GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_6_SOL_TEST_CASE,
+        bedrock_converse.GPT_6_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_6_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_6_1_SOL_TEST_CASE,
+        bedrock_converse.GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_OPUS_5_5_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_OPUS_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_OPUS_5_TEST_CASE,
+        vertex_ai.CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_6_SOL_AGENT_TEST_CASE,
+        openai.GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_6_TERRA_AGENT_TEST_CASE,
+        openai.GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (openai.GPT_6_SOL_TEST_CASE, openai.GPT_6_SOL_AGENT_FOLLOWUP_TEST_CASE, openai.GPT_6_SOL_AGENT_STREAMING_TEST_CASE),
+    (
+        openai.GPT_6_1_SOL_AGENT_TEST_CASE,
+        openai.GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.GEMINI_3_8_FLASH_AGENT_TEST_CASE,
+        vertex_ai.GEMINI_3_8_FLASH_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.GEMINI_3_8_FLASH_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        gemini.GEMINI_3_8_FLASH_AGENT_TEST_CASE,
+        gemini.GEMINI_3_8_FLASH_AGENT_FOLLOWUP_TEST_CASE,
+        gemini.GEMINI_3_8_FLASH_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE,
+        vertex_ai.GEMINI_3_1_PRO_PREVIEW_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.GEMINI_3_1_PRO_PREVIEW_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        gemini.GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE,
+        gemini.GEMINI_3_1_PRO_PREVIEW_AGENT_FOLLOWUP_TEST_CASE,
+        gemini.GEMINI_3_1_PRO_PREVIEW_AGENT_STREAMING_TEST_CASE,
+    ),
+)
+
+HIGH: Final[tuple[AgentCases, ...]] = (
+    (
+        anthropic.CLAUDE_FABLE_5_1_AGENT_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_1_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        anthropic.CLAUDE_FABLE_5_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure_ai.CLAUDE_FABLE_5_1_AGENT_TEST_CASE,
+        azure_ai.CLAUDE_FABLE_5_1_AGENT_FOLLOWUP_TEST_CASE,
+        azure_ai.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure_ai.CLAUDE_FABLE_5_TEST_CASE,
+        azure_ai.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
+        azure_ai.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_6_ASTRA_AGENT_TEST_CASE,
+        azure.GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_FABLE_5_1_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_FABLE_5_1_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_FABLE_5_TEST_CASE,
+        bedrock_converse.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_6_ASTRA_TEST_CASE,
+        bedrock_converse.GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_FABLE_5_1_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_FABLE_5_1_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_FABLE_5_TEST_CASE,
+        vertex_ai.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.GEMINI_4_ARGON_AGENT_TEST_CASE,
+        vertex_ai.GEMINI_4_ARGON_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.GEMINI_4_ARGON_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_6_ASTRA_AGENT_TEST_CASE,
+        openai.GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE,
+    ),
+)
+
+TIERS: Final = (SMALL, MID, HIGH)
+CASES: Final = (*SMALL, *MID, *HIGH)
+
+
+def reference_for(case: TranslationTestCase) -> TranslationTestCase:
+    model: Final = str(case.litellm_request["model"])
+    provider: Final = "anthropic/" if model.startswith("openai/") else "openai/"
+    tier: Final = next(group for group in TIERS if any(row[0] is case or row[1] is case for row in group))
+    reference: Final = next(row for row in tier if str(row[0].litellm_request["model"]).startswith(provider))
+    return reference[1] if any(row[1] is case for row in tier) else reference[0]

@@ -21,7 +21,7 @@ use super::{
 };
 use crate::errors::RustBridgeDeclined;
 
-const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.responses.route_host";
+const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.responses";
 
 fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
     let resolved = call.resolved()?;
@@ -61,8 +61,8 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
             "native Python responses streaming",
         ));
     }
-    let host = InferenceHost::new(resolved.unbind(), ROUTE_HOST_MODULE);
-    run_inference::<ResponsesRoute, _>(py, call, asynchronous, ResponsesPythonHost(host))
+    let host = InferenceHost::new(call.view()?, ROUTE_HOST_MODULE);
+    run_inference::<ResponsesRoute, _>(py, call, asynchronous, ResponsesPythonHost::new(host))
 }
 
 #[pyfunction]

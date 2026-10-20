@@ -2,16 +2,21 @@
 Common utility functions used for translating messages across providers
 """
 
+import base64
+import binascii
 import io
 import json
 import mimetypes
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from itertools import groupby, islice
+from graphlib import CycleError, TopologicalSorter
+from itertools import chain, groupby, islice
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -29,6 +34,7 @@ from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
+    PromptCacheBreakpoint,
 )
 from litellm.types.utils import (
     Choices,
@@ -618,7 +624,7 @@ def update_messages_with_model_file_ids(
 def update_responses_input_with_model_file_ids(
     input: object,
     model_id: str | None = None,
-    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
 ) -> object:
     """
     Updates responses API input with provider-specific file IDs.
@@ -659,7 +665,7 @@ def update_responses_input_with_model_file_ids(
             for content_item in content:
                 if isinstance(content_item, dict) and content_item.get("type") == "input_file":
                     file_id = content_item.get("file_id")
-                    if file_id:
+                    if isinstance(file_id, str) and file_id:
                         provider_file_id = file_id  # Default to original
 
                         # Check if we have a mapping for this file ID
@@ -755,7 +761,7 @@ def _decode_vector_store_ids_in_tools(
 def update_responses_tools_with_model_file_ids(
     tools: list[dict[str, object]] | None,
     model_id: str | None = None,
-    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[dict[str, object]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
@@ -1421,6 +1427,123 @@ def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, 
         frontier = tuple(child for node in frontier for child in _subschemas(node))
 
 
+def schema_fragment_ref(ref: str) -> str:
+    return f"#{ref}" if ref.startswith(("/$defs/", "/definitions/")) else ref
+
+
+def schema_has_unresolvable_ref(schema: Mapping[str, object]) -> bool:
+    definitions: Final = MappingProxyType(dict(_root_definitions(schema)))
+    if not _refs_in(schema) <= definitions.keys():
+        return True
+    try:
+        tuple(TopologicalSorter({pointer: _refs_in(body) for pointer, body in definitions.items()}).static_order())
+    except CycleError:
+        return True
+    return False
+
+
+def schema_union_property_count(schema: Mapping[str, object]) -> int:
+    return sum(1 for _, node in _property_schemas(schema) if _is_union(node))
+
+
+def schema_optional_property_count(schema: Mapping[str, object]) -> int:
+    return sum(len(_optional_property_names(node)) for node in _schema_nodes(schema))
+
+
+def schema_property_count(schema: Mapping[str, object]) -> int:
+    return sum(len(properties) for node in _schema_nodes(schema) if (properties := _schema_at(node, "properties")))
+
+
+def schema_grammar_branch_count(schema: Mapping[str, object]) -> int:
+    return sum(_grammar_branches(node) for node in _schema_nodes(schema))
+
+
+def schema_has_open_object(schema: Mapping[str, object]) -> bool:
+    return any(_is_open_object(node) for node in _schema_nodes(schema))
+
+
+def schema_has_lookaround_pattern(schema: Mapping[str, object]) -> bool:
+    return any(
+        isinstance(pattern := node.get("pattern"), str) and _uses_regex_lookaround(pattern)
+        for node in _schema_nodes(schema)
+    )
+
+
+def schema_string_formats(schema: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(
+        value for node in _schema_nodes(schema) if _may_be_string(node) and isinstance(value := node.get("format"), str)
+    )
+
+
+def _may_be_string(node: Mapping[str, object]) -> bool:
+    node_type: Final = node.get("type")
+    return node_type is None or node_type == "string" or "string" in _list_at(node, "type")
+
+
+def is_object_schema(node: Mapping[str, object]) -> bool:
+    node_type: Final = node.get("type")
+    return node_type == "object" or (isinstance(node_type, list) and "object" in node_type)
+
+
+def _schema_nodes(schema: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    return chain.from_iterable(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))
+
+
+_SCHEMA_LIST: Final = TypeAdapter(tuple[object, ...])
+
+
+def _list_at(container: Mapping[str, object], key: str) -> tuple[object, ...]:
+    value: Final = container.get(key)
+    return _SCHEMA_LIST.validate_python(value) if isinstance(value, list) else ()
+
+
+def _named_schemas(container: Mapping[str, object] | None) -> Iterator[tuple[str, Mapping[str, object]]]:
+    if container is None:
+        return iter(())
+    return ((key, value) for key in container if (value := _schema_at(container, key)) is not None)
+
+
+def _root_definitions(schema: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
+    for defs_key in ("$defs", "definitions"):
+        yield from ((f"#/{defs_key}/{name}", body) for name, body in _named_schemas(_schema_at(schema, defs_key)))
+
+
+def _refs_in(schema: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(
+        schema_fragment_ref(ref) for node in _schema_nodes(schema) if isinstance(ref := node.get("$ref"), str)
+    )
+
+
+def _property_schemas(schema: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
+    return chain.from_iterable(_named_schemas(_schema_at(node, "properties")) for node in _schema_nodes(schema))
+
+
+def _is_union(node: Mapping[str, object]) -> bool:
+    return isinstance(node.get("anyOf"), list) or isinstance(node.get("oneOf"), list) or len(_list_at(node, "type")) > 1
+
+
+def _grammar_branches(node: Mapping[str, object]) -> int:
+    properties: Final = _schema_at(node, "properties")
+    if properties is None:
+        return 0
+    optional: Final = len(_optional_property_names(node))
+    return 2**optional * (len(properties) - optional + 1)
+
+
+def _optional_property_names(node: Mapping[str, object]) -> frozenset[str]:
+    properties: Final = _schema_at(node, "properties")
+    if properties is None:
+        return frozenset()
+    return frozenset(properties) - frozenset(name for name in _list_at(node, "required") if isinstance(name, str))
+
+
+def _is_open_object(node: Mapping[str, object]) -> bool:
+    additional_properties: Final = node.get("additionalProperties")
+    if additional_properties is True or isinstance(additional_properties, dict) or "patternProperties" in node:
+        return True
+    return is_object_schema(node) and "properties" not in node and additional_properties is not False
+
+
 def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
     for key, value in node.items():
         if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
@@ -1787,24 +1910,111 @@ _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
-    if marker is None:
+    """A breakpoint the client already wrote on the block wins, TTL included."""
+    if marker is None or target.get("prompt_cache_breakpoint") is not None:
         return target
     marked: Final = {**target, "prompt_cache_breakpoint": marker}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
-LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
+def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
+    """Anthropic's ``cache_control`` mark rewritten as OpenAI's ``prompt_cache_breakpoint`` on the same block."""
+    if block.get("cache_control") is None:
+        return block
+    unmarked: Final = {key: value for key, value in block.items() if key != "cache_control"}
+    return cast(  # cast-ok: same block shape as the input with the marker key renamed
+        _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
+    )
+
+
+_BREAKPOINT_BLOCK_LIST_KEYS: Final = frozenset({"content", "tool_calls"})
+_BREAKPOINT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_BREAKPOINT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _without_prompt_cache_breakpoint(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    fields: Final = _BREAKPOINT_FIELDS.validate_python(value)
+    return {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
+
+
+def _breakpoints_stripped_from(key: str, value: object) -> object:
+    if key in _BREAKPOINT_BLOCK_LIST_KEYS and isinstance(value, list):
+        return [_without_prompt_cache_breakpoint(block) for block in _BREAKPOINT_BLOCKS.validate_python(value)]
+    return _without_prompt_cache_breakpoint(value) if key == "function" else value
+
+
+def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
+    """A message or tool definition with every ``prompt_cache_breakpoint`` removed: its own, its content parts',
+    its tool calls' and its ``function``'s."""
+    stripped: Final = {
+        key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
+    }
+    return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
+
+
+LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
+    {"thinking_blocks", "reasoning_items", "provider_specific_fields"}
+)
+LITELLM_INTERNAL_MESSAGE_FIELDS: Final = LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS | {"reasoning_content"}
+
+
+def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
+    if not isinstance(tool_call, dict):
+        return tool_call
+    fields: Final = cast(dict[str, object], tool_call)  # cast-ok: untyped JSON tool call, keys forwarded verbatim
+    function_fields: Final = (
+        cast("dict[str, object]", fields.get("function"))  # cast-ok: untyped JSON function chunk
+        if isinstance(fields.get("function"), dict)
+        else None
+    )
+    if "provider_specific_fields" not in fields and (
+        function_fields is None or "provider_specific_fields" not in function_fields
+    ):
+        return cast("dict[str, object]", tool_call)  # cast-ok: untyped JSON tool call, no strip needed
+    return {
+        key: (
+            {fkey: fvalue for fkey, fvalue in function_fields.items() if fkey != "provider_specific_fields"}
+            if key == "function" and function_fields is not None
+            else value
+        )
+        for key, value in fields.items()
+        if key != "provider_specific_fields"
+    }
+
+
+def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
+    kept: Final = {key: value for key, value in message.items() if key not in dropped}
+    tool_calls: Final = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return cast(AllMessageValues, kept)  # cast-ok: same TypedDict minus dropped keys
+    return cast(  # cast-ok: same TypedDict minus dropped keys, tool calls minus their provider_specific_fields
+        AllMessageValues,
+        {
+            **kept,
+            "tool_calls": [
+                _tool_call_without_provider_specific_fields(tool_call)
+                for tool_call in cast(list[object], tool_calls)  # cast-ok: untyped JSON tool calls
+            ],
+        },
+    )
+
+
+def strip_litellm_response_only_fields(message: AllMessageValues) -> AllMessageValues:
+    """Drop the fields litellm attaches to a returned message (e.g. Anthropic thinking blocks or Responses
+    API items) that no OpenAI-compatible endpoint accepts back, so a reply can be sent to a strict one."""
+    return _message_without_fields(message, LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS)
 
 
 def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessageValues:
-    """Drop the fields litellm attaches to assistant messages (e.g. when translating Anthropic thinking
-    blocks) that OpenAI-compatible endpoints with strict schemas reject as extra inputs."""
-    if LITELLM_INTERNAL_MESSAGE_FIELDS.isdisjoint(message):
-        return message
-    return cast(  # cast-ok: same TypedDict minus internal keys
-        AllMessageValues,
-        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS},
-    )
+    """``strip_litellm_response_only_fields`` plus ``reasoning_content``, for endpoints that reject it too."""
+    return _message_without_fields(message, LITELLM_INTERNAL_MESSAGE_FIELDS)
+
+
+def strip_prefill_prefix_field(message: AllMessageValues) -> AllMessageValues:
+    """Drop the ``prefix`` flag Mistral and DeepSeek read off a prefill, for endpoints that reject unknown keys."""
+    return _message_without_fields(message, frozenset({"prefix"}))
 
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
@@ -2100,10 +2310,8 @@ def is_unsignable_thinking_block(block: object) -> bool:
     Anthropic verifies the signature cryptographically, so a block with a null,
     empty, or missing signature (e.g. from an open-source reasoning model) is
     rejected with a 400, and so is a block whose signature or data carries
-    another provider's encrypted reasoning. It also rejects a `thinking` block
-    whose text is empty or whitespace-only ("each thinking block must contain
-    thinking"), regardless of signature, e.g. when a `thinking_blocks` history
-    item from a non-Anthropic reasoning provider is replayed through this path.
+    another provider's encrypted reasoning. A signed block is kept whatever its
+    text, since ``display: omitted`` returns signed blocks with empty ``thinking``.
     `redacted_thinking` blocks carry no signature and are always kept.
     """
     if is_encrypted_reasoning_block(block):
@@ -2114,10 +2322,43 @@ def is_unsignable_thinking_block(block: object) -> bool:
     if mapping.get("type") != "thinking":
         return False
     signature: Final = mapping.get("signature")
-    if not (isinstance(signature, str) and len(signature) > 0):
-        return True
-    thinking_text: Final = mapping.get("thinking")
-    return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
+    return not (isinstance(signature, str) and len(signature) > 0)
+
+
+def has_blank_redacted_data(block: object) -> bool:
+    match block:
+        case {"type": "redacted_thinking", "data": str() as data}:
+            return not data.strip()
+        case {"type": "redacted_thinking"}:
+            return True
+        case _:
+            return False
+
+
+def native_redacted_thinking_data(data: str) -> str:
+    """Claude's own `data` string for a redacted_thinking block.
+
+    Bedrock Converse carries it base64-wrapped as `redactedContent`, and LiteLLM passed that
+    wrapper through as `data` until it started decoding Converse replies, so histories saved
+    before then still hold it. Claude's own value never decodes twice, since its first byte
+    decodes to a protobuf tag outside the base64 alphabet.
+    """
+    return _converse_wrapped_payload(data) or data
+
+
+def converse_redacted_content(data: str) -> str:
+    """The `redactedContent` Bedrock Converse expects for a redacted_thinking block's `data`."""
+    return base64.b64encode(native_redacted_thinking_data(data).encode()).decode()
+
+
+def _converse_wrapped_payload(data: str) -> str | None:
+    try:
+        payload: Final = base64.b64decode(data, validate=True).decode("ascii")
+        _ = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    else:
+        return payload
 
 
 def strip_encrypted_reasoning_from_messages(
@@ -2431,6 +2672,9 @@ def merge_consecutive_system_messages(
     ]
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _attempt_json_repair(s: str) -> object | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
@@ -2482,7 +2726,7 @@ def _attempt_json_repair(s: str) -> object | None:
     candidate += "".join(reversed(opener_stack))
 
     try:
-        return json.loads(candidate)
+        return _DECODED_JSON.validate_python(json.loads(candidate))
     except json.JSONDecodeError:
         pass
 
@@ -2521,7 +2765,7 @@ def parse_tool_call_arguments(
         return {}
 
     try:
-        return json.loads(arguments)
+        return _DECODED_JSON.validate_python(json.loads(arguments))
     except json.JSONDecodeError as original_error:
         repaired: Final = _attempt_json_repair(arguments)
         if repaired is not None:

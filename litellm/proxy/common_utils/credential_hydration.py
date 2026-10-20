@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # narrows untyped credential values at the decrypt boundary
 
 import litellm
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -18,8 +18,8 @@ from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.router_utils.clientside_credential_handler import clientside_credential_keys
 from litellm.types.router import (
     GenericLiteLLMParams,
-    server_owned_wif_fields_named,
     server_owned_wif_fields_present,
+    server_owned_wif_fields_written,
 )
 from litellm.types.utils import CredentialItem, LlmProviders, server_owned_wif_litellm_params
 
@@ -28,6 +28,8 @@ _LITELLM_PROVIDER_IDS: Final = frozenset(provider.value for provider in LlmProvi
 _FEDERATION_SURFACE_FIELDS: Final = frozenset(
     (
         *clientside_credential_keys,
+        "client_id",
+        "client_secret",
         "configurable_clientside_auth_params",
         "litellm_credential_name",
         *server_owned_wif_litellm_params,
@@ -36,15 +38,17 @@ _FEDERATION_SURFACE_FIELDS: Final = frozenset(
 
 
 def write_touches_federation_surface(incoming: Mapping[str, object] | None) -> bool:
-    """Whether this write can move or re-scope the token a federated deployment mints.
+    """Whether this write can move or re-scope a deployment's delegated token.
 
     Three groups of fields can. The federation parameters choose which server-side secret is read
-    and what the minted token is scoped to. ``litellm_credential_name`` resolves to those same
-    parameters by reference. ``api_key``, ``api_base``, ``base_url``, and the
+    and what the minted token is scoped to. OAuth token-exchange parameters select the server-side
+    token endpoint and grant profile, with ``client_id`` and ``client_secret`` authenticating to it.
+    ``litellm_credential_name`` resolves to those same parameters
+    by reference. ``api_key``, ``api_base``, ``base_url``, and the
     ``configurable_clientside_auth_params`` that let a caller override them decide where the
-    resulting token is sent. A write setting none of them leaves the federation configuration
-    exactly as the proxy admin left it, so renaming a federated deployment or changing its rpm
-    stays an ordinary team-admin edit.
+    resulting token is sent. A write setting none of them leaves the delegated-token configuration
+    exactly as the proxy admin left it, so renaming a deployment or changing its rpm stays an
+    ordinary team-admin edit.
     """
     return incoming is not None and not _FEDERATION_SURFACE_FIELDS.isdisjoint(incoming.keys())
 
@@ -64,10 +68,13 @@ def decrypted_or_stored(key: str, value: str) -> str:
     return value if decrypted is None else decrypted
 
 
-def _decrypted(db_credential: CredentialItem) -> CredentialItem:
+def decrypted_credential(db_credential: CredentialItem) -> CredentialItem:
     """The stored credential with every value decrypted, leaving already-plaintext values alone."""
     decrypted_values: Final = MappingProxyType(
-        {key: decrypted_or_stored(key, value) for key, value in db_credential.credential_values.items()}
+        {
+            key: decrypted_or_stored(key, cast("str", value))  # cast-ok: stored values are str
+            for key, value in db_credential.credential_values.items()
+        }
     )
     return CredentialItem(
         credential_name=db_credential.credential_name,
@@ -92,7 +99,7 @@ async def hydrate_named_credential_authoritative(
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
     if db_credential is None:
         return await hydrate_named_credential(credential_name, prisma_client)
-    return _decrypted(db_credential)
+    return decrypted_credential(db_credential)
 
 
 async def hydrate_named_credential(
@@ -107,7 +114,7 @@ async def hydrate_named_credential(
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
     if db_credential is None:
         return None
-    return _decrypted(db_credential)
+    return decrypted_credential(db_credential)
 
 
 async def named_credential_wif_fields(
@@ -122,11 +129,17 @@ async def named_credential_wif_fields(
     refuses whenever either side says the credential is server-owned.
     """
     matching: Final = tuple(c for c in litellm.credential_list if c.credential_name == credential_name)
-    in_memory: Final = tuple(chain.from_iterable(server_owned_wif_fields_named(c.credential_values) for c in matching))
+    in_memory: Final = tuple(
+        chain.from_iterable(server_owned_wif_fields_written(c.credential_values) for c in matching)
+    )
     if prisma_client is None:
         return in_memory
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
-    stored: Final = () if db_credential is None else server_owned_wif_fields_named(db_credential.credential_values)
+    stored: Final = (
+        ()
+        if db_credential is None
+        else server_owned_wif_fields_written(decrypted_credential(db_credential).credential_values)
+    )
     return tuple(dict.fromkeys(in_memory + stored))
 
 
@@ -158,7 +171,7 @@ async def effective_server_owned_wif_fields(
     touching the field.
     """
     from_stored: Final = () if stored is None else server_owned_wif_fields_present(stored)
-    from_incoming: Final = () if incoming is None else server_owned_wif_fields_named(incoming.keys())
+    from_incoming: Final = () if incoming is None else server_owned_wif_fields_written(incoming)
     from_credential: Final = tuple(
         chain.from_iterable(
             await asyncio.gather(

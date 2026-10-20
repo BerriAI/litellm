@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -36,6 +36,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+REQUEST_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class BaseLLMException(Exception):
@@ -125,6 +128,17 @@ class BaseConfig(ABC):
         thinking: Final = non_default_params.get("thinking")
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
         return thinking is True or thinking_type == "enabled" or non_default_params.get("reasoning_effort") is not None
+
+    def is_thinking_requested(self, non_default_params: Mapping[str, object]) -> bool:
+        match non_default_params:
+            case {"thinking": True | {"type": "enabled" | "adaptive"}}:
+                return True
+            case {"reasoning_effort": None | "none"}:
+                return False
+            case {"reasoning_effort": object()}:
+                return True
+            case _:
+                return False
 
     def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
         """
@@ -414,8 +428,22 @@ class BaseConfig(ABC):
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> object:
         pass
+
+    def get_model_response_iterator_for_request(
+        self,
+        streaming_response: "Iterator[str] | AsyncIterator[str] | ModelResponse",
+        sync_stream: bool,
+        json_mode: bool | None,
+        optional_params: Mapping[str, object],
+    ) -> object:
+        if sync_stream:
+            return self.get_model_response_iterator(
+                streaming_response=streaming_response, sync_stream=True, json_mode=json_mode
+            )
+        # FIXME: async streams never got json_mode, passing it changes every provider whose iterator reads it
+        return self.get_model_response_iterator(streaming_response=streaming_response, sync_stream=False)
 
     async def get_async_custom_stream_wrapper(
         self,
@@ -474,7 +502,11 @@ class BaseConfig(ABC):
         """
         return True
 
-    def post_stream_processing(self, stream: Any) -> Any:
+    @property
+    def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
+        return False
+
+    def post_stream_processing(self, stream: object) -> object:
         """Hook for providers to post-process streaming responses. Default: pass-through."""
         return stream
 
