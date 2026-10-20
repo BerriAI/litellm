@@ -18258,6 +18258,7 @@ async def async_queue_request(
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
         router: Final = llm_router
 
+        queued_priority, _ = router.split_request_priority(model=data["model"], kwargs=data)
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_queue_stream() -> StreamingResponse:
@@ -18269,6 +18270,7 @@ async def async_queue_request(
                         request=request,
                     ),
                     media_type="text/event-stream",
+                    headers={"x-litellm-priority": str(queued_priority)},
                 )
 
             async def audit_late_failure(exc: Exception) -> HTTPException | None:
@@ -18283,7 +18285,7 @@ async def async_queue_request(
             )
 
         response: Final = await router.schedule_acompletion(**data)
-        fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
+        fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -18298,6 +18300,10 @@ async def async_queue_request(
             )
         elif isinstance(e, ProxyException):
             raise e
+        elif isinstance(e, litellm.BadRequestError):
+            raise ProxyException(
+                message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
+            )
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,
