@@ -41,6 +41,7 @@ HELD_SEARCHES: Final = 150
 HOLD_SECONDS: Final = 10.0
 _HOLD_ROOMS: Final = MappingProxyType({"hold-async": queue.SimpleQueue[int](), "hold-sync": queue.SimpleQueue[int]()})
 _TOKEN_REQUESTS: Final = queue.SimpleQueue[str]()
+_COUNTED_CLIENT_PORTS: Final = queue.SimpleQueue[int]()
 VERTEX_SERVING_CONFIG_PATH: Final = (
     "/v1/projects/p/locations/global/collections/default_collection/engines/e/servingConfigs/default_search"
 )
@@ -112,6 +113,11 @@ async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallab
     if scope["path"].endswith("/_oauth/token"):
         _TOKEN_REQUESTS.put(scope["path"])
         await _send_json(send, {"access_token": "scripted", "expires_in": 3600, "token_type": "Bearer"})
+        return
+    if scope["path"] == "/counted:search":
+        counted_client: Final = scope["client"]
+        _COUNTED_CLIENT_PORTS.put(counted_client[1] if counted_client else 0)
+        await _send_json(send, {"results": [{"id": "counted"}]})
         return
     if scope["path"].endswith(":search"):
         await _send_json(send, {"results": [{"id": f"http/{version}"}]})
@@ -629,6 +635,28 @@ def test_http2_handlers_open_another_connection_once_the_streams_run_out(
 
     assert search_ids == ["held-together"] * HELD_SEARCHES
     assert len(client_ports) == 2
+
+
+def test_http2_transport_opens_no_more_connections_than_its_cap(http2_tls_peer: TlsPeer) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    async def _burst() -> frozenset[str]:
+        transport: Final = AsyncHTTPHandler.create_async_transport(
+            ssl_context=ssl.create_default_context(cafile=str(http2_tls_peer.cert_file)),
+            http2=True,
+            limits=httpx.Limits(max_connections=1),
+        )
+        async with httpx.AsyncClient(transport=transport) as client:
+            responses: Final = await asyncio.gather(
+                *(client.post(f"{http2_tls_peer.url}/counted:search", json={}) for _ in range(HELD_SEARCHES))
+            )
+        return frozenset(response.json()["results"][0]["id"] for response in responses)
+
+    assert asyncio.run(_burst()) == {"counted"}
+    client_ports: Final = frozenset(
+        iter(lambda: None if _COUNTED_CLIENT_PORTS.empty() else _COUNTED_CLIENT_PORTS.get(), None)
+    )
+    assert len(client_ports) == 1
 
 
 def test_forced_ipv4_handlers_honour_ssl_verify_false(monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer) -> None:

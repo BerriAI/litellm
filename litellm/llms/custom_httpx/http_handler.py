@@ -1444,7 +1444,8 @@ class AsyncHTTPHandler:
             return AsyncHTTP2ConnectionSpread(
                 lambda: AsyncHTTPTransport(
                     local_address=local_address, verify=verify, cert=cert, http2=True, limits=limits
-                )
+                ),
+                max_connections=limits.max_connections,
             )
         if litellm.force_ipv4:
             return AsyncHTTPTransport(local_address=local_address, verify=verify, cert=cert, limits=limits)
@@ -1463,7 +1464,8 @@ class AsyncHTTPHandler:
         if http2 or http2_enabled():
             return _environment_proxy_mounts(
                 lambda proxy_url: AsyncHTTP2ConnectionSpread(
-                    lambda: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=True, limits=limits)
+                    lambda: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=True, limits=limits),
+                    max_connections=limits.max_connections,
                 )
             )
         return _environment_proxy_mounts(
@@ -1810,7 +1812,8 @@ class HTTPHandler:
         local_address: Final = _IPV4_LOCAL_ADDRESS if litellm.force_ipv4 else None
         if http2:
             return HTTP2ConnectionSpread(
-                lambda: HTTPTransport(local_address=local_address, verify=verify, cert=cert, http2=True)
+                lambda: HTTPTransport(local_address=local_address, verify=verify, cert=cert, http2=True),
+                max_connections=DEFAULT_LIMITS.max_connections,
             )
         if litellm.force_ipv4:
             return HTTPTransport(local_address=local_address, verify=verify, cert=cert)
@@ -1828,7 +1831,8 @@ class HTTPHandler:
         if http2:
             return _environment_proxy_mounts(
                 lambda proxy_url: HTTP2ConnectionSpread(
-                    lambda: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=True)
+                    lambda: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=True),
+                    max_connections=DEFAULT_LIMITS.max_connections,
                 )
             )
         return _environment_proxy_mounts(lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert))

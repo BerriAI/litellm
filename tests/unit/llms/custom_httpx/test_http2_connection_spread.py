@@ -137,6 +137,20 @@ async def test_async_spread_opens_another_connection_only_once_streams_run_out()
 
 
 @pytest.mark.asyncio
+async def test_async_spread_shares_the_least_busy_connection_once_the_connection_cap_is_reached():
+    gate: Final = asyncio.Event()
+    connections: Final = _AsyncConnections(gate)
+    burst: Final = 2 * HTTP2_STREAMS_PER_CONNECTION + HTTP2_STREAMS_PER_CONNECTION // 2
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, max_connections=2)) as client:
+        pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(burst))
+        await _until(lambda: connections.in_flight() == burst)
+        assert [connection.peak for connection in connections.opened] == [burst // 2, burst // 2]
+
+        gate.set()
+        assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
+
+
+@pytest.mark.asyncio
 async def test_async_spread_holds_a_stream_until_its_response_is_closed():
     gate: Final = asyncio.Event()
     gate.set()
