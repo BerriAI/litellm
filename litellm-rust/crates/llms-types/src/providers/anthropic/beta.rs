@@ -199,12 +199,19 @@ impl AnthropicBeta {
                 &[BetaProvider::BedrockConverse, BetaProvider::Databricks]
             }
             Self::ContextManagement20250627 => &[BetaProvider::BedrockConverse],
-            Self::AdvisorTool20260301 | Self::Compact20260904 => &[
+            Self::AdvisorTool20260301 => &[
                 BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,
                 BetaProvider::VertexAi,
+                BetaProvider::Databricks,
+            ],
+            Self::Compact20260904 => &[
+                BetaProvider::AzureAi,
+                BetaProvider::BedrockConverse,
+                BetaProvider::Bedrock,
+                BetaProvider::BedrockMantle,
                 BetaProvider::Databricks,
             ],
             Self::Bash20241022

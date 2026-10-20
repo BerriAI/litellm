@@ -661,6 +661,7 @@ mod tests {
         ]}}),
         &["compact-2026-01-12", "context-management-2025-06-27"]
     )]
+    #[case::compaction(json!({"compaction": {"type": "summarize"}}), &["compact-2026-09-04"])]
     #[case::advisor_tool_is_not_a_vertex_beta(
         json!({"tools": [{"type": "advisor_20260301", "name": "advisor"}]}),
         &[]
