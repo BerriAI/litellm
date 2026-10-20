@@ -6,7 +6,7 @@ usage/spend data by querying the aggregated daily activity endpoints.
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, TypeAlias, cast, overload
 
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 USAGE_AI_TEMPERATURE: Final = 0.2
+USAGE_AI_REQUIRED_PARAMS: Final = ("tools",)
 
 TABLE_DAILY_USER_SPEND: Final = "litellm_dailyuserspend"
 TABLE_DAILY_TEAM_SPEND: Final = "litellm_dailyteamspend"
@@ -466,12 +467,17 @@ def _resolve_model(model: str | None) -> str:
     return (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
 
-def _router_knows_model(router: "Router", model: str) -> bool:
-    if router.is_recognized_model(model):
-        return True
+_RouterRoute: TypeAlias = Literal["model_group", "deployment"]
+
+
+def _router_route(router: "Router", model: str, caller_is_proxy_admin: bool) -> _RouterRoute | None:
+    if router.is_recognized_model(model) or (caller_is_proxy_admin and model in router.team_public_model_names):
+        return "model_group"
     if router.router_general_settings.pass_through_all_models:
-        return False
-    return router.default_deployment is not None or router.pattern_router.route(model) is not None  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
+        return None
+    if router.default_deployment is not None or router.pattern_router.route(model) is not None:  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
+        return "model_group"
+    return "deployment" if model in router.deployment_names else None
 
 
 async def _acompletion(
@@ -487,12 +493,12 @@ async def _acompletion(
         sanitized_user_api_key_auth,
     )
     from litellm.proxy.proxy_server import llm_router
+    from litellm.router_utils.common_utils import is_proxy_admin_request
     from litellm.types.llms.openai import AllMessageValues
 
     completion_messages: Final = cast(  # cast-ok: acompletion accepts the same Mapping messages it already receives
         list[AllMessageValues], messages
     )
-    team_id: Final = user_api_key_dict.team_id if user_api_key_dict is not None else None
     team_aliased_model: Final = (
         resolve_team_model_alias(model, user_api_key_dict) if user_api_key_dict is not None else model
     )
@@ -503,41 +509,35 @@ async def _acompletion(
         model_aliases.get(team_aliased_model, team_aliased_model) if model_aliases is not None else team_aliased_model
     )
     router_metadata: Final = (
-        {
-            "user_api_key_team_id": team_id,
-            "user_api_key_auth": sanitized_user_api_key_auth(user_api_key_dict),
-        }
-        if user_api_key_dict is not None
-        else {"user_api_key_team_id": team_id}
+        {"user_api_key_auth": sanitized_user_api_key_auth(user_api_key_dict)} if user_api_key_dict is not None else {}
     )
-    team_model_name: Final = (
-        llm_router.map_team_model(resolved_model, team_id) if llm_router is not None and team_id is not None else None
-    )
-    router_model: Final = (
-        team_model_name
-        if team_model_name is not None
-        else resolved_model
-        if llm_router is not None and _router_knows_model(llm_router, resolved_model)
+    route: Final = (
+        _router_route(llm_router, resolved_model, is_proxy_admin_request({"metadata": router_metadata}))
+        if llm_router is not None
         else None
     )
-    if llm_router is not None and router_model is not None:
+    if llm_router is not None and route is not None:
         if stream:
             return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
-                model=router_model,
+                model=resolved_model,
                 messages=completion_messages,
                 tools=tools,
                 stream=True,
                 temperature=USAGE_AI_TEMPERATURE,
                 drop_params=True,
+                allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
                 metadata=router_metadata,
+                specific_deployment=route == "deployment",
             )
         return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
-            model=router_model,
+            model=resolved_model,
             messages=completion_messages,
             tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
             drop_params=True,
+            allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
             metadata=router_metadata,
+            specific_deployment=route == "deployment",
         )
     return await litellm.acompletion(
         model=resolved_model,
@@ -546,39 +546,38 @@ async def _acompletion(
         stream=stream,
         temperature=USAGE_AI_TEMPERATURE,
         drop_params=True,
+        allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
     )
 
 
 async def check_usage_ai_chat_model_access(user_api_key_dict: "UserAPIKeyAuth", model: str | None) -> None:
-    from litellm.proxy.auth.auth_checks import (
-        can_key_call_model,
-        can_object_call_model,
-        key_model_aliases_for_auth_check,
-    )
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
     from litellm.proxy.proxy_server import (
         llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy_server.llm_model_list is an untyped module global
         llm_router,
-        prisma_client,
     )
 
     resolved_model: Final = _resolve_model(model)
-    await can_key_call_model(
-        model=resolved_model,
-        llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server.llm_model_list is an untyped module global
-        valid_token=user_api_key_dict,
-        llm_router=llm_router,
-        prisma_client=prisma_client,
-    )
-    if user_api_key_dict.team_models:
-        can_object_call_model(
+    try:
+        await can_key_call_resolved_model(
             model=resolved_model,
+            llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server.llm_model_list is an untyped module global
+            valid_token=user_api_key_dict,
             llm_router=llm_router,
-            models=user_api_key_dict.team_models,
-            team_model_aliases=user_api_key_dict.team_model_aliases,
-            team_id=user_api_key_dict.team_id,
-            key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
-            object_type="team",
         )
+    except ProxyException as denial:
+        if (model or "").strip():
+            raise
+        raise ProxyException(
+            message=(
+                f"Ask AI uses {resolved_model} when no model is picked, and this key cannot call it. "
+                f"Pick a model this key can call. {denial.message}"
+            ),
+            type=denial.type,
+            param="model",
+            code=denial.code,
+        ) from denial
 
 
 def _resolve_fetch_kwargs(
