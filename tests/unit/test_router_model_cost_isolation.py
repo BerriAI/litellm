@@ -919,38 +919,89 @@ def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
 
 
 @pytest.mark.parametrize("catalog_entry", (None, {"litellm_provider": 1, "mode": "chat"}))
+@pytest.mark.parametrize("known_model", (False, True))
+@pytest.mark.parametrize("explicit_base", (False, True))
+@pytest.mark.parametrize("service_tier", ("default", "priority", "flex"))
+@pytest.mark.parametrize("override", (None, "cache_read_input_token_cost", "input_cost_per_token_priority"))
+@pytest.mark.parametrize("reload", (False, True))
 def test_bedrock_deployment_keeps_custom_prices_when_profile_lookup_fails(
     monkeypatch: pytest.MonkeyPatch,
     catalog_entry: dict[str, object] | None,
+    known_model: bool,
+    explicit_base: bool,
+    service_tier: str,
+    override: str | None,
+    reload: bool,
 ) -> None:
     from litellm.cost_calculator import completion_cost
-    from litellm.types.utils import ModelResponse, Usage
+    from litellm.types.utils import ModelResponse, Usage, PromptTokensDetailsWrapper
 
-    model: Final = "openai.unmapped-pricing-test"
-    profile: Final = f"us.{model}"
+    model: Final = "anthropic.unmapped-profile-pricing-test"
+    profile: Final = (
+        "us.anthropic.invalid-profile-pricing-test"
+        if catalog_entry is not None
+        else "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opaque-test"
+    )
+    configured_prices: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.03,
+        "output_cost_per_token": 0.04,
+        "cache_read_input_token_cost": 0.001,
+        "input_cost_per_token_priority": 0.05,
+        "output_cost_per_token_priority": 0.06,
+        "input_cost_per_token_flex": 0.007,
+        "output_cost_per_token_flex": 0.008,
+    }
     monkeypatch.setattr(
         litellm,
         "model_cost",
         {
             **litellm.model_cost,
+            **({model: dict(configured_prices)} if known_model else {}),
             **({profile: catalog_entry} if catalog_entry is not None else {}),
         },
     )
     deployment: Final = Deployment(
         model_name="custom-priced",
         litellm_params=LiteLLM_Params(model=f"bedrock/converse/{model}", model_id=profile),
-        model_info=ModelInfo(id="unmapped-profile-deployment", input_cost_per_token=0.01, output_cost_per_token=0.02),
+        model_info=ModelInfo(
+            id="unmapped-profile-deployment",
+            input_cost_per_token=0.01,
+            output_cost_per_token=0.02,
+            **({override: 0.0} if override else {}),
+            **({"base_model": f"bedrock/{profile}"} if explicit_base else {}),
+        ),
     )
-    Router._register_deployment_pricing(deployment)
+    router: Final = Router(model_list=[deployment.to_json(exclude_none=True)])
+    if reload:
+        router.replay_model_cost_registrations()
+    inherit_configured: Final = known_model and not explicit_base
+    tier_rates: Final = inherit_configured and service_tier != "default"
+    input_rate: Final = configured_prices[f"input_cost_per_token_{service_tier}"] if tier_rates else 0.01
+    output_rate: Final = configured_prices[f"output_cost_per_token_{service_tier}"] if tier_rates else 0.02
+    effective_input: Final = 0.0 if override == "input_cost_per_token_priority" and service_tier == "priority" else input_rate
+    cache_rate: Final = 0.0 if override == "cache_read_input_token_cost" else (0.001 if inherit_configured else effective_input)
     assert completion_cost(
         model=model,
         completion_response=ModelResponse(
-            model=model, usage=Usage(prompt_tokens=10, completion_tokens=3, total_tokens=13)
+            model=model,
+            usage=Usage(
+                prompt_tokens=100,
+                completion_tokens=3,
+                total_tokens=103,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+            ),
         ),
         custom_llm_provider="bedrock",
         custom_pricing=True,
         router_model_id="unmapped-profile-deployment",
-    ) == pytest.approx(10 * 0.01 + 3 * 0.02)
+        service_tier=service_tier,
+    ) == pytest.approx(20 * effective_input + 80 * cache_rate + 3 * output_rate)
+    if known_model:
+        assert {
+            key: value for key, value in litellm.model_cost[model].items() if key in configured_prices
+        } == configured_prices
 
 
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():

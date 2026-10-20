@@ -9850,7 +9850,10 @@ class Router:
                 or deployment.litellm_params.model.startswith("bedrock/")
             )
         ):
-            return invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
+            profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
+            profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
+            if not isinstance(profile_info, ModelInfoLookupMiss):
+                return profile_model
         return deployment.litellm_params.model
 
     @staticmethod
