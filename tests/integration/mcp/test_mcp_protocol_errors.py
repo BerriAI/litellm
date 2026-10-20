@@ -132,8 +132,8 @@ def test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_calle
                 ).encode()
             )
         assert method == "tools/call"
-        params: Final = request_json.validate_python(body["params"])
-        arguments: Final = request_json.validate_python(params["arguments"])
+        call_params: Final = request_json.validate_python(body["params"])
+        arguments: Final = request_json.validate_python(call_params["arguments"])
         size: Final = TypeAdapter(int).validate_python(arguments["size"])
         response: Final = json.dumps(
             {
