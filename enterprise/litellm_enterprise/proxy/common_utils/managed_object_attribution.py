@@ -128,6 +128,7 @@ class ResponseCreator:
     key_metadata: Mapping[str, object]
     team_id: str | None
     team_metadata: Mapping[str, object]
+    settings_read: bool = True
 
 
 class ManagedObjectCreatorAttribution:
@@ -147,8 +148,9 @@ class ManagedObjectCreatorAttribution:
     its own takes its budget tier's, the same rule auth applies. Its creator's key and team
     metadata come along too, so the billed event reaches the key's and team's logging callbacks
     like that read did. A rotated key's metadata is read from the live key its rotations lead
-    to, and a deleted key's or team's from its deleted row. A key or team lookup that fails
-    raises instead, so the bill waits for the next read or poll.
+    to, and a deleted key's or team's from its deleted row. A lookup that fails leaves the
+    creator's settings unread and the attribution to what the managed row stores, so the
+    response still bills.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -160,6 +162,22 @@ class ManagedObjectCreatorAttribution:
         return {"user_api_key_user_id": job.created_by, **_shared_metadata(job, rows)}
 
     async def response_creator(self, job: ManagedObjectRow, object_id: str) -> ResponseCreator:
+        try:
+            return await self._read_response_creator(job, object_id)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"{self._poller_name}: could not read the creator of {object_id}, so it bills without their "
+                f"settings: {e}"
+            )
+            return ResponseCreator(
+                metadata=_response_creator_metadata(job, _CreatorRows(key=None, team=None, user=None)),
+                key_metadata={},
+                team_id=getattr(job, "team_id", None),
+                team_metadata={},
+                settings_read=False,
+            )
+
+    async def _read_response_creator(self, job: ManagedObjectRow, object_id: str) -> ResponseCreator:
         api_key: Final = getattr(job, "api_key", None)
         team_id: Final = getattr(job, "team_id", None)
         rows: Final = _CreatorRows(
@@ -167,30 +185,8 @@ class ManagedObjectCreatorAttribution:
             team=await self._live_team_row(team_id),
             user=await self._user_row(object_id, _creator_user_id(job.created_by)),
         )
-        end_user_id: Final = getattr(job, "end_user_id", None)
         return ResponseCreator(
-            metadata={
-                "user_api_key_user_id": _creator_user_id(job.created_by),
-                **_shared_metadata(job, rows),
-                **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
-                "user_api_key_project_id": getattr(rows.key, "project_id", None),
-                "user_api_key_project_alias": getattr(
-                    getattr(rows.key, "litellm_project_table", None), "project_alias", None
-                ),
-                **_key_budget_fields(rows.key),
-                **_budget_fields(
-                    rows.team,
-                    "user_api_key_team_spend",
-                    "user_api_key_team_max_budget",
-                    "user_api_key_team_model_max_budget",
-                ),
-                **_budget_fields(
-                    rows.user,
-                    "user_api_key_user_spend",
-                    "user_api_key_user_max_budget",
-                    "user_api_key_user_model_max_budget",
-                ),
-            },
+            metadata=_response_creator_metadata(job, rows),
             key_metadata=row_metadata(rows.key) if rows.key is not None else await self._retired_key_metadata(api_key),
             team_id=team_id,
             team_metadata=(
@@ -277,6 +273,30 @@ class ManagedObjectCreatorAttribution:
         if not team_id:
             return None
         return await _team_table(self._prisma_client).find_unique(where={"team_id": team_id})
+
+
+def _response_creator_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, object]:
+    end_user_id: Final = getattr(job, "end_user_id", None)
+    return {
+        "user_api_key_user_id": _creator_user_id(job.created_by),
+        **_shared_metadata(job, rows),
+        **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
+        "user_api_key_project_id": getattr(rows.key, "project_id", None),
+        "user_api_key_project_alias": getattr(getattr(rows.key, "litellm_project_table", None), "project_alias", None),
+        **_key_budget_fields(rows.key),
+        **_budget_fields(
+            rows.team,
+            "user_api_key_team_spend",
+            "user_api_key_team_max_budget",
+            "user_api_key_team_model_max_budget",
+        ),
+        **_budget_fields(
+            rows.user,
+            "user_api_key_user_spend",
+            "user_api_key_user_max_budget",
+            "user_api_key_user_model_max_budget",
+        ),
+    }
 
 
 def _shared_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, object]:

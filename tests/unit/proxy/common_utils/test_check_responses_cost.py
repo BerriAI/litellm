@@ -2233,11 +2233,22 @@ async def test_a_creator_rotated_or_deleted_before_the_bill_still_gets_the_charg
 
 
 @pytest.mark.asyncio
-async def test_a_creator_lookup_that_fails_leaves_the_response_for_the_next_read_to_bill_into_the_creators_project(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "failing_lookup, live_key_logging, team_logging",
+    [
+        ("litellm_verificationtoken.find_unique", "key logging", "none"),
+        ("litellm_teamtable.find_unique", "none", "team callback_settings"),
+        ("litellm_deprecatedverificationtoken.find_unique", "none", "none"),
+        ("litellm_deletedverificationtoken.find_first", "none", "none"),
+    ],
+    ids=["live key", "live team", "rotated key", "deleted key"],
+)
+async def test_a_creator_lookup_that_keeps_failing_still_bills_the_response_once_without_the_creators_settings(
+    monkeypatch: pytest.MonkeyPatch, failing_lookup: str, live_key_logging: str, team_logging: str
 ):
-    """A key lookup that fails once must not bill the response without its creator's settings, since billing
-    it once claims it and no later read would ever send the charge to the creator's own project."""
+    """A creator lookup that fails on every read must not leave the response unbilled. It bills once under the
+    key and team the managed row stores, through the proxy's callbacks only, with the text left out since the
+    creator's redaction setting could not be read."""
     import litellm
     from litellm.litellm_core_utils import litellm_logging
 
@@ -2246,20 +2257,31 @@ async def test_a_creator_lookup_that_fails_leaves_the_response_for_the_next_read
     monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [langfuse])
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [capture])
-    priced: Final = _priced_poller()
-    priced.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
-        side_effect=[RuntimeError("database unavailable"), _creator_logging("key logging").key_row]
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    priced: Final = _priced_poller(
+        key_row=_creator_logging(live_key_logging).key_row if live_key_logging != "none" else None,
+        team_row=_creator_logging(team_logging).team_row if team_logging != "none" else None,
+    )
+    table_name, method = failing_lookup.split(".")
+    setattr(
+        getattr(priced.prisma_client.db, table_name),
+        method,
+        AsyncMock(side_effect=RuntimeError("database unavailable")),
     )
 
-    with pytest.raises(RuntimeError):
-        await priced.bill(_terminal_response())
-    unbilled_statuses: Final = dict(priced.table.statuses)
-    await priced.bill(_terminal_response())
+    charge: Final = await priced.bill(_read_with_text("the stored answer"))
+    await priced.bill(_read_with_text("the stored answer"))
 
-    assert unbilled_statuses == {"job-priced": "queued"}
-    assert langfuse.events == ((pytest.approx(_PRICED_COST), _CREATOR_LANGFUSE_VARS["langfuse_public_key"]),)
+    assert getattr(charge, "cost", None) == pytest.approx(_PRICED_COST)
+    assert priced.table.statuses == {"job-priced": "completed"}
+    assert langfuse.events == ()
     (payload,) = capture.payloads
     assert payload["response_cost"] == pytest.approx(_PRICED_COST)
+    assert "the stored answer" not in json.dumps(payload, default=str)
+    metadata: Final = payload["metadata"]
+    assert isinstance(metadata, Mapping)
+    assert metadata["user_api_key_hash"] == _CREATING_KEY_HASH
+    assert metadata["user_api_key_team_id"] == ("team-alpha" if team_logging != "none" else None)
 
 
 @pytest.mark.asyncio

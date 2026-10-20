@@ -137,6 +137,8 @@ def creator_logging_fields(creator: ResponseCreator, proxy_config: "ProxyConfig 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
 
+    if not creator.settings_read:
+        return _REJECTED_CREATOR_LOGGING
     try:
         return key_and_team_logging_fields(
             user_api_key_dict=UserAPIKeyAuth(
@@ -424,11 +426,11 @@ class CheckResponsesCost:
         target: _PollTarget,
         response: ResponsesAPIResponse,
     ) -> BilledCharge | None:
-        creator: Final = await self._creator_attribution.response_creator(job, job.unified_object_id)
         if not await self._claim_for_billing(job):
             verbose_proxy_logger.info(f"Response {job.unified_object_id} was already billed elsewhere, skipping")
             return None
         try:
+            creator: Final = await self._creator_attribution.response_creator(job, job.unified_object_id)
             charge: Final = await self._log_billed_response(self._billed_response(job, target, response, creator))
         except BaseException:
             await self._release_billing_claim(job)
