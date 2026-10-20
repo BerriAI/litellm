@@ -639,7 +639,10 @@ class DeploymentAffinityCheck(CustomLogger):
             # likely a non-router call or a call path that doesn't support affinity.
             return None
 
-        model_id: Final = model_info.get("id")
+        typed_model_info: Final = cast(  # cast-ok: router kwargs payloads are str-keyed dicts
+            dict[str, object], model_info
+        )
+        model_id: Final = typed_model_info.get("id")
         if not model_id:
             verbose_router_logger.warning("DeploymentAffinityCheck: model_id missing; skipping affinity cache update.")
             return None
