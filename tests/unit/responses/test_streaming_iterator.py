@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import websockets.exceptions
 from pydantic_core import PydanticSerializationError
 
 import litellm
@@ -321,6 +322,43 @@ async def test_transport_error_after_output_started_is_not_fallback_eligible():
 
     assert exc_info.value is trailing_error
     _assert_failure_logged_once(logging_obj, trailing_error)
+
+
+_READ_TIMEOUT_PREFIXES: Final = [
+    pytest.param([], id="before-output"),
+    pytest.param(_PARTIAL_OUTPUT_EVENTS, id="after-output"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+async def test_transport_read_timeout_raises_litellm_timeout(prefix):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    stall: Final = httpx.ReadTimeout("")
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=stall)
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        async for _ in iterator:
+            pass
+
+    assert exc_info.value.status_code == 408
+    assert "Request timed out. Error_str: ReadTimeout" in str(exc_info.value)
+    assert exc_info.value.__cause__ is stall
+    _assert_failure_logged_once(logging_obj, stall)
+
+
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+def test_sync_transport_read_timeout_raises_litellm_timeout(prefix):
+    iterator: Final = _make_sync_iterator(
+        sse_events=prefix, logging_obj=_logging_obj_stub(), trailing_error=httpx.ReadTimeout("")
+    )
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        for _ in iterator:
+            pass
+
+    assert exc_info.value.status_code == 408
+    assert "Request timed out. Error_str: ReadTimeout" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -2559,41 +2597,57 @@ def test_faked_stream_builds_each_refusal_summary_and_custom_tool_input_once_for
     }
 
 
-def _blocking_dispatch(release: asyncio.Event) -> Mock:
-    async def _dispatch(*args: object, **kwargs: object) -> None:
-        await release.wait()
+@pytest.mark.asyncio
+async def test_shutdown_drain_waits_for_a_pending_logging_task():
+    row_written = asyncio.Event()
 
-    return Mock(side_effect=_dispatch)
+    async def write_row():
+        await asyncio.sleep(0.05)
+        row_written.set()
 
+    streaming_module.spawn_logging_task(asyncio.get_running_loop(), write_row(), task_name="row")
 
-def _pending_tasks_running(dispatch: Mock) -> list[asyncio.Task[object]]:
-    code: Final = dispatch.side_effect.__code__
-    return [task for task in streaming_module._PENDING_LOGGING_TASKS if task.get_coro().cr_code is code]
+    await streaming_module.drain_logging_tasks(timeout=1)
+
+    assert row_written.is_set()
 
 
 @pytest.mark.asyncio
-async def test_completed_stream_success_logging_task_is_strongly_referenced():
-    """#31059: the success-logging task was a bare create_task, so only the loop's weak
-    reference kept it alive and a GC pass could drop the stream's spend-log row."""
-    release: Final = asyncio.Event()
+async def test_shutdown_drain_gives_up_on_a_stuck_logging_task_at_its_timeout():
+    stuck = streaming_module.spawn_logging_task(asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck")
+
+    await asyncio.wait_for(streaming_module.drain_logging_tasks(timeout=0.05), timeout=1)
+
+    assert not stuck.done()
+    stuck.cancel()
+
+
+def _row_writer(row_written: asyncio.Event) -> Mock:
+    async def write_row(*args: object, **kwargs: object) -> None:
+        await asyncio.sleep(0.05)
+        row_written.set()
+
+    return Mock(side_effect=write_row)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_waits_for_a_completed_streams_success_logging():
+    row_written: Final = asyncio.Event()
     logging_obj: Final = _logging_obj_stub()
-    logging_obj.dispatch_success_handlers = _blocking_dispatch(release)
+    logging_obj.dispatch_success_handlers = _row_writer(row_written)
     iterator: Final = _make_iterator(sse_events=_COMPLETE_STREAM_EVENTS, logging_obj=logging_obj)
 
     async for _ in iterator:
         pass
+    await streaming_module.drain_logging_tasks(timeout=1)
 
-    tasks: Final = _pending_tasks_running(logging_obj.dispatch_success_handlers)
-    assert len(tasks) == 1
-    release.set()
-    await asyncio.wait(tasks)
-    assert tasks[0] not in streaming_module._PENDING_LOGGING_TASKS
+    assert row_written.is_set()
 
 
-_WS_TURN_EVENTS: Final = [
-    pytest.param(({"type": "response.completed", "response": {}},), "dispatch_success_handlers", id="success"),
+_WS_TERMINAL_EVENTS: Final = [
+    pytest.param({"type": "response.completed", "response": {}}, "dispatch_success_handlers", id="success"),
     pytest.param(
-        ({"type": "response.failed", "response": {"error": {"code": "server_error", "message": "boom"}}},),
+        {"type": "response.failed", "response": {"error": {"code": "server_error", "message": "boom"}}},
         "dispatch_failure_handlers",
         id="failure",
     ),
@@ -2601,19 +2655,22 @@ _WS_TURN_EVENTS: Final = [
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("events, dispatch_name", _WS_TURN_EVENTS)
-async def test_websocket_turn_logging_task_is_strongly_referenced(events, dispatch_name):
-    release: Final = asyncio.Event()
-    turn_logging_obj: Final = MagicMock(spec=LiteLLMLoggingObj)
-    turn_logging_obj.response_cost_calculator.return_value = 0.0
-    setattr(turn_logging_obj, dispatch_name, _blocking_dispatch(release))
+@pytest.mark.parametrize("terminal_event, dispatch_name", _WS_TERMINAL_EVENTS)
+async def test_shutdown_drain_waits_for_a_websocket_turns_logging(terminal_event, dispatch_name):
+    row_written: Final = asyncio.Event()
+    logging_obj: Final = MagicMock()
+    logging_obj.copy_for_new_call.return_value = logging_obj
+    logging_obj.response_cost_calculator.return_value = 0.0
+    setattr(logging_obj, dispatch_name, _row_writer(row_written))
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[json.dumps(terminal_event), websockets.exceptions.ConnectionClosedOK(None, None)]
+    )
     streaming: Final = streaming_module.ResponsesWebSocketStreaming(
-        websocket=Mock(), backend_ws=Mock(), logging_obj=MagicMock(spec=LiteLLMLoggingObj)
+        websocket=MagicMock(send_text=AsyncMock()), backend_ws=backend_ws, logging_obj=logging_obj
     )
 
-    streaming._log_turn(streaming_module._ResponsesWsTurn(logging_obj=turn_logging_obj, events=events))
+    await streaming.backend_to_client()
+    await streaming_module.drain_logging_tasks(timeout=1)
 
-    tasks: Final = _pending_tasks_running(getattr(turn_logging_obj, dispatch_name))
-    assert len(tasks) == 1
-    release.set()
-    await asyncio.wait(tasks)
+    assert row_written.is_set()

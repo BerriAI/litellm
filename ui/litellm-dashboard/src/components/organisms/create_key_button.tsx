@@ -479,7 +479,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       const response =
         endpoint === "service_account"
           ? await keyCreateServiceAccountCall(accessToken, payload)
-          : await keyCreateCall(accessToken, userID, payload);
+          : await keyCreateCall(accessToken, userID ?? "", payload);
 
       // Add the data to the state in the parent component
       // Also directly update the keys list in VirtualKeysTable without an API call
@@ -1902,7 +1902,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
               <DialogTitle>Create New User</DialogTitle>
             </DialogHeader>
             <CreateUserButton
-              userID={userID}
+              userID={userID ?? ""}
               accessToken={accessToken}
               possibleUIRoles={possibleUIRoles}
               onUserCreated={handleUserCreated}
@@ -1914,7 +1914,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       {apiKey && (
         <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
-          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
             <div className="grid grid-cols-1 gap-2 w-full">
               <DialogTitle className="text-lg font-medium text-foreground">Save your Key</DialogTitle>
               {apiKey != null ? (

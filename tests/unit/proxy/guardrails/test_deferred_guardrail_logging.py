@@ -1442,7 +1442,7 @@ class TestResponsesIteratorDeferredLogging:
         logging_obj._on_deferred_stream_complete = MagicMock()
         iterator = self._iterator(logging_obj)
 
-        with patch("litellm.responses.streaming_iterator._spawn_logging_task") as mock_spawn_logging_task:
+        with patch("litellm.responses.streaming_iterator.spawn_logging_task") as mock_spawn_logging_task:
             iterator._log_completed_response(is_async=True)
 
         mock_spawn_logging_task.assert_not_called()
@@ -1461,7 +1461,7 @@ class TestResponsesIteratorDeferredLogging:
         from litellm.responses import streaming_iterator
 
         created = []
-        real_spawn_logging_task = streaming_iterator._spawn_logging_task
+        real_spawn_logging_task = streaming_iterator.spawn_logging_task
 
         def tracking_spawn_logging_task(*args, **kwargs):
             task = real_spawn_logging_task(*args, **kwargs)
@@ -1469,7 +1469,7 @@ class TestResponsesIteratorDeferredLogging:
             return task
 
         with patch(
-            "litellm.responses.streaming_iterator._spawn_logging_task",
+            "litellm.responses.streaming_iterator.spawn_logging_task",
             side_effect=tracking_spawn_logging_task,
         ):
             iterator._log_completed_response(is_async=True)

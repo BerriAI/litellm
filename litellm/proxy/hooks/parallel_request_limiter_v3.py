@@ -105,6 +105,7 @@ else:
 
 
 _REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
+_MCP_KEY_RPM_LIMITS: Final[TypeAdapter[dict[str, int] | None]] = TypeAdapter(dict[str, int] | None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3000,12 +3001,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         MCP tool calls have no token usage, so only requests_per_unit is set;
         tokens_per_unit stays None so the TPM reservation path is never engaged.
         """
-        from litellm.proxy.auth.auth_utils import get_key_mcp_rpm_limit
-
         if not mcp_server_name or not user_api_key_dict.api_key:
             return
 
-        mcp_rpm_limit: Final = get_key_mcp_rpm_limit(user_api_key_dict)
+        metadata: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(user_api_key_dict.metadata or {})
+        mcp_rpm_limit: Final = _MCP_KEY_RPM_LIMITS.validate_python(metadata.get("mcp_rpm_limit"))
         if not mcp_rpm_limit:
             return
 
@@ -3046,11 +3046,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # team's mcp_rpm_limit. Every applicable team is charged rather than one being picked: the
         # limiter enforces all descriptors, so each team's own ceiling binds on a call made through
         # its grant, and there is no arbitrary attribution when several teams grant the same server.
-        team_limits: Final[list[tuple[str | None, dict[str, int] | None]]] = []
-        if user_api_key_dict.team_id:
-            team_limits.append((user_api_key_dict.team_id, get_team_mcp_rpm_limit(user_api_key_dict)))
-        for source_team_id, source_limit in (user_api_key_dict.mcp_source_team_rpm_limits or {}).items():
-            team_limits.append((source_team_id, source_limit))
+        source_team_limits: Final = user_api_key_dict.mcp_source_team_rpm_limits or {}
+        primary_team_ids: Final = (user_api_key_dict.team_id,) if user_api_key_dict.team_id else ()
+        team_ids: Final = tuple(dict.fromkeys((*primary_team_ids, *source_team_limits)))
+        team_limits: Final = tuple(
+            (
+                team_id,
+                get_team_mcp_rpm_limit(user_api_key_dict) or source_team_limits.get(team_id)
+                if team_id == user_api_key_dict.team_id
+                else source_team_limits[team_id],
+            )
+            for team_id in team_ids
+        )
 
         for team_id, mcp_rpm_limit in team_limits:
             if not team_id or not mcp_rpm_limit:

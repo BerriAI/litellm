@@ -441,7 +441,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Mock the logging task spawn and executor.submit since we're not in async context
         with (
             patch("asyncio.get_running_loop"),
-            patch("litellm.responses.streaming_iterator._spawn_logging_task"),
+            patch("litellm.responses.streaming_iterator.spawn_logging_task"),
             patch("litellm.responses.streaming_iterator.executor") as mock_executor,
         ):
             try:
@@ -730,7 +730,7 @@ class TestBaseResponsesAPIStreamingIterator:
                 return_value=mock_responses_api_response,
             ),
             patch("asyncio.get_running_loop"),
-            patch("litellm.responses.streaming_iterator._spawn_logging_task") as mock_spawn_logging_task,
+            patch("litellm.responses.streaming_iterator.spawn_logging_task") as mock_spawn_logging_task,
             patch("litellm.responses.streaming_iterator.executor") as mock_executor,
         ):
             result = iterator._process_chunk(json.dumps(test_chunk_data))

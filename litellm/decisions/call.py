@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -6,6 +7,7 @@ from typing import Final, Literal, TypeAlias
 
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
@@ -56,8 +58,9 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     UnsupportedDecisionsRequest,
 )
+from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, get_model_cost_key
 
 SystemOneQuestions: TypeAlias = Mapping[str, DecisionQuestion | Mapping[str, object]]
 OpenAIDecisionQuestions: TypeAlias = Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
@@ -415,6 +418,30 @@ def _outbound_headers(
     return MappingProxyType({**(extra_headers or {}), **forwarded})
 
 
+_LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _jsonable_fallback(value: object) -> object:
+    return dict(_LOGGED_FIELDS_ADAPTER.validate_python(value)) if isinstance(value, Mapping) else str(value)
+
+
+def _logged_request_message(caller_request: object) -> ChatCompletionUserMessage:
+    caller_fields: Final = _LOGGED_FIELDS_ADAPTER.validate_python(
+        to_jsonable_python(caller_request, fallback=_jsonable_fallback)
+    )
+    sent_fields: Final = json.dumps(
+        dict((name, value) for name, value in caller_fields.items() if value not in (None, [], {}))
+    )
+    return ChatCompletionUserMessage(role="user", content=sent_fields)
+
+
+def log_caller_request(kwargs: Mapping[str, object], caller_request: object) -> None:
+    """Record every request field the caller sent as the logged `messages`, before any validation."""
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.update_messages([_logged_request_message(caller_request)])
+
+
 def prepare_call(
     *,
     model: str,
@@ -458,7 +485,7 @@ def prepare_call(
         ) from error
 
     try:
-        resolved_api_base, resolved_api_key = provider_config.resolve_connection(
+        resolved_api_base, static_api_key = provider_config.resolve_connection(
             dynamic_api_base or api_base, dynamic_api_key or api_key
         )
     except ValueError as error:
@@ -469,6 +496,7 @@ def prepare_call(
             model=model,
             llm_provider=provider,
         )
+    resolved_api_key: Final = provider_config.resolve_credential(static_api_key, resolved_api_base, kwargs)
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
             message=f"Missing API key for Decisions provider '{provider}'",
@@ -666,7 +694,10 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
         {
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
-            "provider_response_model": f"{call.custom_llm_provider}/{call.model}",
+            "provider_response_model": (
+                get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
+                or f"{call.custom_llm_provider}/{call.model}"
+            ),
             **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )

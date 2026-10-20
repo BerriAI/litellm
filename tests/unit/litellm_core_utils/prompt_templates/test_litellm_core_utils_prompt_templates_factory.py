@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    _sanitize_anthropic_tool_use_id,
+    sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
@@ -640,6 +640,64 @@ async def test_bedrock_converse_replays_reasoning_to_claude_only_as_base64_of_cl
 
     assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
     assert assistant_content == [*sent, {"text": "hello"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model, final_text",
+    [("us.anthropic.claude-sonnet-4-6", "Leaves fall"), ("us.amazon.nova-pro-v1:0", "Leaves fall \n")],
+    ids=["claude", "nova"],
+)
+async def test_bedrock_converse_strips_trailing_whitespace_from_a_final_assistant_turn_for_claude_only(
+    use_async: bool, model: str, final_text: str
+):
+    """Claude on Converse 400s on a final assistant turn ending in whitespace, which a cut stream's prefill often has."""
+    messages: Final = [
+        {"role": "user", "content": "Write a haiku."},
+        {"role": "assistant", "content": "Sure.  "},
+        {"role": "user", "content": "About autumn."},
+        {"role": "assistant", "content": "Leaves fall \n"},
+    ]
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert [m["content"] for m in result if m["role"] == "assistant"] == [
+        [{"text": "Sure.  "}],
+        [{"text": final_text}],
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_keeps_whitespace_between_text_blocks_of_a_final_claude_assistant_turn(
+    use_async: bool,
+):
+    messages: Final = [
+        {"role": "user", "content": "Write a haiku."},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Leaves fall "}, {"type": "text", "text": "softly \n"}],
+        },
+    ]
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model="us.anthropic.claude-sonnet-4-6", llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(
+            messages=messages, model="us.anthropic.claude-sonnet-4-6", llm_provider="bedrock"
+        )
+    )
+
+    assert result[-1]["content"] == [{"text": "Leaves fall "}, {"text": "softly"}]
 
 
 def test_translate_thinking_blocks_keeps_dropping_redacted_data_when_called_the_old_way():
@@ -1832,6 +1890,25 @@ def test_bedrock_tools_unpack_defs():
     ]
 
     _bedrock_tools_pt(tools=tools)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"type": ["object", "null"]},
+        {"type": "object", "properties": {"tier": {"type": "integer"}}, "$defs": [{"type": "string"}]},
+    ],
+    ids=["root_type_list", "defs_list"],
+)
+def test_bedrock_tools_pt_sends_malformed_parameters_as_an_object_schema(parameters: dict[str, object]) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools: Final = [{"type": "function", "function": {"name": "json_tool_call", "parameters": parameters}}]
+
+    input_schema: Final = _bedrock_tools_pt(tools=tools)[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert input_schema["type"] == "object"
+    assert "$defs" not in input_schema
 
 
 def test_bedrock_tools_pt_strict_parameter():
@@ -4426,7 +4503,7 @@ def test_get_tool_calls_from_response_keeps_sanitized_concat_ids_distinct():
     )
 
     ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
-    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+    sanitized: Final = [sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
 
     assert len(sanitized) == len(set(sanitized))
     assert ids == ["a:b", "a:b__concat_2", "a_b__concat_1"]
@@ -4440,7 +4517,7 @@ def test_get_tool_calls_from_response_bumps_suffix_when_sibling_sanitizes_onto_i
     )
 
     ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
-    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+    sanitized: Final = [sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
 
     assert len(ids) == len(sanitized)
     assert len(sanitized) == len(set(sanitized))
