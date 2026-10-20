@@ -1392,7 +1392,7 @@ async def test_bedrock_secret_lookups_leave_the_event_loop_free(
     _ = await call()
 
     assert vault.read.is_set()
-    assert not vault.stalled_the_loop.is_set()
+    assert not vault.read_on_loop.is_set()
     assert ".us-west-2." in upstream.calls.last.request.url.host
 
 
