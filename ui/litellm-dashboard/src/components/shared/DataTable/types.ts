@@ -28,6 +28,8 @@ export interface DataTableResolvedProps<TData extends RowData, TValue> {
 
   isLoading?: boolean;
   isError?: boolean;
+  errorMessage?: React.ReactNode;
+  onRetry?: () => void;
   loadingMessage?: string;
   skeletonRowCount?: number;
   noDataMessage?: React.ReactNode;

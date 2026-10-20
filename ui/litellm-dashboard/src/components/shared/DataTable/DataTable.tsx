@@ -25,7 +25,8 @@ import {
   useReactTable,
   type VisibilityState,
 } from "@tanstack/react-table";
-import { SearchX } from "lucide-react";
+import { SearchX, TriangleAlert } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import * as React from "react";
 import { Fragment, useEffect, useState } from "react";
 
@@ -363,6 +364,23 @@ function DefaultEmptyState() {
   );
 }
 
+function ErrorState({ message, onRetry }: { message?: React.ReactNode; onRetry?: () => void }) {
+  return (
+    <div role="alert" className="flex flex-col items-center gap-1 py-6">
+      <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-destructive/10">
+        <TriangleAlert className="size-5 text-destructive" />
+      </div>
+      <div className="text-sm font-medium text-foreground">Failed to load</div>
+      {message ? <div className="max-w-prose text-center text-sm text-muted-foreground">{message}</div> : null}
+      {onRetry ? (
+        <Button variant="outline" size="sm" className="mt-2" onClick={onRetry}>
+          Retry
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 const SKELETON_WIDTHS = ["w-[58%]", "w-[44%]", "w-[70%]", "w-[50%]", "w-[64%]", "w-[48%]"] as const;
 
 function SkeletonCell<TData>({ column, index }: { column: Column<TData, unknown> | undefined; index: number }) {
@@ -599,6 +617,9 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
 
   const {
     isLoading = false,
+    isError = false,
+    errorMessage,
+    onRetry,
     loadingMessage = "Loading…",
     skeletonRowCount = 8,
     noDataMessage,
@@ -656,6 +677,13 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
           size={size}
           message={loadingMessage}
         />
+      );
+    }
+    if (isError && rows.length === 0) {
+      return (
+        <MessageRow colSpan={visibleColumnCount} stretch={stretchEmpty}>
+          <ErrorState message={errorMessage} onRetry={onRetry} />
+        </MessageRow>
       );
     }
     if (rows.length === 0) {
