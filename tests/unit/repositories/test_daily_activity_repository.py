@@ -104,21 +104,29 @@ def _user_spend_row(user_id: str | None, **overrides: object) -> dict[str, objec
     }
 
 
-def _export_row(api_key: str | None) -> dict[str, object]:
+def _export_row(
+    api_key: str | None,
+    *,
+    model: str | None = None,
+    user_id: str | None = None,
+    entity_id: str = "user-1",
+    spend: float = 1.0,
+    api_requests: int = 1,
+) -> dict[str, object]:
     return {
         "date": "2026-01-01",
-        "entity_id": "user-1",
+        "entity_id": entity_id,
         "entity_alias": None,
         "api_key": api_key,
         "key_alias": None,
-        "user_id": None,
+        "user_id": user_id,
         "user_email": None,
-        "model": None,
-        "spend": 1.0,
+        "model": model,
+        "spend": spend,
         "flat_cost": 0.0,
         "prompt_tokens": 10,
         "completion_tokens": 2,
-        "api_requests": 1,
+        "api_requests": api_requests,
         "successful_requests": 1,
         "failed_requests": 0,
         "cache_read_input_tokens": 3,
@@ -704,8 +712,93 @@ async def test_export_is_lazy_and_uses_the_last_row_as_the_next_cursor(monkeypat
         build_export_sql(
             _scope(),
             export_type=ExportType.DAILY_WITH_KEYS,
-            after=ExportCursor("2026-01-01", "user-1", "key-2"),
+            after=ExportCursor("2026-01-01", "user-1", ("key-2",)),
             batch_size=2,
+        ).params
+        == database.query_calls[1][1]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("export_type", "scope", "rows", "expected_cursor_params"),
+    [
+        (
+            ExportType.DAILY,
+            _scope(),
+            (_export_row("key-1"),),
+            (("2026-01-01", "user-1", 1),),
+        ),
+        (
+            ExportType.DAILY_WITH_MODELS,
+            _scope(),
+            (_export_row("key-1", model="model-a"), _export_row("key-1", model="model-b")),
+            (
+                ("2026-01-01", "user-1", "model-a", 1),
+                ("2026-01-01", "user-1", "model-b", 1),
+            ),
+        ),
+        (
+            ExportType.DAILY_WITH_USERS,
+            _scope(table=DailyActivityTable.TEAM),
+            (
+                _export_row("key-1", user_id="user-a", entity_id="team-1"),
+                _export_row("key-2", user_id="user-b", entity_id="team-1"),
+            ),
+            (
+                ("2026-01-01", "team-1", "user-a", 1),
+                ("2026-01-01", "team-1", "user-b", 1),
+            ),
+        ),
+    ],
+)
+async def test_export_pagination_preserves_existing_grouping_cursors(
+    monkeypatch: pytest.MonkeyPatch,
+    export_type: ExportType,
+    scope: DailyActivityScope,
+    rows: tuple[dict[str, object], ...],
+    expected_cursor_params: tuple[tuple[object, ...], ...],
+) -> None:
+    monkeypatch.setattr(constants, "USAGE_EXPORT_BATCH_SIZE", 1)
+    database = _FakeDatabase(tuple((row,) for row in rows))
+    repository, _ = _repository(database)
+
+    exported_rows: Final = tuple([row async for row in repository.export_rows(scope, export_type=export_type)])
+
+    assert len(exported_rows) == len(rows)
+    cursor_param_count: Final = len(expected_cursor_params[0])
+    next_page_params: Final = tuple(query[1][-cursor_param_count:] for query in database.query_calls[1:])
+    assert next_page_params == expected_cursor_params
+
+
+@pytest.mark.asyncio
+async def test_export_cursor_tracks_model_when_a_key_has_multiple_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(constants, "USAGE_EXPORT_BATCH_SIZE", 1)
+    database = _FakeDatabase(
+        (
+            (_export_row("key-1", model="model-a"),),
+            (_export_row("key-1", model="model-b"),),
+            (_export_row("key-2", model="model-a"),),
+        )
+    )
+    repository, _ = _repository(database)
+    rows = repository.export_rows(_scope(), export_type=ExportType.DAILY_WITH_KEYS_AND_MODELS)
+
+    assert tuple([(row.api_key, row.model) async for row in rows]) == (
+        ("key-1", "model-a"),
+        ("key-1", "model-b"),
+        ("key-2", "model-a"),
+    )
+    assert len(database.query_calls) == 4
+    assert database.query_calls[1][1][-5:] == ("2026-01-01", "user-1", "key-1", "model-a", 1)
+    assert database.query_calls[2][1][-5:] == ("2026-01-01", "user-1", "key-1", "model-b", 1)
+    assert database.query_calls[3][1][-5:] == ("2026-01-01", "user-1", "key-2", "model-a", 1)
+    assert (
+        build_export_sql(
+            _scope(),
+            export_type=ExportType.DAILY_WITH_KEYS_AND_MODELS,
+            after=ExportCursor("2026-01-01", "user-1", ("key-1", "model-a")),
+            batch_size=1,
         ).params
         == database.query_calls[1][1]
     )

@@ -104,6 +104,7 @@ class ExportType(str, Enum):
     DAILY = "daily"
     DAILY_WITH_KEYS = "daily_with_keys"
     DAILY_WITH_MODELS = "daily_with_models"
+    DAILY_WITH_KEYS_AND_MODELS = "daily_with_keys_and_models"
     DAILY_WITH_USERS = "daily_with_users"
 
 
