@@ -4841,7 +4841,8 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
     # installed would make this depend on when that happens.
     monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
 
-    saved_model_cost = litellm.model_cost
+    saved_model_cost: Final = litellm.model_cost
+    monkeypatch.setattr(litellm, "model_cost", dict(saved_model_cost))
     try:
         litellm.register_model(
             model_cost={
