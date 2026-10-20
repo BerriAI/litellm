@@ -90,12 +90,20 @@ def continuation_cap_of(request_body: RequestBody) -> int | None:
     return _int_or_none(generation_config["max_output_tokens"])
 
 
+def _asks_for_text_only(generation_config: GenerationConfig) -> bool:
+    if "responseModalities" not in generation_config:
+        return True
+    return all(modality == "TEXT" for modality in generation_config["responseModalities"])
+
+
 def with_default_output_budget(
     request_body: RequestBody, model_max_output_tokens: Callable[[], int | None]
 ) -> RequestBody:
     generation_config: Final = request_body.get("generationConfig", GenerationConfig())
     budget: Final = get_env_int_or_none(DEFAULT_OUTPUT_BUDGET_ENV)
     if budget is None or budget <= 0 or not _OUTPUT_LIMIT_KEYS.isdisjoint(generation_config):
+        return request_body
+    if not _asks_for_text_only(generation_config):
         return request_body
     model_max: Final = model_max_output_tokens()
     if model_max is None:

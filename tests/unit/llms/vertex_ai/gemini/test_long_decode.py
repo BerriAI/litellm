@@ -1325,7 +1325,11 @@ async def test_request_with_no_output_limit_keeps_continuing_until_the_env_budge
     hops: Final = (
         (_sse(STREAM_FIRST_CHUNK, STREAM_HOP_1_END), _sse(HOP_2_TRUNCATED), _sse(HOP_2))
         if stream
-        else (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2_TRUNCATED), httpx.Response(200, json=HOP_2))
+        else (
+            httpx.Response(200, json=HOP_1),
+            httpx.Response(200, json=HOP_2_TRUNCATED),
+            httpx.Response(200, json=HOP_2),
+        )
     )
     kwargs: Final = {"model": ARGON, "messages": list(MESSAGES), "stream": stream, "api_key": "fake-gemini-key"}
     transport: Final = httpx.MockTransport(_replay(hops, sent))
@@ -1388,6 +1392,33 @@ async def test_env_budget_applies_only_to_a_request_that_sets_no_output_limit_of
         api_key="fake-gemini-key",
         client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
         **request_params,
+    )
+
+    assert _output_limits(sent[0]) == expected_limits
+
+
+@pytest.mark.parametrize(
+    "modalities, expected_limits",
+    [
+        (["audio"], {}),
+        (["text", "audio"], {}),
+        (["text", "image"], {}),
+        (["text"], {"max_output_tokens": 50}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_env_budget_applies_only_to_a_request_asking_for_text_output(
+    monkeypatch: pytest.MonkeyPatch, modalities: list[str], expected_limits: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=ARGON,
+        messages=list(MESSAGES),
+        modalities=modalities,
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
     )
 
     assert _output_limits(sent[0]) == expected_limits
