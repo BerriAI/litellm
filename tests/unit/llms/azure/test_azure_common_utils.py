@@ -1392,12 +1392,19 @@ def test_get_azure_ad_token_with_oidc_token(setup_mocks, monkeypatch):
     ids=["username_password", "code_provider"],
 )
 def test_an_oidc_azure_ad_token_wins_over_another_sign_in_on_both_the_sdk_and_direct_http_routes(
-    setup_mocks, competing_sign_in: dict[str, object]
+    monkeypatch: pytest.MonkeyPatch, competing_sign_in: dict[str, object]
 ) -> None:
+    class TokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            assertion: Final = parse_qs(request.read().decode())["client_assertion"][0]
+            return httpx.Response(200, json={"access_token": f"exchanged.{assertion}", "expires_in": 3600})
+
+    monkeypatch.setattr(litellm, "sync_transport", TokenEndpoint(), raising=False)
+    monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
     litellm_params: Final = {
-        "azure_ad_token": "oidc/test-token",
-        "client_id": "test-client-id",
-        "tenant_id": "test-tenant-id",
+        "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
+        "client_id": "oidc-wins-client",
+        "tenant_id": "oidc-tenant",
         **competing_sign_in,
     }
 
@@ -1411,7 +1418,7 @@ def test_an_oidc_azure_ad_token_wins_over_another_sign_in_on_both_the_sdk_and_di
         is_async=False,
     )
 
-    assert direct_http_token == sdk_client_params["azure_ad_token_provider"]() == "mock-oidc-token"
+    assert direct_http_token == sdk_client_params["azure_ad_token_provider"]() == "exchanged.federated-oidc-token"
 
 
 def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
