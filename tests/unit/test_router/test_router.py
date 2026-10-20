@@ -5,16 +5,17 @@ import functools
 import gc
 import itertools
 import json
+import linecache
 import logging
 import os
 import sys
 import threading
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import FrameType, MappingProxyType, SimpleNamespace
-from typing import TYPE_CHECKING, Final, Literal, cast
+from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
+from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -29735,7 +29736,15 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
     assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
 
 
-_REINDEX_HOLD_SECONDS: Final = 0.2
+_SYNC_SECONDS: Final = 10
+_ROUTER_FILE: Final = Router.__init__.__code__.co_filename
+_INDEX_LOCK_LINES: Final = frozenset(
+    number
+    for number, line in enumerate(linecache.getlines(_ROUTER_FILE), start=1)
+    if "with self._deployment_index_lock" in line
+)
+
+_Read = TypeVar("_Read")
 
 
 def _concurrent_delete_deployment(index: int) -> dict[str, object]:
@@ -29754,17 +29763,28 @@ def _concurrent_delete_router() -> Router:
     return Router(model_list=[_concurrent_delete_deployment(index) for index in range(4)])
 
 
-@contextlib.contextmanager
-def _writer_held_at_reindex(write: Callable[[], object], event: Literal["call", "c_call"] = "call") -> Iterator[None]:
-    """Hold `write` on its own thread at its first `event` in the re-index: after the list shrank, before the maps caught up."""
+def _read_during_held_write(
+    read: Callable[[], _Read],
+    write: Callable[[], object],
+    event: Literal["call", "c_call"] = "call",
+    write_after: CodeType | None = None,
+) -> _Read:
+    """Run `read` on its own thread while `write` waits at its first `event` in the re-index, after the list shrank and
+    before the maps caught up. With `write_after`, the write starts when `read` returns from that function. The write
+    resumes once `read` returns or reaches the router's index lock, so a read that skips the lock meets the half-updated
+    list and a read that takes the lock waits for the write"""
     reindex: Final = Router._update_deployment_indices_after_removal.__code__
     held: Final = threading.Event()
     release: Final = threading.Event()
+    settled: Final = threading.Event()
+    released_in_time: Final[list[bool]] = []
+    outcome: Final[list[_Read]] = []
+    failure: Final[list[BaseException]] = []
 
     def hold_in_reindex(frame: FrameType, observed: str, _arg: object) -> None:
         if observed == event and frame.f_code is reindex and not held.is_set():
             held.set()
-            release.wait(timeout=_REINDEX_HOLD_SECONDS)
+            released_in_time.append(release.wait(timeout=_SYNC_SECONDS))
 
     def run_write() -> None:
         previous: Final = sys.getprofile()
@@ -29775,13 +29795,47 @@ def _writer_held_at_reindex(write: Callable[[], object], event: Literal["call", 
             sys.setprofile(previous)
 
     writer: Final = threading.Thread(target=run_write)
-    writer.start()
+
+    def start_write() -> None:
+        writer.start()
+        assert held.wait(timeout=_SYNC_SECONDS), "the write never reached re-indexing"
+
+    def watch_read(frame: FrameType, observed: str, _arg: object) -> Callable[..., object] | None:
+        if frame.f_code.co_filename != _ROUTER_FILE:
+            return None
+        if observed == "return" and frame.f_code is write_after and writer.ident is None:
+            start_write()
+        elif observed == "line" and held.is_set() and frame.f_lineno in _INDEX_LOCK_LINES:
+            settled.set()
+        return watch_read
+
+    def run_read() -> None:
+        previous: Final = sys.gettrace()
+        sys.settrace(watch_read)
+        try:
+            outcome.append(read())
+        except BaseException as error:
+            failure.append(error)
+        finally:
+            sys.settrace(previous)
+            settled.set()
+
+    reader: Final = threading.Thread(target=run_read)
     try:
-        assert held.wait(timeout=10), "the write never reached re-indexing"
-        yield
+        if write_after is None:
+            start_write()
+        reader.start()
+        assert settled.wait(timeout=_SYNC_SECONDS), "the read neither returned nor reached the index lock"
     finally:
         release.set()
-        writer.join()
+        if reader.ident is not None:
+            reader.join()
+        if writer.ident is not None:
+            writer.join()
+    assert released_in_time == [True], "the write was not held for the whole read"
+    if failure:
+        raise failure[0]
+    return outcome[0]
 
 
 def _deployment_ids(deployments: list[DeploymentTypedDict]) -> tuple[str, ...]:
@@ -29857,8 +29911,7 @@ def test_lookup_during_a_concurrent_delete_returns_the_requested_deployment(
 ) -> None:
     router: Final = _concurrent_delete_router()
 
-    with _writer_held_at_reindex(lambda: router.delete_deployment("deployment-0")):
-        observed: Final = read(router)
+    observed: Final = _read_during_held_write(lambda: read(router), lambda: router.delete_deployment("deployment-0"))
 
     assert observed == expected
 
@@ -29869,8 +29922,9 @@ def test_lookup_during_an_upsert_returns_the_requested_deployment() -> None:
         **{**_concurrent_delete_deployment(0), "litellm_params": {"model": "openai/gpt-0", "api_key": "rotated"}}
     )
 
-    with _writer_held_at_reindex(lambda: router.upsert_deployment(rotated)):
-        observed: Final = router.get_deployment("deployment-3").model_info.id
+    observed: Final = _read_during_held_write(
+        lambda: router.get_deployment("deployment-3").model_info.id, lambda: router.upsert_deployment(rotated)
+    )
 
     assert observed == "deployment-3"
 
@@ -29878,8 +29932,10 @@ def test_lookup_during_an_upsert_returns_the_requested_deployment() -> None:
 def test_add_during_a_concurrent_delete_indexes_the_added_deployment() -> None:
     router: Final = _concurrent_delete_router()
 
-    with _writer_held_at_reindex(lambda: router.delete_deployment("deployment-0")):
-        router.add_deployment(Deployment(**_concurrent_delete_deployment(4)))
+    _read_during_held_write(
+        lambda: router.add_deployment(Deployment(**_concurrent_delete_deployment(4))),
+        lambda: router.delete_deployment("deployment-0"),
+    )
 
     assert [router.get_deployment(f"deployment-{index}").model_info.id for index in range(1, 5)] == [
         f"deployment-{index}" for index in range(1, 5)
@@ -29889,29 +29945,23 @@ def test_add_during_a_concurrent_delete_indexes_the_added_deployment() -> None:
 def test_set_model_list_during_a_concurrent_delete_indexes_the_new_list() -> None:
     router: Final = _concurrent_delete_router()
 
-    with _writer_held_at_reindex(lambda: router.delete_deployment("deployment-0"), event="c_call"):
-        router.set_model_list([_concurrent_delete_deployment(index) for index in range(10, 14)])
+    _read_during_held_write(
+        lambda: router.set_model_list([_concurrent_delete_deployment(index) for index in range(10, 14)]),
+        lambda: router.delete_deployment("deployment-0"),
+        event="c_call",
+    )
 
     assert router.get_model_ids() == [f"deployment-{index}" for index in range(10, 14)]
 
 
 def test_team_model_has_alternatives_when_a_delete_starts_after_its_deployment_lookup() -> None:
     router: Final = _concurrent_delete_router()
-    lookup: Final = Router.get_deployment.__code__
-    previous: Final = sys.getprofile()
 
-    with contextlib.ExitStack() as held_delete:
-
-        def start_delete_after_lookup(frame: FrameType, event: str, _arg: object) -> None:
-            if event == "return" and frame.f_code is lookup:
-                sys.setprofile(previous)
-                held_delete.enter_context(_writer_held_at_reindex(lambda: router.delete_deployment("deployment-0")))
-
-        sys.setprofile(start_delete_after_lookup)
-        try:
-            has_alternatives: Final = router.team_model_has_alternatives("deployment-3")
-        finally:
-            sys.setprofile(previous)
+    has_alternatives: Final = _read_during_held_write(
+        lambda: router.team_model_has_alternatives("deployment-3"),
+        lambda: router.delete_deployment("deployment-0"),
+        write_after=Router.get_deployment.__code__,
+    )
 
     assert has_alternatives is True
 
@@ -29930,7 +29980,9 @@ def test_init_adaptive_router_deployment_during_a_concurrent_delete_prices_the_l
         model_info=ModelInfo(id="adaptive"),
     )
 
-    with _writer_held_at_reindex(lambda: router.delete_deployment("deployment-0")):
-        router.init_adaptive_router_deployment(deployment=adaptive)
+    _read_during_held_write(
+        lambda: router.init_adaptive_router_deployment(deployment=adaptive),
+        lambda: router.delete_deployment("deployment-0"),
+    )
 
     assert router.adaptive_routers["adaptive"][0].strategy.model_to_cost == {"model-3": 3e-06}
