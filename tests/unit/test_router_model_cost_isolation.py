@@ -18,6 +18,7 @@ import queue
 import re
 import sys
 import threading
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, cast
 from unittest.mock import Mock, patch
@@ -169,6 +170,35 @@ async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch
         assert router.get_configured_token_limits("local") == (None, None)
         await router.arefresh_model_info(client=handler)
         assert router.get_configured_token_limits("local") == (2048, 2048)
+    _invalidate_model_cost_lowercase_map()
+
+
+async def test_discovery_sends_the_secret_behind_an_oidc_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text("local-secret")
+    router: Final = Router(model_list=[{
+        "model_name": "local",
+        "litellm_params": {
+            "model": "hosted_vllm/local-model",
+            "api_base": "https://discovery.test/v1",
+            "api_key": f"oidc/file/{token}",
+        },
+        "model_info": {"id": "oidc-deployment"},
+    }])
+    authorizations: Final[list[str | None]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        authorizations.append(request.headers.get("Authorization"))
+        return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        await router._arefresh_deployment_model_info(router.model_list[0], client=handler)
+    assert authorizations == ["Bearer local-secret"]
     _invalidate_model_cost_lowercase_map()
 
 
@@ -976,6 +1006,67 @@ def test_partial_pricing_does_not_overwrite_explicit_cache_fields():
         entry = litellm.model_cost[deploy_id]
         assert entry.get("cache_creation_input_token_cost") == explicit_cache_create
         assert entry.get("cache_read_input_token_cost") == explicit_cache_read
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+@pytest.mark.parametrize(
+    ("deployment_cache_prices", "billed_cache_read_rate"),
+    [({}, 2.5e-07), ({"cache_read_input_token_cost": 1e-07}, 1e-07)],
+    ids=["inherits-builtin-explicit-rate", "own-cache-read-price-wins"],
+)
+def test_partial_custom_pricing_bills_explicit_cache_hits(
+    deployment_cache_prices: dict[str, float], billed_cache_read_rate: float
+):
+    backend_model = "dashscope/qwen-explicit-cache-inherit-backend"
+    deploy_id = "qwen-deploy-partial-pricing"
+    model_keys = {
+        deploy_id: litellm.model_cost.get(deploy_id),
+        backend_model: litellm.model_cost.get(backend_model),
+    }
+    litellm.model_cost[backend_model] = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_creation_input_token_cost": 3.125e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "explicit_cache_read_input_token_cost": 2.5e-07,
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "qwen-custom",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key",
+                        "input_cost_per_token": 2e-06,
+                        "output_cost_per_token": 6e-06,
+                        **deployment_cache_prices,
+                    },
+                    "model_info": {"id": deploy_id},
+                }
+            ],
+        )
+        response = litellm.ModelResponse(
+            model=backend_model,
+            usage=litellm.Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                prompt_tokens_details={"cached_tokens": 1000, "cache_type": "ephemeral"},
+            ),
+        )
+
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model=backend_model,
+            custom_pricing=True,
+            router_model_id=deploy_id,
+        )
+
+        assert cost == pytest.approx(1000 * billed_cache_read_rate)
     finally:
         _restore_model_cost_entries(model_keys)
 

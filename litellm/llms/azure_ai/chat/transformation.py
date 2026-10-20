@@ -1,7 +1,7 @@
 import copy
 import enum
 import re
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Collection, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -119,6 +119,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         optional_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
         model: str,
         drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
         if not azureAIGPT5Config.is_model_gpt_5_model(model):
             return super().map_openai_params(
@@ -132,6 +134,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
         )
 
     def _supports_stop_reason(self, model: str) -> bool:

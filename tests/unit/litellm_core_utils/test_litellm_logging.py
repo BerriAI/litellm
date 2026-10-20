@@ -32,6 +32,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
 from litellm.constants import (
     KUBERNETES_POD_ROUTING_KEY,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
     REDACTED_BY_LITELLM,
     SENTRY_PII_DENYLIST,
@@ -406,6 +407,20 @@ def test_get_masked_api_base(logging_obj):
     masked_api_base = logging_obj._get_masked_api_base(api_base)
     assert masked_api_base == "https://api.openai.com/v1"
     assert type(masked_api_base) == str
+
+
+@pytest.mark.parametrize("no_upstream_call", [False, True])
+def test_pre_call_stamps_the_provider_handoff_only_when_a_provider_call_is_made(logging_obj, no_upstream_call):
+    """The proxy fires pre_call for a failure it raised itself (auth, rate limit, client disconnect)
+    so callbacks see it; that call never reached a provider, so neither handoff instant may be set."""
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    if no_upstream_call:
+        logging_obj.model_call_details[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
+
+    logging_obj.pre_call(input="", api_key="")
+
+    assert ("api_call_start_time" in logging_obj.model_call_details) is not no_upstream_call
+    assert (logging_obj.model_call_details.get("first_api_call_start_time") is not None) is not no_upstream_call
 
 
 def test_pre_call_tolerates_missing_api_base(logging_obj):
@@ -1402,6 +1417,56 @@ class TestRetrieveBatchCostPassesModelIdentity:
         assert captured["model_name"] == "bedrock/global.anthropic.claude-sonnet-4-6"
         assert captured["model_info"] is not None
         assert captured["model_info"]["input_cost_per_token"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_forwards_vertex_location_of_the_deployment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        captured: dict[str, object] = {}
+
+        from litellm.batches.batch_utils import BatchCostUsageResult
+        from litellm.types.utils import LiteLLMBatch, Usage
+
+        async def fake_handle_completed_batch(**kwargs: object) -> BatchCostUsageResult:
+            captured.update(kwargs)
+            return BatchCostUsageResult(
+                cost=1.25,
+                usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
+                models=["gemini-3.5-flash"],
+                successful_requests=1,
+                failed_requests=0,
+            )
+
+        monkeypatch.setattr(logging_module, "handle_completed_batch", fake_handle_completed_batch)
+
+        obj = LitellmLogging(
+            model="vertex_ai/gemini-3.5-flash",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-2",
+            function_id="f",
+        )
+        obj.custom_llm_provider = "vertex_ai"
+        obj.litellm_params = {"vertex_project": "proj-1", "vertex_location": "us-central1"}
+
+        batch = LiteLLMBatch(
+            id="batch_vertex",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-in",
+            object="batch",
+            status="completed",
+            output_file_id="file-out",
+        )
+
+        with contextlib.suppress(Exception):
+            await obj._async_success_handler_body(result=batch, start_time=None, end_time=None)
+
+        assert captured, "handle_completed_batch was never called"
+        assert captured["vertex_location"] == "us-central1"
 
 
 class TestRetrieveBatchPricesOnlyFinalBatches:
@@ -8300,10 +8365,10 @@ async def test_supabase_logs_the_request_messages_and_response_for_async_request
 
 def _resolve(custom_llm_provider, litellm_params, optional_params, model):
     from litellm.litellm_core_utils.litellm_logging import (
-        _resolve_vertex_location_for_cost,
+        resolve_vertex_location_for_cost,
     )
 
-    return _resolve_vertex_location_for_cost(
+    return resolve_vertex_location_for_cost(
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         optional_params=optional_params,

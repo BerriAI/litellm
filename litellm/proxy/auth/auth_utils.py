@@ -21,7 +21,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -36,7 +36,12 @@ from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_me
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment, server_owned_wif_fields_present
+from litellm.types.router import (
+    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+    Deployment,
+    reject_server_owned_wif_fields,
+    server_owned_wif_fields_present,
+)
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
 from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
 
@@ -246,16 +251,19 @@ reject_server_owned_wif_params = _reject_server_owned_wif_params
 
 _CREDENTIAL_VALUES: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
+_LIST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
 
 def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
-    """Raise ``ValueError`` if a request body picks the federated identity by credential name.
+    """Raise ``ValueError`` if a request body picks a server-owned identity by credential name.
 
     ``load_credentials_from_list`` merges a named credential's values into the call, so a body
     naming a federated credential moves the token exchange onto that credential's federation rule
     and organization exactly as sending the federation fields inline would, which
-    ``reject_server_owned_wif_params`` already refuses. Attaching one is a deployment decision, so
-    it is refused with no client-side opt-in to relax it, the same as the inline form.
+    ``reject_server_owned_wif_params`` already refuses, and a body naming one whose ``api_key`` is
+    an ``oidc/`` secret reference gets the proxy to read that secret for a call it shapes. Attaching
+    either is a deployment decision, so it is refused with no client-side opt-in to relax it, the
+    same as the inline form.
 
     Only credentials already loaded into memory can be resolved here, which is every credential the
     proxy would resolve for the call itself: ``load_credentials_from_list`` reads the same list.
@@ -271,8 +279,8 @@ def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
     if wif_fields:
         raise ValueError(
             f"Rejected Request: litellm_credential_name={named!r} names a credential configured for "
-            f"workload identity federation or OAuth token exchange ({wif_fields[0]}), which a request body "
-            "cannot choose. "
+            f"workload identity federation or OAuth token exchange, or holding an oidc/ api_key secret "
+            f"reference ({wif_fields[0]}), which a request body cannot choose. "
             "A proxy admin attaches it to a deployment."
         )
 
@@ -685,17 +693,50 @@ def is_request_body_safe(
         _reject_client_chosen_federation(user_config_params, manages_deployments=manages_deployments)
     litellm_params: Final = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
-        _reject_client_chosen_federation(litellm_params, manages_deployments=manages_deployments)
+        _reject_request_credential_params(litellm_params, manages_deployments=manages_deployments)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(
-                litellm_params_metadata,
-                general_settings,
-                llm_router,
-                model,
-                manages_deployments=manages_deployments,
+                litellm_params_metadata, general_settings, llm_router, model, manages_deployments=manages_deployments
             )
+    for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
+        reject_api_key_secret_reference(user_config_params)
     return True
+
+
+def _reject_request_credential_params(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
+    if manages_deployments:
+        reject_server_owned_wif_fields(litellm_params)
+    else:
+        reject_server_owned_wif_params(litellm_params)
+        reject_federated_credential_reference(litellm_params)
+    for nested_params in _nested_configs(litellm_params):
+        reject_api_key_secret_reference(nested_params)
+
+
+def _user_config_litellm_params(request_body: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    user_config: Final = _coerce_metadata_to_dict(request_body.get("user_config"))
+    if user_config is None:
+        return ()
+    entries: Final = _mappings_in(user_config.get("model_list")) + _mappings_in(user_config.get("search_tools"))
+    nested: Final = tuple(
+        litellm_params
+        for entry in entries
+        if (litellm_params := _coerce_metadata_to_dict(entry.get("litellm_params"))) is not None
+    )
+    defaults: Final = _coerce_metadata_to_dict(user_config.get("default_litellm_params"))
+    return nested if defaults is None else (*nested, defaults)
+
+
+def _nested_configs(params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        nested for key in _NESTED_CONFIG_KEYS if (nested := _coerce_metadata_to_dict(params.get(key))) is not None
+    )
+
+
+def _mappings_in(value: object) -> tuple[Mapping[str, object], ...]:
+    entries: Final = _LIST_ENTRIES.validate_python(value) if isinstance(value, list) else ()
+    return tuple(mapping for entry in entries if (mapping := _coerce_metadata_to_dict(entry)) is not None)
 
 
 def carries_client_side_overrides(request_body: object) -> bool:
