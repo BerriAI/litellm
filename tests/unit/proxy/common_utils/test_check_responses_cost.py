@@ -1792,8 +1792,14 @@ def _priced_poller(
     prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         side_effect=key_lookup_error or (lambda where, **_: key_rows.get(where["token"]))
     )
+    rotation_chain: Final = (api_key, *rotated_to)
+    rotated_from: Final = dict(zip(rotation_chain, rotation_chain[1:]))
     prisma_client.db.litellm_deprecatedverificationtoken.find_unique = AsyncMock(
-        return_value=SimpleNamespace(token=api_key, active_token_id=next(iter(rotated_to))) if rotated_to else None
+        side_effect=lambda where: (
+            SimpleNamespace(token=where["token"], active_token_id=rotated_from[where["token"]])
+            if where["token"] in rotated_from
+            else None
+        )
     )
     prisma_client.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=deleted_key_row)
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
@@ -2190,8 +2196,17 @@ async def test_the_billing_event_reaches_the_langfuse_projects_the_creators_own_
     assert all(cost == pytest.approx(_PRICED_COST) for cost, _ in billed_events)
 
 
+def _rotations_for(retired: str, key_logging: object) -> Mapping[str, object]:
+    rotated_once: Final = hashlib.sha256(b"sk-alice-rotated").hexdigest()
+    if retired == "rotated key":
+        return {rotated_once: key_logging}
+    if retired == "key rotated twice":
+        return {rotated_once: None, hashlib.sha256(b"sk-alice-rotated-again").hexdigest(): key_logging}
+    return {}
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("retired", ["rotated key", "deleted key", "deleted team"])
+@pytest.mark.parametrize("retired", ["rotated key", "key rotated twice", "deleted key", "deleted team"])
 async def test_a_creator_rotated_or_deleted_before_the_bill_still_gets_the_charge_in_its_own_langfuse_project(
     monkeypatch: pytest.MonkeyPatch, retired: str
 ):
@@ -2209,8 +2224,8 @@ async def test_a_creator_rotated_or_deleted_before_the_bill_still_gets_the_charg
 
     await _bill_through_a_priced_deployment(
         _terminal_response(),
-        rotated_to={hashlib.sha256(b"sk-alice-rotated").hexdigest(): key_logging} if retired == "rotated key" else {},
-        deleted_key_row=key_logging if retired == "deleted key" else None,
+        rotated_to=_rotations_for(retired, key_logging),
+        deleted_key_row=key_logging if retired == "deleted key" else SimpleNamespace(metadata={}),
         deleted_team_row=_creator_logging("team callback_settings").team_row if retired == "deleted team" else None,
     )
 

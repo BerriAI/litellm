@@ -67,6 +67,7 @@ class ManagedObjectRow(Protocol):
 
 _TAG_LIST_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object])
 _KEY_OWNER_SCOPE_PREFIX: Final = "key:"
+_MAX_ROTATION_HOPS: Final = 16
 
 
 def _string_tags(request_tags: object) -> list[str] | None:
@@ -138,9 +139,9 @@ class ManagedObjectCreatorAttribution:
     before did, and never names a key-scoped creator as its user. A key that sets no budget of
     its own takes its budget tier's, the same rule auth applies. Its creator's key and team
     metadata come along too, so the billed event reaches the key's and team's logging callbacks
-    like that read did. A rotated key's metadata is read from the key it was rotated to, and a
-    deleted key's or team's from its deleted row. A key or team lookup that fails raises
-    instead, so the bill waits for the next read or poll.
+    like that read did. A rotated key's metadata is read from the live key its rotations lead
+    to, and a deleted key's or team's from its deleted row. A key or team lookup that fails
+    raises instead, so the bill waits for the next read or poll.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -193,11 +194,10 @@ class ManagedObjectCreatorAttribution:
     async def _retired_key_metadata(self, api_key: str | None) -> Mapping[str, object]:
         if not _names_a_key_row(api_key):
             return {}
-        rotation: Final = await _rotated_token_table(self._prisma_client).find_unique(where={"token": api_key})
-        current_token: Final = rotation.active_token_id if rotation is not None else api_key
+        current_token: Final = await self._token_rotated_to(api_key, _MAX_ROTATION_HOPS)
         current_key: Final = (
             await _token_table(self._prisma_client).find_unique(where={"token": current_token})
-            if rotation is not None
+            if current_token != api_key
             else None
         )
         if current_key is not None:
@@ -207,6 +207,12 @@ class ManagedObjectCreatorAttribution:
                 where={"token": current_token}, order={"deleted_at": "desc"}
             )
         )
+
+    async def _token_rotated_to(self, token: str, hops_left: int) -> str:
+        rotation: Final = await _rotated_token_table(self._prisma_client).find_unique(where={"token": token})
+        if rotation is None or hops_left == 0:
+            return token
+        return await self._token_rotated_to(rotation.active_token_id, hops_left - 1)
 
     async def _deleted_team_metadata(self, team_id: str | None) -> Mapping[str, object]:
         if not team_id:
