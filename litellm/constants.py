@@ -743,6 +743,8 @@ ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
 OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS: Final = 13
 PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
 PDF_MAX_FORM_XOBJECT_DEPTH: Final = 32
+AZURE_DATA_ZONES: Final = frozenset({"global", "global-standard", "us", "us-gov", "eu", "apac"})
+OPENAI_CHAT_MODES: Final = frozenset({"chat", "responses"})
 VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,

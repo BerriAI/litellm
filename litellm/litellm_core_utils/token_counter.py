@@ -5,7 +5,6 @@ import io
 import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from functools import partial
 from itertools import accumulate, chain
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
@@ -22,6 +21,7 @@ from litellm.constants import (
     ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX,
     ANTHROPIC_IMAGE_MAX_PIXELS,
     ANTHROPIC_IMAGE_PIXELS_PER_TOKEN,
+    AZURE_DATA_ZONES,
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
@@ -30,6 +30,7 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    OPENAI_CHAT_MODES,
     OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS,
     PDF_DATA_URL_PREFIX,
     PDF_MAX_FORM_XOBJECT_DEPTH,
@@ -361,11 +362,18 @@ class _PdfBox(Protocol):
     def height(self) -> float: ...
 
 
+class _PdfContent(Protocol):
+    @property
+    def operations(self) -> Sequence[tuple[object, bytes]]: ...
+
+
 class _PdfPage(Protocol):
     @property
     def mediabox(self) -> _PdfBox: ...
 
-    def extract_text(self, *, visitor_operand_before: Callable[..., None] | None = None) -> str: ...
+    def extract_text(self) -> str: ...
+
+    def get_contents(self) -> _PdfContent | None: ...
 
 
 class _PdfReader(Protocol):
@@ -447,15 +455,38 @@ def _is_openai_chat_model(model: str) -> bool:
     return model in litellm.open_ai_chat_completion_models or model in litellm.azure_llms
 
 
+def _openai_deployment_name(model: str) -> str:
+    provider_free: Final = model.removeprefix("openai/").removeprefix("azure/")
+    zone, _, deployment_name = provider_free.partition("/")
+    return deployment_name if zone in AZURE_DATA_ZONES else provider_free
+
+
 def _openai_model_family(model: str) -> str | None:
-    deployment_name: Final = model.removeprefix("openai/").removeprefix("azure/").rsplit("/", 1)[-1]
-    words: Final = deployment_name.split("-")
+    longest_listed_name: Final = max(
+        map(len, chain(litellm.open_ai_chat_completion_models, litellm.azure_llms)), default=0
+    )
+    deployment_name: Final = _openai_deployment_name(model)
+    words: Final = deployment_name[: longest_listed_name + 1].split("-")
     prefixes: Final = ("-".join(words[:end]) for end in range(len(words), 0, -1))
     return next((prefix for prefix in prefixes if _is_openai_chat_model(prefix)), None)
 
 
+def _cost_map_entry(model: str) -> Mapping[str, object]:
+    entry: Final[object] = litellm.model_cost.get(model)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]  # cost map is loaded untyped
+    return _pdf_dictionary(entry) or {}
+
+
+def _is_azure_openai_chat_model(model: str) -> bool:
+    entry: Final = _cost_map_entry(f"azure/{_openai_deployment_name(model)}")
+    return (
+        entry.get("litellm_provider") == "azure"
+        and entry.get("mode") in OPENAI_CHAT_MODES
+        and entry.get("supports_pdf_input") is True
+    )
+
+
 def _is_openai_or_azure_model(model: str) -> bool:
-    return _is_openai_chat_model(model) or _openai_model_family(model) is not None
+    return _is_openai_chat_model(model) or _openai_model_family(model) is not None or _is_azure_openai_chat_model(model)
 
 
 def _pdf_page_pricing(model: str | None) -> PdfPagePricing:
@@ -797,6 +828,11 @@ def _tiktoken_model_name(model: str) -> str:
     return _fix_model_name(_openai_model_family(model) or model)
 
 
+def _is_listed_non_chat_model(model: str) -> bool:
+    mode: Final = _cost_map_entry(model).get("mode")
+    return mode is not None and mode not in OPENAI_CHAT_MODES
+
+
 def openai_tokenizer_encoding_name(model: str) -> str:
     """The tiktoken encoding name for `model`, without loading the encoding."""
     model_to_use: Final = _tiktoken_model_name(model)
@@ -805,7 +841,7 @@ def openai_tokenizer_encoding_name(model: str) -> str:
     try:
         return tiktoken.encoding_name_for_model(model_to_use)
     except KeyError:
-        return "o200k_base"
+        return "cl100k_base" if _is_listed_non_chat_model(model_to_use) else "o200k_base"
 
 
 def uses_legacy_message_accounting(model: str) -> bool:
@@ -921,43 +957,74 @@ def _pdf_value(container: Mapping[str, object], key: str) -> object:
     return container[key] if key in container else None  # noqa: SIM401  # pypdf resolves references only in []
 
 
-def _pdf_xobjects(container: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    resources: Final = _pdf_dictionary(_pdf_value(container, "/Resources"))
+_PdfDrawing: TypeAlias = tuple[_PdfContent, Mapping[str, object] | None]
+
+
+def _pdf_resources(
+    container: Mapping[str, object], inherited: Mapping[str, object] | None
+) -> Mapping[str, object] | None:
+    return _pdf_dictionary(_pdf_value(container, "/Resources")) or inherited
+
+
+def _pdf_drawn_xobjects(drawing: _PdfDrawing) -> tuple[tuple[Mapping[str, object], Mapping[str, object] | None], ...]:
+    content, resources = drawing
     xobjects: Final = _pdf_dictionary(_pdf_value(resources, "/XObject")) if resources is not None else None
     if xobjects is None:
         return ()
-    resolved: Final = (_pdf_dictionary(xobjects[name]) for name in xobjects)
-    return tuple(xobject for xobject in resolved if xobject is not None)
+    operand_lists: Final = (operands for operands, operator in content.operations if operator == b"Do")
+    names: Final[Iterable[object]] = (
+        cast(Sequence[object], operands)[0]  # cast-ok: pypdf parses an operator's operands into a list
+        for operands in operand_lists
+        if isinstance(operands, list) and operands
+    )
+    resolved: Final = (_pdf_dictionary(_pdf_value(xobjects, name)) for name in names if isinstance(name, str))
+    return tuple((xobject, resources) for xobject in resolved if xobject is not None)
 
 
-def _pdf_unseen_forms(
-    xobjects: tuple[Mapping[str, object], ...], seen: frozenset[int]
-) -> tuple[Mapping[str, object], ...]:
-    forms: Final = {id(xobject): xobject for xobject in xobjects if _pdf_value(xobject, "/Subtype") == "/Form"}
-    return tuple(form for form_id, form in forms.items() if form_id not in seen)
+def _draws_inline_image(content: _PdfContent) -> bool:
+    return any(operator == b"INLINE IMAGE" for _, operator in content.operations)
 
 
-def _pdf_resources_draw_raster_image(page: Mapping[str, object]) -> bool:
-    frontier: tuple[Mapping[str, object], ...] = (page,)  # rebind-ok: breadth-first walk, recursion is banned
+def _pdf_form_drawing(form: Mapping[str, object], inherited: Mapping[str, object] | None) -> _PdfDrawing | None:
+    from pypdf.generic import ContentStream, StreamObject
+
+    if not isinstance(form, StreamObject):
+        return None
+    return cast(_PdfContent, ContentStream(form, None)), _pdf_resources(form, inherited)  # cast-ok: pypdf is untyped
+
+
+def _pdf_unseen_form_drawings(
+    drawn: tuple[tuple[Mapping[str, object], Mapping[str, object] | None], ...], seen: frozenset[int]
+) -> tuple[_PdfDrawing, ...]:
+    forms: Final = {id(xobject): (xobject, inherited) for xobject, inherited in drawn if id(xobject) not in seen}
+    form_drawings: Final = (
+        _pdf_form_drawing(form, inherited)
+        for form, inherited in forms.values()
+        if _pdf_value(form, "/Subtype") == "/Form"
+    )
+    return tuple(drawing for drawing in form_drawings if drawing is not None)
+
+
+def _pdf_page_draws_raster_image(page: _PdfPage) -> bool:
+    contents: Final = page.get_contents()
+    page_dictionary: Final = _pdf_dictionary(page)
+    if contents is None or page_dictionary is None:
+        return False
+    frontier: tuple[_PdfDrawing, ...] = (  # rebind-ok: breadth-first walk, recursion is banned
+        (contents, _pdf_resources(page_dictionary, None)),
+    )
     seen: frozenset[int] = frozenset()  # rebind-ok: breadth-first walk, recursion is banned
     for _ in range(PDF_MAX_FORM_XOBJECT_DEPTH):
         if not frontier:
             return False
-        xobjects = tuple(chain.from_iterable(map(_pdf_xobjects, frontier)))
-        if any(_pdf_value(xobject, "/Subtype") == "/Image" for xobject in xobjects):
+        if any(_draws_inline_image(content) for content, _ in frontier):
             return True
-        seen = seen | frozenset(map(id, frontier))
-        frontier = _pdf_unseen_forms(xobjects, seen)
+        drawn = tuple(chain.from_iterable(map(_pdf_drawn_xobjects, frontier)))
+        if any(_pdf_value(xobject, "/Subtype") == "/Image" for xobject, _ in drawn):
+            return True
+        frontier = _pdf_unseen_form_drawings(drawn, seen)
+        seen = seen | frozenset(id(xobject) for xobject, _ in drawn)
     return bool(frontier)
-
-
-def _record_inline_image(
-    inline_images: list[bytes],  # mutable-ok: pypdf reports content operators only to a callback
-    operator: bytes,
-    *_: object,
-) -> None:
-    if operator == b"INLINE IMAGE":
-        inline_images.append(operator)
 
 
 def _openai_page_image_tokens(width: float, height: float) -> int:
@@ -969,14 +1036,9 @@ def _openai_page_image_tokens(width: float, height: float) -> int:
 
 
 def _openai_pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
-    inline_images: Final[list[bytes]] = []  # mutable-ok: pypdf reports content operators only to a callback
-    text: Final = page.extract_text(visitor_operand_before=partial(_record_inline_image, inline_images)) or ""
+    text: Final = page.extract_text() or ""
     text_tokens: Final = count_function(text) + OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS if text.strip() else 0
-    page_dictionary: Final = _pdf_dictionary(page)
-    draws_image: Final = bool(inline_images) or (
-        page_dictionary is not None and _pdf_resources_draw_raster_image(page_dictionary)
-    )
-    if not draws_image:
+    if not _pdf_page_draws_raster_image(page):
         return text_tokens
     return text_tokens + _openai_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
 

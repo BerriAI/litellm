@@ -1790,11 +1790,13 @@ def _pdf_base64(
     height: int = 792,
     xobjects: tuple[bytes, ...] = (),
     drawing: bytes = b"",
+    page_resources: str | None = None,
 ) -> str:
     """`xobjects` are numbered from 4 + 2 * len(pages), every page lists the first one as its /X0 XObject, and every
-    page's content stream ends with `drawing`."""
+    page's content stream ends with `drawing`. `page_resources` replaces every page's /Resources dictionary."""
     first_xobject: Final = 4 + 2 * len(pages)
     page_xobjects: Final = f" /XObject << /X0 {first_xobject} 0 R >>" if xobjects else ""
+    resources: Final = page_resources if page_resources is not None else f"<< /Font << /F1 3 0 R >>{page_xobjects} >>"
 
     def page_objects(index: int, text: str) -> tuple[bytes, bytes]:
         escaped: Final = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
@@ -1802,7 +1804,7 @@ def _pdf_base64(
         content: Final = f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
         page: Final = (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
-            f"/Resources << /Font << /F1 3 0 R >>{page_xobjects} >> /Contents {4 + 2 * index} 0 R >>"
+            f"/Resources {resources} /Contents {4 + 2 * index} 0 R >>"
         ).encode()
         return content, page
 
@@ -1899,11 +1901,17 @@ _ONE_PIXEL_IMAGE: Final = (
 )
 
 
-def _form_xobject(resources_number: int) -> bytes:
+_DRAW_X0: Final = b" q 10 0 0 10 0 0 cm /X0 Do Q"
+_DRAW_X1: Final = b"/X1 Do"
+
+
+def _form_xobject(resources_number: int, drawing: bytes = _DRAW_X1) -> bytes:
     return (
         f"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources {resources_number} 0 R "
-        "/Length 0 >>\nstream\n\nendstream"
-    ).encode()
+        f"/Length {len(drawing)} >>\nstream\n".encode()
+        + drawing
+        + b"\nendstream"
+    )
 
 
 def _xobject_resources(xobject_number: int) -> bytes:
@@ -1973,11 +1981,23 @@ def test_openai_model_prices_a_page_that_draws_a_raster_image_as_a_high_detail_p
     letter_page_image: Final = 85 + 4 * 170
     small_page_image: Final = 85 + 170
 
-    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=xobjects)) == (
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=xobjects, drawing=_DRAW_X0)) == (
         _text_cost(model, _REVENUE_LINE) + 13 + letter_page_image
     )
-    assert _pdf_cost(model, _pdf_base64(("",), xobjects=xobjects)) == letter_page_image
-    assert _pdf_cost(model, _pdf_base64(("",), 300, 300, xobjects=xobjects)) == small_page_image
+    assert _pdf_cost(model, _pdf_base64(("",), xobjects=xobjects, drawing=_DRAW_X0)) == letter_page_image
+    assert _pdf_cost(model, _pdf_base64(("",), 300, 300, xobjects=xobjects, drawing=_DRAW_X0)) == small_page_image
+
+
+def test_openai_model_prices_no_page_image_for_an_image_the_page_lists_but_never_draws():
+    """Pages sharing one /Resources all list its logo, but only the page that paints it bills a page image: measured
+    2026-10-20 on Azure gpt-5.6-sol, a 3-page PDF drawing a logo on page 1 billed 403, not three page images."""
+    model: Final = "gpt-4o"
+
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,))) == (
+        _text_cost(model, _REVENUE_LINE) + 13
+    )
+    form_listing_an_unused_image: Final = (_form_xobject(7, b""), _xobject_resources(8), _ONE_PIXEL_IMAGE)
+    assert _pdf_cost(model, _pdf_base64(("",), xobjects=form_listing_an_unused_image, drawing=_DRAW_X0)) == 0
 
 
 def test_openai_model_prices_no_image_for_forms_that_draw_none():
@@ -1985,19 +2005,30 @@ def test_openai_model_prices_no_image_for_forms_that_draw_none():
     model: Final = "gpt-4o"
     self_referencing_form: Final = (_form_xobject(7), _xobject_resources(6))
 
-    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=self_referencing_form)) == (
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=self_referencing_form, drawing=_DRAW_X0)) == (
         _text_cost(model, _REVENUE_LINE) + 13
     )
+
+
+_INLINE_IMAGE: Final = b" q 200 0 0 200 72 400 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x00 EI Q"
 
 
 def test_openai_model_prices_a_page_that_draws_an_inline_image_as_a_high_detail_page_image():
     """An image drawn inline in the content stream (BI ... ID ... EI) bills like an image XObject: measured
     2026-10-20, the same 200x200 pt picture billed 351 either way on Azure gpt-5.6-sol and 303 on gpt-4o."""
     model: Final = "gpt-4o"
-    inline_image: Final = b" q 200 0 0 200 72 400 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x00 EI Q"
+    form_drawing_inline_image: Final = (
+        f"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length {len(_INLINE_IMAGE)} >>\nstream\n".encode()
+        + _INLINE_IMAGE
+        + b"\nendstream"
+    )
 
-    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), drawing=inline_image)) == (
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), drawing=_INLINE_IMAGE)) == (
         _text_cost(model, _REVENUE_LINE) + 13 + 85 + 4 * 170
+    )
+    assert _pdf_cost(model, _pdf_base64(("",), drawing=_INLINE_IMAGE, page_resources="<< >>")) == 85 + 4 * 170
+    assert _pdf_cost(model, _pdf_base64(("",), xobjects=(form_drawing_inline_image,), drawing=_DRAW_X0)) == (
+        85 + 4 * 170
     )
 
 
@@ -2013,9 +2044,25 @@ def test_openai_model_keeps_the_text_of_a_page_whose_forms_nest_too_deep_to_walk
         )
     )
 
-    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=chain_objects)) == (
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=chain_objects, drawing=_DRAW_X0)) == (
         _text_cost(model, _REVENUE_LINE) + 13 + 85 + 4 * 170
     )
+
+
+@pytest.mark.timeout(10)
+def test_openai_model_reads_resources_shared_by_many_forms_once():
+    """3,000 forms that all list the same /Resources took 17 seconds to price before each dictionary was read once."""
+    model: Final = "gpt-4o"
+    form_count: Final = 3000
+    shared_resources_number: Final = 7
+    shared_resources: Final = (
+        "<< /XObject << " + " ".join(f"/F{index} {8 + index} 0 R" for index in range(form_count)) + " >> >>"
+    ).encode()
+    forms: Final = tuple(_form_xobject(shared_resources_number, b"/F0 Do") for _ in range(form_count))
+
+    assert _pdf_cost(
+        model, _pdf_base64((_REVENUE_LINE,), xobjects=(forms[0], shared_resources, *forms), drawing=_DRAW_X0)
+    ) == (_text_cost(model, _REVENUE_LINE) + 13)
 
 
 _NON_LATIN_SAMPLE: Final = "Привет, как дела? これは日本語のテキストです。 Ceci est un texte en français: éèàç. " * 8
@@ -2046,6 +2093,40 @@ def test_openai_models_tiktoken_does_not_know_count_with_o200k(model: str):
 def test_prefixed_openai_model_names_count_text_like_the_model_they_name(deployment_name: str, model: str):
     assert token_counter_new(model=deployment_name, text=_NON_LATIN_SAMPLE) == token_counter_new(
         model=model, text=_NON_LATIN_SAMPLE
+    )
+
+
+@pytest.mark.parametrize("model", ["azure/gpt-chat-latest", "azure/codex-mini"])
+def test_azure_openai_models_only_azure_lists_get_openai_pdf_pricing(model: str):
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,))) == _text_cost(model, _REVENUE_LINE) + 13
+
+
+@pytest.mark.parametrize(
+    "model", ["openrouter/openai/gpt-4o", "github_copilot/gpt-4o", "replicate/openai/gpt-5", "azure_ai/gpt-4o"]
+)
+def test_gpt_names_on_other_gateways_keep_their_pdf_pricing_and_encoding(model: str):
+    """Only openai/, azure/ and Azure data zones are stripped, so a GPT name served through another gateway keeps
+    the PDF pricing and text encoding it had before."""
+    assert _pdf_cost(model, _pdf_base64(("",))) == 1534
+    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
+        tiktoken.get_encoding("cl100k_base").encode(_NON_LATIN_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize("model", ["text-embedding-ada-002-v2", "tts-1", "whisper-1"])
+def test_openai_models_that_are_not_chat_models_keep_counting_with_cl100k(model: str):
+    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
+        tiktoken.get_encoding("cl100k_base").encode(_NON_LATIN_SAMPLE)
+    )
+
+
+@pytest.mark.timeout(10)
+def test_a_very_long_unknown_model_name_counts_promptly():
+    """A 200,000-word model name took minutes to count, since every dash-joined prefix of it was tried."""
+    long_name: Final = "unknown-" + "a-" * 200_000
+
+    assert token_counter_new(model=long_name, text=_NON_LATIN_SAMPLE) == token_counter_new(
+        model="my-private-model", text=_NON_LATIN_SAMPLE
     )
 
 
