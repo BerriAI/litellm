@@ -9498,17 +9498,24 @@ class Router:
         When a retry or fallback happens, record which model group, deployment and attempt just failed and why,
         and count it toward the request-wide num_retries_per_request cap
         """
+        from litellm.litellm_core_utils.get_litellm_params import get_base_model_from_litellm_call_metadata
         from litellm.types.router import RetryAttemptRecord
 
         _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-        request_metadata: Final[Mapping[str, object]] = kwargs[_metadata_var]
+        request_metadata: Final = cast("Mapping[str, object]", kwargs[_metadata_var])  # cast-ok: untyped kwargs
         model_group: Final = kwargs.get("model")
         model_info: Final = request_metadata.get("model_info")
         deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+        base_model: Final = get_base_model_from_litellm_call_metadata(
+            metadata=request_metadata
+        ) or self._deployment_params_base_model(deployment_id if isinstance(deployment_id, str) else None)
+        deployment_model: Final = request_metadata.get("deployment")
         attempted_retries: Final = request_metadata.get("attempted_retries")
         attempt_record: Final[RetryAttemptRecord] = {
             "model_group": model_group if isinstance(model_group, str) else None,
             "deployment_id": deployment_id if isinstance(deployment_id, str) else None,
+            "model": deployment_model if isinstance(deployment_model, str) else None,
+            "base_model": base_model if isinstance(base_model, str) else None,
             "exception_type": type(e).__name__,
             "exception_string": str(e),
             "attempted_retries": attempted_retries if type(attempted_retries) is int else None,
@@ -9538,6 +9545,18 @@ class Router:
         kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
         kwargs[_metadata_var]["request_retry_count"] = request_retry_count  # rebind-ok: same dict, read by the cap
         return kwargs
+
+    def _deployment_params_base_model(self, deployment_id: str | None) -> str | None:
+        """The ``base_model`` a deployment declares under ``litellm_params`` (the Azure named-deployment
+        shape), the same key the success path's ``get_base_model_from_metadata`` reads."""
+        deployment: Final = self.get_deployment(model_id=deployment_id) if deployment_id is not None else None
+        if deployment is None:
+            return None
+        extra_params: Final = cast(  # cast-ok: pydantic extras are untyped, base_model is isinstance-checked below
+            "Mapping[str, object]", deployment.litellm_params.model_extra or {}
+        )
+        base_model: Final = extra_params.get("base_model")
+        return base_model if isinstance(base_model, str) else None
 
     def _update_usage(self, deployment_id: str, parent_otel_span: Span | None) -> int:
         """

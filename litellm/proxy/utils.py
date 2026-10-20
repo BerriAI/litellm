@@ -1161,6 +1161,43 @@ def _timed_out_earlier_records(
     return tuple(record for identity, record in by_identity.items() if identity != final_identity)
 
 
+def _record_pricing(
+    model_call_details: Mapping[str, object], record: Mapping[str, object], base_model: str | None
+) -> tuple[Mapping[str, object], str | None]:
+    """The ``(model_call_details, base_model)`` to price one earlier attempt with: the record's own
+    deployment model and ``base_model`` when it served a different model than the final attempt
+    (the provider is then inferred from that model), else the final attempt's."""
+    record_model: Final = record.get("model")
+    if not isinstance(record_model, str) or record_model == model_call_details.get("model"):
+        return model_call_details, base_model
+    record_base_model: Final = record.get("base_model")
+    return (
+        {**model_call_details, "model": record_model, "custom_llm_provider": None},
+        record_base_model if isinstance(record_base_model, str) else None,
+    )
+
+
+def _billed_earlier_attempt(
+    model_call_details: Mapping[str, object],
+    record: Mapping[str, object],
+    index: int,
+    estimated_usage: Usage,
+    base_model: str | None,
+) -> BilledFailedAttempt:
+    pricing_details, pricing_base_model = _record_pricing(model_call_details, record, base_model)
+    return BilledFailedAttempt(
+        attempted_retries=_attempt_number(record, index),
+        deployment_id=_record_deployment_id(record),
+        usage=estimated_usage,
+        response_cost=_estimated_input_cost(
+            pricing_details,
+            estimated_usage.prompt_tokens,
+            deployment_id=_record_deployment_id(record),
+            base_model=pricing_base_model,
+        ),
+    )
+
+
 def _billed_earlier_attempts(
     model_call_details: Mapping[str, object],
     litellm_params: Mapping[str, object] | None,
@@ -1174,23 +1211,14 @@ def _billed_earlier_attempts(
     request's own deployment and retry count (``attempted_retries`` restarts at 0 after a fallback
     hop, so the count alone cannot tell the groups apart). An earlier attempt that ended in a
     ``Timeout`` had the same prompt accepted by its deployment, so it is billed like the final
-    attempt, at that deployment's input rate (else the cost map's rate for ``base_model`` or the
-    model). Only the exception class survives on the record, so an earlier connect timeout is
-    billed too; any other failure class is not."""
+    attempt, at that deployment's input rate (else the cost map's rate for the record's own
+    ``base_model`` or model, which a fallback hop can make a different model than the final one).
+    Only the exception class survives on the record, so an earlier connect timeout is billed too;
+    any other failure class is not."""
     final_attempt: Final = _retry_metadata_bucket(litellm_params).get("attempted_retries")
     final_identity: Final = (deployment_id, final_attempt if isinstance(final_attempt, int) else None)
     return tuple(
-        BilledFailedAttempt(
-            attempted_retries=_attempt_number(record, index),
-            deployment_id=_record_deployment_id(record),
-            usage=estimated_usage,
-            response_cost=_estimated_input_cost(
-                model_call_details,
-                estimated_usage.prompt_tokens,
-                deployment_id=_record_deployment_id(record),
-                base_model=base_model,
-            ),
-        )
+        _billed_earlier_attempt(model_call_details, record, index, estimated_usage, base_model)
         for index, record in enumerate(_timed_out_earlier_records(litellm_params, final_identity))
     )
 
