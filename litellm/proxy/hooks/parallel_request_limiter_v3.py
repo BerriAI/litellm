@@ -1642,6 +1642,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         read_only: bool = False,
         skip_tpm_check: bool = False,
         parallel_slot_id: str | None = None,
+        skip_parallel_check: bool = False,
     ) -> RateLimitResponse:
         """
         Check if any of the rate limit descriptors should be rate limited.
@@ -1658,6 +1659,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 ``reserve_tpm_tokens`` reservation path should set this to
                 avoid the +1-per-key Lua / in-memory increment double-charging
                 the tokens counter.
+            skip_parallel_check: If True, ``max_parallel_requests`` gauges are
+                neither checked nor acquired, for a call that runs inside a
+                request already holding its slot.
 
         ``max_parallel_requests`` descriptors are enforced by the dedicated
         concurrency-gauge path (``_check_parallel_request_gauges``), never by
@@ -1750,7 +1754,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if windowed_response["overall_code"] == "OVER_LIMIT":
                 return windowed_response
 
-        if not gauges:
+        if not gauges or skip_parallel_check:
             return windowed_response
 
         gauge_response: Final = await self._check_parallel_request_gauges(
@@ -3930,6 +3934,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         tpm_reservation_amount: int,
         call_type: str | None = None,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        reuses_request_slot: bool = False,
     ) -> None:
         """
         Reserve project-scoped ITPM/OTPM tokens (Bedrock Mantle-style
@@ -4009,7 +4014,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
                 stash.reservation_released = True
-            await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
+            if not reuses_request_slot:
+                await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
             self._handle_rate_limit_error(
                 response=io_response,
                 descriptors=descriptors,
@@ -4170,6 +4176,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
         stash: Final = claim_request_stash_for_data(data)
+        reuses_request_slot: Final = call_type == CallTypes.call_mcp_tool.value and stash.parallel_slot is not None
 
         #########################################################
         # Check if the call type has a specific rate limiter
@@ -4214,11 +4221,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # then because _reserve_project_io_tokens_or_raise below charges
             # them unconditionally and counting them here too would
             # double-charge every request.
-            parallel_counter_keys: Final = [
-                self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
-                for d in descriptors
-                if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
-            ]
+            parallel_counter_keys: Final = (
+                []
+                if reuses_request_slot
+                else [
+                    self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
+                    for d in descriptors
+                    if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
+                ]
+            )
             parallel_slot_id: Final = uuid.uuid4().hex if parallel_counter_keys else None
 
             first_pass_descriptors: Final = (
@@ -4233,6 +4244,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 skip_tpm_check=self.tpm_reservation_enabled,
                 parallel_slot_id=parallel_slot_id,
+                skip_parallel_check=reuses_request_slot,
             )
 
             if response["overall_code"] == "OVER_LIMIT":
@@ -4340,7 +4352,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     raw_estimate=estimated_tokens,
                 )
                 if stash.ptu_ceiling is not None and ptu_estimated_tokens > stash.ptu_ceiling.tpm_limit:
-                    await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
+                    if not reuses_request_slot:
+                        await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
                     raise PTUShareExceededError(stash.ptu_ceiling, ptu_estimated_tokens)
                 tpm_response: Final = await self.reserve_tpm_tokens(
                     descriptors=descriptors,
@@ -4350,7 +4363,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
                 if tpm_response["overall_code"] == "OVER_LIMIT":
-                    await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
+                    if not reuses_request_slot:
+                        await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
                     self._handle_rate_limit_error(
                         response=tpm_response,
                         descriptors=descriptors,
@@ -4401,6 +4415,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 tpm_reservation_amount=tpm_reservation_amount,
                 call_type=call_type,
                 endpoint_type=endpoint_type,
+                reuses_request_slot=reuses_request_slot,
             )
 
     def _create_pipeline_operations(

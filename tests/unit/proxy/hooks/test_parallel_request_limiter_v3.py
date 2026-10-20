@@ -3,6 +3,7 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
+import contextvars
 import logging
 import sys
 import time
@@ -53,6 +54,7 @@ from litellm.types.mcp import MCPPreCallRequestObject, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
+    CallTypes,
     EmbeddingResponse,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -4203,6 +4205,71 @@ async def test_completed_responses_post_call_releases_parallel_slot() -> None:
     assert handler._gauge_in_flight_from_cache_value(
         await local_cache.async_get_cache(key=parallel_key)
     ) == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_inside_admitted_request_reuses_its_parallel_slot() -> None:
+    api_key = hash_token("sk-mcp-auto-execute")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key = f"{{api_key:{api_key}}}:max_parallel_requests"
+    owner_call_id = "mcp-auto-execute-owner"
+
+    async def in_flight() -> int:
+        return handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=parallel_key)
+        )
+
+    def mcp_tool_call() -> dict[str, object]:
+        return {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Tool: add"}],
+            "mcp_server_name": "math",
+        }
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    async def pre_call_from_another_request(
+        data: dict[str, object], call_type: str
+    ) -> None:
+        await asyncio.create_task(
+            pre_call(data, call_type), context=contextvars.Context()
+        )
+
+    await pre_call(
+        {"model": "gpt-4o-mini", "input": "add 2 and 3", "litellm_call_id": owner_call_id},
+        CallTypes.aresponses.value,
+    )
+    await pre_call(mcp_tool_call(), CallTypes.call_mcp_tool.value)
+    await pre_call(mcp_tool_call(), CallTypes.call_mcp_tool.value)
+    assert await in_flight() == 1
+
+    with pytest.raises(HTTPException):
+        await pre_call_from_another_request(
+            mcp_tool_call(), CallTypes.call_mcp_tool.value
+        )
+
+    await handler.async_log_success_event(
+        kwargs={"litellm_call_id": owner_call_id},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert await in_flight() == 0
+    await pre_call_from_another_request(
+        {"model": "gpt-4o-mini", "input": "next request"},
+        CallTypes.aresponses.value,
+    )
+    assert await in_flight() == 1
 
 
 @pytest.mark.asyncio
