@@ -5,7 +5,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
@@ -34,6 +34,11 @@ class _GoogleCountTokensSystemInstruction(BaseModel):
     model_config = ConfigDict(frozen=True)
     parts: tuple[_GoogleCountTokensTextPart, ...]
 
+    @field_validator("parts", mode="before")
+    @classmethod
+    def normalize_parts(cls, parts: object) -> object:
+        return (parts,) if isinstance(parts, Mapping) else parts
+
 
 class _GoogleCountTokensFunctionDeclaration(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
@@ -54,7 +59,7 @@ class _GoogleCountTokensRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
     contents: tuple[Mapping[str, JsonValue], ...] = ()
     system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")
-    tools: tuple[_GoogleCountTokensTool, ...] = ()
+    tools: tuple[_GoogleCountTokensTool, ...] | None = ()
 
 
 router: Final = APIRouter(
@@ -114,7 +119,7 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         if validated_data.system_instruction is not None
         else None
     )
-    declarations: Final = chain.from_iterable(tool.function_declarations for tool in validated_data.tools)
+    declarations: Final = chain.from_iterable(tool.function_declarations for tool in validated_data.tools or ())
     tools: Final = [
         {
             "name": declaration.name,
