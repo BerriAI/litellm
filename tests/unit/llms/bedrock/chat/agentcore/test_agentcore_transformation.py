@@ -1277,8 +1277,9 @@ _AGENTCORE_RUNTIME_URL: Final = (
     "arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A888602223428%3Aruntime%2Fhosted_agent_13sf6-cALnp38iZD/invocations"
 )
 _AGENTCORE_DELTAS: Final = (
-    'data: {"event":{"contentBlockDelta":{"delta":{"text":"Machine learning lets "}}}}\n\n'
-    'data: {"event":{"contentBlockDelta":{"delta":{"text":"computers learn from data."}}}}\n\n'
+    'data: {"event":{"messageStart":{"role":"assistant"}}}\n\n'
+    'data: {"event":{"contentBlockDelta":{"delta":{"text":"Machine learning lets "},"contentBlockIndex":0}}}\n\n'
+    'data: {"event":{"contentBlockDelta":{"delta":{"text":"computers learn from data."},"contentBlockIndex":0}}}\n\n'
 )
 
 
@@ -1308,7 +1309,11 @@ async def _stream_agentcore(body: str, sync_mode: bool) -> list[tuple[str | None
 @pytest.mark.parametrize(
     "ending",
     [
-        pytest.param('data: {"event":{"messageStop":{"stopReason":"end_turn"}}}\n\n', id="message_stop"),
+        pytest.param(
+            'data: {"event":{"contentBlockStop":{"contentBlockIndex":0}}}\n\n'
+            'data: {"event":{"messageStop":{"stopReason":"end_turn"}}}\n\n',
+            id="message_stop",
+        ),
         pytest.param(
             'data: {"event":{"messageStop":{"stopReason":"end_turn"}}}\n\n'
             'data: {"event":{"metadata":{"usage":{"inputTokens":9,"outputTokens":7,"totalTokens":16}}}}\n\n'

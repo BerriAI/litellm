@@ -107,19 +107,31 @@ def _gemini_frames(ending: Ending) -> tuple[bytes, ...]:
     return (*content, usage) if finished else content
 
 
+def _event(name: str, frame: JsonValue) -> bytes:
+    return f"event: {name}\n".encode() + _data(frame)
+
+
 def _langgraph_frames() -> tuple[bytes, ...]:
-    """LangGraph ends a run by closing the stream after its metadata event."""
+    """A LangGraph server's run stream in its default mode, its run metadata first and then the state after each step"""
+    question: Final = {"type": "human", "content": "Answer in two steps."}
+    answers: Final = tuple({"type": "ai", "content": part} for part in _PARTIAL)
     return (
-        *(_data(["messages", [[{"type": "ai", "content": part}, {}]]]) for part in _PARTIAL),
-        _data(["metadata", {"run_id": "run-1"}]),
+        _event("metadata", {"run_id": "run-1", "attempt": 1}),
+        *(_event("values", {"messages": [question, *answers[:step]]}) for step in range(len(answers) + 1)),
     )
 
 
 def _agentcore_frames(ending: Ending) -> tuple[bytes, ...]:
-    """A runtime that is not Strands can end its turn on messageStop with no metadata or final message."""
-    content: Final = tuple(_data({"event": {"contentBlockDelta": {"delta": {"text": part}}}}) for part in _PARTIAL)
-    message_stop: Final = _data({"event": {"messageStop": {"stopReason": "end_turn"}}})
-    return (*content, message_stop) if ending == "ending-complete" else content
+    """A runtime that forwards Bedrock Converse events without the metadata event, so its turn ends on messageStop"""
+    start: Final = _data({"event": {"messageStart": {"role": "assistant"}}})
+    content: Final = tuple(
+        _data({"event": {"contentBlockDelta": {"delta": {"text": part}, "contentBlockIndex": 0}}}) for part in _PARTIAL
+    )
+    end: Final = (
+        _data({"event": {"contentBlockStop": {"contentBlockIndex": 0}}}),
+        _data({"event": {"messageStop": {"stopReason": "end_turn"}}}),
+    )
+    return (start, *content, *end) if ending == "ending-complete" else (start, *content)
 
 
 def _frames(family: Family, identity: str, ending: Ending) -> tuple[bytes, ...]:

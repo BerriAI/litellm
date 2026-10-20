@@ -271,11 +271,13 @@ async def test_langgraph_streaming_acompletion_without_a_client_posts_through_th
 
 
 @pytest.mark.asyncio
-async def test_langgraph_async_stream_delivers_every_message_event_before_its_stop():
+async def test_langgraph_async_stream_delivers_every_step_of_the_run_before_its_stop():
     async def events():
-        yield b'data: ["messages", [[{"type": "ai", "content": "25 * 4"}, {}]]]\n\n'
-        yield b'data: ["messages", [[{"type": "ai", "content": " is 100"}, {}]]]\n\n'
-        yield b'data: ["metadata", {"run_id": "run-1"}]\n\n'
+        question = {"type": "human", "content": "What is 25 * 4?"}
+        answers = [{"type": "ai", "content": "25 * 4"}, {"type": "ai", "content": " is 100"}]
+        yield b'event: metadata\ndata: {"run_id": "run-1", "attempt": 1}\n\n'
+        for step in range(len(answers) + 1):
+            yield b"event: values\ndata: " + json.dumps({"messages": [question, *answers[:step]]}).encode() + b"\n\n"
 
     client = AsyncHTTPHandler(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=events())))
 
