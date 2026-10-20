@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Final
@@ -13,6 +14,7 @@ import respx
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.workload_identity import _workload_identity_auth
@@ -1188,20 +1190,32 @@ class _GatewayThatRecordsTheAuthorization:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "route",
-    [realtime_main.acreate_realtime_client_secret, realtime_main.acreate_realtime_transcription_session],
-    ids=["client_secrets", "transcription_sessions"],
+    ("route", "model"),
+    [
+        (realtime_main.acreate_realtime_client_secret, "gpt-realtime"),
+        (realtime_main.acreate_realtime_transcription_session, "gpt-realtime"),
+        (realtime_main.acreate_realtime_translation_client_secret, "gpt-realtime-translate"),
+    ],
+    ids=["client_secrets", "transcription_sessions", "translation_client_secrets"],
 )
 @respx.mock
 async def test_openai_realtime_http_routes_send_the_federated_bearer_for_a_keyless_deployment(
-    federated_deployment: dict[str, str], route: Callable[..., Awaitable[object]]
+    federated_deployment: dict[str, str], route: Callable[..., Awaitable[object]], model: str
 ) -> None:
     _mock_token_exchange()
     gateway: Final = _GatewayThatRecordsTheAuthorization()
     await route.__wrapped__(
-        model="gpt-realtime",
+        model=model,
         custom_llm_provider="openai",
-        litellm_logging_obj=FakeLogging(),
+        litellm_logging_obj=Logging(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="acreate_realtime_client_secret",
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="test-federated-realtime",
+            function_id="test-federated-realtime",
+        ),
         client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
         **federated_deployment,
     )

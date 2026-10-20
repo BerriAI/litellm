@@ -322,7 +322,9 @@ async def acreate_realtime_translation_client_secret(
     request_data["session"].pop("type", None)
     return await base_llm_http_handler.async_realtime_translation_client_secret_handler(
         api_base=resolved_api_base,
-        api_key=resolved_api_key,
+        api_key=await _realtime_http_bearer_token(
+            custom_llm_provider, resolved_api_key, resolved_api_base, litellm_params
+        ),
         request_data=request_data,
         logging_obj=litellm_logging_obj,
         timeout=timeout or request_timeout,

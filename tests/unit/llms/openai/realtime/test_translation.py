@@ -1,5 +1,6 @@
 import gzip
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -78,14 +79,16 @@ def test_openai_translation_calls_url():
     )
 
 
-def test_azure_translation_urls_use_ga_paths():
-    config = AzureRealtimeHTTPConfig()
+@pytest.mark.parametrize("suffix", ("", "/", "/openai", "/openai/v1/"))
+def test_azure_translation_urls_use_ga_paths(suffix: str):
+    config: Final = AzureRealtimeHTTPConfig()
+    api_base: Final = f"https://example.openai.azure.com{suffix}"
     assert (
-        config.get_translation_client_secret_url("https://example.openai.azure.com", "translate-deployment")
+        config.get_translation_client_secret_url(api_base, "translate-deployment")
         == "https://example.openai.azure.com/openai/v1/realtime/translations/client_secrets"
     )
     assert (
-        config.get_translation_calls_url("https://example.openai.azure.com", "translate-deployment")
+        config.get_translation_calls_url(api_base, "translate-deployment")
         == "https://example.openai.azure.com/openai/v1/realtime/translations/calls"
     )
 

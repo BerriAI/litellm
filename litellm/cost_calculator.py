@@ -1888,14 +1888,13 @@ def completion_cost(
                     # the response attribute (for verbose_json responses that
                     # naturally include duration from the provider).
                     _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    provider_duration = _get_transcription_usage_duration(completion_response)
-                    audio_transcription_file_duration = (
-                        provider_duration
-                        if provider_duration is not None
-                        else _hidden.get(
-                            "audio_transcription_duration",
-                            getattr(completion_response, "duration", 0.0),
-                        )
+                    audio_transcription_file_duration = _hidden.get(
+                        "audio_transcription_duration",
+                        getattr(completion_response, "duration", 0.0),
+                    ) or (
+                        (_get_transcription_usage_duration(completion_response) or 0.0)
+                        if _bills_provider_transcription_seconds(requested_model, custom_llm_provider)
+                        else 0.0
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):

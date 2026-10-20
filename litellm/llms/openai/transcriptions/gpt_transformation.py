@@ -59,7 +59,6 @@ class OpenAIGPTTranscribeAudioTranscriptionConfig(OpenAIGPTAudioTranscriptionCon
         data: Final = {
             "model": model,
             "file": audio_file,
-            "response_format": "json",
             **optional_params,
         }
         return AudioTranscriptionRequestData(data=data)

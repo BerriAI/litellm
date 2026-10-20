@@ -38,7 +38,7 @@ def test_gpt_transcribe_config_uses_native_parameters_and_json():
     request = config.transform_audio_transcription_request(
         model="gpt-transcribe",
         audio_file=audio_file,
-        optional_params={"keywords": ["LiteLLM"], "languages": ["en", "fr"], "stream": True},
+        optional_params={"keywords": ["LiteLLM"], "languages": ["en", "fr"], "stream": True, "response_format": "json"},
         litellm_params={},
     )
     assert request.data["response_format"] == "json"
