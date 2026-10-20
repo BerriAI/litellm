@@ -289,15 +289,30 @@ def test_chat_audio_drop_params_strips_unknown_fields_inside_speaker_voices():
     }
 
 
-def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts():
-    voice_config: Final = {
-        "voice": "Kore",
-        "prebuiltVoiceConfig": {"voiceName": "Kore"},
-        "replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "UklGRg=="},
-    }
+GEMINI_VOICE_CONFIG: Final = {
+    "voice": "Kore",
+    "prebuiltVoiceConfig": {"voiceName": "Kore"},
+    "replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "UklGRg=="},
+}
 
-    assert _chat_speech_config({"voiceConfig": voice_config, "languageCode": "fr-FR"}, drop_params=True) == {
-        "voiceConfig": voice_config,
+
+@pytest.mark.parametrize(
+    "speech_config",
+    [
+        {"voiceConfig": GEMINI_VOICE_CONFIG, "languageCode": "fr-FR"},
+        {
+            "voice_config": {
+                "voice": "Kore",
+                "prebuilt_voice_config": {"voice_name": "Kore"},
+                "replicated_voice_config": {"mime_type": "audio/wav", "voice_sample_audio": "UklGRg=="},
+            },
+            "language_code": "fr-FR",
+        },
+    ],
+)
+def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(speech_config: dict[str, object]):
+    assert _chat_speech_config(speech_config, drop_params=True) == {
+        "voiceConfig": GEMINI_VOICE_CONFIG,
         "languageCode": "fr-FR",
     }
 
