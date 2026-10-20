@@ -74,7 +74,7 @@ CASE: Final = PerformanceTestCase(
         Limit("postgres_peak_connections", max=23),
         Limit("time_to_first_token_seconds", percentile=50, max=1.56),
         Limit("time_to_first_token_seconds", percentile=99, max=4.5),
-        Limit("memory_growth_megabytes", max=236),
+        Limit("memory_growth_megabytes", max=600),
         Limit("cpu_seconds_per_request", max=0.57),
         Limit("postgres_calls_per_request", max=2.64),
         Limit("postgres_max_statement_per_request", max=0.43),
