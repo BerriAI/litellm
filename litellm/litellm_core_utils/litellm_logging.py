@@ -131,6 +131,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.interactions import (
     InteractionsAPIResponse,
@@ -2886,6 +2887,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, SearchResponse)  # Search API
             or isinstance(logging_result, DecisionsResponse)
             or isinstance(logging_result, OpenAIDecisionResponse)
+            or isinstance(logging_result, ExtractionResponse)
             or (
                 isinstance(logging_result, InteractionsAPIResponse)
                 and logging_result.usage is not None

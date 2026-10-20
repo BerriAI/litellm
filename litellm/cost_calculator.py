@@ -111,6 +111,7 @@ from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_toke
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
+from litellm.types.extraction import ExtractionResponse, ExtractionUsage
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -1103,6 +1104,8 @@ def get_usage_object(
 
     if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
         return None if completion_response.usage is None else _decisions_usage(completion_response.usage)
+    if isinstance(completion_response, ExtractionResponse):
+        return _extraction_usage(completion_response.usage)
     if isinstance(completion_response, HttpxBinaryResponseContent):
         return completion_response.usage
     if usage_obj is None:
@@ -1159,6 +1162,14 @@ def _decisions_usage(usage: DecisionsUsage | OpenAIDecisionUsage) -> Usage:
     )
 
 
+def _extraction_usage(usage: ExtractionUsage) -> Usage:
+    return Usage(
+        prompt_tokens=usage.input_tokens,
+        completion_tokens=usage.output_tokens,
+        total_tokens=usage.input_tokens + usage.output_tokens,
+    )
+
+
 def _is_known_usage_objects(usage_obj):
     """Returns True if the usage obj is a known Usage type"""
     return (
@@ -1166,6 +1177,7 @@ def _is_known_usage_objects(usage_obj):
         or isinstance(usage_obj, ResponseAPIUsage)
         or isinstance(usage_obj, DecisionsUsage)
         or isinstance(usage_obj, OpenAIDecisionUsage)
+        or isinstance(usage_obj, ExtractionUsage)
         or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
     )
 
@@ -1195,6 +1207,8 @@ def infer_call_type(call_type: CallTypesLiteral | None, completion_response: obj
         return "send_message"
     elif isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
         return "adecisions"
+    elif isinstance(completion_response, ExtractionResponse):
+        return "aextraction"
 
     return call_type
 
@@ -1591,6 +1605,8 @@ def completion_cost(
                         )
                     if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
                         _usage = _decisions_usage(usage_obj).model_dump()
+                    elif isinstance(usage_obj, ExtractionUsage):
+                        _usage = _extraction_usage(usage_obj).model_dump()
                     elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
@@ -2112,7 +2128,8 @@ def response_cost_calculator(
     | Response
     | SearchResponse
     | DecisionsResponse
-    | OpenAIDecisionResponse,
+    | OpenAIDecisionResponse
+    | ExtractionResponse,
     model: str,
     custom_llm_provider: str | None,
     call_type: Literal[
@@ -2138,6 +2155,8 @@ def response_cost_calculator(
         "adecisions",
         "systemone",
         "asystemone",
+        "extraction",
+        "aextraction",
     ],
     optional_params: dict,
     cache_hit: bool | None = None,

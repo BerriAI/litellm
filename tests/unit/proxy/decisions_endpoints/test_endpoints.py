@@ -26,6 +26,7 @@ from litellm.proxy.proxy_server import (
     initialize,
 )
 from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionRequestBody
+from litellm.types.extraction import ExtractionRequestBody
 
 _INPUT_TOKENS: Final[int] = 367
 _OUTPUT_TOKENS: Final[int] = 3
@@ -1282,3 +1283,108 @@ def test_the_two_decisions_routes_document_different_request_formats(decisions_o
 
     assert "state" in properties("/v1/systemone") and "state" not in properties("/v1/decisions")
     assert "input" in properties("/v1/decisions") and "input" not in properties("/v1/systemone")
+
+
+_CLAIRIC_UPSTREAM: Final = "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clairic"
+_CLAIRIC_INPUT_TOKENS: Final = 416
+_CLAIRIC_RESULT: Final[Mapping[str, object]] = {
+    "model": "clairic",
+    "answers": {
+        "vendor": {"type": "text", "p_null": 0.0177, "span": [19, 29], "confidence": 0.9998, "value": "Acme Tools"},
+        "days_to_pay": {"type": "estimate", "value": 31, "mean": 30.76, "median": 30, "p10": 29, "p90": 34},
+    },
+    "truncated": False,
+    "usage": {"input_tokens": _CLAIRIC_INPUT_TOKENS, "output_tokens": 0, "schema_tokens": 312, "passes": 2},
+}
+_EXTRACTION_REQUEST: Final[Mapping[str, object]] = {
+    "model": "invoice-reader",
+    "state": "Invoice #4471 from Acme Tools. Payment due in 30 days.",
+    "fields": {
+        "vendor": {"type": "text", "instructions": "Who sent the invoice?"},
+        "days_to_pay": {"type": "estimate", "min": 0, "max": 90},
+    },
+    "images": ["data:image/png;base64,AA=="],
+}
+
+
+def _route_invoice_reader_to_clairic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "invoice-reader",
+                    "litellm_params": {
+                        "model": "cloudflare/clairic",
+                        "api_key": "cloudflare-key",
+                        "api_base": "https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+                    },
+                }
+            ]
+        ),
+    )
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/extraction", "/extraction"))
+def test_proxy_extraction_forwards_the_body_to_clairic_and_returns_its_answers_and_cost(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+) -> None:
+    _route_invoice_reader_to_clairic(monkeypatch)
+    upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(
+        json={"result": _CLAIRIC_RESULT, "success": True, "errors": [], "messages": []}
+    )
+
+    response: Final = client.post(endpoint, json=_EXTRACTION_REQUEST)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {**_CLAIRIC_RESULT, "model": "cloudflare/clairic"}
+    expected_cost: Final = _CLAIRIC_INPUT_TOKENS * float(
+        litellm.model_cost["cloudflare/clairic"]["input_cost_per_token"]
+    )
+    assert expected_cost > 0
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+    assert json.loads(upstream.calls[0].request.content) == {**_EXTRACTION_REQUEST, "model": "clairic"}
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer cloudflare-key"
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    (
+        {"model": "invoice-reader", "state": "Invoice #4471"},
+        {"model": "invoice-reader", "state": "Invoice #4471", "fields": {"total": {"type": "money"}}},
+        {**_EXTRACTION_REQUEST, "images": ["https://example.com/invoice.png"]},
+    ),
+    ids=("missing_fields", "unknown_field_type", "remote_image"),
+)
+def test_proxy_extraction_refuses_a_malformed_body_before_calling_clairic(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    request_body: Mapping[str, object],
+) -> None:
+    _route_invoice_reader_to_clairic(monkeypatch)
+    upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(json=_CLAIRIC_RESULT)
+
+    response: Final = client.post("/v1/extraction", json=request_body)
+
+    assert response.status_code == 400, response.text
+    assert "Invalid Extraction request" in response.text
+    assert not upstream.called
+
+
+@pytest.mark.parametrize("path", ("/v1/extraction", "/extraction"))
+def test_swagger_documents_the_extraction_request_and_response(decisions_openapi: dict[str, object], path: str) -> None:
+    operation = decisions_openapi["paths"][path]["post"]
+    media = operation["requestBody"]["content"]["application/json"]
+
+    assert {"model", "fields"} <= set(media["schema"]["required"])
+    assert "$ref" not in json.dumps(media["schema"])
+    example = {key: value for key, value in media["example"].items() if key != "model"}
+    assert len(TypeAdapter(ExtractionRequestBody).validate_python(example).fields) == 5
+    response_ref = operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    assert response_ref == "#/components/schemas/ExtractionResponse"
+    assert {"answers", "usage"} <= set(decisions_openapi["components"]["schemas"]["ExtractionResponse"]["properties"])

@@ -376,6 +376,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/decisions",
         "/systemone",
         "/v1/systemone",
+        "/extraction",
+        "/v1/extraction",
         # OCR
         "/ocr",
         "/v1/ocr",

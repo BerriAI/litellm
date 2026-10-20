@@ -549,6 +549,7 @@
             "completion",
             "embedding",
             "evaluation",
+            "extraction",
             "guardrail",
             "image_edit",
             "image_generation",

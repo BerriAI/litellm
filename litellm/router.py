@@ -2474,6 +2474,11 @@ class Router:
         self.asystemone = self.factory_function(asystemone, call_type="asystemone")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
         self.systemone = self.factory_function(systemone, call_type="systemone")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
 
+        from litellm.extraction import aextraction, extraction
+
+        self.aextraction = self.factory_function(aextraction, call_type="aextraction")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
+        self.extraction = self.factory_function(extraction, call_type="extraction")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
+
     def _initialize_video_endpoints(self):
         """Initialize video endpoints."""
         from litellm.videos import (
@@ -7535,6 +7540,8 @@ class Router:
             "decisions",
             "asystemone",
             "systemone",
+            "aextraction",
+            "extraction",
             "aadapter_generate_content",
             "avideo_generation",
             "video_generation",
@@ -7610,6 +7617,7 @@ class Router:
             "search",
             "decisions",
             "systemone",
+            "extraction",
             "video_generation",
             "video_list",
             "video_status",
@@ -7779,6 +7787,7 @@ class Router:
                 "ocr",
                 "adecisions",
                 "asystemone",
+                "aextraction",
                 "avideo_generation",
                 "avideo_list",
                 "avideo_status",
