@@ -3262,7 +3262,7 @@ async def test_native_multipart_tool_result_is_excluded_before_compression(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE)
     unsafe: Final = {"type": "tool_result", "tool_use_id": unsafe_id, "content": unsafe_content}
-    safe: Final = {"type": "tool_result", "tool_use_id": "call_safe", "content": "file.py\n" * 100}
+    safe: Final = {"type": "tool_result", "tool_use_id": "call.safe:1", "content": "file.py\n" * 100}
     result_blocks: Final = [unsafe, safe] if with_safe_result else [unsafe]
     messages: Final = [
         {"role": "user", "content": "Read the results"},
@@ -3284,12 +3284,16 @@ async def test_native_multipart_tool_result_is_excluded_before_compression(
     result: Final = await AnthropicMessagesHandler().process_input_messages(
         {"messages": messages, "model": "test-model", "max_tokens": 100}, callback
     )
-    assert result["messages"][-1]["content"][0] == unsafe
+    assert result["messages"][-1]["content"][0] == {
+        **unsafe, "tool_use_id": result["messages"][-2]["content"][0]["id"],
+    }
     if with_safe_result:
         assert json.loads(route.calls.last.request.content)["messages"] == [
-            {"role": "tool", "tool_call_id": "call_safe", "content": safe["content"]},
+            {"role": "tool", "tool_call_id": "call.safe:1", "content": safe["content"]},
         ]
-        assert result["messages"][-1]["content"][1] == {**safe, "content": "summary"}
+        assert result["messages"][-1]["content"][1] == {
+            **safe, "content": "summary", "tool_use_id": result["messages"][-2]["content"][1]["id"],
+        }
         assert extract_compression_saved_tokens({"guardrail_information": _recorded_guardrail_entries(result)}) == 100
     else:
         assert not route.called

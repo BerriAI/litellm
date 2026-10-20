@@ -323,6 +323,7 @@ def _restored_block(
             )
             restored: Final = {
                 **original.block,
+                "tool_use_id": tool_use_id,
                 "content": original.block.get("content") if content is None else content,
             }
             return _with_kept_parts(restored, restored, original.parts)
