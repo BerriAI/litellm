@@ -675,7 +675,7 @@ func TestResourceLiteLLMModelCreateSendsAdditionalModelInfo(t *testing.T) {
 		"mode":                "chat",
 		"display_name":        "Claude Sonnet 4.5",
 		"additional_model_info": map[string]interface{}{
-			"mixpanel":   string(nested),
+			"catalog":    string(nested),
 			"supports_x": "true",
 			"max_items":  "12",
 			"label":      "plain",
@@ -688,7 +688,7 @@ func TestResourceLiteLLMModelCreateSendsAdditionalModelInfo(t *testing.T) {
 
 	modelInfo := createPayload["model_info"].(map[string]interface{})
 	want := map[string]interface{}{
-		"mixpanel":     map[string]interface{}{"owner": "platform", "tags": []interface{}{"a", "b"}, "limits": map[string]interface{}{"rpm": float64(5)}},
+		"catalog":      map[string]interface{}{"owner": "platform", "tags": []interface{}{"a", "b"}, "limits": map[string]interface{}{"rpm": float64(5)}},
 		"supports_x":   true,
 		"max_items":    float64(12),
 		"label":        "plain",
@@ -714,7 +714,7 @@ func TestResourceLiteLLMModelCreateSendsAdditionalModelInfo(t *testing.T) {
 	if litellmParams["max_context"] != float64(16384) {
 		t.Errorf("max_context = %#v, want 16384", litellmParams["max_context"])
 	}
-	if _, leaked := litellmParams["mixpanel"]; leaked {
+	if _, leaked := litellmParams["catalog"]; leaked {
 		t.Error("additional_model_info entry leaked into litellm_params")
 	}
 }
@@ -773,9 +773,9 @@ func TestResourceLiteLLMModelUpdatePatchesChangedAdditionalModelInfo(t *testing.
 		wantPatch map[string]interface{}
 	}{
 		"changed nested value is sent whole": {
-			oldInfo:   map[string]interface{}{"mixpanel": oldNested, "label": "a"},
-			newInfo:   map[string]interface{}{"mixpanel": newNested, "label": "a"},
-			wantPatch: map[string]interface{}{"mixpanel": map[string]interface{}{"owner": "data"}},
+			oldInfo:   map[string]interface{}{"catalog": oldNested, "label": "a"},
+			newInfo:   map[string]interface{}{"catalog": newNested, "label": "a"},
+			wantPatch: map[string]interface{}{"catalog": map[string]interface{}{"owner": "data"}},
 		},
 		"added key is sent with converted type": {
 			oldInfo:   map[string]interface{}{"label": "a"},
@@ -787,8 +787,8 @@ func TestResourceLiteLLMModelUpdatePatchesChangedAdditionalModelInfo(t *testing.
 			newInfo: map[string]interface{}{"label": "a"},
 		},
 		"unchanged map sends nothing": {
-			oldInfo: map[string]interface{}{"mixpanel": oldNested},
-			newInfo: map[string]interface{}{"mixpanel": oldNested},
+			oldInfo: map[string]interface{}{"catalog": oldNested},
+			newInfo: map[string]interface{}{"catalog": oldNested},
 		},
 	}
 	for name, tc := range cases {
@@ -874,7 +874,7 @@ func TestResourceLiteLLMModelAcceptsUnreservedAdditionalModelInfoKeys(t *testing
 		"model_name":            "sonnet-4-5-anthropic",
 		"custom_llm_provider":   "anthropic",
 		"base_model":            "claude-sonnet-4-5",
-		"additional_model_info": map[string]interface{}{"mixpanel": `{"a":1}`, "supports_x": "true"},
+		"additional_model_info": map[string]interface{}{"catalog": `{"a":1}`, "supports_x": "true"},
 	})
 	if diags := resourceLiteLLMModel().Validate(config); diags.HasError() {
 		t.Errorf("unexpected validation error: %v", diags)

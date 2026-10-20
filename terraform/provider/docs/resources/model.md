@@ -228,8 +228,8 @@ The following arguments are supported:
     mode                = "chat"
 
     additional_model_info = {
-      owner    = "platform"
-      mixpanel = jsonencode({ tier = "gold", regions = ["us", "eu"] }) # nested object on the proxy
+      owner   = "platform"
+      catalog = jsonencode({ tier = "gold", regions = ["us", "eu"] }) # nested object on the proxy
     }
   }
   ```
