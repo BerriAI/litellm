@@ -6316,65 +6316,6 @@ async def test_spend_tracking_never_writes_the_auth_object_back():
 
 
 @pytest.mark.asyncio
-async def test_update_cache_global_proxy_spend_scalar_stays_shared():
-    """
-    The proxy-wide spend estimate must keep flowing to Redis when the spend
-    writeback goes per-pod: the global max_budget check reads the
-    ``{litellm_proxy_admin_name}:spend`` cache entry between authoritative DB
-    reloads, so keeping it pod-local would let traffic spread across replicas
-    exceed the proxy budget by roughly a factor of the replica count within a
-    cache TTL. Sharing this scalar is safe because it carries no limits or
-    permissions, so it cannot resurrect an invalidated auth blob.
-    """
-    from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
-    global_key = "{}:spend".format(admin_name)
-    user_seed: Final = {"user_id": "user-lit", "spend": 1.0}
-
-    def fake_get(key):
-        if key == "user-lit":
-            return user_seed
-        if key == global_key:
-            return 10.0
-        return None
-
-    async def fake_batch_get(keys, **kwargs):
-        return [fake_get(key) for key in keys]
-
-    original_cache = litellm.proxy.proxy_server.user_api_key_cache
-    cache = UserApiKeyCache(in_memory_cache=InMemoryCache(), default_in_memory_ttl=300)
-    cache.in_memory_cache.set_cache("user-lit", user_seed)
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
-    try:
-        with patch.object(cache, "async_batch_get_cache", new=AsyncMock(side_effect=fake_batch_get)):
-            with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
-                await litellm.proxy.proxy_server.update_cache(
-                    token=None,
-                    user_id="user-lit",
-                    end_user_id=None,
-                    team_id=None,
-                    response_cost=5.0,
-                    parent_otel_span=None,
-                )
-
-                pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-                if pending:
-                    await asyncio.wait(pending, timeout=5)
-
-                calls = mock_set_cache.await_args_list
-                shared_keys = [
-                    k for c in calls if c.kwargs.get("local_only") is not True for k, _ in c.kwargs["cache_list"]
-                ]
-                assert cache.in_memory_cache.get_cache("user-lit")["spend"] == 6.0
-                assert global_key not in cache.in_memory_cache.cache_dict
-                assert shared_keys == [global_key]
-    finally:
-        setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
-
-
-@pytest.mark.asyncio
 async def test_init_sso_settings_in_db():
     """
     Test that _init_sso_settings_in_db properly loads SSO settings from database,
@@ -15615,39 +15556,32 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
 
 
 @pytest.mark.asyncio
-async def test_update_cache_reads_and_writes_the_global_spend_scalar_as_spend_counters():
-    """The only Redis traffic of the post-call spend update is the global spend scalar, so its
-    read and write spans must both name ``spend_counters``, never a bare ``redis.mget`` with no owner."""
+async def test_update_cache_adds_the_global_spend_scalar_in_redis_as_spend_counters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-    cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
-    cache.in_memory_cache.set_cache("u1", {"user_id": "u1", "spend": 1.0})
-    seen: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
+    seen_target: Final = MagicMock()
 
-    async def _mget(keys, **_kwargs):
-        seen.append(("mget", current_service_target()))
-        return [10.0 for _ in keys]
+    async def _increment_if_present(key: str, value: float) -> float:
+        seen_target(key, value, current_service_target())
+        return 12.0
 
-    async def _set_pipeline(**_kwargs):
-        seen.append(("set", current_service_target()))
+    shared: Final = MagicMock(spec=RedisCache, async_increment_if_present=AsyncMock(side_effect=_increment_if_present))
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=shared)
 
-    with (
-        patch.object(cache, "async_batch_get_cache", new=AsyncMock(side_effect=_mget)),
-        patch.object(cache, "async_set_cache_pipeline", new=AsyncMock(side_effect=_set_pipeline)),
-    ):
-        await litellm.proxy.proxy_server.update_cache(
-            token=None,
-            user_id="u1",
-            end_user_id=None,
-            team_id=None,
-            response_cost=2.0,
-            parent_otel_span=None,
-            cache=cache,
-        )
-        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-        if pending:
-            await asyncio.wait(pending, timeout=5)
+    await litellm.proxy.proxy_server.update_cache(
+        token=None,
+        user_id="u1",
+        end_user_id=None,
+        team_id=None,
+        response_cost=2.0,
+        parent_otel_span=None,
+        cache=cache,
+    )
 
-    assert seen == [("mget", "spend_counters"), ("set", "spend_counters")]
+    assert seen_target.call_args_list == [call(GLOBAL_PROXY_SPEND_CACHE_KEY, 2.0, "spend_counters")]
     assert current_service_target() is None

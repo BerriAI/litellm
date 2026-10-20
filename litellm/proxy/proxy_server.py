@@ -307,10 +307,8 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.dual_cache import DeclaredBatchRead
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
-    active_request_redis_batches,
     drain_post_call_redis_batches,
 )
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
@@ -4228,67 +4226,6 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
     return tuple(float(current_value) for current_value in results or ())
 
 
-def update_cache_read_keys(user_id: str | None, response_cost: float | None) -> tuple[str, ...]:
-    if response_cost is None or user_id is None:
-        return ()
-    return (GLOBAL_PROXY_SPEND_CACHE_KEY,)
-
-
-_UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
-
-
-async def arm_update_cache_read(keys: Sequence[str], cache: DualCache | None = None) -> None:
-    """Declares the ``update_cache`` read on the request pipeline once the spend is persisted, so it rides the same
-    round trip as the post-call spend counter read instead of its own."""
-    request: Final = active_request_redis_batches()
-    target: Final = user_api_key_cache if cache is None else cache
-    if request is None or target.redis_cache is None or not keys:
-        return
-    with service_target(SPEND_COUNTERS_TARGET):
-        request.prefetched[_UPDATE_CACHE_PREFETCH_SLOT] = await target.declare_batch_get(
-            keys, request.batch(target.redis_cache)
-        )
-
-
-async def _take_armed_update_cache_read(keys: Sequence[str], cache: DualCache) -> Mapping[str, object] | None:
-    request: Final = active_request_redis_batches()
-    if request is None:
-        return None
-    armed: Final = request.prefetched.pop(_UPDATE_CACHE_PREFETCH_SLOT, None)
-    if not isinstance(armed, DeclaredBatchRead) or armed.keys != tuple(keys):
-        return None
-    values: Final = await cache.async_resolve_batch_get(armed)
-    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
-
-
-async def _read_update_cache_values(
-    keys: Sequence[str], parent_otel_span: Span | None, cache: DualCache | None = None
-) -> Mapping[str, object]:
-    """One batched read for every object ``update_cache`` refreshes; a failed read leaves them all untouched,
-    exactly as a failed per-object GET left that object untouched."""
-    if not keys:
-        return MappingProxyType({})
-    target: Final = user_api_key_cache if cache is None else cache
-    try:
-        armed: Final = await _take_armed_update_cache_read(keys, target)
-        if armed is not None:
-            return armed
-        values: Final = await target.async_batch_get_cache(
-            keys=list(keys), parent_otel_span=parent_otel_span, throttle_redis=False
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Spend tracking - failed to read cached spend objects. Budget enforcement may use stale spend values. "
-            "keys=%s - %s",
-            keys,
-            str(e),
-        )
-        return MappingProxyType({})
-    if values is None:
-        return MappingProxyType({})
-    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
-
-
 _CachedSpendObjectT = TypeVar(
     "_CachedSpendObjectT", LiteLLM_UserTable, LiteLLM_EndUserTable, LiteLLM_TeamTableCachedObj, LiteLLM_TagTable
 )
@@ -4305,6 +4242,34 @@ def _add_spend_to_locally_cached_object(
         value=current.model_copy(update={"spend": (current.spend or 0.0) + response_cost}),
         local_only=True,
         model_type=model_type,
+        ttl=get_management_object_ttl(cache),
+    )
+
+
+async def _add_spend_to_shared_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> float | None:
+    if cache.redis_cache is None:
+        return None
+    try:
+        return await cache.redis_cache.async_increment_if_present(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=response_cost)
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Spend tracking - failed to add spend to the global proxy spend in Redis. "
+            "Budget enforcement may use stale spend values. response_cost=%s - %s",
+            response_cost,
+            str(e),
+        )
+        return None
+
+
+async def _add_spend_to_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> None:
+    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost)
+    local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    if not isinstance(local_total, (int, float)):
+        return
+    cache.set_cache(
+        key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+        value=local_total + response_cost if shared_total is None else shared_total,
+        local_only=True,
         ttl=get_management_object_ttl(cache),
     )
 
@@ -4326,12 +4291,6 @@ async def update_cache(
     """
 
     target: Final = user_api_key_cache if cache is None else cache
-    with service_target(SPEND_COUNTERS_TARGET):
-        cached_values: Final = await _read_update_cache_values(
-            keys=update_cache_read_keys(user_id=user_id, response_cost=response_cost),
-            parent_otel_span=parent_otel_span,
-            cache=target,
-        )
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -4414,17 +4373,10 @@ async def update_cache(
         if tag_name and isinstance(tag_name, str):
             _add_spend(tag_cache_key(tag_name), LiteLLM_TagTable, response_cost)
 
-    global_proxy_spend: Final = cached_values.get(GLOBAL_PROXY_SPEND_CACHE_KEY)
-    if not isinstance(global_proxy_spend, (int, float)):
+    if litellm.max_budget <= 0:
         return
     with service_target(SPEND_COUNTERS_TARGET):
-        asyncio.create_task(
-            target.async_set_cache_pipeline(
-                cache_list=[(GLOBAL_PROXY_SPEND_CACHE_KEY, global_proxy_spend + response_cost)],
-                ttl=get_management_object_ttl(target),
-                litellm_parent_otel_span=parent_otel_span,
-            )
-        )
+        await _add_spend_to_global_proxy_spend(target, response_cost)
 
 
 def run_ollama_serve():

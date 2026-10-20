@@ -28,10 +28,11 @@ from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from opentelemetry.trace import Span
 
+import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.tag import LiteLLM_TagTable
@@ -1567,26 +1568,6 @@ async def test_invalidate_spend_counter_swallows_redis_failure_no_raise(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_update_cache_no_cached_entities_schedules_pipeline_flush(monkeypatch):
-    fake_user_cache = _make_user_api_key_cache(get_value=None)
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
-
-    await ps.update_cache(
-        token=None,
-        user_id="u1",
-        end_user_id="eu1",
-        team_id="t1",
-        response_cost=1.0,
-        parent_otel_span=None,
-        tags=["x"],
-    )
-
-    assert fake_user_cache.async_get_cache.await_count == 0
-    fake_user_cache.async_batch_get_cache.assert_awaited_once()
-    assert fake_user_cache.async_batch_get_cache.await_args.kwargs["keys"] == [f"{ps.litellm_proxy_admin_name}:spend"]
-
-
-@pytest.mark.asyncio
 async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkeypatch):
     """An inner _update_user_cache raising must not propagate — update_cache
     catches and logs, the public coroutine still completes normally."""
@@ -1694,28 +1675,23 @@ def _cached_spend_object(
             return tag_cache_key("race-tag"), LiteLLM_TagTable(tag_name="race-tag", models=models)
 
 
-class _WriteDuringReadUserApiKeyCache(UserApiKeyCache):
-    def __init__(self, management_write: Callable[[UserApiKeyCache], None]) -> None:
-        super().__init__(in_memory_cache=InMemoryCache())
-        self._management_write: Final = management_write
+class _RunsOnKeyRead(InMemoryCache):
+    def __init__(self, on_read: Callable[[], Awaitable[None]]) -> None:
+        super().__init__()
+        self._on_read: Final = on_read
 
-    async def async_batch_get_cache(
-        self,
-        keys: list[str],
-        parent_otel_span: Span | None = None,
-        local_only: bool = False,
-        throttle_redis: bool = True,
-        **kwargs: object,
-    ):
-        result: Final = await super().async_batch_get_cache(
-            keys,
-            parent_otel_span=parent_otel_span,
-            local_only=local_only,
-            throttle_redis=throttle_redis,
-            **kwargs,
-        )
-        self._management_write(self)
-        return result
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        await self._on_read()
+        return await super().async_get_cache(key, **kwargs)
+
+
+def _cache_that_runs_on_key_read(on_read: Callable[[], Awaitable[None]]) -> UserApiKeyCache:
+    return UserApiKeyCache(in_memory_cache=InMemoryCache(), key_object_in_memory_cache=_RunsOnKeyRead(on_read))
+
+
+@pytest.fixture
+def proxy_max_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
 
 
 @pytest.mark.asyncio
@@ -1732,18 +1708,18 @@ async def test_update_cache_adds_spend_to_the_entry_a_management_write_left_mid_
     key, seeded = _cached_spend_object(kind, models=["gpt-a"])
     _, refreshed = _cached_spend_object(kind, models=["gpt-b"])
 
-    def _write(cache: UserApiKeyCache) -> None:
+    async def _write() -> None:
         if management_write == "none":
             return
         evict_local(cache_keys=(key,), user_api_key_cache=cache)
         if management_write == "refresh":
             cache.set_cache(key=key, value=refreshed, local_only=True)
 
-    cache: Final = _WriteDuringReadUserApiKeyCache(management_write=_write)
+    cache: Final = _cache_that_runs_on_key_read(on_read=_write)
     cache.set_cache(key=key, value=seeded, local_only=True)
 
     await ps.update_cache(
-        token=None,
+        token="sk-race",
         user_id="race-user",
         end_user_id="race-end-user",
         team_id="race-team",
@@ -1759,18 +1735,19 @@ async def test_update_cache_adds_spend_to_the_entry_a_management_write_left_mid_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("user_cached_on_this_worker", [True, False])
-async def test_update_cache_adds_spend_to_the_global_proxy_counter_whether_or_not_the_user_is_cached(
-    user_cached_on_this_worker: bool,
+@pytest.mark.usefixtures("proxy_max_budget")
+@pytest.mark.parametrize("user", ["cached_on_this_worker", "not_cached_on_this_worker", "none"])
+async def test_update_cache_adds_spend_to_the_global_proxy_spend_for_every_request(
+    user: Literal["cached_on_this_worker", "not_cached_on_this_worker", "none"],
 ) -> None:
     cache: Final = UserApiKeyCache()
     cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0)
-    if user_cached_on_this_worker:
+    if user == "cached_on_this_worker":
         cache.set_cache(key="spender", value=LiteLLM_UserTable(user_id="spender", spend=1.0))
 
     await ps.update_cache(
         token=None,
-        user_id="spender",
+        user_id=None if user == "none" else "spender",
         end_user_id=None,
         team_id=None,
         response_cost=0.25,
@@ -1780,6 +1757,75 @@ async def test_update_cache_adds_spend_to_the_global_proxy_counter_whether_or_no
     await _drain_spend_cache_writes()
 
     assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY) == 10.25
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_max_budget")
+async def test_update_cache_never_brings_back_a_global_proxy_spend_a_budget_reset_cleared() -> None:
+    async def _budget_reset() -> None:
+        await cache.async_delete_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
+
+    cache: Final = _cache_that_runs_on_key_read(on_read=_budget_reset)
+    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0)
+
+    await ps.update_cache(
+        token="sk-spender",
+        user_id="spender",
+        end_user_id=None,
+        team_id=None,
+        response_cost=0.25,
+        parent_otel_span=None,
+        cache=cache,
+    )
+    await _drain_spend_cache_writes()
+
+    assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY) is None
+
+
+_SharedGlobalSpendOutcome = Literal["peers_added_spend", "reset_elsewhere", "reset_while_redis_answers", "redis_down"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_max_budget")
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        ("peers_added_spend", 12.0),
+        ("reset_elsewhere", 10.25),
+        ("reset_while_redis_answers", None),
+        ("redis_down", 10.25),
+    ],
+)
+async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_total(
+    outcome: _SharedGlobalSpendOutcome, expected: float | None
+) -> None:
+    async def _increment_if_present(key: str, value: float) -> float | None:
+        match outcome:
+            case "peers_added_spend":
+                return 12.0
+            case "reset_elsewhere":
+                return None
+            case "reset_while_redis_answers":
+                await cache.async_delete_cache(key=key)
+                return 10.0 + value
+            case "redis_down":
+                raise ConnectionError()
+
+    shared: Final = MagicMock(spec=RedisCache, async_increment_if_present=AsyncMock(side_effect=_increment_if_present))
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=shared)
+    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0, local_only=True)
+
+    await ps.update_cache(
+        token=None,
+        user_id=None,
+        end_user_id=None,
+        team_id=None,
+        response_cost=0.25,
+        parent_otel_span=None,
+        cache=cache,
+    )
+
+    assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True) == expected
 
 
 class _UnwritableKeyUserApiKeyCache(UserApiKeyCache):
@@ -1794,6 +1840,7 @@ class _UnwritableKeyUserApiKeyCache(UserApiKeyCache):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_max_budget")
 async def test_update_cache_still_adds_spend_to_the_others_when_one_cached_object_fails() -> None:
     cache: Final = _UnwritableKeyUserApiKeyCache(unwritable_key="broken-user")
     cache.in_memory_cache.set_cache(
