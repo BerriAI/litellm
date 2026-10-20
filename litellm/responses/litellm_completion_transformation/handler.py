@@ -24,14 +24,14 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
-    from litellm.main import PlannedChat
+    from litellm.native.chat_plan import PlannedChat
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 def _plan_bridged_chat(request: Mapping[str, object]) -> "PlannedChat | None":
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.main import plan_chat
+    from litellm.native.chat_plan import plan_chat
 
     logging_obj: Final = request.get("litellm_logging_obj")
     return plan_chat(request, logging_obj) if isinstance(logging_obj, Logging) else None
@@ -84,7 +84,7 @@ class LiteLLMCompletionTransformationHandler:
 
         completion_args: Final = {**kwargs, **litellm_completion_request}
 
-        from litellm.main import execute_planned_chat
+        from litellm.native.chat_plan import execute_planned_chat
 
         planned_chat: Final = _plan_bridged_chat(_REQUEST_KWARGS_ADAPTER.validate_python(completion_args))
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = (
@@ -136,7 +136,7 @@ class LiteLLMCompletionTransformationHandler:
 
         acompletion_args: Final = {**kwargs, **litellm_completion_request}
 
-        from litellm.main import aexecute_planned_chat
+        from litellm.native.chat_plan import aexecute_planned_chat
 
         planned_chat: Final = _plan_bridged_chat(_REQUEST_KWARGS_ADAPTER.validate_python(acompletion_args))
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = (

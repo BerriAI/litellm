@@ -87,7 +87,7 @@ async def test_aresponses_forwards_timeout_to_acompletion():
     and similar providers, with calls falling back to the provider SDK default
     (~600s for Anthropic).
     """
-    with patch("litellm.main.aexecute_planned_chat", new_callable=AsyncMock) as mock_chat:
+    with patch("litellm.native.chat_plan.aexecute_planned_chat", new_callable=AsyncMock) as mock_chat:
         mock_chat.return_value = ModelResponse(
             id="id",
             created=0,
