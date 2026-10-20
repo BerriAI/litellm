@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import itertools
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Mapping
@@ -26,7 +25,7 @@ from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark: Final = pytest.mark.timeout(900)
+pytestmark: Final = [pytest.mark.timeout(900), pytest.mark.shares_worker_state]
 
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _DROPPED: Final = re.compile(r"original model: (\S+), ignoring and continuing")
@@ -422,12 +421,13 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_refusing_logins_and_s
                         owned, key, workers, control_port, held_markers, (), tasks
                     )
                     victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                    victim: Final = psutil.Process(victim_pid)
-                    victim.suspend()
-                    victim.send_signal(signal.SIGKILL)
+                    with owned.replacing_worker(victim_pid) as kill:
+                        kill.freeze()
+                        await asyncio.to_thread(kill)
+                        release.set()
+                        answers: Final = await asyncio.gather(*bursts)
                 finally:
                     release.set()
-                answers: Final = await asyncio.gather(*bursts)
             served: Final = tuple(item for item in itertools.chain.from_iterable(answers) if item is not None)
             assert len(served) == held_by[survivor_pid], (held_by, len(served))
             for item in served:

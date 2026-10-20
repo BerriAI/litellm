@@ -6,12 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
 )
@@ -51,6 +53,7 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingMetadata,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
 )
 
 # OpenTelemetry imports moved to individual functions to avoid import errors when not installed
@@ -102,6 +105,16 @@ class _ResponseWithUsageView(TypedDict, total=False):
     usage: "_UsageCompletionTokensView | None"
 
 
+class _FailurePayloadView(TypedDict, total=False):
+    error_information: ReadOnly[StandardLoggingPayloadErrorInformation | None]
+    error_str: ReadOnly[str | None]
+
+
+class _FailureKwargsView(TypedDict, total=False):
+    exception: ReadOnly[BaseException | None]
+    standard_logging_object: ReadOnly[_FailurePayloadView | None]
+
+
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 # Metadata keys dropped from spans when `litellm.redact_user_api_key_info` is set.
@@ -111,8 +124,24 @@ _USER_API_KEY_METADATA_KEYS: Final = frozenset(
     if key.startswith("user_api_key")
 )
 
+
+def _text_as_stored_on_span(span: Span, key: str, text: str) -> str:
+    from opentelemetry.sdk.trace import ReadableSpan
+
+    stored: Final = span.attributes.get(key) if isinstance(span, ReadableSpan) and span.attributes else None
+    return stored if isinstance(stored, str) else text
+
+
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
+
+
+class _CacheHitView(TypedDict, total=False):
+    cache_hit: ReadOnly[object]
+    saved_cache_cost: ReadOnly[object]
+
+
+_CACHE_HIT_VIEW: Final = TypeAdapter(_CacheHitView)
 
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
@@ -919,7 +948,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=value,
                     )
 
-            service_logging_span.set_status(Status(StatusCode.ERROR))
+            service_logging_span.set_status(
+                Status(
+                    StatusCode.ERROR, _text_as_stored_on_span(service_logging_span, "error", error) if error else None
+                )
+            )
             service_logging_span.end(end_time=_end_time_ns)
 
     async def async_post_call_failure_hook(
@@ -934,8 +967,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         parent_otel_span: Final = user_api_key_dict.parent_otel_span
         if parent_otel_span is not None:
-            parent_otel_span.set_status(Status(StatusCode.ERROR))
-
             # Stamp team attributes onto the SERVER (root) span too, so the
             # trace root is team-filterable on the failure path like the
             # child exception span below.
@@ -957,13 +988,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 original_exception=original_exception,
                 traceback_str=traceback_str,
             )
-            self._record_exception_on_span(
+            server_error_message: Final = self._record_exception_on_span(
                 span=parent_otel_span,
                 kwargs={
                     "exception": original_exception,
                     "standard_logging_object": {"error_information": error_information},
                 },
             )
+            parent_otel_span.set_status(Status(StatusCode.ERROR, server_error_message))
 
             # _record_exception_on_span only stamps when error_code is set;
             # bare TypeError etc. has none, and the span is about to be ended.
@@ -992,7 +1024,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 team_id=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
             )
-            exception_logging_span.set_status(Status(StatusCode.ERROR))
+            exception_logging_span.set_status(Status(StatusCode.ERROR, server_error_message))
             exception_logging_span.end(end_time=self._to_ns(datetime.now()))
 
             # Emit guardrail spans for any guardrail invocations that
@@ -2198,11 +2230,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if self._gen_ai_semconv_latest_experimental:
                 span_kwargs["kind"] = self.span_kind.CLIENT
             span = otel_tracer.start_span(**span_kwargs)
-            span.set_status(Status(StatusCode.ERROR))
             self.set_attributes(span, kwargs, response_obj)
 
             # Record exception information using OTEL standard method
-            self._record_exception_on_span(span=span, kwargs=kwargs)
+            span_error_message: Final = self._record_exception_on_span(span=span, kwargs=kwargs)
+            span.set_status(Status(StatusCode.ERROR, span_error_message))
 
             span.end(end_time=self._to_ns(end_time))
         else:
@@ -2211,9 +2243,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # Only set attributes if the span is still recording (not closed)
             # Note: parent_otel_span is guaranteed to be not None here
             if parent_otel_span.is_recording():
-                parent_otel_span.set_status(Status(StatusCode.ERROR))
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
-                self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
+                parent_error_message: Final = self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
+                parent_otel_span.set_status(Status(StatusCode.ERROR, parent_error_message))
 
         # Create span for guardrail information — ensure proper parenting (Issue #5)
         guardrail_ctx: Final = self._resolve_guardrail_context(
@@ -2231,13 +2263,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         ):
             parent_otel_span.end(end_time=self._to_ns(end_time))
 
-    def _record_exception_on_span(self, span: Span, kwargs: dict):
+    def _record_exception_on_span(self, span: Span, kwargs: _FailureKwargsView) -> str | None:
         """
         Record exception information on the span using OTEL standard methods.
 
         This extracts error information from StandardLoggingPayload and:
         1. Uses span.record_exception() for the actual exception object (OTEL standard)
         2. Sets structured error attributes from StandardLoggingPayloadErrorInformation
+
+        Returns the error message it recorded, if any, for the span status description.
         """
         try:
             from litellm.integrations._types.open_inference import (
@@ -2252,10 +2286,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 span.record_exception(exception)
 
             # Get StandardLoggingPayload for structured error information
-            standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
+            standard_logging_payload: Final = kwargs.get("standard_logging_object")
 
             if standard_logging_payload is None:
-                return
+                return None
 
             # Extract error_information from StandardLoggingPayload
             error_information: Final = standard_logging_payload.get("error_information")
@@ -2269,59 +2303,67 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         key=ErrorAttributes.ERROR_MESSAGE,
                         value=error_str,
                     )
-                return
+                return _text_as_stored_on_span(span, ErrorAttributes.ERROR_MESSAGE, error_str) if error_str else None
 
             # Set structured error attributes from StandardLoggingPayloadErrorInformation
-            if error_information.get("error_code"):
+            error_code: Final = error_information.get("error_code")
+            if error_code:
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_CODE,
-                    value=error_information["error_code"],
+                    value=error_code,
                 )
 
                 # Also expose under the OTel-standard name as an int
                 # (error_code is a str, may be non-numeric).
-                _error_code_val: Final = error_information["error_code"]
-                if _error_code_val is not None:
-                    try:
-                        self.safe_set_attribute(
-                            span=span,
-                            key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
-                            value=int(_error_code_val),
-                        )
-                    except (ValueError, TypeError):
-                        pass
+                try:
+                    self.safe_set_attribute(
+                        span=span,
+                        key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+                        value=int(error_code),
+                    )
+                except (ValueError, TypeError):
+                    pass
 
-            if error_information.get("error_class"):
+            error_class: Final = error_information.get("error_class")
+            if error_class:
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_TYPE,
-                    value=error_information["error_class"],
+                    value=error_class,
                 )
 
-            if error_information.get("error_message"):
+            error_message: Final = error_information.get("error_message")
+            if error_message:
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_MESSAGE,
-                    value=error_information["error_message"],
+                    value=error_message,
                 )
 
-            if error_information.get("llm_provider"):
+            llm_provider: Final = error_information.get("llm_provider")
+            if llm_provider:
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_LLM_PROVIDER,
-                    value=error_information["llm_provider"],
+                    value=llm_provider,
                 )
 
-            if error_information.get("traceback"):
+            traceback_text: Final = error_information.get("traceback")
+            if traceback_text:
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_STACK_TRACE,
-                    value=error_information["traceback"],
+                    value=traceback_text,
                 )
 
         except Exception as e:
             verbose_logger.exception("OpenTelemetry: Error recording exception on span: %s", str(e))
+            return None
+        else:
+            if error_message:
+                return _text_as_stored_on_span(span, ErrorAttributes.ERROR_MESSAGE, error_message)
+            return error_class or None
 
     def set_tools_attributes(self, span: Span, tools):
         import json
@@ -2421,12 +2463,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ############ LLM CALL METADATA ##############
             #############################################
-            metadata: Final = standard_logging_payload["metadata"]
+            metadata: Final = cast(  # cast-ok: payload metadata follows the standard logging contract
+                StandardLoggingMetadata, standard_logging_payload["metadata"]
+            )
             redact_user_api_key_info: Final = litellm.redact_user_api_key_info is True
             for key, value in metadata.items():
                 if redact_user_api_key_info and key in _USER_API_KEY_METADATA_KEYS:
                     continue
-                self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
+                self.safe_set_attribute(
+                    span=span,
+                    key=f"metadata.{key}",
+                    value=safe_dumps(value) if key == KUBERNETES_POD_ROUTING_KEY and value is not None else value,
+                )
             decision: Final = metadata.get("routing_decision")
             span.set_attributes(routing_decision_attributes(decision))
 
@@ -2447,6 +2495,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 litellm_params=litellm_params,
             )
             # Cost breakdown tracking
+            cache_view: Final = _CACHE_HIT_VIEW.validate_python(standard_logging_payload)
+            cache_hit: Final = cache_view.get("cache_hit") is True
             cost_breakdown: Final[CostBreakdown | None] = standard_logging_payload.get("cost_breakdown")
             if cost_breakdown:
                 for key, value in cost_breakdown.items():
@@ -2456,6 +2506,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             key=f"gen_ai.cost.{key}",
                             value=value,
                         )
+            self.safe_set_attribute(span=span, key=LiteLLM.CACHE_HIT, value=cache_hit)
+            if cache_hit:
+                saved_cache_cost: Final = cache_view.get("saved_cache_cost")
+                if isinstance(saved_cache_cost, (int, float)):
+                    self.safe_set_attribute(span=span, key=LiteLLM.SAVED_CACHE_COST, value=saved_cache_cost)
             #############################################
             ########## LLM Request Attributes ###########
             #############################################
@@ -3507,8 +3562,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 key="exception",
                 value=str(_exception),
             )
-            management_endpoint_span.set_status(Status(StatusCode.ERROR))
-            management_endpoint_span.end(end_time=_end_time_ns)
 
             # The management wrapper has no other hook that closes the SERVER span.
             from litellm.litellm_core_utils.litellm_logging import (
@@ -3518,14 +3571,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             error_information: Final = StandardLoggingPayloadSetup.get_error_information(
                 original_exception=_exception,
             )
-            parent_otel_span.set_status(Status(StatusCode.ERROR))
-            self._record_exception_on_span(
+            server_error_message: Final = self._record_exception_on_span(
                 span=parent_otel_span,
                 kwargs={
                     "exception": _exception,
                     "standard_logging_object": {"error_information": error_information},
                 },
             )
+            management_endpoint_span.set_status(Status(StatusCode.ERROR, server_error_message))
+            management_endpoint_span.end(end_time=_end_time_ns)
+            parent_otel_span.set_status(Status(StatusCode.ERROR, server_error_message))
             parent_otel_span.end(end_time=_end_time_ns)
 
     def create_litellm_proxy_request_started_span(
@@ -3585,19 +3640,20 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         span: Span | None,
         exception: Exception | None,
         status_code: int,
-    ) -> None:
+    ) -> str | None:
         """Stamp structured ``error.*`` attributes on the SERVER span from the
         exception returned to the client, with ``error.code`` pinned to the real
-        response status. Idempotent (overwrites); emits no exception event."""
+        response status. Idempotent (overwrites); emits no exception event.
+        Returns the error text for the span status description."""
         if span is None or exception is None:
-            return
+            return None
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
         )
 
         error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=exception)
         error_information["error_code"] = str(status_code)
-        self._record_exception_on_span(
+        return self._record_exception_on_span(
             span=span,
             kwargs={"standard_logging_object": {"error_information": error_information}},
         )

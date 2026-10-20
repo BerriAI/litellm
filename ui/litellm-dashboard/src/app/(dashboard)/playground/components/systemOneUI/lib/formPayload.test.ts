@@ -82,7 +82,7 @@ describe("retype", () => {
       type: "choice",
       instructions: "Is it urgent?",
       note: "kept",
-      criteria: { option_1: "", option_2: "" },
+      criteria: {},
     };
     const asScore = { type: "score", instructions: "Is it urgent?", note: "kept", criteria: ["", ""] };
     expect(retype(noul, "choice")).toEqual(asChoice);

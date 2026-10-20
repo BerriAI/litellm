@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi import Request
+from pydantic import ValidationError
 
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 
@@ -1842,3 +1843,47 @@ class TestEdgeCases:
         stored = json.loads(call_args.kwargs["value"])
 
         assert stored["output"] == []
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected_metadata"),
+    [
+        (
+            {"model": "gpt-4o", "input": "Hello", "metadata": {"trace": "t-1", "tags": ["a", None], "attempt": 2}},
+            {"trace": "t-1", "tags": ["a", None], "attempt": 2},
+        ),
+        ({"model": "gpt-4o", "metadata": {}}, {}),
+        ({"model": "gpt-4o", "metadata": None}, None),
+        ({"model": "gpt-4o"}, {}),
+        ({"id": "resp_from_client", "status": "completed", "output": ["x"], "usage": {"total_tokens": 9}}, {}),
+    ],
+)
+async def test_create_initial_state_carries_only_the_request_metadata_into_the_queued_response(
+    request_data, expected_metadata
+):
+    handler = ResponsePollingHandler(redis_cache=None)
+
+    response = await handler.create_initial_state(polling_id="litellm_poll_abc", request_data=request_data)
+
+    assert repr(response.metadata) == repr(expected_metadata)
+    assert type(response.created_at) is int
+    assert response.model_dump(exclude={"created_at", "metadata"}, exclude_none=True) == {
+        "id": "litellm_poll_abc",
+        "object": "response",
+        "status": "queued",
+        "output": [],
+    }
+    assert response.model_fields_set == {"id", "object", "status", "created_at", "output", "metadata", "usage"}
+
+
+@pytest.mark.parametrize("metadata", ["trace-1", ["trace", "t-1"], 7, True, b"trace"])
+async def test_create_initial_state_rejects_request_metadata_that_is_not_an_object(metadata):
+    handler = ResponsePollingHandler(redis_cache=None)
+
+    with pytest.raises(ValidationError) as rejected:
+        await handler.create_initial_state(polling_id="litellm_poll_abc", request_data={"metadata": metadata})
+
+    assert rejected.value.title == "ResponsesAPIResponse"
+    assert [(error["loc"], error["type"], repr(error["input"])) for error in rejected.value.errors()] == [
+        (("metadata",), "dict_type", repr(metadata))
+    ]
