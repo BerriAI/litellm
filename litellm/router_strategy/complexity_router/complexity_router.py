@@ -3456,9 +3456,13 @@ class ComplexityRouter(CustomLogger):
     @staticmethod
     def _deployment_model_id(deployment: Mapping[str, object]) -> str | None:
         model_info: Final = deployment.get("model_info")
-        deployment_id: Final = cast(  # cast-ok: the isinstance check in the condition narrows model_info to a Mapping with str keys
-            "Mapping[str, object]", model_info
-        ).get("id") if isinstance(model_info, Mapping) else None
+        deployment_id: Final = (
+            cast(  # cast-ok: the isinstance check in the condition narrows model_info to a Mapping with str keys
+                "Mapping[str, object]", model_info
+            ).get("id")
+            if isinstance(model_info, Mapping)
+            else None
+        )
         return None if deployment_id is None else str(deployment_id)
 
     def _group_has_deployment_id(self, group: str, model_id: str) -> bool:
