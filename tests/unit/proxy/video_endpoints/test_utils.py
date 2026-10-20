@@ -115,12 +115,7 @@ def test_provider__falsy_top_level_falls_through_to_extra_body(falsy):
 
 
 def test_provider__from_extra_body_dict():
-    assert (
-        get_custom_provider_from_data(
-            {"extra_body": {"custom_llm_provider": "bedrock"}}
-        )
-        == "bedrock"
-    )
+    assert get_custom_provider_from_data({"extra_body": {"custom_llm_provider": "bedrock"}}) == "bedrock"
 
 
 def test_provider__from_extra_body_json_string():
@@ -138,10 +133,7 @@ def test_provider__json_string_parsing_to_non_dict_is_none():
 
 
 def test_provider__extra_body_provider_not_a_string_is_none():
-    assert (
-        get_custom_provider_from_data({"extra_body": {"custom_llm_provider": 123}})
-        is None
-    )
+    assert get_custom_provider_from_data({"extra_body": {"custom_llm_provider": 123}}) is None
 
 
 @pytest.mark.parametrize(
@@ -173,9 +165,7 @@ def test_encode__dict_with_id_mutates_in_place_and_preserves_other_keys():
 
     assert out is response  # same dict, mutated in place
     assert out["object"] == "character" and out["name"] == "hero"
-    assert out["id"] == encode_character_id_with_provider(
-        "char_raw", "azure", "model-1"
-    )
+    assert out["id"] == encode_character_id_with_provider("char_raw", "azure", "model-1")
     decoded = decode_character_id_with_provider(out["id"])
     assert decoded["custom_llm_provider"] == "azure"
     assert decoded["model_id"] == "model-1"
@@ -550,6 +540,18 @@ def _fallback_router() -> Router:
     )
 
 
+def _wildcard_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*", "api_key": "wildcard-key"},
+                "model_info": {"id": "dep-wildcard"},
+            }
+        ]
+    )
+
+
 @pytest.mark.parametrize(
     ("requested_model", "answering_deployment", "expected"),
     [
@@ -570,6 +572,15 @@ def test_fallback_requested_model__names_the_asked_group_only_when_another_group
     )
 
     assert fallback_requested_model(requested_model, video, _fallback_router()) == expected
+
+
+def test_fallback_requested_model__is_none_for_a_create_a_provider_wildcard_served() -> None:
+    video: Final = _video(
+        encode_video_id_with_provider("operations/op_1", "gemini", "veo-3.1-fast-generate-preview"),
+        hidden_params={"model_id": "dep-wildcard"},
+    )
+
+    assert fallback_requested_model("gemini/veo-3.1-fast-generate-preview", video, _wildcard_router()) is None
 
 
 def test_video_model_group__is_none_without_a_router() -> None:

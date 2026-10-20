@@ -117,7 +117,9 @@ def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> s
 
 
 def fallback_requested_model(requested_model: str | None, response: object, llm_router: "Router | None") -> str | None:
-    """The group a create asked for when a router fallback served it from a deployment outside that group."""
+    """The group a create asked for when one of that group's router fallbacks served it."""
+    from litellm.proxy.auth.auth_utils import router_fallback_model_names
+
     if requested_model is None or llm_router is None or not isinstance(response, VideoObject):
         return None
     deployment_id: Final = id_safe_name(response.hidden_params.get("model_id"))
@@ -125,9 +127,7 @@ def fallback_requested_model(requested_model: str | None, response: object, llm_
     if deployment is None:
         return None
     creating_group: Final = deployment.model_info.team_public_model_name or deployment.model_name
-    if llm_router.resolve_served_model_name(requested_model, creating_group) == creating_group:
-        return None
-    return requested_model
+    return requested_model if creating_group in router_fallback_model_names(requested_model, llm_router) else None
 
 
 def encode_video_id_in_response(

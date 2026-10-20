@@ -590,6 +590,15 @@ def fallback_target_model_name(target: object) -> str | None:
     return None
 
 
+def router_fallback_model_names(model: str, llm_router: Router) -> frozenset[str]:
+    """The groups the router falls back to when `model` fails, generic (`*`) fallbacks included."""
+    from litellm.proxy.auth.model_checks import get_all_fallbacks
+
+    return frozenset(
+        name for target in get_all_fallbacks(model, llm_router) if (name := fallback_target_model_name(target))
+    )
+
+
 def request_fallback_model_names(request_body: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
@@ -2022,7 +2031,6 @@ def _video_access_group(decoded_video: DecodedVideoId, llm_router: Router | None
     fallbacks skip model access checks, the group whose router fallback created it.
     """
     from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
     from litellm.proxy.video_endpoints.utils import video_model_group
 
     creating_group: Final = video_model_group(decoded_video, llm_router)
@@ -2031,10 +2039,9 @@ def _video_access_group(decoded_video: DecodedVideoId, llm_router: Router | None
         return creating_group
     if router_fallback_access_check.is_enforced():
         return creating_group
-    fallback_groups: Final = frozenset(
-        fallback_target_model_name(target) for target in get_all_fallbacks(requested_model, llm_router)
-    )
-    return requested_model if creating_group in fallback_groups else creating_group
+    if creating_group in router_fallback_model_names(requested_model, llm_router):
+        return requested_model
+    return creating_group
 
 
 def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | None) -> str | None:
