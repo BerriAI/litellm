@@ -1006,6 +1006,9 @@ def normalize_request_route(route: str) -> str:
     return route
 
 
+MAX_REQUEST_SIZE_MB_SETTING: Final = TypeAdapter[int | float | None](int | float | None)
+
+
 async def check_if_request_size_is_safe(request: Request) -> bool:
     """
     Enterprise Only:
@@ -1023,7 +1026,9 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
     """
     from litellm.proxy.proxy_server import general_settings, premium_user
 
-    max_request_size_mb: Final = general_settings.get("max_request_size_mb", None)
+    max_request_size_mb: Final = MAX_REQUEST_SIZE_MB_SETTING.validate_python(
+        general_settings.get("max_request_size_mb")
+    )
 
     if max_request_size_mb is not None:
         # Check if premium user

@@ -392,6 +392,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
+    MAX_REQUEST_SIZE_MB_SETTING,
     check_response_size_is_safe,
     is_request_body_safe,
     log_model_access_denial,
@@ -2718,11 +2719,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
-_MAX_REQUEST_SIZE_MB: Final = TypeAdapter[int | float | None](int | float | None)
-
-
 def _configured_max_request_size_mb() -> int | float | None:
-    return _MAX_REQUEST_SIZE_MB.validate_python(general_settings.get("max_request_size_mb"))
+    return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
 
 
 app.add_middleware(
