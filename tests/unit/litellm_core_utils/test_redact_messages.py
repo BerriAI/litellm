@@ -207,7 +207,7 @@ def test_responses_redaction_removes_instructions_without_changing_the_response(
     assert redacted == {
         **original,
         "instructions": "redacted-by-litellm",
-        "reasoning": None,
+        **({"reasoning": None} if surface == "typed" else {}),
         "output": [
             {**original["output"][0], "summary": [{"type": "summary_text", "text": "redacted-by-litellm"}]},
             {**original["output"][1], "arguments": "redacted-by-litellm"},
@@ -1624,6 +1624,38 @@ async def test_responses_redaction_removes_request_instructions_from_logged_kwar
     assert kwargs is not None
     assert kwargs["standard_logging_object"]["model_parameters"]["instructions"] == "redacted-by-litellm"
     assert SECRET not in json.dumps({key: kwargs.get(key) for key in logged_keys}, default=str)
+
+
+@pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_one_callback_opting_out_leaves_instructions_for_the_other_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sibling: Final = TestCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [TestCustomLogger(message_logging=False), sibling])
+    provider_reply: Final = {**mock_responses_api_response("private answer").model_dump(), "instructions": SECRET}
+
+    await litellm.aresponses(
+        model="openai/gpt-5-mini",
+        input="hi",
+        instructions=SECRET,
+        api_key="fake-key",
+        client=AsyncHTTPHandler(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=provider_reply, request=request))
+        ),
+    )
+
+    for _ in range(100):
+        if sibling.logged_kwargs is not None:
+            break
+        await asyncio.sleep(0.1)
+    kwargs: Final = sibling.logged_kwargs
+    assert kwargs is not None
+    assert sibling.response_obj is not None
+    assert kwargs["optional_params"]["instructions"] == SECRET
+    assert kwargs["standard_logging_object"]["model_parameters"]["instructions"] == SECRET
+    assert kwargs["standard_logging_object"]["response"]["instructions"] == SECRET
+    assert sibling.response_obj.instructions == SECRET
 
 
 def test_request_body_redaction_replaces_instructions_only_when_sent() -> None:

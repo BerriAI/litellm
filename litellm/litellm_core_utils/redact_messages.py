@@ -83,7 +83,7 @@ def _redact_streaming_response(streaming_response):
             _redact_choice_content(choice)
         redact_vertex_ai_metadata_from_logged_object(streaming_response)
     elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
-        return perform_redaction({}, streaming_response, redact_streaming_responses=False)
+        return perform_redaction({}, streaming_response)
     elif hasattr(streaming_response, "output"):
         _redact_responses_api_output(streaming_response.output)
         if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
@@ -243,17 +243,17 @@ def _with_redacted_instructions(params: Mapping[str, object]) -> Mapping[str, ob
     return params if params.get("instructions") is None else {**params, "instructions": REDACTED_BY_LITELLM}
 
 
-def _redacted_responses_api_response(response: Mapping[str, object]) -> Mapping[str, object]:
+def _redacted_responses_api_response(
+    response: Mapping[str, object], *, redact_instructions: bool = True
+) -> Mapping[str, object]:
     output: Final = response.get("output")
-    return _with_redacted_instructions(
-        {
-            **response,
-            "output": _redact_responses_api_output_dict(_RESPONSE_ITEMS.validate_python(output), REDACTED_BY_LITELLM)
-            if isinstance(output, list)
-            else output,
-            **({"reasoning": None} if response.get("reasoning") is not None else {}),
-        }
-    )
+    redacted: Final = {
+        **response,
+        "output": _redact_responses_api_output_dict(_RESPONSE_ITEMS.validate_python(output), REDACTED_BY_LITELLM)
+        if isinstance(output, list)
+        else output,
+    }
+    return _with_redacted_instructions(redacted) if redact_instructions else redacted
 
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -267,20 +267,24 @@ def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[
     return _redact_standard_logging_object(payload)
 
 
-def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, object]:
+def _redact_standard_logging_object(
+    payload: Mapping[str, object], *, redact_instructions: bool = True
+) -> dict[str, object]:
     standard_logging_object: Final = copy.deepcopy(without_classifier_audit(payload))
     redacted_str: Final = REDACTED_BY_LITELLM
 
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
     model_parameters: Final = _as_mapping(standard_logging_object.get("model_parameters"))
-    if model_parameters is not None:
+    if model_parameters is not None and redact_instructions:
         standard_logging_object["model_parameters"] = _with_redacted_instructions(model_parameters)
 
     response: Final = standard_logging_object.get("response")
     if response is not None:
         if isinstance(response, dict) and "output" in response:
-            standard_logging_object["response"] = _redacted_responses_api_response(response)
+            standard_logging_object["response"] = _redacted_responses_api_response(
+                response, redact_instructions=redact_instructions
+            )
             redact_vertex_ai_metadata_from_logged_object(standard_logging_object["response"])
         elif isinstance(response, dict) and "choices" in response:
             # ModelResponse dict format - redact content in choices
@@ -373,11 +377,11 @@ def _redact_hidden_provider_specific_fields(params: Mapping[str, object]) -> Non
 def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body: bool = True) -> dict[str, object]:
     """
     Copy of litellm_params without classifier audit fields or baseline route request parameters.
-    redact_request_body also redacts the nested proxy_server_request body.
+    redact_request_body also redacts the request instructions and the nested proxy_server_request body.
     """
     request: Final = _as_mapping(params.get("proxy_server_request"))
     return {
-        **_with_redacted_instructions(params),
+        **(_with_redacted_instructions(params) if redact_request_body else params),
         **{
             key: _redacted_baseline_metadata(value)
             for key, value in params.items()
@@ -398,7 +402,8 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     redact_streaming_responses=False skips the in-place redaction of the shared streaming
     response entries; per-callback redaction hands each opted-out callback its own redacted
     copy via redact_streaming_responses_for_custom_logger instead. It also leaves the shared
-    proxy request body and hidden provider fields as they are, since the spend log reads them.
+    request instructions, proxy request body and hidden provider fields as they are, since the
+    spend log and the other callbacks read them.
     """
     # Redact model_call_details
     params: Final = _as_mapping(model_call_details.get("litellm_params"))
@@ -412,16 +417,19 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
     optional_params: Final = _as_mapping(model_call_details.get("optional_params"))
-    model_call_details.update(
-        {
-            **({"instructions": REDACTED_BY_LITELLM} if model_call_details.get("instructions") is not None else {}),
-            **({"optional_params": _with_redacted_instructions(optional_params)} if optional_params else {}),
-        }
-    )
+    if redact_streaming_responses:
+        model_call_details.update(
+            {
+                **({"instructions": REDACTED_BY_LITELLM} if model_call_details.get("instructions") is not None else {}),
+                **({"optional_params": _with_redacted_instructions(optional_params)} if optional_params else {}),
+            }
+        )
     model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):
-        model_call_details["standard_logging_object"] = _redact_standard_logging_object(standard_logging_object)
+        model_call_details["standard_logging_object"] = _redact_standard_logging_object(
+            standard_logging_object, redact_instructions=redact_streaming_responses
+        )
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response
@@ -464,7 +472,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
                 _redact_model_response_dict_choices(_result["choices"], REDACTED_BY_LITELLM)
             redact_vertex_ai_metadata_from_logged_object(_result)
         elif isinstance(_result, dict) and "output" in _result:
-            return _redacted_responses_api_response(_result)
+            return _redacted_responses_api_response(_result, redact_instructions=redact_streaming_responses)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
                 _redact_responses_api_output(_result.output)
@@ -472,7 +480,9 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             if hasattr(_result, "reasoning") and _result.reasoning is not None:
                 _result.reasoning = None
             return _result.model_copy(
-                update={"instructions": REDACTED_BY_LITELLM} if _result.instructions is not None else {}
+                update={"instructions": REDACTED_BY_LITELLM}
+                if redact_streaming_responses and _result.instructions is not None
+                else {}
             )
         elif isinstance(_result, litellm.EmbeddingResponse):
             if hasattr(_result, "data") and _result.data is not None:
