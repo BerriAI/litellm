@@ -580,18 +580,18 @@ def test_langfuse_usage_details_omit_zero_cache_and_reasoning_counts():
     assert usage == {"input": 12, "output": 8, "total": 20}
 
 
-def _langfuse_streamed_payload() -> dict[str, object]:
+def _langfuse_payload() -> dict[str, object]:
     return {
         "call_type": "acompletion",
         "custom_llm_provider": "openai",
         "model": "gpt-4o",
-        "completionStartTime": 1791547200.25,
+        "completionStartTime": 1791547299.0,
     }
 
 
-def test_langfuse_mapper_sends_the_first_chunk_time_of_a_streamed_call():
+def test_langfuse_mapper_sends_the_completion_start_time_in_utc():
     data: Final = LLMCallSpanData.from_standard_logging_payload(
-        _langfuse_streamed_payload(), time_to_first_chunk_seconds=1.0
+        _langfuse_payload(), completion_start_seconds=1791547200.25
     )
 
     attrs: Final = LangfuseMapper().map(data)
@@ -599,9 +599,8 @@ def test_langfuse_mapper_sends_the_first_chunk_time_of_a_streamed_call():
     assert attrs["langfuse.observation.completion_start_time"] == "2026-10-09T12:00:00.250000+00:00"
 
 
-def test_langfuse_mapper_leaves_out_the_completion_start_time_of_a_call_that_did_not_stream():
-    """A call that did not stream has its end time backfilled as completionStartTime, which is no first chunk."""
-    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(_langfuse_streamed_payload()))
+def test_langfuse_mapper_ignores_the_payloads_end_time_fallback_when_litellm_recorded_no_completion_start():
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(_langfuse_payload()))
 
     assert "langfuse.observation.completion_start_time" not in attrs
 

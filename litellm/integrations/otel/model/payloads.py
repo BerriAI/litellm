@@ -429,7 +429,7 @@ class LLMCallSpanData:
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
     time_to_first_chunk_seconds: float | None = None
-    # When the first chunk arrived, in epoch seconds; set with ``time_to_first_chunk_seconds`` (streamed calls only)
+    # litellm's completion_start_time in epoch seconds: the first chunk, or the end time of a call that did not stream
     completion_start_seconds: float | None = None
     # The requested output modality, set only on the routes that pin one (image
     # generation, speech, transcription, OCR), and the litellm route itself, which
@@ -452,6 +452,7 @@ class LLMCallSpanData:
         payload: StandardLoggingPayload,
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
+        completion_start_seconds: float | None = None,
         request_route: str | None = None,
         request_purpose: str | None = None,
         trace: TraceControls | None = None,
@@ -504,9 +505,7 @@ class LLMCallSpanData:
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
-            completion_start_seconds=(
-                as_float(payload.get("completionStartTime")) if time_to_first_chunk_seconds is not None else None
-            ),
+            completion_start_seconds=completion_start_seconds,
             output_type=resolve_output_type(call_type),
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,

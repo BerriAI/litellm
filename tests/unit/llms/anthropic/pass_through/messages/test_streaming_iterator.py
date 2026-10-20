@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Final, Literal
 from unittest.mock import patch
 
@@ -859,13 +859,15 @@ class _SuccessRecorder(CustomLogger):
         self.success_kwargs.append(kwargs)
 
 
-def _make_priced_logging_obj(call_id: str, recorder: _SuccessRecorder, model: str) -> LiteLLMLoggingObj:
+def _make_priced_logging_obj(
+    call_id: str, recorder: _SuccessRecorder, model: str, start_time: datetime | None = None
+) -> LiteLLMLoggingObj:
     logging_obj = LiteLLMLoggingObj(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="anthropic_messages",
-        start_time=datetime.now(),
+        start_time=start_time or datetime.now(),
         litellm_call_id=call_id,
         function_id=call_id,
         dynamic_async_success_callbacks=[recorder],
@@ -878,6 +880,33 @@ def _make_priced_logging_obj(call_id: str, recorder: _SuccessRecorder, model: st
         custom_llm_provider="anthropic",
     )
     return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_streamed_messages_log_the_call_start_instead_of_when_the_upstream_answered():
+    model: Final = "claude-sonnet-5"
+    call_start: Final = datetime.now() - timedelta(seconds=5)
+    recorder: Final = _SuccessRecorder()
+    logging_obj: Final = _make_priced_logging_obj("logs_call_start", recorder, model, start_time=call_start)
+    logging_obj._on_deferred_stream_complete = lambda logging_coroutine: logging_coroutine
+    iterator: Final = BaseAnthropicMessagesStreamingIterator(
+        litellm_logging_obj=logging_obj, request_body={"model": model, "stream": True}
+    )
+
+    async def _full_stream():
+        for event in (*_STREAM_PREFIX, *_STREAM_TAIL):
+            yield event
+
+    _ = [chunk async for chunk in iterator.async_sse_wrapper(_full_stream())]
+    for _ in range(100):
+        if getattr(logging_obj, "_deferred_stream_complete_args", None) is not None:
+            break
+        await asyncio.sleep(0.01)
+    (logging_coroutine,) = logging_obj._deferred_stream_complete_args
+    await logging_coroutine
+
+    assert len(recorder.success_kwargs) == 1
+    assert recorder.success_kwargs[0]["standard_logging_object"]["startTime"] == call_start.timestamp()
 
 
 class _UpstreamClosedOnDetach:
