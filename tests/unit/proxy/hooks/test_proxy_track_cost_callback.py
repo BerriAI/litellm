@@ -18,17 +18,17 @@ from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
-    ProxyDBLogger,
     _get_budget_reservation_from_metadata,
+    ProxyDBLogger,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
     run_spend_event,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
@@ -456,10 +456,7 @@ async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from
 @pytest.mark.parametrize(
     "metadata_buckets, expected",
     [
-        (
-            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}},
-            False,
-        ),
+        ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}}, False),
         ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_id": "caller"}}, None),
         ({"metadata": {"used_client_oauth_token": "yes"}}, None),
     ],
@@ -616,10 +613,7 @@ async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_str
     [
         (None, ["detect-only-scanner"]),
         ([], ["detect-only-scanner"]),
-        (
-            [{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}],
-            ["logged-before-the-failure"],
-        ),
+        ([{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}], ["logged-before-the-failure"]),
     ],
 )
 async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_after_the_failure_was_logged(
@@ -3241,9 +3235,7 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("identity_field", ["agent_id", "billing_agent_id"])
-async def test_autonomous_llm_callback_persists_without_human_or_key(
-    identity_field: str,
-) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
+async def test_autonomous_llm_callback_persists_without_human_or_key(identity_field: str) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
     kwargs: Final = {
         "call_type": "acompletion",
         "model": "test-model",
@@ -3267,12 +3259,9 @@ async def test_autonomous_llm_callback_persists_without_human_or_key(
 
 @pytest.mark.parametrize("agent_id,expected", [(None, False), ("autonomous-agent", True)])
 def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: str | None, expected: bool) -> None:
-    assert (
-        _should_track_cost_callback(
-            user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
-        )
-        is expected
-    )
+    assert _should_track_cost_callback(
+        user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
+    ) is expected
 
 
 _CALL_START: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -3312,7 +3301,6 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
 
     assert update_database.await_count == 1, "the spend enqueue itself must still run"
     assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
-
 
 class _SharedCounter:
     def __init__(self) -> None:

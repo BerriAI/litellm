@@ -3,7 +3,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -157,7 +157,7 @@ def _proxy_spend_writer() -> DBSpendUpdateWriter:
     return proxy_logging_obj.db_spend_update_writer
 
 
-DeploymentLookup = Callable[[str], Deployment | None]
+DeploymentLookup: TypeAlias = Callable[[str], Deployment | None]
 
 
 def _proxy_deployment(model_id: str) -> Deployment | None:
