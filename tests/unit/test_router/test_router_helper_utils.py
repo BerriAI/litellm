@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import gc
 import json
 import os
@@ -1280,6 +1281,69 @@ async def test_increment_deployment_usage_writes_only_positive_deltas_for_limite
         is None
     )
     assert await unlimited.get_model_group_usage("gpt-5-mini") == (None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_increment_deployment_usage_starts_tracking_after_limit_is_added():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake"},
+                "model_info": {"id": "lit-3058-upsert"},
+            }
+        ]
+    )
+    increment = functools.partial(
+        router._increment_deployment_usage,
+        deployment_id="lit-3058-upsert",
+        deployment_name="gpt-5-mini",
+        model_group="gpt-5-mini",
+        total_tokens=25,
+        rpm_increment=1,
+        parent_otel_span=None,
+    )
+
+    assert await increment() is None
+
+    router.upsert_deployment(
+        Deployment(
+            model_name="gpt-5-mini",
+            litellm_params=LiteLLM_Params(model="gpt-5-mini", api_key="sk-fake", rpm=10),
+            model_info={"id": "lit-3058-upsert"},
+        )
+    )
+
+    assert await increment() is not None
+    assert await router.get_model_group_usage("gpt-5-mini") == (25, 1)
+
+
+@pytest.mark.parametrize(
+    "litellm_params, model_info, deployment_id, tracks",
+    [
+        ({}, {}, "lit-3058-tracks", False),
+        ({"rpm": 10}, {}, "lit-3058-tracks", True),
+        ({"tpm": 1000}, {}, "lit-3058-tracks", True),
+        ({"otpm": 500}, {}, "lit-3058-tracks", True),
+        ({}, {"itpm": 500}, "lit-3058-tracks", True),
+        ({"rpm": 10}, {}, "lit-3058-unknown", False),
+    ],
+)
+def test_deployment_tracks_usage_for_every_limit_source(
+    litellm_params: dict, model_info: dict, deployment_id: str, tracks: bool
+):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-unmapped-model",
+                "litellm_params": {"model": "openai/my-unmapped-model", "api_key": "sk-fake", **litellm_params},
+                "model_info": {"id": "lit-3058-tracks", **model_info},
+            }
+        ]
+    )
+
+    assert router._deployment_tracks_usage(deployment_id, "my-unmapped-model") is tracks
 
 
 def _shared_redis_stub(store: dict) -> MagicMock:
