@@ -367,6 +367,68 @@ class TestVertexAITextToSpeechConfig:
         }
 
     @pytest.mark.parametrize(
+        ("voice", "unsendable_field"),
+        [
+            (
+                {"voice_config": {"replicated_voice_config": {"mime_type": "audio/wav", "voice_sample_audio": "UklG"}}},
+                "voiceConfig.replicatedVoiceConfig",
+            ),
+            (
+                {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck", "style": "calm"}}},
+                "voiceConfig.prebuiltVoiceConfig.style",
+            ),
+            ({"speechConfig": {"voiceConfig": {"voice": "Puck"}}}, "voiceConfig.voice"),
+            (
+                {
+                    "multiSpeakerVoiceConfig": {
+                        "speakerVoiceConfigs": [
+                            {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
+                            {"speaker": "Katie", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}, "tone": "x"},
+                        ]
+                    }
+                },
+                "multiSpeakerVoiceConfig.speakerVoiceConfigs.tone",
+            ),
+        ],
+    )
+    def test_gemini_tts_cloud_tts_rejects_voice_fields_it_cannot_send(
+        self, voice: dict[str, object], unsendable_field: str
+    ):
+        config: Final = VertexAITextToSpeechConfig()
+
+        with pytest.raises(litellm.UnsupportedParamsError, match=unsendable_field):
+            config.map_openai_params(
+                model="gemini-3.1-flash-tts-preview",
+                optional_params={"response_format": "mp3"},
+                voice=voice,
+            )
+
+    @pytest.mark.parametrize(
+        ("voice", "voice_name"),
+        [
+            ({"voiceConfig": {"replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "UklG"}}}, "Kore"),
+            ({"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck", "style": "calm"}}}, "Puck"),
+        ],
+    )
+    def test_gemini_tts_cloud_tts_drops_voice_fields_it_cannot_send_with_drop_params(
+        self, voice: dict[str, object], voice_name: str
+    ):
+        config: Final = VertexAITextToSpeechConfig()
+
+        _, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+            drop_params=True,
+        )
+
+        assert optional_params["vertex_voice_dict"] == {
+            "languageCode": "en-US",
+            "modelName": "gemini-3.1-flash-tts-preview",
+            "name": voice_name,
+        }
+
+    @pytest.mark.parametrize(
         "voice",
         [
             {"name": "Umbriel", "modelName": "gemini-2.5-flash-tts"},

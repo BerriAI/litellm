@@ -409,7 +409,7 @@ def _gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, o
     return camel_config if camel_config is not None else as_str_mapping(value.get("speech_config"))
 
 
-def _named_voice_keys(keys: Sequence[str]) -> str:
+def named_voice_keys(keys: Sequence[str]) -> str:
     named: Final = ", ".join(key[:_NAMED_VOICE_KEY_CHARS] for key in keys[:_NAMED_UNKNOWN_VOICE_KEYS])
     unnamed_count: Final = len(keys) - _NAMED_UNKNOWN_VOICE_KEYS
     return f"{named}, and {unnamed_count} more" if unnamed_count > 0 else named
@@ -431,7 +431,7 @@ def reject_unknown_gemini_tts_voice_keys(
         return
     raise UnsupportedParamsError(
         message=(
-            f"{model} does not support the voice keys {_named_voice_keys(unknown_keys)}. Remove them, or set "
+            f"{model} does not support the voice keys {named_voice_keys(unknown_keys)}. Remove them, or set "
             "drop_params to ignore them."
         ),
         model=model,

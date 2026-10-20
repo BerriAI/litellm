@@ -7,7 +7,7 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 
 import base64
 import math
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeAlias, Union
 
@@ -124,6 +124,51 @@ def _fallback_gemini_tts_audio_duration(audio: bytes, encoding: str, sample_rate
 
 
 _SPEAKER_CONFIG_ITEMS: Final = TypeAdapter(list[object])
+
+_CloudTtsVoiceFields: TypeAlias = "Mapping[str, _CloudTtsVoiceFields]"
+
+_CLOUD_TTS_VOICE_LEAF: Final[_CloudTtsVoiceFields] = MappingProxyType({})
+
+_CLOUD_TTS_PREBUILT_VOICE_FIELDS: Final[_CloudTtsVoiceFields] = MappingProxyType(
+    {"prebuiltVoiceConfig": MappingProxyType({"voiceName": _CLOUD_TTS_VOICE_LEAF})}
+)
+
+_CLOUD_TTS_SPEECH_CONFIG_FIELDS: Final[_CloudTtsVoiceFields] = MappingProxyType(
+    {
+        "languageCode": _CLOUD_TTS_VOICE_LEAF,
+        "voiceConfig": _CLOUD_TTS_PREBUILT_VOICE_FIELDS,
+        "multiSpeakerVoiceConfig": MappingProxyType(
+            {
+                "speakerVoiceConfigs": MappingProxyType(
+                    {
+                        "speaker": _CLOUD_TTS_VOICE_LEAF,
+                        "speakerAlias": _CLOUD_TTS_VOICE_LEAF,
+                        "speakerId": _CLOUD_TTS_VOICE_LEAF,
+                        "voiceConfig": _CLOUD_TTS_PREBUILT_VOICE_FIELDS,
+                    }
+                )
+            }
+        ),
+    }
+)
+
+
+def _voice_field_mappings(value: object) -> tuple[Mapping[str, object], ...]:
+    items: Final = _SPEAKER_CONFIG_ITEMS.validate_python(value) if isinstance(value, list) else (value,)
+    return tuple(mapping for item in items if (mapping := as_str_mapping(item)) is not None)
+
+
+def _fields_cloud_tts_cannot_send(value: object, fields: _CloudTtsVoiceFields, path: str) -> Iterator[str]:
+    for mapping in _voice_field_mappings(value):
+        for key, child in mapping.items():
+            yield from _field_cloud_tts_cannot_send(f"{path}{key}", child, fields.get(key))
+
+
+def _field_cloud_tts_cannot_send(path: str, value: object, fields: "_CloudTtsVoiceFields | None") -> Iterator[str]:
+    if fields is None:
+        yield path
+        return
+    yield from _fields_cloud_tts_cannot_send(value, fields, f"{path}.")
 
 
 class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
@@ -287,6 +332,29 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         )
 
     @staticmethod
+    def _reject_voice_fields_cloud_tts_cannot_send(model: str, voice: Mapping[str, object], drop_params: bool) -> None:
+        if drop_params:
+            return
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            named_voice_keys,
+            normalize_gemini_speech_config,
+        )
+
+        unsendable: Final = sorted(
+            _fields_cloud_tts_cannot_send(normalize_gemini_speech_config(voice), _CLOUD_TTS_SPEECH_CONFIG_FIELDS, "")
+        )
+        if not unsendable:
+            return
+        raise UnsupportedParamsError(
+            message=(
+                f"{model} cannot send the voice fields {named_voice_keys(unsendable)} as mp3, opus, alaw, or mulaw. "
+                "Request wav or pcm, remove them, or set drop_params to ignore them."
+            ),
+            model=model,
+            llm_provider="vertex_ai",
+        )
+
+    @staticmethod
     def _reject_malformed_gemini_tts_speaker(model: str, drop_params: bool) -> None:
         if drop_params:
             return
@@ -426,6 +494,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         )
         model_name: Final = model
         speaker_configs: Final = self._extract_gemini_tts_speaker_configs(model, voice_config, drop_params)
+        self._reject_voice_fields_cloud_tts_cannot_send(model, voice_config, drop_params)
         if speaker_configs:
             return None, {
                 "languageCode": language_code,
