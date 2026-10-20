@@ -832,7 +832,11 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         _restore_model_cost_entries(model_keys)
 
 
-@pytest.mark.parametrize("field", ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+@pytest.mark.parametrize("service_tier", ("default", "priority", "flex"))
+@pytest.mark.parametrize(
+    "field",
+    ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost", "input_cost_per_token_priority"),
+)
 @pytest.mark.parametrize("rate", (0.0, 0.004))
 @pytest.mark.parametrize("explicit_base", (False, True))
 @pytest.mark.parametrize("provider", (None, "bedrock"))
@@ -844,6 +848,7 @@ def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
     explicit_base: bool,
     provider: str | None,
     registration_path: str,
+    service_tier: str,
 ) -> None:
     from litellm.cost_calculator import completion_cost
     from litellm.types.utils import ModelResponse, Usage, PromptTokensDetailsWrapper
@@ -857,6 +862,10 @@ def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
         "input_cost_per_token": 0.01,
         "output_cost_per_token": 0.02,
         "cache_read_input_token_cost": 0.001,
+        "input_cost_per_token_priority": 0.05,
+        "output_cost_per_token_priority": 0.06,
+        "input_cost_per_token_flex": 0.007,
+        "output_cost_per_token_flex": 0.008,
     }
     base_prices: Final = {**profile_prices, "input_cost_per_token": 0.03, "output_cost_per_token": 0.04}
     monkeypatch.setattr(
@@ -892,8 +901,11 @@ def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
             prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5),
         ),
     )
-    input_rate: Final = rate if field == "input_cost_per_token" else (0.03 if explicit_base else 0.01)
-    output_rate: Final = rate if field == "output_cost_per_token" else (0.04 if explicit_base else 0.02)
+    catalog: Final = base_prices if explicit_base else profile_prices
+    input_field: Final = "input_cost_per_token" + (f"_{service_tier}" if service_tier != "default" else "")
+    output_field: Final = "output_cost_per_token" + (f"_{service_tier}" if service_tier != "default" else "")
+    input_rate: Final = rate if field == input_field else catalog[input_field]
+    output_rate: Final = rate if field == output_field else catalog[output_field]
     cache_rate: Final = rate if field == "cache_read_input_token_cost" else 0.001
     assert completion_cost(
         model=model,
@@ -901,6 +913,7 @@ def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
         custom_llm_provider="bedrock",
         custom_pricing=True,
         router_model_id="profile-priced-deployment",
+        service_tier=service_tier,
     ) == pytest.approx(95 * input_rate + 3 * output_rate + 5 * cache_rate)
     assert litellm.model_cost[profile] == profile_prices
 

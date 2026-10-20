@@ -11087,29 +11087,28 @@ class Router:
             if not isinstance(profile_info, ModelInfoLookupMiss):
                 explicit_info: Final = _MODEL_INFO_ADAPTER.validate_python(model_info)
                 priced_info: Final = model_info_with_pricing_overrides(profile_info, explicit_info)
-                return {
-                    **{key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)},
-                    **explicit_info,
-                }
+                model_info.update(
+                    {key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)}
+                )
         Router._inherit_builtin_base_rates_for_off_peak(
             model_info=model_info,
-            backend_model=deployment.litellm_params.model,
+            backend_model=backend_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
-                backend_model=deployment.litellm_params.model,
+                backend_model=backend_model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
         Router._inherit_builtin_service_tier_pricing(
             model_info=model_info,
-            backend_model=Router._cost_map_backend_model(deployment),
+            backend_model=backend_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
-            backend_model=deployment.litellm_params.model,
+            backend_model=backend_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         return model_info
