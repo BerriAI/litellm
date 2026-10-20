@@ -273,6 +273,8 @@ def _get_spend_logs_metadata(
         )
     verbose_proxy_logger.debug("getting payload for SpendLogs, available keys in metadata: %s", [*metadata])
 
+    retry_key: Final = BILLED_RETRY_ATTEMPT_METADATA_KEY
+    billed_retry_attempt: Final = retry_key in metadata and metadata[retry_key] is True
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
         **MappingProxyType(
@@ -286,7 +288,7 @@ def _get_spend_logs_metadata(
         used_client_oauth_token=used_client_oauth_token,
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
-        billed_retry_attempt=metadata.get(BILLED_RETRY_ATTEMPT_METADATA_KEY) is True,
+        billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
