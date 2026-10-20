@@ -81,7 +81,7 @@ async def test_handle_count_tokens_request_looks_up_its_region_off_the_event_loo
     )
 
     assert vault.read.is_set()
-    assert not vault.stalled_the_loop.is_set()
+    assert not vault.read_on_loop.is_set()
     assert result == {"input_tokens": 7}
 
 
