@@ -8419,13 +8419,15 @@ def convert_list_message_to_dict(
     return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
-def validate_and_fix_openai_messages(messages: list[Any]):
+def validate_and_fix_openai_messages(
+    messages: list[Any],  # mutable-ok: caller passes arbitrary message dicts
+):
     """
     Ensures all messages are valid OpenAI chat completion messages.
 
     Handles missing role for assistant messages.
     """
-    new_messages: list[AllMessageValues] = []
+    new_messages: Final[list[AllMessageValues]] = []  # mutable-ok: list is populated by appending, name never rebound
     for message in messages:
         # Copy before mutating: assigning dicts into a pydantic Message's
         # tool_calls triggers PydanticSerializationUnexpectedValue warnings on
@@ -8446,7 +8448,7 @@ def validate_and_fix_openai_messages(messages: list[Any]):
             ),
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
-        new_messages.append(cast(AllMessageValues, cleaned_message))
+        new_messages.append(cast(AllMessageValues, cleaned_message))  # cast-ok: cleanup_none_field_in_message return satisfies AllMessageValues
     return validate_chat_completion_user_messages(messages=new_messages)
 
 
