@@ -166,6 +166,7 @@ LLM_CONFIG_NAMES: Final = (
     "OpenRouterDecisionsConfig",
     "FireworksAIDecisionsConfig",
     "CloudflareDecisionsConfig",
+    "CloudflareExtractionConfig",
     "StrandsDeciderDecisionsConfig",
     "DatabricksDecisionsConfig",
     "HostedVLLMDecisionsConfig",
@@ -735,6 +736,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "OpenRouterDecisionsConfig": (".llms.openrouter.decisions.transformation", "OpenRouterDecisionsConfig"),
     "FireworksAIDecisionsConfig": (".llms.fireworks_ai.decisions.transformation", "FireworksAIDecisionsConfig"),
     "CloudflareDecisionsConfig": (".llms.cloudflare.decisions.transformation", "CloudflareDecisionsConfig"),
+    "CloudflareExtractionConfig": (".llms.cloudflare.extraction.transformation", "CloudflareExtractionConfig"),
     "StrandsDeciderDecisionsConfig": (
         ".llms.strands_decider.decisions.transformation",
         "StrandsDeciderDecisionsConfig",

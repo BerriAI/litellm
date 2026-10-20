@@ -21,6 +21,16 @@ describe("modelUsageExample", () => {
     );
   });
 
+  it("posts an extraction model to /v1/extraction with typed fields", () => {
+    const example = modelUsageExample("extraction", BASE_URL, "clairic", "X-Litellm-Key");
+    expect(example).toContain('"https://proxy.example.com/v1/extraction"');
+    expect(example).toContain('headers={"X-Litellm-Key": "Bearer your_api_key"}');
+    expect(example).toContain('"model": "clairic"');
+    expect(example).toContain('"fields": {');
+    expect(example).not.toContain("chat.completions");
+    expect(example).not.toContain("/v1/systemone");
+  });
+
   it("keeps the chat completions example for every other mode", () => {
     for (const mode of ["chat", null, undefined]) {
       const example = modelUsageExample(mode, BASE_URL, "gpt-5.5", "Authorization");
@@ -28,6 +38,7 @@ describe("modelUsageExample", () => {
       expect(example).toContain('base_url="https://proxy.example.com"');
       expect(example).toContain('model="gpt-5.5"');
       expect(example).not.toContain("/v1/systemone");
+      expect(example).not.toContain("/v1/extraction");
     }
   });
 

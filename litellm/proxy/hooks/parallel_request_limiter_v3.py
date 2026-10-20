@@ -7,6 +7,7 @@ This is currently in development and not yet ready for production.
 import asyncio
 import binascii
 import itertools
+import json
 import logging
 import os
 import uuid
@@ -42,6 +43,7 @@ from litellm.caching.redis_batch import (
 )
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -78,6 +80,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
@@ -490,6 +493,7 @@ RESPONSES_API_CALL_TYPES: Final = ("aresponses", "responses")
 EMBEDDING_API_CALL_TYPES: Final = ("aembedding", "embedding")
 TEXT_COMPLETION_API_CALL_TYPES: Final = ("atext_completion", "text_completion")
 RERANK_API_CALL_TYPES: Final = (CallTypes.rerank.value, CallTypes.arerank.value)
+EXTRACTION_API_CALL_TYPES: Final = (CallTypes.extraction.value, CallTypes.aextraction.value)
 GOOGLE_GENAI_NATIVE_CALL_TYPES: Final = (
     CallTypes.generate_content.value,
     CallTypes.agenerate_content.value,
@@ -1094,6 +1098,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             or PROXY_MaxParallelRequestsHandler_v3._has_explicit_output_cap(data, call_type)
             or is_embedding
             or endpoint_type == EndpointType.DECISIONS
+            or call_type in EXTRACTION_API_CALL_TYPES
         ):
             return
         effective_cap: Final = max(capped_floor, configured_output_tokens or 0)
@@ -1218,6 +1223,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if call_type in RESPONSES_API_CALL_TYPES or call_type in EMBEDDING_API_CALL_TYPES
             else (None, estimable_data.get("prompt"), None)
             if call_type in TEXT_COMPLETION_API_CALL_TYPES
+            else (None, self._extraction_input_text(_REQUEST_RATE_LIMIT_DATA.validate_python(estimable_data)), None)
+            if call_type in EXTRACTION_API_CALL_TYPES
             else (estimable_data.get("messages"), None, None)
             if call_type
             else (
@@ -1245,7 +1252,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         estimated_input_tokens: Final = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
 
         explicit_max_tokens: Final = self._get_explicit_output_cap(data, call_type)
-        is_embedding: Final = self._is_embedding_request(data, call_type)
+        generates_no_output: Final = (
+            self._is_embedding_request(data, call_type) or call_type in EXTRACTION_API_CALL_TYPES
+        )
 
         base_output_floor: Final = self.no_max_tokens_output_floor(min_configured_tpm_limit)
         output_floor: Final = (
@@ -1255,7 +1264,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         max_tokens_estimate: Final = (
             0
-            if is_embedding or (explicit_max_tokens is None and total_chars == 0 and configured_output_tokens is None)
+            if generates_no_output
+            or (explicit_max_tokens is None and total_chars == 0 and configured_output_tokens is None)
             else explicit_max_tokens
             if explicit_max_tokens is not None
             else configured_output_tokens
@@ -3834,6 +3844,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if isinstance(part, (str, dict))
         )
 
+    @staticmethod
+    def _extraction_input_text(data: Mapping[str, object]) -> str:
+        state: Final = data.get("state")
+        return f"{state if isinstance(state, str) else ''}\n{json.dumps(data.get('fields'), default=str)}"
+
     def _estimate_precise_input_tokens(self, data: object, model: str | None, call_type: str | None = None) -> int:
         """
         Model-aware input token estimate for the project ITPM reservation,
@@ -3892,6 +3907,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if call_type in RERANK_API_CALL_TYPES
             else (None, prompt, data.get("tools"), data.get("tool_choice"))
             if call_type in TEXT_COMPLETION_API_CALL_TYPES
+            else (None, self._extraction_input_text(_REQUEST_RATE_LIMIT_DATA.validate_python(data)), None, None)
+            if call_type in EXTRACTION_API_CALL_TYPES
             else (data.get("messages"), fallback_text, data.get("tools"), data.get("tool_choice"))
         )
         messages, selected_text, countable_tools, countable_tool_choice = selected_inputs
@@ -4512,6 +4529,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> Usage | ResponseAPIUsage | Mapping[str, object] | None:
         if isinstance(response_obj, (Usage, ResponseAPIUsage)):
             return response_obj
+        if isinstance(response_obj, ExtractionResponse):
+            return get_usage_object(response_obj)
         if isinstance(
             response_obj,
             (ModelResponse, EmbeddingResponse, TextCompletionResponse, BaseLiteLLMOpenAIResponseObject),
@@ -5143,21 +5162,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # than parsed out of the body) carry their usage in
         # ``combined_usage_object`` instead, and would otherwise never charge
         # the TPM window.
-        _usage: Usage | dict[str, object] | None = None
-        if isinstance(
-            response_obj,
-            (
-                ModelResponse,
-                EmbeddingResponse,
-                TextCompletionResponse,
-                BaseLiteLLMOpenAIResponseObject,
-            ),
-        ):
-            _usage = getattr(response_obj, "usage", None)
-        else:
-            _combined_usage: Final = kwargs.get("combined_usage_object")
-            if isinstance(_combined_usage, Usage):
-                _usage = _combined_usage
+        _combined_usage: Final = kwargs.get("combined_usage_object")
+        _usage: Final[Usage | dict[str, object] | None] = (
+            getattr(response_obj, "usage", None)
+            if isinstance(
+                response_obj,
+                (
+                    ModelResponse,
+                    EmbeddingResponse,
+                    TextCompletionResponse,
+                    BaseLiteLLMOpenAIResponseObject,
+                ),
+            )
+            else get_usage_object(response_obj)
+            if isinstance(response_obj, ExtractionResponse)
+            else _combined_usage
+            if isinstance(_combined_usage, Usage)
+            else None
+        )
         total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
         if total_tokens == 0:
             total_tokens = self._aggregate_only_total_tokens(usage=_usage)
