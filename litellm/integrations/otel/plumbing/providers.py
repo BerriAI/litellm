@@ -3,6 +3,7 @@
 import queue
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from hashlib import sha256
@@ -488,14 +489,14 @@ def is_llm_call_span(span: ReadableSpan) -> bool:
 
 #: Request trees held back for a sampled destination until the last span of the request
 #: still open ends, the verdicts kept for the spans that start after that (a post-call
-#: database write), the spans in flight per request, and the request each started span
+#: database write), the spans in flight per request, and the request each open span
 #: belongs to. All bounded, so a span that never ends, or a flood of requests, cannot
 #: hold spans for ever: the oldest tree is decided on what it has.
 _MAX_PENDING_TREES: Final = 1024
 _MAX_PENDING_SPANS_PER_TREE: Final = 512
 _MAX_REMEMBERED_VERDICTS: Final = 4096
 _MAX_OPEN_REQUESTS: Final = 16384
-_MAX_REMEMBERED_ROOTS: Final = 16384
+_MAX_OPEN_SPANS: Final = 16384
 
 
 class _PendingTree:
@@ -693,17 +694,19 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
         self._pending: OrderedDict[_RequestKey, _PendingTree] = OrderedDict()  # mutable-ok: bounded, by request
         self._open: OrderedDict[_RequestKey, int] = OrderedDict()  # mutable-ok: bounded, spans in flight by request
-        self._roots: OrderedDict[int, int] = OrderedDict()  # mutable-ok: bounded LRU, root span id by span id
+        self._roots: OrderedDict[int, int] = OrderedDict()  # mutable-ok: bounded, root span id by open span id
+        self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         context: Final = span.context
         with self._lock:
-            request: Final = self._request_of(span)
+            request: Final = self._request_of(span, trace.get_current_span(parent_context))
             if context is not None:
+                self._span_roots[span] = request[1]
                 self._roots[context.span_id] = request[1]
-                while len(self._roots) > _MAX_REMEMBERED_ROOTS:
+                while len(self._roots) > _MAX_OPEN_SPANS:
                     self._roots.popitem(last=False)
             self._open[request] = self._open.get(request, 0) + 1
             while len(self._open) > _MAX_OPEN_REQUESTS:
@@ -714,6 +717,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         attributes: Final = span.attributes or _NO_ATTRIBUTES
         with self._lock:
             request: Final = self._request_of(span)
+            if span.context is not None:
+                self._roots.pop(span.context.span_id, None)
         failed: Final = span.status.status_code is StatusCode.ERROR
         for destination in request_destinations():
             if (
@@ -735,11 +740,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         for held_span, held_destination in self._settle(request, failed):
             self._forward(held_span, held_destination)
 
-    def _request_of(self, span: ReadableSpan) -> _RequestKey:
-        """The request ``span`` belongs to, read under ``_lock``: the root recorded when it
-        started, else the span itself when its parent is remote or missing, else its
-        parent's root, or the parent itself once that record is gone, which is right for
-        a late child of the root."""
+    def _request_of(self, span: ReadableSpan, parent_span: Span | None = None) -> _RequestKey:
+        """The request ``span`` belongs to, read under ``_lock``: the root recorded while it
+        is open, else the span itself when its parent is remote or missing, else its
+        parent's root, recorded while the parent is open or on ``parent_span`` for a child
+        starting under a parent that has ended, else the parent itself."""
         context: Final = span.context
         if context is None:
             return (0, 0)
@@ -749,7 +754,12 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         parent: Final = span.parent
         if parent is None or parent.is_remote:
             return (context.trace_id, context.span_id)
-        return (context.trace_id, self._roots.get(parent.span_id, parent.span_id))
+        root: Final = self._roots.get(parent.span_id)
+        if root is not None:
+            return (context.trace_id, root)
+        if isinstance(parent_span, SDKSpan):
+            return (context.trace_id, self._span_roots.get(parent_span, parent.span_id))
+        return (context.trace_id, parent.span_id)
 
     def _default_capture_for(self, destination: "OtelDestination") -> str:
         backend: Final = destination.callback_name

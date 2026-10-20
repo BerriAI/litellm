@@ -1444,6 +1444,65 @@ class TestTenantSampling:
             "postgres SELECT LiteLLM_VerificationToken",
         }
 
+    def test_a_span_two_levels_down_that_outlives_many_other_spans_still_closes_its_request(self):
+        """A classifier call under the route span that stays open while the worker starts
+        more spans than it tracks at once still counts against its own request, so the
+        request reaches the space when it ends rather than being held."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+        destinations = (arize_destination(arize_success_sampling_rate="1.0"),)
+
+        def other_request():
+            set_request_destinations(())
+            with get_tracer(provider, "litellm").start_as_current_span("POST /v1/chat/completions"):
+                pass
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                with tracer.start_as_current_span("route gpt-4"):
+                    with tracer.start_as_current_span("chat classifier"):
+                        for _ in range(otel_providers._MAX_OPEN_SPANS + 1):
+                            contextvars.Context().run(other_request)
+                with tracer.start_as_current_span("chat gpt-4"):
+                    pass
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "route gpt-4",
+            "chat classifier",
+            "chat gpt-4",
+        }
+
+    def test_a_span_starting_under_an_ended_span_below_the_root_follows_its_request(self):
+        """A post-call write started under the route span after its failed request ended
+        is kept with the request at the error rate, rather than decided on its own at the
+        success rate."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+        destinations = (arize_destination(arize_success_sampling_rate="0.0", arize_error_sampling_rate="1.0"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions") as root:
+                with tracer.start_as_current_span("route gpt-4") as route:
+                    route_context = trace_api.set_span_in_context(route)
+                root.set_status(Status(StatusCode.ERROR, "upstream 500"))
+            with tracer.start_as_current_span("postgres INSERT LiteLLM_SpendLogs", context=route_context):
+                pass
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "route gpt-4",
+            "postgres INSERT LiteLLM_SpendLogs",
+        }
+
     def test_concurrent_calls_of_one_trace_each_answer_to_their_own_outcome(self):
         """Two calls of the caller's trace in flight at once on one process, one failing,
         are decided as two processes serving one each would decide them."""
