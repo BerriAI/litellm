@@ -419,6 +419,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # tokens) to the attacker's host, or coerces the proxy into
     # authenticating against the attacker's host with admin secrets.
     "aws_bedrock_runtime_endpoint",
+    "aws_bedrock_control_plane_endpoint",
     # Bedrock project/workspace association. Deployments pin this to
     # enforce a data-retention policy, so a caller-supplied value would
     # re-route the request's retention and accounting to any project
