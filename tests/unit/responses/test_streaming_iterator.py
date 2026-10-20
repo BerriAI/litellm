@@ -323,6 +323,43 @@ async def test_transport_error_after_output_started_is_not_fallback_eligible():
     _assert_failure_logged_once(logging_obj, trailing_error)
 
 
+_READ_TIMEOUT_PREFIXES: Final = [
+    pytest.param([], id="before-output"),
+    pytest.param(_PARTIAL_OUTPUT_EVENTS, id="after-output"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+async def test_transport_read_timeout_raises_litellm_timeout(prefix):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    stall: Final = httpx.ReadTimeout("")
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=stall)
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        async for _ in iterator:
+            pass
+
+    assert exc_info.value.status_code == 408
+    assert "Request timed out. Error_str: ReadTimeout" in str(exc_info.value)
+    assert exc_info.value.__cause__ is stall
+    _assert_failure_logged_once(logging_obj, stall)
+
+
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+def test_sync_transport_read_timeout_raises_litellm_timeout(prefix):
+    iterator: Final = _make_sync_iterator(
+        sse_events=prefix, logging_obj=_logging_obj_stub(), trailing_error=httpx.ReadTimeout("")
+    )
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        for _ in iterator:
+            pass
+
+    assert exc_info.value.status_code == 408
+    assert "Request timed out. Error_str: ReadTimeout" in str(exc_info.value)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
 async def test_stream_ending_after_partial_output_without_terminal_event_raises(trailer):
@@ -2557,3 +2594,28 @@ def test_faked_stream_builds_each_refusal_summary_and_custom_tool_input_once_for
         (1, "content", 1): "No forecasts for Mars.",
         (2, "input", 0): "curl wttr.in/Berlin",
     }
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_waits_for_a_pending_logging_task():
+    row_written = asyncio.Event()
+
+    async def write_row():
+        await asyncio.sleep(0.05)
+        row_written.set()
+
+    streaming_module.spawn_logging_task(asyncio.get_running_loop(), write_row(), task_name="row")
+
+    await streaming_module.drain_logging_tasks(timeout=1)
+
+    assert row_written.is_set()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_gives_up_on_a_stuck_logging_task_at_its_timeout():
+    stuck = streaming_module.spawn_logging_task(asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck")
+
+    await asyncio.wait_for(streaming_module.drain_logging_tasks(timeout=0.05), timeout=1)
+
+    assert not stuck.done()
+    stuck.cancel()

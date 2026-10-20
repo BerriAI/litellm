@@ -11,7 +11,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
+from litellm.llms.anthropic.pass_through.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -110,7 +110,9 @@ class OpenAITokenCounter(BaseTokenCounter):
             return None
 
         malformed_error: Final = (
-            OpenAICountTokensConfig.malformed_anthropic_messages_error(messages)
+            OpenAICountTokensConfig.malformed_anthropic_messages_error(
+                messages, drop_params=deployment_drops_params(deployment)
+            )
             if messages_format == "anthropic"
             else None
         )
@@ -124,6 +126,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 error=True,
                 error_message=request_error,
                 status_code=400,
+                rejected_before_provider_call=True,
             )
 
         deployment = deployment or {}

@@ -297,6 +297,10 @@
           "format": "date",
           "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
         },
+        "explicit_cache_read_input_token_cost": {
+          "type": "number",
+          "minimum": 0
+        },
         "gemini_audio_only_live": {
           "type": "boolean"
         },
@@ -1209,6 +1213,43 @@
             },
             "additionalProperties": false
           }
+        },
+        "token_count_framing": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tokens added once per request to a local count estimate, for the provider's chat framing."
+        },
+        "token_count_model": {
+          "type": "object",
+          "required": [
+            "model"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "region": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "litellm_provider": {
+              "type": "string",
+              "enum": [
+                "bedrock",
+                "bedrock_mantle"
+              ]
+            }
+          },
+          "description": "Model that counts tokens for this one, its counting provider, and the AWS region its count API runs in."
+        },
+        "token_count_tokenizer": {
+          "type": "string",
+          "description": "Tokenizer litellm counts this model's requests with when the provider cannot count them.",
+          "enum": [
+            "kimi_k3"
+          ]
         },
         "tpm": {
           "type": "integer",

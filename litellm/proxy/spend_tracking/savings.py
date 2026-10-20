@@ -90,7 +90,7 @@ def _effective_model_info(router: "Router | None", deployment_id: str | None, mo
     if router is None or deployment_id is None:
         return None
     try:
-        return router.get_deployment_model_info(deployment_id, model)
+        return router.cached_deployment_model_info(deployment_id, model)
     except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail the spend write
         verbose_proxy_logger.debug("savings: no deployment pricing for %s (%s)", model, e)
         return None

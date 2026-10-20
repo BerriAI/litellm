@@ -2023,7 +2023,9 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
         ]
     )
 
-    def inject_alias_into_kwargs(deployment, kwargs, function_name=None):
+    def inject_alias_into_kwargs(
+        deployment: dict, kwargs: dict, function_name: str | None = None, splits_stream_timeout: bool = False
+    ) -> None:
         # Simulate the alias leaking into kwargs (as happens when
         # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
         # calling the helper through async_function_with_fallbacks).
@@ -8616,6 +8618,9 @@ def test_wildcard_route_deployments_is_the_one_pattern_routing_serves_from(
 
     assert tuple(Deployment.model_validate(d).model_info.id for d in served) == expected_ids
     assert tuple(Deployment.model_validate(d).model_info.id for d in early_deployments) == expected_ids
+    assert router.wildcard_routed_models(requested, team_id) == frozenset(
+        Deployment.model_validate(d).litellm_params.model for d in served
+    )
 
 
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
@@ -9974,6 +9979,94 @@ def test_update_kwargs_with_deployment_model_info_in_metadata():
     assert model_info["id"] == "custom-pricing-id"
     assert model_info["input_cost_per_token"] == 0.0003
     assert model_info["output_cost_per_token"] == 0.0015
+
+
+def test_update_kwargs_with_deployment_clears_pod_routing_on_non_discovery_fallback() -> None:
+    from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+
+    routing_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.1",
+        "pod_count": 3,
+        "selection": "session_affinity",
+    }
+    discovery_deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "discovery-id"},
+        KUBERNETES_POD_ROUTING_KEY: routing_record,
+    }
+    fallback_deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "fallback-id"},
+    }
+    router: Final = litellm.Router(model_list=[discovery_deployment])
+    kwargs: Final = {"metadata": {}}
+
+    router._update_kwargs_with_deployment(deployment=discovery_deployment, kwargs=kwargs)
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] == routing_record
+
+    router._update_kwargs_with_deployment(deployment=fallback_deployment, kwargs=kwargs)
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] is None
+
+
+def test_update_kwargs_with_deployment_synchronizes_existing_litellm_metadata_pod_routing() -> None:
+    from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+
+    routing_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.1",
+        "pod_count": 3,
+        "selection": "session_affinity",
+    }
+    spoofed_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.9",
+        "pod_count": 3,
+        "selection": "round_robin",
+    }
+    deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "discovery-id"},
+        KUBERNETES_POD_ROUTING_KEY: routing_record,
+    }
+    original_litellm_metadata: Final = {KUBERNETES_POD_ROUTING_KEY: spoofed_record}
+    kwargs: Final = {"metadata": {}, "litellm_metadata": original_litellm_metadata}
+    router: Final = litellm.Router(model_list=[deployment])
+
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="completion")
+
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] == routing_record
+    assert kwargs["litellm_metadata"][KUBERNETES_POD_ROUTING_KEY] == routing_record
+    assert kwargs["litellm_metadata"] is not original_litellm_metadata
+    assert original_litellm_metadata[KUBERNETES_POD_ROUTING_KEY] == spoofed_record
+
+
+def test_update_kwargs_with_non_discovery_deployment_clears_other_pod_routing_bucket() -> None:
+    from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+
+    previous_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.1",
+        "pod_count": 3,
+        "selection": "session_affinity",
+    }
+    deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "fallback-id"},
+    }
+    original_litellm_metadata: Final = {KUBERNETES_POD_ROUTING_KEY: previous_record}
+    kwargs: Final = {"metadata": {}, "litellm_metadata": original_litellm_metadata}
+    router: Final = litellm.Router(model_list=[deployment])
+
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="completion")
+
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] is None
+    assert kwargs["litellm_metadata"][KUBERNETES_POD_ROUTING_KEY] is None
+    assert original_litellm_metadata[KUBERNETES_POD_ROUTING_KEY] == previous_record
 
 
 def test_combine_fallback_usage():

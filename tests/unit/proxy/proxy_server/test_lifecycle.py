@@ -999,6 +999,54 @@ async def test_proxy_startup_event_freezes_gc_before_serving(enabled: bool) -> N
     assert (frozen_while_serving > 0) is enabled
 
 
+@pytest.mark.asyncio
+async def test_proxy_shutdown_commits_spend_before_waiting_on_a_slow_logging_task_and_again_after_it() -> None:
+    """A worker killed while shutdown waits on a slow logging task keeps the spend it had already counted,
+    and a worker that finishes the wait also commits the spend that task adds."""
+    from litellm.responses import streaming_iterator as streaming_module
+
+    task_may_finish: Final = asyncio.Event()
+    task_finished: Final = asyncio.Event()
+    flushes: Final[list[tuple[str, bool]]] = []  # mutable-ok: records what each shutdown flush saw, which is the assertion
+
+    async def slow_logging_task() -> None:
+        await task_may_finish.wait()
+        task_finished.set()
+
+    def recording_flush(name: str) -> Callable[[], Awaitable[None]]:
+        async def flush() -> None:
+            flushes.append((name, task_finished.is_set()))
+            task_may_finish.set()
+
+        return flush
+
+    scheduler: Final = AsyncIOScheduler()
+    clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(ps, "flush_spend_counters_on_shutdown", recording_flush("spend counters")),
+        patch.object(ps, "_flush_spend_logs_queue_on_shutdown", recording_flush("spend logs")),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                streaming_module.spawn_logging_task(
+                    asyncio.get_running_loop(), slow_logging_task(), task_name="slow spend row"
+                )
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert flushes == [
+        ("spend counters", False),
+        ("spend logs", False),
+        ("spend counters", True),
+        ("spend logs", True),
+    ]
+
+
 def test_otel_global_provider_published_after_callback_init():
     """The OTel V2 global-provider publish must run after callback
     initialization in ``proxy_startup_event``.

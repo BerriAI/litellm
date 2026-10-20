@@ -137,6 +137,15 @@ def _header(response: FastResponse, name: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _ms_header(response: FastResponse | None, name: str) -> float | None:
+    """A gateway timing header as a number; the gateway writes the literal `None` when it has no value."""
+    value: Final = _header(response, name) if response is not None else None
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None
+
+
 def _quit(user: FastHttpUser) -> None:
     """End the run once every record is written. Quitting from a separate greenlet: `runner.quit`
     kills the user greenlets, and the user calling it would be killed mid-shutdown."""
@@ -309,6 +318,8 @@ class PlanUser(FastHttpUser):
                 call_id=_header(response, "x-litellm-call-id") if response is not None else None,
                 error=error,
                 response_id=identifier,
+                litellm_overhead_ms=_ms_header(response, "x-litellm-overhead-duration-ms"),
+                litellm_response_ms=_ms_header(response, "x-litellm-response-duration-ms"),
             )
         )
         if _PROGRESS.drained:
