@@ -1,16 +1,20 @@
+import asyncio
+import threading
 import httpx
 import litellm
 import pytest
 import respx
 
 
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
 
+from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError, _route_user_config_request, route_request
 
 
 @pytest.mark.parametrize(
@@ -1982,3 +1986,52 @@ async def test_team_key_search_of_registered_bedrock_store_reaches_bedrock_with_
         posted_url
     )
     assert "Credential=AKIAREGISTRYKEY00000/" in signed_auth, signed_auth
+
+
+@pytest.fixture
+def fake_redis_port() -> Iterator[int]:
+    server: Final = TcpFakeServer(("127.0.0.1", 0), server_type="redis")
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server.server_address[1]
+    server.shutdown()
+    server.server_close()
+
+
+async def _user_config_request_outcome(redis_port: int) -> str:
+    data: Final = {
+        "model": "rate-limited",
+        "messages": [{"role": "user", "content": "hi"}],
+        "num_retries": 0,
+        "user_config": {
+            "routing_strategy": "usage-based-routing-v2",
+            "redis_host": "127.0.0.1",
+            "redis_port": redis_port,
+            "model_list": [
+                {
+                    "model_name": "rate-limited",
+                    "rpm": 2,
+                    "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test", "mock_response": "ok"},
+                }
+            ],
+        },
+    }
+    try:
+        await _route_user_config_request(data, "acompletion")
+    except litellm.RateLimitError:
+        return "429"
+    finally:
+        await asyncio.sleep(0.3)
+    return "200"
+
+
+@pytest.mark.asyncio
+async def test_user_config_router_enforces_its_rpm_limit_across_requests(fake_redis_port: int) -> None:
+    outcomes: Final = [await _user_config_request_outcome(fake_redis_port) for _ in range(5)]
+
+    assert outcomes[0] == "200"
+    assert "429" in outcomes, outcomes
+    assert all(getattr(litellm, list_name) == [] for list_name in ("callbacks", "input_callback")), (
+        litellm.callbacks,
+        litellm.input_callback,
+    )

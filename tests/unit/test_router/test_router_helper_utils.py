@@ -4,7 +4,8 @@ import json
 import os
 import weakref
 from datetime import datetime, timezone
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from types import MethodType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1839,6 +1840,32 @@ def test_discard_keeps_callbacks_owned_by_other_live_routers():
     survivor.discard()
 
 
+@pytest.mark.parametrize(
+    "routing_strategy, selector_attr",
+    [
+        ("usage-based-routing", "lowesttpm_logger"),
+        ("usage-based-routing-v2", "lowesttpm_logger_v2"),
+        ("latency-based-routing", "lowestlatency_logger"),
+        ("cost-based-routing", "lowestcost_logger"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_discard_leaves_same_strategy_survivor_receiving_events(
+    routing_strategy: RoutingStrategyName, selector_attr: str
+):
+    model_list: Final[list[DeploymentTypedDict]] = [
+        {"model_name": "gpt-5.5", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}}
+    ]
+    retired: Final = Router(model_list=model_list, routing_strategy=routing_strategy)
+    survivor: Final = Router(model_list=model_list, routing_strategy=routing_strategy)
+
+    retired.discard()
+    await survivor.acompletion(model="gpt-5.5", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+
+    assert any(callback is getattr(survivor, selector_attr) for callback in litellm.success_callback)
+    survivor.discard()
+
+
 def test_discard_drops_routing_group_selectors():
     router: Final = Router(
         model_list=[
@@ -1854,6 +1881,109 @@ def test_discard_drops_routing_group_selectors():
     router.discard()
 
     assert all(getattr(litellm, list_name) == [] for list_name in _CALLBACK_LIST_NAMES)
+
+
+_GROUPED_MODEL_LIST: Final[list[DeploymentTypedDict]] = [
+    {"model_name": "grouped-model", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}}
+]
+
+
+class _LabelledHook(CustomLogger):
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.label = label
+
+
+def _visit_hooks_reloading_routing_groups_mid_loop(
+    router: Router, hooks: tuple[_LabelledHook, ...]
+) -> Iterator[CustomLogger]:
+    for callback in litellm.callbacks:
+        if callback is hooks[0]:
+            router.update_settings(
+                routing_groups=[{"group_name": "fast", "models": ["grouped-model"], "routing_strategy": "least-busy"}]
+            )
+        if callback in hooks:
+            yield callback
+
+
+def test_routing_group_reload_keeps_every_hook_of_an_in_flight_callback_loop():
+    router: Final = Router(
+        model_list=_GROUPED_MODEL_LIST,
+        routing_groups=[{"group_name": "fast", "models": ["grouped-model"], "routing_strategy": "least-busy"}],
+    )
+    hooks: Final = tuple(_LabelledHook(label) for label in ("guardrail_a", "guardrail_b", "guardrail_c"))
+    for hook in hooks:
+        litellm.logging_callback_manager.add_litellm_callback(hook)
+
+    visited: Final = tuple(_visit_hooks_reloading_routing_groups_mid_loop(router, hooks))
+
+    assert visited == hooks
+    router.discard()
+
+
+def _routers_seen_in_success_loop_discarding_first(first: Router, second: Router) -> Iterator[Router]:
+    for callback in litellm.success_callback:
+        if not isinstance(callback, MethodType):
+            continue
+        if callback.__self__ is first:
+            first.discard()
+            yield first
+        if callback.__self__ is second:
+            yield second
+
+
+def test_discard_mid_success_loop_keeps_the_next_router_callback():
+    first: Final = Router(model_list=_GROUPED_MODEL_LIST)
+    second: Final = Router(model_list=_GROUPED_MODEL_LIST)
+
+    seen: Final = tuple(_routers_seen_in_success_loop_discarding_first(first, second))
+
+    assert seen == (first, second)
+    second.discard()
+
+
+@pytest.mark.asyncio
+async def test_discard_purges_optional_pre_call_checks_from_event_lists_after_serving_a_request():
+    router: Final = Router(
+        model_list=_GROUPED_MODEL_LIST,
+        optional_pre_call_checks=["enforce_model_rate_limits", "prompt_caching", "deployment_affinity"],
+    )
+    await router.acompletion(model="grouped-model", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+
+    router.discard()
+
+    assert all(getattr(litellm, list_name) == [] for list_name in _CALLBACK_LIST_NAMES)
+
+
+def test_discard_registers_same_config_survivor_optional_pre_call_checks():
+    retired: Final = Router(model_list=_GROUPED_MODEL_LIST, optional_pre_call_checks=["enforce_model_rate_limits"])
+    survivor: Final = Router(model_list=_GROUPED_MODEL_LIST, optional_pre_call_checks=["enforce_model_rate_limits"])
+
+    retired.discard()
+
+    assert survivor.optional_callbacks
+    assert all(_is_registered(check) for check in survivor.optional_callbacks)
+    survivor.discard()
+
+
+def _is_registered(callback: object) -> bool:
+    return any(registered is callback for registered in litellm.callbacks)
+
+
+@pytest.mark.asyncio
+async def test_discard_releases_per_request_override_selector():
+    def build_override_then_discard() -> weakref.ReferenceType[object]:
+        router: Final = Router(model_list=_GROUPED_MODEL_LIST)
+        selector: Final = router._get_override_strategy_selector("usage-based-routing-v2")
+        assert selector is not None
+        router.discard()
+        return weakref.ref(selector)
+
+    selector_ref: Final = build_override_then_discard()
+    await asyncio.sleep(0)
+    gc.collect()
+
+    assert selector_ref() is None
 
 
 def test_initialize_assistants_endpoint(model_list):

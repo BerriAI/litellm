@@ -139,6 +139,9 @@ ignored_function_names = [
     "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
     "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
     "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "_drop_from_global_callback_lists",  # Run by discard, tested through the discard tests in test_router_helper_utils.py
+    "_callback_selectors",  # Run by discard, tested through the discard tests in test_router_helper_utils.py
+    "_register_global_callbacks",  # Run by discard, tested through the survivor discard tests in test_router_helper_utils.py
 ]
 
 

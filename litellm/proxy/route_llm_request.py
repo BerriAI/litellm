@@ -38,7 +38,7 @@ else:
     LitellmRouter = Any
 
 
-def _route_user_config_request(data: dict, route_type: str):
+async def _route_user_config_request(data: dict, route_type: str):
     """Route a request using the user-provided router config."""
     router_config: Final = data.pop("user_config")
 
@@ -48,9 +48,10 @@ def _route_user_config_request(data: dict, route_type: str):
     filtered_config: Final = {k: v for k, v in router_config.items() if k in valid_args}
 
     user_router: Final = litellm.Router(**filtered_config)
-    ret_val: Final = getattr(user_router, f"{route_type}")(**data)
-    user_router.discard()
-    return ret_val
+    try:
+        return await getattr(user_router, f"{route_type}")(**data)
+    finally:
+        user_router.discard()
 
 
 def _is_a2a_agent_model(model_name: object) -> bool:

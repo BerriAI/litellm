@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
 from itertools import chain
-from types import MappingProxyType
+from types import MappingProxyType, MethodType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
 
 import anyio
@@ -515,6 +515,24 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 _CallbackT = TypeVar("_CallbackT")
+
+
+def _drop_from_global_callback_lists(callbacks: Iterable[object], method_owner: object | None = None) -> None:
+    dropped_ids: Final = frozenset(id(callback) for callback in callbacks if callback is not None)
+
+    def keep(callback: object) -> bool:
+        if id(callback) in dropped_ids:
+            return False
+        return method_owner is None or not (isinstance(callback, MethodType) and callback.__self__ is method_owner)
+
+    litellm.callbacks = [callback for callback in litellm.callbacks if keep(callback)]
+    litellm.input_callback = [callback for callback in litellm.input_callback if keep(callback)]
+    litellm.success_callback = [callback for callback in litellm.success_callback if keep(callback)]
+    litellm.failure_callback = [callback for callback in litellm.failure_callback if keep(callback)]
+    litellm.service_callback = [callback for callback in litellm.service_callback if keep(callback)]
+    litellm._async_success_callback = [callback for callback in litellm._async_success_callback if keep(callback)]
+    litellm._async_failure_callback = [callback for callback in litellm._async_failure_callback if keep(callback)]
+
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset(
     {"model", "api_base", "api_key", "api_version", "responses_api_version"}
@@ -1527,20 +1545,12 @@ class Router:
         self._override_selectors_lock = threading.Lock()
         self.access_groups = None
         ## USAGE TRACKING ##
-        if isinstance(litellm._async_success_callback, list):
-            litellm.logging_callback_manager.add_litellm_async_success_callback(self.deployment_callback_on_success)
-        else:
-            litellm.logging_callback_manager.add_litellm_async_success_callback(self.deployment_callback_on_success)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(self.deployment_callback_on_success)
         if isinstance(litellm.success_callback, list):
             litellm.logging_callback_manager.add_litellm_success_callback(self.sync_deployment_callback_on_success)
         else:
             litellm.success_callback = [self.sync_deployment_callback_on_success]
-        if isinstance(litellm._async_failure_callback, list):
-            litellm.logging_callback_manager.add_litellm_async_failure_callback(
-                self.async_deployment_callback_on_failure
-            )
-        else:
-            litellm._async_failure_callback = [self.async_deployment_callback_on_failure]
+        litellm.logging_callback_manager.add_litellm_async_failure_callback(self.async_deployment_callback_on_failure)
         ## COOLDOWNS ##
         if isinstance(litellm.failure_callback, list):
             litellm.logging_callback_manager.add_litellm_failure_callback(self.deployment_callback_on_failure)
@@ -1636,27 +1646,10 @@ class Router:
         # Stop contributing to cost-map rebuilds straight away rather than waiting
         # for this router to be collected.
         _live_routers.discard(self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_success_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.success_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_failure_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.failure_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.input_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.service_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, self)
-        self._unregister_router_selectors(
-            (
-                *(getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()),
-                *self._override_selectors.values(),
-                *chain.from_iterable(selectors.values() for selectors in self._group_selectors.values()),
-            )
-        )
-
-        # Remove ForwardClientSideHeadersByModelGroup if it exists
-        if self.optional_callbacks is not None:
-            for callback in self.optional_callbacks:
-                litellm.logging_callback_manager.remove_callback_from_list_by_object(
-                    litellm.callbacks, callback, require_self=False
-                )
+        self._unregister_router_selectors((*self._callback_selectors(), *self._override_selectors.values()))
+        _drop_from_global_callback_lists(self.optional_callbacks or (), method_owner=self)
+        for router in tuple(_live_routers):
+            router._register_global_callbacks()
 
     @staticmethod
     def _create_redis_cache(
@@ -1771,6 +1764,22 @@ class Router:
         if isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(selector)
 
+    def _callback_selectors(self) -> tuple[RouterStrategySelector, ...]:
+        return tuple(
+            selector
+            for selector in (
+                *(getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()),
+                *chain.from_iterable(selectors.values() for selectors in self._group_selectors.values()),
+            )
+            if selector is not None
+        )
+
+    def _register_global_callbacks(self) -> None:
+        for selector in self._callback_selectors():
+            self._register_router_selector(selector)
+        for callback in self.optional_callbacks or ():
+            litellm.logging_callback_manager.add_litellm_callback(callback)
+
     def _unregister_router_selectors(self, selectors: Sequence[object]) -> None:
         """
         Drop router-owned strategy selectors from litellm's global callback
@@ -1780,11 +1789,9 @@ class Router:
         into the per-event lists on every request, so those are purged too.
         """
         for selector in selectors:
-            if selector is None:
-                continue
             if isinstance(selector, BaseRoutingStrategy):
                 selector.retire()
-            litellm.logging_callback_manager.remove_callback_from_all_lists(selector)
+        _drop_from_global_callback_lists(selectors)
 
     def _apply_updated_routing_strategy_args(self) -> None:
         """
