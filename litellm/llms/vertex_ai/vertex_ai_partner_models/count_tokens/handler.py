@@ -6,8 +6,12 @@ Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
+from pydantic import TypeAdapter
+
+from litellm.llms.anthropic.common_utils import count_tokens_feature_betas
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -19,8 +23,19 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
 )
 
 
+_REQUEST_MESSAGES: Final = TypeAdapter(Sequence[object])
+
+
 def count_tokens_publisher(model: str) -> str | None:
     return next((publisher for marker, publisher in _COUNT_TOKENS_PUBLISHERS if marker in model), None)
+
+
+def count_tokens_headers(access_token: str, request_data: Mapping[str, object]) -> Mapping[str, str]:
+    authorization: Final = {"Authorization": f"Bearer {access_token}"}
+    betas: Final = count_tokens_feature_betas(
+        "vertex_ai", request_data, _REQUEST_MESSAGES.validate_python(request_data["messages"])
+    )
+    return {**authorization, "anthropic-beta": ",".join(betas)} if betas else authorization
 
 
 class VertexAIPartnerModelsTokenCounter(VertexBase):
@@ -157,8 +172,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             api_base=litellm_params.get("api_base"),
         )
 
-        # Prepare headers
-        headers: Final = {"Authorization": f"Bearer {access_token}"}
+        headers: Final = dict(count_tokens_headers(access_token, request_data))
 
         # Get async HTTP client
         from litellm import LlmProviders

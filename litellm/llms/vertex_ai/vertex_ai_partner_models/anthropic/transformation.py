@@ -1,24 +1,57 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
+from ....anthropic.common_utils import AnthropicError, requires_native_compaction_beta
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+_VERTEX_HEADER_ONLY_BETAS: Final = frozenset(
+    {ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value, ANTHROPIC_BETA_HEADER_VALUES.INLINE_TOOLS_2026_09_15.value}
+)
+
+
+_BETA_VALUE: Final[TypeAdapter[str | tuple[str, ...] | None]] = TypeAdapter(str | tuple[str, ...] | None)
+
+_REQUEST_MESSAGES: Final = TypeAdapter(Sequence[object])
+
+
+def _beta_names(value: object) -> frozenset[str] | None:
+    try:
+        parsed: Final = _BETA_VALUE.validate_python(value)
+    except ValidationError:
+        return None
+    names: Final = parsed.split(",") if isinstance(parsed, str) else parsed or ()
+    return frozenset(name.strip() for name in names if name.strip())
+
+
+def _client_betas(value: object, field: str, drop_params: bool) -> frozenset[str]:
+    names: Final = _beta_names(value)
+    if names is not None:
+        return names
+    if drop_params:
+        return frozenset()
+    raise AnthropicError(
+        status_code=400,
+        message=f"{field} must be a string or a list of strings, got {type(value).__name__}",
+    )
 
 
 class VertexAIError(Exception):
@@ -124,6 +157,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
             custom_llm_provider="vertex_ai",
+            is_thinking_display_updates_used=self.is_thinking_display_updates_used(
+                _NON_DEFAULT_PARAMS.validate_python(data).get("thinking")
+            ),
         )
 
         beta_set: Final = set(auto_betas)
@@ -135,21 +171,39 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         if context_management:
             self._add_context_management_beta_headers(beta_set, context_management)
 
-        extra_headers: Final = optional_params.get("extra_headers") or {}
-        anthropic_beta_value: Final = extra_headers.get("anthropic-beta", "")
-        if isinstance(anthropic_beta_value, str) and anthropic_beta_value:
-            for beta in anthropic_beta_value.split(","):
-                beta = beta.strip()
-                if beta:
-                    beta_set.add(beta)
-        elif isinstance(anthropic_beta_value, list):
-            beta_set.update(anthropic_beta_value)
-
+        params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
+        compaction_betas: Final = (
+            frozenset({ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value})
+            if requires_native_compaction_beta("vertex_ai", params, _REQUEST_MESSAGES.validate_python(data["messages"]))
+            else frozenset[str]()
+        )
+        drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+        extra_headers: Final = _NON_DEFAULT_PARAMS.validate_python(params.get("extra_headers") or {})
         data.pop("extra_headers", None)
+        injected_betas: Final = frozenset(beta_set) | _client_betas(
+            extra_headers.get("anthropic-beta"), "The anthropic-beta header", drop_params
+        )
+        client_body_betas: Final = _client_betas(
+            _NON_DEFAULT_PARAMS.validate_python(data).get("anthropic_beta"), "anthropic_beta", drop_params
+        )
 
-        if beta_set:
-            data["anthropic_beta"] = list(beta_set)
-            headers["anthropic-beta"] = ",".join(beta_set)
+        body_betas: Final = (injected_betas | client_body_betas) - _VERTEX_HEADER_ONLY_BETAS
+        if body_betas:
+            data["anthropic_beta"] = sorted(body_betas)
+        elif "anthropic_beta" in data:
+            del data["anthropic_beta"]
+        header_betas: Final = (
+            injected_betas
+            | compaction_betas
+            | (client_body_betas & _VERTEX_HEADER_ONLY_BETAS)
+            | _client_betas(
+                _NON_DEFAULT_PARAMS.validate_python(headers).get("anthropic-beta"),
+                "The anthropic-beta header",
+                drop_params,
+            )
+        )
+        if header_betas:
+            headers["anthropic-beta"] = ",".join(sorted(header_betas))
 
         return data
 

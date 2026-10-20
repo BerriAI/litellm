@@ -551,6 +551,7 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -4693,13 +4694,11 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
             return litellm.ModelResponse(model=self.model)
         else:
-            from litellm.types.llms.anthropic import AnthropicResponse
-
-            pydantic_result: Final = AnthropicResponse.model_validate(result)
-            import httpx
-
+            served_body: Final = _SERVED_ANTHROPIC_BODY.validate_python(
+                result.model_dump() if isinstance(result, BaseModel) else result
+            )
             result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
+                completion_response=served_body,
                 raw_response=httpx.Response(
                     status_code=200,
                     headers={},

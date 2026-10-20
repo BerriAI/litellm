@@ -1,6 +1,9 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from pydantic import TypeAdapter
+
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, requires_native_compaction_beta
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
     messages_carry_output_config,
@@ -8,6 +11,8 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
 )
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
@@ -15,6 +20,8 @@ from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
+
+_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
@@ -115,8 +122,23 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
-        if beta_values:
-            headers["anthropic-beta"] = ",".join(beta_values)
+        typed_params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
+        if requires_native_compaction_beta("vertex_ai", typed_params, messages):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
+
+        thinking_display_betas: Final = (
+            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
+            if anthropic_model_info.is_thinking_display_updates_used(typed_params.get("thinking"))
+            else ()
+        )
+        tool_change_betas: Final = (
+            (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,)
+            if anthropic_model_info.is_mid_conversation_tool_change_used(messages)
+            else ()
+        )
+        all_beta_values: Final = beta_values.union(thinking_display_betas, tool_change_betas)
+        if all_beta_values:
+            headers["anthropic-beta"] = ",".join(sorted(all_beta_values))
 
         return headers, api_base
 

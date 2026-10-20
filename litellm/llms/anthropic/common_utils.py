@@ -44,6 +44,7 @@ from litellm.llms.anthropic.wif import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
@@ -52,6 +53,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
+    LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
@@ -119,6 +121,8 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
+NATIVE_COMPACTION_PROVIDERS: Final = frozenset({"anthropic", "azure_ai", "vertex_ai"})
+
 
 def is_anthropic_messages_url(url: str) -> bool:
     """Check whether a URL addresses Anthropic's Messages API."""
@@ -131,7 +135,7 @@ def requires_native_compaction_beta(
     optional_params: Mapping[str, object],
     messages: Sequence[object],
 ) -> bool:
-    return custom_llm_provider == "anthropic" and (
+    return custom_llm_provider in NATIVE_COMPACTION_PROVIDERS and (
         optional_params.get("compaction") is not None
         or any(
             isinstance(block, Mapping)
@@ -144,6 +148,27 @@ def requires_native_compaction_beta(
             if isinstance(content, (list, tuple))
             for block in content
         )
+    )
+
+
+def count_tokens_feature_betas(
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    messages: Sequence[object],
+) -> tuple[str, ...]:
+    return tuple(
+        beta
+        for beta, used in (
+            (
+                ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value,
+                requires_native_compaction_beta(custom_llm_provider, optional_params, messages),
+            ),
+            (
+                ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+                AnthropicModelInfo().is_mid_conversation_tool_change_used(messages),
+            ),
+        )
+        if used
     )
 
 
@@ -546,10 +571,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         file_ids: Final = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
 
-    def is_thinking_display_updates_used(self, thinking: AnthropicThinkingParam | None) -> bool:
-        if not isinstance(thinking, dict):
-            return False
-        return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
+    def is_thinking_display_updates_used(self, thinking: object) -> bool:
+        match thinking:
+            case {"type": "adaptive" | "enabled", "display": "updates"}:
+                return True
+            case _:
+                return False
 
     def is_mid_conversation_tool_change_used(self, messages: Sequence[object]) -> bool:
         for message in messages:
@@ -1001,7 +1028,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         budget_tokens: Final = _legacy_budget_tokens(thinking.get("budget_tokens", 0), drop_params=drop_params)
         display: Final = thinking.get("display")
-        supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
+        keeps_display: Final = display in ("summarized", "omitted") or (
+            display == "updates" and custom_llm_provider in LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS
+        )
+        supported_display: Final = {"display": display} if keeps_display else {}
         carried_keys: Final = carried_thinking_keys(
             thinking, rebuilt_keys=frozenset(("type", "budget_tokens", "display")), drop_params=drop_params
         )
@@ -1305,8 +1335,6 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_vertex_request is True:
             # Vertex AI requires web search beta header for web search to work
             if web_search_tool_used:
-                from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-
                 headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
         elif len(all_betas) > 0:
             headers["anthropic-beta"] = ",".join(all_betas)

@@ -4236,15 +4236,18 @@ def test_thinking_display_beta_requires_active_thinking(thinking: object, expect
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("display", "expected_thinking"),
+    ("provider", "display", "expected_thinking"),
     (
-        ("summarized", {"type": "adaptive", "display": "summarized"}),
-        ("omitted", {"type": "adaptive", "display": "omitted"}),
-        ("updates", {"type": "adaptive"}),
+        ("azure_ai", "summarized", {"type": "adaptive", "display": "summarized"}),
+        ("azure_ai", "omitted", {"type": "adaptive", "display": "omitted"}),
+        ("azure_ai", "updates", {"type": "adaptive", "display": "updates"}),
+        ("vertex_ai", "updates", {"type": "adaptive", "display": "updates"}),
+        ("anthropic", "updates", {"type": "adaptive", "display": "updates"}),
+        ("databricks", "updates", {"type": "adaptive"}),
     ),
 )
 def test_shared_legacy_thinking_translation_preserves_supported_display(
-    display: str, expected_thinking: dict[str, str]
+    provider: str, display: str, expected_thinking: dict[str, str]
 ) -> None:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -4255,7 +4258,7 @@ def test_shared_legacy_thinking_translation_preserves_supported_display(
     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
         model="claude-opus-5",
         optional_params=optional_params,
-        custom_llm_provider="azure_ai",
+        custom_llm_provider=provider,
         drop_params=False,
     )
 
@@ -4522,3 +4525,44 @@ def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_dro
     )
 
     assert optional_params == {"thinking": {"type": "adaptive"}}
+
+
+_SIGNED_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "summary so far", "signature": "sig"}
+
+
+@pytest.mark.parametrize(
+    "provider,expected",
+    [("anthropic", True), ("vertex_ai", True), ("azure_ai", True), ("bedrock", False), ("bedrock_converse", False)],
+)
+@pytest.mark.parametrize(
+    "optional_params,messages",
+    [
+        ({"compaction": {"type": "summarize"}}, [{"role": "user", "content": "hi"}]),
+        ({}, [{"role": "assistant", "content": [_SIGNED_COMPACTION_BLOCK]}, {"role": "user", "content": "go on"}]),
+    ],
+    ids=["compaction_param", "signed_compaction_block"],
+)
+def test_requires_native_compaction_beta_per_provider(
+    provider: str, expected: bool, optional_params: dict[str, object], messages: list[object]
+) -> None:
+    from litellm.llms.anthropic.common_utils import requires_native_compaction_beta
+
+    assert requires_native_compaction_beta(provider, optional_params, messages) is expected
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+@pytest.mark.parametrize(
+    "optional_params,messages",
+    [
+        ({"max_tokens": 64}, [{"role": "user", "content": "hi"}]),
+        ({}, [{"role": "assistant", "content": [{"type": "compaction", "content": "unsigned"}]}]),
+        ({"compaction": None}, [{"role": "user", "content": "hi"}]),
+    ],
+    ids=["no_signal", "unsigned_block", "compaction_none"],
+)
+def test_requires_native_compaction_beta_is_false_without_a_signal(
+    provider: str, optional_params: dict[str, object], messages: list[object]
+) -> None:
+    from litellm.llms.anthropic.common_utils import requires_native_compaction_beta
+
+    assert requires_native_compaction_beta(provider, optional_params, messages) is False
