@@ -4,10 +4,7 @@ use std::ops::ControlFlow;
 use litellm_coroutine::Co;
 
 use super::coroutine::MachineFault;
-use crate::{
-    interceptors::{RawResponse, RequestContext, WireRequest},
-    protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
-};
+use crate::protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery};
 
 pub struct CallContext<P: Protocol> {
     pub services: HostServices<P>,
@@ -85,38 +82,16 @@ impl<P: Protocol> crate::interceptors::Interceptors<P::Error> for ChannelInterce
 where
     P::Error: From<MachineFault>,
 {
-    async fn before_provider_request(
-        &self,
-        wire: WireRequest,
-        context: RequestContext,
-    ) -> Result<WireRequest, P::Error> {
-        self.0
-            .request_reply(|reply| {
-                HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
-                    wire: Box::new(wire),
-                    context: Box::new(context),
-                    reply,
-                })
-            })
-            .await
+    async fn handle(&self, request: InterceptRequest) -> Result<(), P::Error> {
+        request.relay(self).await
     }
 
-    async fn result_ready(
+    async fn intercept<A: Send>(
         &self,
-        facts: crate::interceptors::ExecutionFacts,
-    ) -> Result<(), P::Error> {
+        ask: impl FnOnce(Reply<A>) -> InterceptRequest + Send,
+    ) -> Result<A, P::Error> {
         self.0
-            .request_reply(|reply| {
-                HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply })
-            })
-            .await
-    }
-
-    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), P::Error> {
-        self.0
-            .request_reply(|reply| {
-                HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply })
-            })
+            .request_reply(|reply| HostRequest::Intercept(ask(reply)))
             .await
     }
 }

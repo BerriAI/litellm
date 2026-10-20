@@ -1,4 +1,5 @@
 mod support;
+use litellm_host::protocol::InterceptRequest;
 
 use std::{
     sync::{
@@ -125,6 +126,25 @@ struct ChangingHooks {
 }
 
 impl Interceptors<RouteError> for ChangingHooks {
+    async fn handle(&self, request: InterceptRequest) -> Result<(), RouteError> {
+        match request {
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+            InterceptRequest::ResultReady { facts, reply } => {
+                reply.send(self.result_ready(facts).await?);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ChangingHooks {
     async fn before_provider_request(
         &self,
         mut wire: WireRequest,
