@@ -210,6 +210,29 @@ async def test_seat_check_transport_failure_raises_connection_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "env_name,env_value,message",
+    [
+        (
+            "GITHUB_COPILOT_API_KEY_URL",
+            "https://api.octo.ghe.com/copilot_internal/v2/token",
+            "Set GITHUB_COPILOT_API_BASE",
+        ),
+        ("GITHUB_COPILOT_API_BASE", "ftp://copilot.example.com", "must be an HTTP or HTTPS URL"),
+    ],
+)
+async def test_seat_check_surfaces_the_copilot_api_base_configuration_error(monkeypatch, env_name, env_value, message):
+    monkeypatch.setenv(env_name, env_value)
+    with (
+        github_http(
+            lambda request: pytest.fail(f"unexpected request to {request.url}"), answer_plan(PLAN_COPILOT_HOST)
+        ),
+        pytest.raises(InvalidAPIBaseError, match=message),
+    ):
+        await acheck_copilot_seat("stored-github-token", "copilot-cred")
+
+
+@pytest.mark.asyncio
 async def test_github_login_uses_configured_auth_headers(monkeypatch):
     monkeypatch.setenv("GITHUB_COPILOT_USER_AGENT", "test-agent")
     monkeypatch.setenv("GITHUB_COPILOT_INTEGRATION_ID", "")

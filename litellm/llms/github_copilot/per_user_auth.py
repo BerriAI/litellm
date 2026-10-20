@@ -300,9 +300,10 @@ async def afetch_github_login(github_token: str) -> str:
 
 async def acheck_copilot_seat(github_token: str, credential_name: str) -> None:
     client: Final = _new_async_github_client()
+    api_base: Final = await aget_copilot_api_base(github_token)
     try:
         response: Final = await client.get(
-            f"{(await aget_copilot_api_base(github_token)).rstrip('/')}/models",
+            f"{api_base.rstrip('/')}/models",
             headers=get_copilot_default_headers(github_token),
         )
     except Exception as e:
