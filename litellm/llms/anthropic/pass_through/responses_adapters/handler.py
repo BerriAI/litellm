@@ -14,8 +14,9 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
+from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -30,6 +31,9 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import ProviderConfigManager
 
+from ..adapters.handler import request_safeguards_evaluator
+from ..convertible_blocks import reject_malformed_tool_result_text
+from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
@@ -39,6 +43,12 @@ BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
+
+
+def _record_bridged_response(responses_kwargs: Mapping[str, object], result: ResponsesAPIResponse) -> None:
+    logging_obj: Final = litellm_logging_obj_from_kwargs(responses_kwargs)
+    if logging_obj is not None:
+        logging_obj.record_bridged_responses_api_response(result)
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -87,7 +97,7 @@ def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, objec
         return cache_control_as_prompt_cache_breakpoint
     if _model_takes_prompt_cache_breakpoint(model, forwarded_kwargs):
         return None
-    if normalize_drop_params(forwarded_kwargs.get("drop_params")) is True or litellm.drop_params is True:
+    if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
         return _without_prompt_cache_breakpoint
     return None
 
@@ -133,6 +143,7 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
         [
@@ -180,6 +191,7 @@ def _build_responses_kwargs(
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
     )
 
     # Normalize reasoning effort based on model capabilities
@@ -284,6 +296,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
             extra_kwargs=kwargs,
         )
 
+        safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
         result: Final = await litellm.aresponses(**responses_kwargs)
 
         if stream:
@@ -291,13 +304,16 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
+                safeguards_evaluator=safeguards_evaluator,
             )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        return _ADAPTER.translate_response(result)
+        served: Final = await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
+        _record_bridged_response(responses_kwargs, result)
+        return served
 
     @staticmethod
     def anthropic_messages_handler(

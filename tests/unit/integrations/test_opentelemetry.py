@@ -51,7 +51,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import SpanAttributes
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from collections.abc import AsyncIterator
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -363,6 +363,33 @@ def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metada
     assert finished.attributes["metadata.routing_decision"] == str(decision)
 
 
+def test_v1_pod_routing_none_matches_other_none_metadata_attributes() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "answer",
+                "standard_logging_object": {
+                    "id": "routing-call",
+                    "call_type": "acompletion",
+                    "metadata": {
+                        KUBERNETES_POD_ROUTING_KEY: None,
+                        "other_none": None,
+                    },
+                },
+            },
+            {"model": "answer", "choices": [], "usage": {}},
+        )
+    (finished,) = exporter.get_finished_spans()
+    routing_attribute: Final = finished.attributes["metadata.kubernetes_pod_routing"]
+    assert routing_attribute == finished.attributes["metadata.other_none"]
+    assert routing_attribute != "null"
+
+
 @pytest.mark.parametrize("decision", ["custom", 42, ["custom"]])
 def test_v1_malformed_routing_metadata_preserves_inference_attributes(decision: object) -> None:
     exporter: Final = InMemorySpanExporter()
@@ -477,6 +504,75 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
         assert ("gen_ai.cost.tool_usage_cost", 0.0001) not in call_args_list
         assert ("gen_ai.cost.original_cost", 0.004) not in call_args_list
+
+    def test_cache_hit_span_carries_cache_indicator_and_saved_cost(self):
+        """
+        A cache-hit span reports litellm.cache_hit and litellm.saved_cache_cost so cost
+        attribution can tell a cache-served response apart from a billed call.
+        """
+        otel: Final = OpenTelemetry()
+        mock_span: Final = MagicMock()
+
+        kwargs: Final = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "cache_hit": True,
+                "saved_cache_cost": 0.003,
+                "cost_breakdown": {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0},
+            },
+        }
+
+        response_obj: Final = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        mock_span.set_attribute.assert_any_call("litellm.cache_hit", True)
+        mock_span.set_attribute.assert_any_call("litellm.saved_cache_cost", 0.003)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.total_cost", 0.0)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.input_cost", 0.0)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.output_cost", 0.0)
+
+    def test_non_cache_hit_span_reports_cache_hit_false(self):
+        otel: Final = OpenTelemetry()
+        mock_span: Final = MagicMock()
+
+        kwargs: Final = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "cache_hit": False,
+            },
+        }
+
+        response_obj: Final = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        call_args_list: Final = [call[0] for call in mock_span.set_attribute.call_args_list]
+        assert ("litellm.cache_hit", False) in call_args_list
+        assert all(key != "litellm.saved_cache_cost" for key, _value in call_args_list)
+        assert all(not key.startswith("gen_ai.cost.") for key, _value in call_args_list)
 
 
 class TestOpenTelemetryProviderInitialization(unittest.TestCase):

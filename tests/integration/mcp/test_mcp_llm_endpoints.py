@@ -12,7 +12,14 @@ from typing import Final, Literal, TypeVar
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
 from integration._support.mcp import (
     McpPeer,
@@ -34,16 +41,26 @@ from openai.types.responses.tool_param import Mcp
 from pydantic import JsonValue, TypeAdapter
 
 
-pytestmark: Final = pytest.mark.xdist_group("mcp_llm_private_gateway")
+pytestmark: Final = [pytest.mark.xdist_group("mcp_llm_private_gateway"), pytest.mark.shares_worker_state]
 
 
 @pytest.fixture(scope="session")
 def _llm_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, Mapping[str, str]]]:
     directory: Final = tmp_path_factory.mktemp("mcp-llm-gateway")
+    stock: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = directory / "stored-responses.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                **stock,
+                "general_settings": {**object_value(stock["general_settings"]), "store_prompts_in_spend_logs": True},
+            }
+        )
+    )
     with (
         worker_services(directory) as services,
         gateway_from_environment() as shared,
-        owned_proxy(shared, directory, services) as private,
+        owned_proxy(shared, directory, services, config=config) as private,
     ):
         yield private, services
 
@@ -97,6 +114,17 @@ class Turn:
     tool: str
     arguments: str
     answer: str
+
+
+@dataclass(frozen=True, slots=True)
+class Billing:
+    first: tuple[int, int] = (10, 5)
+    follow_up: tuple[int, int] = (10, 5)
+    follow_up_fails: bool = False
+
+
+EVEN_ROUNDS: Final = Billing()
+FOLLOW_UP_OUTAGE: Final = "scripted follow-up outage"
 
 
 def _fixed_turn(tool: str) -> Callable[[Mapping[str, JsonValue]], Turn]:
@@ -155,7 +183,58 @@ def _responses_stream(response: Mapping[str, JsonValue], item: Mapping[str, Json
     )
 
 
-def _model_double(plan: Callable[[Mapping[str, JsonValue]], Turn]) -> Callable[[Request], Reply]:
+def _block_ids(message: JsonValue, kind: str, field: str) -> frozenset[str]:
+    content: Final = message.get("content") if isinstance(message, dict) else None
+    blocks: Final = content if isinstance(content, list) else []
+    return frozenset(str(block[field]) for block in blocks if isinstance(block, dict) and block.get("type") == kind)
+
+
+def _unanswered_tool_uses(body: Mapping[str, JsonValue]) -> frozenset[str]:
+    messages: Final = body.get("messages")
+    turns: Final = messages if isinstance(messages, list) else []
+    followers: Final = [*turns[1:], None]
+    return frozenset().union(
+        *(
+            _block_ids(turn, "tool_use", "id") - _block_ids(follower, "tool_result", "tool_use_id")
+            for turn, follower in zip(turns, followers)
+        )
+    )
+
+
+def _orphan_tool_results(body: Mapping[str, JsonValue]) -> frozenset[str]:
+    messages: Final = body.get("messages")
+    turns: Final = messages if isinstance(messages, list) else []
+    leaders: Final = [None, *turns[:-1]]
+    return frozenset().union(
+        *(
+            _block_ids(turn, "tool_result", "tool_use_id") - _block_ids(leader, "tool_use", "id")
+            for turn, leader in zip(turns, leaders)
+        )
+    )
+
+
+def _anthropic_invalid_request(message: str) -> Reply:
+    error: Final = {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+    return Reply(status=400, body=json.dumps(error).encode())
+
+
+def _anthropic_tool_result_rule(body: Mapping[str, JsonValue]) -> Reply | None:
+    unanswered: Final = _unanswered_tool_uses(body)
+    orphans: Final = _orphan_tool_results(body)
+    if unanswered:
+        return _anthropic_invalid_request(
+            f"`tool_use` ids were found without `tool_result` blocks immediately after: {', '.join(sorted(unanswered))}"
+        )
+    if orphans:
+        return _anthropic_invalid_request(
+            f"unexpected `tool_use_id` found in `tool_result` blocks: {', '.join(sorted(orphans))}"
+        )
+    return None
+
+
+def _model_double(
+    plan: Callable[[Mapping[str, JsonValue]], Turn], billing: Billing = EVEN_ROUNDS
+) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target.endswith("/models"):
             return _json({"object": "list", "data": []})
@@ -165,8 +244,16 @@ def _model_double(plan: Callable[[Mapping[str, JsonValue]], Turn]) -> Callable[[
             return Reply(status=500, body=json.dumps(outage).encode())
         turn: Final = plan(body)
         done: Final = _has_tool_result(body)
+        if done and billing.follow_up_fails:
+            failure: Final = {"error": {"message": FOLLOW_UP_OUTAGE, "type": "server_error", "code": None}}
+            return Reply(status=500, body=json.dumps(failure).encode())
+        prompt_tokens, completion_tokens = billing.follow_up if done else billing.first
         identity: Final = uuid.uuid4().hex[:12]
-        usage: Final = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        usage: Final = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
         if request.target.endswith("/chat/completions"):
             message: Final = (
                 {"role": "assistant", "content": turn.answer}
@@ -215,6 +302,8 @@ def _model_double(plan: Callable[[Mapping[str, JsonValue]], Turn]) -> Callable[[
                 }
             )
         if request.target.endswith("/messages"):
+            if (rejected := _anthropic_tool_result_rule(body)) is not None:
+                return rejected
             content: Final = (
                 [{"type": "text", "text": turn.answer}]
                 if done
@@ -229,7 +318,7 @@ def _model_double(plan: Callable[[Mapping[str, JsonValue]], Turn]) -> Callable[[
                     "content": content,
                     "stop_reason": "end_turn" if done else "tool_use",
                     "stop_sequence": None,
-                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                    "usage": {"input_tokens": prompt_tokens, "output_tokens": completion_tokens},
                 }
             )
         assert request.target.endswith("/responses"), request.target
@@ -258,7 +347,11 @@ def _model_double(plan: Callable[[Mapping[str, JsonValue]], Turn]) -> Callable[[
             "status": "completed",
             "model": "gpt-4o-mini",
             "output": [item],
-            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            "usage": {
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
         }
         return _responses_stream(response, item) if body.get("stream") is True else _json(response)
 
@@ -347,16 +440,28 @@ def _upstream_model(surface: Surface) -> str:
     }[surface]
 
 
+PRICES: Final[Mapping[str, JsonValue]] = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "num_retries": 0}
+
+
 @contextmanager
-def _rig(gateway: Gateway, surface: Surface) -> Iterator[Rig]:
+def _rig(
+    gateway: Gateway,
+    surface: Surface,
+    *,
+    upstream: Surface | None = None,
+    billing: Billing = EVEN_ROUNDS,
+    prices: Mapping[str, JsonValue] | None = None,
+) -> Iterator[Rig]:
     alias: Final = "llm" + uuid.uuid4().hex[:8]
     with (
         mcp_peer() as peer,
-        wire_server(_model_double(_fixed_turn(f"{alias}-add"))) as wire,
+        wire_server(_model_double(_fixed_turn(f"{alias}-add"), billing)) as wire,
         gateway.scenario() as scenario,
     ):
         server_id: Final = register_mcp(scenario, peer, alias)
-        model: Final = scenario.model(model=_upstream_model(surface), api_base=wire.url + "/v1")
+        model: Final = scenario.model(
+            model=_upstream_model(upstream or surface), api_base=wire.url + "/v1", **(prices or {})
+        )
         peer.drain()
         yield Rig(gateway, scenario, peer, wire, alias, server_id, model, surface)
 
@@ -461,6 +566,61 @@ def test_server_scoped_gateway_url_exposes_only_that_servers_tools(gateway: Gate
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
 
 
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_proxy_path_url_of_a_served_server_is_listed_and_executed_by_the_gateway(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(gateway, surface) as rig:
+        server_url: Final = f"{str(gateway.client.base_url).rstrip('/')}/mcp/{rig.alias}"
+        response: Final = rig.send(_granted_key(rig), [{**AUTO, "server_url": server_url}])
+        assert response.status_code == 200, response.text
+        requests: Final = rig.upstream_tools()
+        assert len(requests) == 2 and all(rig.tool in names for names in requests), requests
+        peer_calls: Final = tuple(JSON_OBJECT.validate_python(call["body"]) for call in _peer_add_calls(rig.peer))
+        assert [object_value(call["params"])["name"] for call in peer_calls] == ["add"], peer_calls
+        assert rig.final_text(JSON_OBJECT.validate_json(response.content)) == ANSWER, response.text
+
+
+LOOKUP_PARAMETERS: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+CALLER_FUNCTION_TOOLS: Final[Mapping[Surface, Mapping[str, object]]] = {
+    "chat": {"type": "function", "function": {"name": "lookup", "parameters": LOOKUP_PARAMETERS}},
+    "responses": {"type": "function", "name": "lookup", "parameters": LOOKUP_PARAMETERS},
+    "messages": {"name": "lookup", "input_schema": LOOKUP_PARAMETERS},
+}
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_tools_that_do_not_name_the_gateway_reach_the_provider_unchanged_and_never_the_peer(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(gateway, surface) as rig:
+        remote_mcp_tools: Final = [
+            {
+                "type": "mcp",
+                "server_label": "docs",
+                "server_url": "https://mcp.example.com/sse",
+                "require_approval": "never",
+            },
+            {
+                "type": "mcp",
+                "server_label": "repos",
+                "server_url": f"https://mcp.example.com/mcp/unserved{uuid.uuid4().hex[:8]}",
+                "require_approval": "never",
+            },
+        ]
+        response: Final = rig.send(_granted_key(rig), [CALLER_FUNCTION_TOOLS[surface], *remote_mcp_tools])
+        assert response.status_code == 200, response.text
+        bodies: Final = tuple(
+            JSON_OBJECT.validate_json(request.body) for request in rig.wire.drain() if request.method == "POST"
+        )
+        assert len(bodies) == 1, bodies
+        forwarded: Final = bodies[0].get("tools")
+        assert isinstance(forwarded, list) and len(forwarded) == 3, forwarded
+        assert [tool for tool in forwarded if isinstance(tool, dict) and tool.get("type") == "mcp"] == remote_mcp_tools
+        assert "lookup" in json.dumps([tool for tool in forwarded if tool not in remote_mcp_tools]), forwarded
+        assert tool_calls(rig.peer.drain()) == (), "a tool that does not name the gateway reached the peer"
+
+
 def test_streaming_chat_executes_the_tool_once_and_streams_the_follow_up(gateway: Gateway) -> None:
     with _rig(gateway, "chat") as rig:
         key: Final = _granted_key(rig)
@@ -476,6 +636,45 @@ def test_streaming_chat_executes_the_tool_once_and_streams_the_follow_up(gateway
         )
         assert text == ANSWER, response.text
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+        assert len(rig.upstream_tools()) == 2
+
+
+def _mcp_call_items(
+    events: Sequence[Mapping[str, JsonValue]], kind: str
+) -> tuple[tuple[JsonValue, dict[str, JsonValue]], ...]:
+    announced: Final = tuple(
+        (event["output_index"], object_value(event["item"])) for event in events if event["type"] == kind
+    )
+    return tuple((index, item) for index, item in announced if item.get("type") == "mcp_call")
+
+
+def _add_call_arguments(call: dict[str, object]) -> JsonValue:
+    return object_value(JSON_OBJECT.validate_python(call["body"])["params"])["arguments"]
+
+
+def test_streaming_responses_opens_the_gateway_tool_call_empty_and_streams_its_arguments_once(gateway: Gateway) -> None:
+    with _rig(gateway, "responses") as rig:
+        key: Final = _granted_key(rig)
+        response: Final = rig.send(key, [AUTO], stream=True)
+        assert response.status_code == 200, response.text
+        events: Final = tuple(
+            JSON_OBJECT.validate_json(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and line != "data: [DONE]"
+        )
+        opened: Final = _mcp_call_items(events, "response.output_item.added")
+        closed: Final = _mcp_call_items(events, "response.output_item.done")
+        assert [(index, item["arguments"], item["status"]) for index, item in opened] == [
+            (closed[0][0], "", "in_progress")
+        ], opened
+        streamed: Final = "".join(
+            string_value(event["delta"])
+            for event in events
+            if event["type"] == "response.mcp_call_arguments.delta" and event["output_index"] == opened[0][0]
+        )
+        assert json.loads(streamed) == ADD, streamed
+        assert string_value(opened[0][1]["arguments"]) + streamed == closed[0][1]["arguments"], (opened, closed)
+        assert [_add_call_arguments(call) for call in _peer_add_calls(rig.peer)] == [ADD]
         assert len(rig.upstream_tools()) == 2
 
 
@@ -542,6 +741,119 @@ def test_an_open_server_in_another_gateway_cannot_widen_this_gateways_tools(gate
         deleted: Final = shared.request("GET", "/key/info", params={"key": key})
         assert deleted.status_code == 200, deleted.text
         assert deleted.json()["info"]["status"] == "deleted", deleted.text
+
+
+FIRST_ROUND: Final = (11, 3)
+FOLLOW_UP_ROUND: Final = (17, 7)
+
+
+def _price(*rounds: tuple[int, int]) -> float:
+    input_price, output_price = PRICES["input_cost_per_token"], PRICES["output_cost_per_token"]
+    assert isinstance(input_price, float) and isinstance(output_price, float)
+    return sum(prompt * input_price + completion * output_price for prompt, completion in rounds)
+
+
+def _responses_rows(call_id: str, status: str) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: read_rows(
+            "SELECT request_id, spend, prompt_tokens, completion_tokens, session_id "
+            'FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s AND call_type=%s AND status=%s',
+            (call_id, "aresponses", status),
+        ),
+        lambda found: len(found) >= 1,
+        seconds=70,
+    )
+
+
+def _session_call_types(session_id: str) -> frozenset[str]:
+    rows: Final = read_rows('SELECT call_type FROM "LiteLLM_SpendLogs" WHERE session_id=%s', (session_id,))
+    return frozenset(str(row["call_type"]) for row in rows)
+
+
+def _message_text(message: Mapping[str, JsonValue]) -> str:
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return content
+    blocks: Final = content if isinstance(content, list) else []
+    return "".join(str(block["text"]) for block in blocks if isinstance(block, dict) and block.get("type") == "text")
+
+
+def _assistant_texts(body: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    messages: Final = body.get("messages")
+    turns: Final = messages if isinstance(messages, list) else []
+    return tuple(_message_text(turn) for turn in turns if isinstance(turn, dict) and turn.get("role") == "assistant")
+
+
+def test_nonstream_responses_auto_execute_logs_the_answer_and_bills_both_rounds(gateway: Gateway) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND)
+    with _rig(gateway, "responses", billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO])
+        assert response.status_code == 200, response.text
+        body: Final = JSON_OBJECT.validate_json(response.content)
+        assert rig.final_text(body) == ANSWER, response.text
+        rows: Final = _responses_rows(response.headers["x-litellm-call-id"], "success")
+        assert len(rows) == 1, rows
+        row: Final = rows[0]
+        assert row["request_id"] == body["id"], row
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (
+            FIRST_ROUND[0] + FOLLOW_UP_ROUND[0],
+            FIRST_ROUND[1] + FOLLOW_UP_ROUND[1],
+        ), row
+        assert object_value(body["usage"])["input_tokens"] == row["prompt_tokens"], body
+        assert float(str(row["spend"])) == pytest.approx(_price(FIRST_ROUND, FOLLOW_UP_ROUND)), row
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(float(str(row["spend"])))
+        session_id: Final = string_value(row["session_id"])
+        eventually(
+            lambda: _session_call_types(session_id),
+            lambda found: {"list_mcp_tools", "call_mcp_tool"} <= found,
+            seconds=70,
+        )
+
+
+def test_nonstream_responses_failed_follow_up_bills_round_one_on_the_failure_row(gateway: Gateway) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_fails=True)
+    with _rig(gateway, "responses", billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO])
+        assert response.status_code == 500 and FOLLOW_UP_OUTAGE in response.text, response.text
+        call_id: Final = response.headers["x-litellm-call-id"]
+        rows: Final = _responses_rows(call_id, "failure")
+        assert len(rows) == 1, rows
+        assert float(str(rows[0]["spend"])) == pytest.approx(_price(FIRST_ROUND)), rows
+        assert (
+            read_rows(
+                'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s AND call_type=%s AND status=%s',
+                (call_id, "aresponses", "success"),
+            )
+            == []
+        )
+
+
+def test_bridged_responses_auto_execute_answers_every_tool_use_with_its_result(gateway: Gateway) -> None:
+    with _rig(gateway, "responses", upstream="messages") as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO])
+        assert response.status_code == 200, response.text
+        assert rig.final_text(response.json()) == ANSWER, response.text
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+
+
+def test_bridged_next_turn_replays_the_mcp_turn_answer(gateway: Gateway) -> None:
+    with _rig(gateway, "responses", upstream="messages") as rig:
+        key: Final = _granted_key(rig)
+        first: Final = rig.send(key, [AUTO])
+        assert first.status_code == 200, first.text
+        first_id: Final = string_value(JSON_OBJECT.validate_json(first.content)["id"])
+        eventually(
+            lambda: read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (first_id,)),
+            lambda found: len(found) == 1,
+            seconds=70,
+        )
+        rig.wire.drain()
+        second: Final = rig.send(key, [AUTO], previous_response_id=first_id, cache={"no-cache": True})
+        assert second.status_code == 200, second.text
+        opening: Final = next(
+            JSON_OBJECT.validate_json(request.body) for request in rig.wire.drain() if request.method == "POST"
+        )
+        assert ANSWER in _assistant_texts(opening), opening
 
 
 Bridge = Literal["chat", "responses", "messages"]

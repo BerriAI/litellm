@@ -5,17 +5,17 @@ from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
-import litellm
 import pytest
 from pydantic import ValidationError
 
-
+import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 async def _drain_tasks():
@@ -2643,6 +2643,58 @@ class TestRecordPartialUsageForFailure:
         assert "response_cost" not in logging_obj.model_call_details
 
 
+class _FailureRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failure_kwargs = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_kwargs.append(kwargs)
+
+
+class TestLogErrorFrameAsFailure:
+    """A stream closed at the provider's `event: error` frame is one failed attempt: its failure log bills the
+    usage streamed before the frame on the attempt-scoped copy its caller hands it, and the request's shared
+    logging state stays as it was, so the attempt the router opens next logs with nothing left behind."""
+
+    @pytest.mark.asyncio
+    async def test_logs_a_failure_with_the_usage_streamed_before_the_frame_and_leaves_the_request_state_alone(self):
+        recorder = _FailureRecorder()
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-sonnet-5",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id="test-error-frame-failure",
+            function_id="test-error-frame-failure",
+            dynamic_async_failure_callbacks=[recorder],
+        )
+        chunks = [
+            *TestRecordPartialUsageForFailure()._interrupted_chunks()[:1],
+            TestRecordPartialUsageForFailure._sse(
+                "error", {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+            ),
+        ]
+
+        await AnthropicPassthroughLoggingHandler.log_error_frame_as_failure(
+            attempt_logging_obj=logging_obj.attempt_scoped_copy(),
+            request_body={"model": "claude-sonnet-5", "stream": True},
+            all_chunks=chunks,
+            error_event=("overloaded_error", "Overloaded", 529),
+        )
+
+        assert len(recorder.failure_kwargs) == 1
+        failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
+        assert failure_payload["status"] == "failure"
+        assert failure_payload["prompt_tokens"] == 52
+        assert failure_payload["response_cost"] > 0
+        assert isinstance(recorder.failure_kwargs[0]["exception"], litellm.InternalServerError)
+        assert "combined_usage_object" not in logging_obj.model_call_details
+        assert "response_cost" not in logging_obj.model_call_details
+        assert logging_obj.should_run_logging("async_failure")
+
+
 @pytest.mark.parametrize(
     ("all_chunks", "interrupted"),
     [
@@ -2951,3 +3003,58 @@ def test_get_user_from_metadata(end_user_id):
     )
 
     assert response == "test"
+
+
+def _anthropic_sse_stream(stop_reason: str, stop_details: dict | None) -> list[str]:
+    events: Final = (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": ANTHROPIC_DOCS_REFUSAL_MESSAGE["id"],
+                    "type": "message",
+                    "role": "assistant",
+                    "model": ANTHROPIC_DOCS_REFUSAL_MESSAGE["model"],
+                    "content": [],
+                    "usage": {"input_tokens": 412, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details},
+                "usage": {"output_tokens": 0},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+    return [f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events]
+
+
+def test_streamed_messages_refusal_stop_details_on_the_logged_response(mock_logging_obj):
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    logged: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
+        all_chunks=_anthropic_sse_stream("refusal", stop_details),
+        litellm_logging_obj=mock_logging_obj,
+        model="claude-sonnet-5-5",
+    )
+
+    assert logged.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = logged.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == stop_details
+
+
+def test_streamed_messages_end_turn_logs_no_stop_details(mock_logging_obj):
+    logged: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
+        all_chunks=_anthropic_sse_stream("end_turn", None),
+        litellm_logging_obj=mock_logging_obj,
+        model="claude-sonnet-5-5",
+    )
+
+    assert logged.choices[0].finish_reason == "stop"
+    provider_fields: Final = logged.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_fields

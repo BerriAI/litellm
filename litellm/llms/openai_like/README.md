@@ -63,6 +63,12 @@ That's it! The provider will be automatically loaded and available.
     // Optional: Special handling flags
     "special_handling": {
       "convert_content_list_to_string": true
+    },
+
+    // Optional: Capabilities every model of this provider has, used when a
+    // model has no cost map row or its row leaves the field unset
+    "provider_info": {
+      "supports_function_calling": true
     }
   }
 }
