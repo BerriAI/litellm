@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -11,6 +12,7 @@ import respx
 
 import litellm
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
@@ -19,6 +21,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Delta,
     Function,
+    ModelResponse,
     ModelResponseStream,
     PromptTokensDetails,
     ServerToolUse,
@@ -2180,3 +2183,49 @@ def test_stream_chunk_builder_keeps_reasoning_items_on_text_only_replies():
     assert response is not None
     assert response.choices[0].message.content == "Hello world"
     assert response.choices[0].message.reasoning_items == reasoning_items
+
+
+@pytest.mark.parametrize("reported_cost", (0.0, 0.42))
+@pytest.mark.parametrize("pricing_source", ("params", "metadata", "none"))
+def test_azure_ai_stream_custom_pricing_overrides_reported_cost(
+    monkeypatch: pytest.MonkeyPatch, reported_cost: float, pricing_source: str
+) -> None:
+    model: Final = "azure_ai/streamed-cost-regression"
+    pricing: Final = {"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}
+    monkeypatch.setitem(litellm.model_cost, model, {**pricing, "litellm_provider": "azure_ai", "mode": "chat"})
+    litellm_params: Final = (
+        pricing
+        if pricing_source == "params"
+        else ({"metadata": {"model_info": pricing}} if pricing_source == "metadata" else {})
+    )
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="streamed-custom-cost-regression",
+        function_id="streamed-custom-cost-regression",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params=litellm_params, optional_params={}, custom_llm_provider="azure_ai"
+    )
+    response: Final = stream_chunk_builder(
+        chunks=[
+            _legacy_stream_chunk(
+                model,
+                content="hello",
+                finish_reason="stop",
+                usage=Usage(prompt_tokens=2, completion_tokens=3, cost=reported_cost),
+            )
+        ],
+        logging_obj=logging_obj,
+    )
+    assert response is not None
+    token_cost: Final = 2 * pricing["input_cost_per_token"] + 3 * pricing["output_cost_per_token"]
+    expected: Final = reported_cost if pricing_source == "none" else token_cost
+    assert logging_obj.response_cost_calculator(result=response) == pytest.approx(expected)
+    assert logging_obj.response_cost_calculator(result=response, cache_hit=True) == 0.0
+    assert logging_obj.response_cost_calculator(
+        result=ModelResponse(model=model, usage=Usage(prompt_tokens=2, completion_tokens=3))
+    ) == pytest.approx(token_cost)
