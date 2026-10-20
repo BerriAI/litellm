@@ -150,7 +150,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     cached_get_model_info_helper,
-    runtime_model_cost_registration,
+    runtime_model_cost_registrations,
     token_counter,
     unmapped_model_generalization,
 )
@@ -857,12 +857,14 @@ _NON_TOKEN_RATE_FIELDS: Final = frozenset(
 
 def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
     return any(
-        value is not None
-        and (
-            field in _NON_TOKEN_RATE_FIELDS
-            or (field.startswith("cache_") and is_server_derived_pricing_key(field))
-            or ("cost_per" in field and "token" in field)
-        )
+        value is not None and (field in _NON_TOKEN_RATE_FIELDS or ("cost_per" in field and "token" in field))
+        for field, value in entry.items()
+    )
+
+
+def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
+    return _cost_map_entry_prices_anything(entry) or any(
+        value is not None and field.startswith("cache_") and is_server_derived_pricing_key(field)
         for field, value in entry.items()
     )
 
@@ -941,16 +943,15 @@ def select_model_name_for_cost_calc(
         completion_response_model if isinstance(completion_response_model, str) else None
     )
     registered_pricing: Final = (
-        runtime_model_cost_registration(configured_model, "bedrock")
+        runtime_model_cost_registrations(configured_model, "bedrock")
         if invoked_model_info is not None and isinstance(configured_model, str)
-        else None
+        else ()
     )
-    invoked_pricing_model: Final = (
-        invoked_model_info["key"]
-        if invoked_model_info is not None
-        and _declares_rates(invoked_model_info)
-        and not (registered_pricing is not None and _cost_map_entry_prices_anything(registered_pricing))
-        else None
+    registered_pricing_model: Final = next(
+        (key for key, entry in registered_pricing if _bedrock_registration_has_prices(entry)), None
+    )
+    bedrock_pricing_model: Final = registered_pricing_model or (
+        invoked_model_info["key"] if invoked_model_info is not None and _declares_rates(invoked_model_info) else None
     )
     priced_from_response: Final = provider_response_model is not None or completion_response_model is not None
     priced_region: Final = (
@@ -969,8 +970,8 @@ def select_model_name_for_cost_calc(
         else:
             return_model = model
 
-    elif base_model is not None or invoked_pricing_model is not None or provider_response_model is not None:
-        return_model = base_model if base_model is not None else invoked_pricing_model or provider_response_model
+    elif base_model is not None or bedrock_pricing_model is not None or provider_response_model is not None:
+        return_model = base_model if base_model is not None else bedrock_pricing_model or provider_response_model
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:

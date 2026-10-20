@@ -3619,7 +3619,9 @@ def _register_on_current_map(
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
 
 
-def runtime_model_cost_registration(model: str, custom_llm_provider: str) -> Mapping[str, object] | None:
+def runtime_model_cost_registrations(
+    model: str, custom_llm_provider: str
+) -> tuple[tuple[str, Mapping[str, object]], ...]:
     names: Final = get_potential_model_names(model, custom_llm_provider)
     candidates: Final = (
         model,
@@ -3628,14 +3630,13 @@ def runtime_model_cost_registration(model: str, custom_llm_provider: str) -> Map
         names["split_model"],
         names["stripped_model_name"],
     )
-    entries: Final = (_builtin_cost_map().get(key) for key in candidates)
-    registered: Final = next(
-        (entry for entry in entries if isinstance(entry, AliasedCostEntry) and entry.registered_fields), None
+    entries: Final = ((key, _builtin_cost_map().get(key)) for key in dict.fromkeys(candidates))
+    registered: Final = (
+        (key, entry) for key, entry in entries if isinstance(entry, AliasedCostEntry) and entry.registered_fields
     )
-    return (
-        MappingProxyType({key: value for key, value in registered.items() if key in registered.registered_fields})
-        if registered is not None
-        else None
+    return tuple(
+        (key, MappingProxyType({name: value for name, value in entry.items() if name in entry.registered_fields}))
+        for key, entry in registered
     )
 
 

@@ -10075,7 +10075,7 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
 @pytest.mark.parametrize(
     "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
 )
-def test_runtime_model_cost_registration_resolves_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
     from litellm import utils as model_utils
     from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 
@@ -10085,9 +10085,12 @@ def test_runtime_model_cost_registration_resolves_bedrock_routing(monkeypatch: p
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, key: entry, alias: entry})
     litellm.register_model({key: rates}, persist_across_reloads=False)
 
-    assert model_utils.runtime_model_cost_registration("bedrock/converse/openai.test-converse", "bedrock") == rates
-    assert model_utils.runtime_model_cost_registration(alias, "bedrock") == rates
-    assert model_utils.runtime_model_cost_registration("bedrock/converse/openai.other-converse", "bedrock") is None
+    registrations: Final = dict(
+        model_utils.runtime_model_cost_registrations("bedrock/converse/openai.test-converse", "bedrock")
+    )
+    assert registrations[key] == rates
+    assert dict(model_utils.runtime_model_cost_registrations(alias, "bedrock"))[alias] == rates
+    assert model_utils.runtime_model_cost_registrations("bedrock/converse/openai.other-converse", "bedrock") == ()
 
 
 def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
