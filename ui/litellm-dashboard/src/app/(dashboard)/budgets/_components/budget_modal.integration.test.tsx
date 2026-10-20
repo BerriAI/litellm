@@ -12,23 +12,12 @@ vi.mock("@/app/(dashboard)/hooks/budgets/useBudgets", () => ({
   useCreateBudget: () => ({ mutateAsync: createMock }),
 }));
 
-const FULL_PAYLOAD = {
-  budget_id: "budget-alpha",
-  tpm_limit: 500.57,
-  rpm_limit: 7,
-  max_budget: 42.57,
-  budget_duration: "30d",
-};
-
 const renderModal = () => render(<BudgetModal isModalVisible={true} setIsModalVisible={vi.fn()} />);
 
 const create = async (user: ReturnType<typeof userEvent.setup>) =>
-  user.click(screen.getByRole("button", { name: "Create Budget" }));
+  user.click(screen.getByRole("button", { name: "Create budget" }));
 
-const openOptionalSettings = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(screen.getByText("Optional Settings"));
-  await screen.findByLabelText("Max Budget (USD)");
-};
+const resetPeriod = () => screen.getByRole("combobox", { name: "Reset period" });
 
 describe("BudgetModal", () => {
   beforeEach(() => {
@@ -36,58 +25,42 @@ describe("BudgetModal", () => {
     createMock.mockResolvedValue(undefined);
   });
 
-  it("submits only the mounted fields when Optional Settings stays collapsed", async () => {
+  it("submits the spend limit and reset period alongside the rate limits", async () => {
     const user = userEvent.setup();
     renderModal();
 
     fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
-    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "500.567" } });
-    fireEvent.change(screen.getByLabelText("Max Requests per minute"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "42.567" } });
+    await chooseSelectOption(user, resetPeriod(), "per month");
+    fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "500.567" } });
+    fireEvent.change(screen.getByLabelText("Requests per minute"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("Batch tokens per day"), { target: { value: "90000" } });
     await create(user);
 
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
-    expect(createMock.mock.calls[0][0]).toEqual({
+    const expected = {
       budget_id: "budget-alpha",
+      max_budget: 42.57,
+      budget_duration: "30d",
       tpm_limit: 500.57,
       rpm_limit: 7,
-    });
+      tpd_limit: 90000,
+    };
+    expect(createMock.mock.calls[0][0]).toEqual(expected);
   });
 
-  it("submits every field once Optional Settings is expanded", async () => {
+  it("submits a spend limit that never resets as a null reset period", async () => {
     const user = userEvent.setup();
     renderModal();
 
     fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
-    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "500.567" } });
-    fireEvent.change(screen.getByLabelText("Max Requests per minute"), { target: { value: "7" } });
-
-    await openOptionalSettings(user);
-    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.567" } });
-
-    await chooseSelectOption(user, screen.getByRole("combobox"), "monthly");
-
+    fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "10" } });
+    await chooseSelectOption(user, resetPeriod(), "per week");
+    await chooseSelectOption(user, resetPeriod(), "in total");
     await create(user);
 
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
-    expect(createMock.mock.calls[0][0]).toEqual(FULL_PAYLOAD);
-  });
-
-  it("drops Optional Settings values again when the section is collapsed before submit", async () => {
-    const user = userEvent.setup();
-    renderModal();
-
-    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
-
-    await openOptionalSettings(user);
-    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.567" } });
-    await chooseSelectOption(user, screen.getByRole("combobox"), "monthly");
-
-    await user.click(screen.getByText("Optional Settings"));
-    await waitFor(() => expect(screen.queryByLabelText("Max Budget (USD)")).not.toBeInTheDocument());
-    await create(user);
-
-    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
-    expect(createMock.mock.calls[0][0]).toEqual({ budget_id: "budget-alpha" });
+    expect(createMock.mock.calls[0][0]).toEqual({ budget_id: "budget-alpha", max_budget: 10, budget_duration: null });
   });
 
   it("submits a cleared number field as null", async () => {
@@ -95,44 +68,22 @@ describe("BudgetModal", () => {
     renderModal();
 
     fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
-    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "5" } });
-    await user.clear(screen.getByLabelText("Max Tokens per minute"));
+    fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "5" } });
+    await user.clear(screen.getByLabelText("Tokens per minute"));
     await create(user);
 
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
-    expect(createMock.mock.calls[0][0]).toEqual({
-      budget_id: "budget-alpha",
-      tpm_limit: null,
-    });
+    expect(createMock.mock.calls[0][0]).toEqual({ budget_id: "budget-alpha", tpm_limit: null });
   });
 
   it("blocks submit while Budget ID is empty", async () => {
     const user = userEvent.setup();
     renderModal();
 
-    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "5" } });
     await create(user);
 
     await waitFor(() => expect(screen.getByLabelText("Budget ID")).toHaveAttribute("aria-invalid", "true"));
     expect(createMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps a typed Optional Setting when the section is collapsed and reopened, as antd's store did", async () => {
-    const user = userEvent.setup();
-    renderModal();
-    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "probe-budget" } });
-
-    await openOptionalSettings(user);
-    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.5" } });
-
-    await user.click(screen.getByText("Optional Settings"));
-    await user.click(screen.getByText("Optional Settings"));
-
-    expect(await screen.findByLabelText("Max Budget (USD)")).toHaveValue(42.5);
-
-    await create(user);
-
-    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
-    expect(createMock.mock.calls[0][0]).toMatchObject({ budget_id: "probe-budget", max_budget: 42.5 });
   });
 });

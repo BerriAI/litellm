@@ -34,79 +34,48 @@ const renderModal = () =>
 const save = async (user: ReturnType<typeof userEvent.setup>) =>
   user.click(screen.getByRole("button", { name: "Save" }));
 
-const openOptionalSettings = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(screen.getByText("Optional Settings"));
-  await screen.findByLabelText("Max Budget (USD)");
-};
-
 describe("EditBudgetModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     updateMock.mockResolvedValue(undefined);
   });
 
-  it("submits only the mounted fields when Optional Settings stays collapsed", async () => {
+  it("keeps the existing spend limit and reset period when only a rate limit changes", async () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.clear(screen.getByLabelText("Max Tokens per minute"));
-    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "500.567" } });
-    await save(user);
-
-    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
-    expect(updateMock.mock.calls[0][0]).toEqual({
-      budget_id: "budget-alpha",
-      tpm_limit: 500.57,
-      rpm_limit: 10,
-    });
-  });
-
-  it("submits every field once Optional Settings is expanded", async () => {
-    const user = userEvent.setup();
-    renderModal();
-
-    await user.clear(screen.getByLabelText("Max Tokens per minute"));
-    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "500.567" } });
-    await user.clear(screen.getByLabelText("Max Requests per minute"));
-    fireEvent.change(screen.getByLabelText("Max Requests per minute"), { target: { value: "7" } });
-
-    await openOptionalSettings(user);
-    await user.clear(screen.getByLabelText("Max Budget (USD)"));
-    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.567" } });
-
-    await chooseSelectOption(user, screen.getByRole("combobox"), "monthly");
-
+    fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "500.567" } });
     await save(user);
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
     const expected = {
       budget_id: "budget-alpha",
+      max_budget: 100,
+      budget_duration: "7d",
       tpm_limit: 500.57,
-      rpm_limit: 7,
-      max_budget: 42.57,
-      budget_duration: "30d",
+      rpm_limit: 10,
     };
-
     expect(updateMock.mock.calls[0][0]).toEqual(expected);
   });
 
-  it("keeps a typed Optional Setting when the section is collapsed and reopened, as antd's store did", async () => {
+  it("submits a changed spend limit and reset period", async () => {
     const user = userEvent.setup();
     renderModal();
 
-    await openOptionalSettings(user);
-    const maxBudget = screen.getByLabelText("Max Budget (USD)");
-    await user.clear(maxBudget);
-    fireEvent.change(maxBudget, { target: { value: "99.25" } });
-
-    await user.click(screen.getByText("Optional Settings"));
-    await user.click(screen.getByText("Optional Settings"));
-
-    expect(await screen.findByLabelText("Max Budget (USD)")).toHaveValue(99.25);
-
+    const resetPeriod = screen.getByRole("combobox", { name: "Reset period" });
+    expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(100);
+    expect(resetPeriod).toHaveTextContent("per week");
+    fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "42.567" } });
+    await chooseSelectOption(user, resetPeriod, "per month");
     await save(user);
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
-    expect(updateMock.mock.calls[0][0]).toMatchObject({ max_budget: 99.25 });
+    expect(updateMock.mock.calls[0][0]).toMatchObject({ max_budget: 42.57, budget_duration: "30d" });
+  });
+
+  it("does not let the budget ID be edited", () => {
+    renderModal();
+
+    expect(screen.getByLabelText("Budget ID")).toBeDisabled();
   });
 });
