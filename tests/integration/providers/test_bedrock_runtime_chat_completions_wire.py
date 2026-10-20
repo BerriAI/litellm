@@ -462,6 +462,19 @@ def test_streamed_tools_while_reasoning_are_bridged_to_native_responses(gateway:
         assert _only_spend_row_of(model) == _bridged_success_row(model, wire.url)
 
 
+def test_tools_while_reasoning_are_bridged_with_the_deployments_rounded_effort(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model_info={"reasoning_effort_levels": ["low", "high"]},
+            **{**GPT_DEPLOYMENT, "aws_bedrock_runtime_endpoint": wire.url},
+        )
+        response: Final = _chat(gateway, model, marker, tools=[dict(TOOL)], reasoning_effort="medium")
+        assert _payload(response)["id"] == f"resp_upstream_{marker}", response.text
+        body: Final = _body(_converse_request(wire, NATIVE_RESPONSES))
+        assert (body["model"], body["reasoning"]) == (GPT, {"effort": "high"}), body
+
+
 def _reasoning_deployment(scenario: Scenario, wire: Wire, target: str) -> str:
     if target == OPENAI_CODEX:
         return scenario.model(model=f"openai/{OPENAI_CODEX}", api_base=wire.url, api_key="synthetic-openai-key")
