@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
@@ -82,7 +82,7 @@ class KeyManagementEventHooks:
         # Send email notification - non-blocking, independent operation
         if data.send_invite_email is True:
             try:
-                await KeyManagementEventHooks._send_key_created_email(response.model_dump(exclude_none=True))
+                await KeyManagementEventHooks._send_key_created_email(response)
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to send key created email: %s", e)
 
@@ -517,7 +517,7 @@ class KeyManagementEventHooks:
         return False
 
     @staticmethod
-    async def _send_key_created_email(response: dict):
+    async def _send_key_created_email(response: GenerateKeyResponse):
         """
         Send key created email if email sending is enabled.
 
@@ -532,7 +532,7 @@ class KeyManagementEventHooks:
         from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
         # generate_key_fn remaps token to the hashed token_id. The plaintext sk- key stays on key.
-        plaintext_key: Final[str] = cast(str, response.get("key") or response.get("token") or "")
+        plaintext_key: Final[str] = response.key or response.token or ""
 
         ##########################
         # v2 integration for emails (enterprise)
@@ -555,11 +555,11 @@ class KeyManagementEventHooks:
                     event_group=Litellm_EntityType.KEY,
                     event_message="API Key Created",
                     token=plaintext_key,
-                    spend=response.get("spend", 0.0),
-                    max_budget=response.get("max_budget", 0.0),
-                    user_id=response.get("user_id", None),
-                    team_id=response.get("team_id", "Default Team"),
-                    key_alias=response.get("key_alias", None),
+                    spend=0.0 if response.spend is None else response.spend,
+                    max_budget=0.0 if response.max_budget is None else response.max_budget,
+                    user_id=response.user_id,
+                    team_id=response.team_id if response.team_id is not None else "Default Team",
+                    key_alias=response.key_alias,
                 )
                 for email_logger in initialized_email_loggers:
                     if isinstance(email_logger, BaseEmailLogger):
@@ -581,11 +581,11 @@ class KeyManagementEventHooks:
                 event_group=Litellm_EntityType.KEY,
                 event_message="API Key Created",
                 token=plaintext_key,
-                spend=response.get("spend", 0.0),
-                max_budget=response.get("max_budget", 0.0),
-                user_id=response.get("user_id", None),
-                team_id=response.get("team_id", "Default Team"),
-                key_alias=response.get("key_alias", None),
+                spend=0.0 if response.spend is None else response.spend,
+                max_budget=0.0 if response.max_budget is None else response.max_budget,
+                user_id=response.user_id,
+                team_id=response.team_id if response.team_id is not None else "Default Team",
+                key_alias=response.key_alias,
             )
             # If user configured email alerting - send an Email letting their end-user know the key was created
             asyncio.create_task(

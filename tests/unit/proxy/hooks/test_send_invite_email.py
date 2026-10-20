@@ -1,4 +1,5 @@
 import asyncio
+import html
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,20 +19,26 @@ from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventH
 
 _PLAINTEXT_KEY = "sk-plaintext-key-39315"
 _TOKEN_ID = "a1b2c3d4e5f6789012345678abcdef01"
+_MARKUP_KEY = 'sk-1234567890123456</pre><a href="https://attacker.example/login">Activate key</a><pre>'
 
 
-def _key_created_email_response() -> dict:
-    """Response after generate_key_fn remaps token onto the hashed token_id."""
-    return {
-        "key": _PLAINTEXT_KEY,
-        "token": _TOKEN_ID,
-        "token_id": _TOKEN_ID,
-        "user_id": "user-123",
-        "team_id": "team-1",
-        "key_alias": "ci-key",
-        "spend": 0.0,
-        "max_budget": 10.0,
-    }
+def _key_created_email_response(key: str = _PLAINTEXT_KEY) -> GenerateKeyResponse:
+    """Response after generate_key_fn remaps token onto the hashed token_id.
+
+    Constructing the model with both fields copies token onto key, so the hash is
+    assigned afterwards, matching generate_key_fn.
+    """
+    response = GenerateKeyResponse(
+        key=key,
+        token_id=_TOKEN_ID,
+        user_id="user-123",
+        team_id="team-1",
+        key_alias="ci-key",
+        spend=0.0,
+        max_budget=10.0,
+    )
+    response.token = _TOKEN_ID
+    return response
 
 
 def _proxy_server_module(slack_alerting: object) -> SimpleNamespace:
@@ -309,9 +316,7 @@ async def test_v1_key_generation_no_email_when_send_invite_email_false():
                 mock_send_key_created_email.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_v0_key_created_email_contains_plaintext_key_not_token_id(monkeypatch):
-    """The v0 invite email prints webhook token, which must be the sk- key."""
+async def _render_v0_key_created_email(monkeypatch: pytest.MonkeyPatch, key: str) -> str:
     for name in ("EMAIL_LOGO_URL", "EMAIL_SUPPORT_CONTACT", "SMTP_SENDER_LOGO"):
         monkeypatch.delenv(name, raising=False)
 
@@ -338,18 +343,34 @@ async def test_v0_key_created_email_contains_plaintext_key_not_token_id(monkeypa
         ),
         patch.dict(sys.modules, {"litellm.proxy.proxy_server": _proxy_server_module(slack_alerting)}),
     ):
-        await KeyManagementEventHooks._send_key_created_email(_key_created_email_response())
+        await KeyManagementEventHooks._send_key_created_email(_key_created_email_response(key))
         assert scheduled, "key created email was not scheduled"
         await asyncio.gather(*scheduled)
 
     assert sent_html, "key created email was not sent"
-    assert f"Key: <pre>{_PLAINTEXT_KEY}</pre>" in sent_html[0]
-    assert _TOKEN_ID not in sent_html[0]
+    return sent_html[0]
 
 
 @pytest.mark.asyncio
-async def test_enterprise_key_created_email_contains_plaintext_key_not_token_id(monkeypatch):
-    """The enterprise invite email prints virtual_key, which must be the sk- key."""
+async def test_v0_key_created_email_contains_plaintext_key_not_token_id(monkeypatch):
+    """The v0 invite email prints webhook token, which must be the sk- key."""
+    sent_html = await _render_v0_key_created_email(monkeypatch, _PLAINTEXT_KEY)
+    assert f"Key: <pre>{_PLAINTEXT_KEY}</pre>" in sent_html
+    assert _TOKEN_ID not in sent_html
+
+
+@pytest.mark.asyncio
+async def test_v0_key_created_email_escapes_markup_in_custom_key(monkeypatch):
+    """A custom key is text in the legacy HTML email, not markup."""
+    sent_html = await _render_v0_key_created_email(monkeypatch, _MARKUP_KEY)
+    escaped_key = html.escape(_MARKUP_KEY, quote=True)
+    assert f"Key: <pre>{escaped_key}</pre>" in sent_html
+    assert f'api_key="{escaped_key}"' in sent_html
+    assert '<a href="https://attacker.example/login">' not in sent_html
+    assert _TOKEN_ID not in sent_html
+
+
+async def _render_enterprise_key_created_email(monkeypatch: pytest.MonkeyPatch, key: str):
     pytest.importorskip("litellm_enterprise")
     monkeypatch.setenv("EMAIL_INCLUDE_API_KEY", "true")
     for name in ("EMAIL_LOGO_URL", "EMAIL_SUPPORT_CONTACT", "SMTP_SENDER_LOGO", "EMAIL_SIGNATURE"):
@@ -382,12 +403,34 @@ async def test_enterprise_key_created_email_contains_plaintext_key_not_token_id(
         ),
         patch.dict(sys.modules, {"litellm.proxy.proxy_server": _proxy_server_module(None)}),
     ):
-        await KeyManagementEventHooks._send_key_created_email(_key_created_email_response())
+        await KeyManagementEventHooks._send_key_created_email(_key_created_email_response(key))
+    return recording_logger
+
+
+@pytest.mark.asyncio
+async def test_enterprise_key_created_email_contains_plaintext_key_not_token_id(monkeypatch):
+    """The enterprise invite email prints virtual_key, which must be the sk- key."""
+    recording_logger = await _render_enterprise_key_created_email(monkeypatch, _PLAINTEXT_KEY)
 
     assert recording_logger.events, "enterprise key created email was not sent"
     assert recording_logger.events[0].virtual_key == _PLAINTEXT_KEY
     assert recording_logger.events[0].token == _PLAINTEXT_KEY
     assert recording_logger.html_bodies, "enterprise key created email was not sent"
-    html = recording_logger.html_bodies[0]
-    assert f'<div class="key">{_PLAINTEXT_KEY}</div>' in html
-    assert _TOKEN_ID not in html
+    sent_html = recording_logger.html_bodies[0]
+    assert f'<div class="key">{_PLAINTEXT_KEY}</div>' in sent_html
+    assert _TOKEN_ID not in sent_html
+
+
+@pytest.mark.asyncio
+async def test_enterprise_key_created_email_escapes_markup_in_custom_key(monkeypatch):
+    """The stored event keeps the raw key, and the enterprise HTML escapes it."""
+    recording_logger = await _render_enterprise_key_created_email(monkeypatch, _MARKUP_KEY)
+    escaped_key = html.escape(_MARKUP_KEY, quote=True)
+
+    assert recording_logger.events[0].virtual_key == _MARKUP_KEY
+    assert recording_logger.events[0].token == _MARKUP_KEY
+    sent_html = recording_logger.html_bodies[0]
+    assert f'<div class="key">{escaped_key}</div>' in sent_html
+    assert f'"{escaped_key}"' in sent_html
+    assert '<a href="https://attacker.example/login">' not in sent_html
+    assert _TOKEN_ID not in sent_html
