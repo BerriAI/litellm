@@ -488,7 +488,7 @@ async def _texts_until_error(
 
 
 async def _chat_openai_stream_until_error(
-    gateway: Gateway, model: str, prompt: str
+    gateway: Gateway, model: str, prompt: str, extra: Mapping[str, JsonValue] = MappingProxyType({})
 ) -> tuple[str | openai.APIError, ...]:
     async with async_openai_client(gateway) as client:
         stream: Final = await client.chat.completions.create(
@@ -496,7 +496,7 @@ async def _chat_openai_stream_until_error(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=16,
             stream=True,
-            extra_body=dict(NO_CACHE),
+            extra_body={**NO_CACHE, **extra},
         )
         return tuple([item async for item in _texts_until_error(stream)])
 
@@ -537,6 +537,39 @@ def test_sagemaker_chat_stream_failure_after_the_first_chunks_reaches_the_caller
     errors: Final = tuple(item for item in outcome if isinstance(item, openai.APIError))
     assert "".join(item for item in outcome if isinstance(item, str)) == "".join(CONTENT), outcome
     assert len(errors) == 1 and expected in errors[0].message, outcome
+
+
+_PRE_CONTENT_FAILURES: Final[Mapping[str, Reply]] = MappingProxyType(
+    {
+        "error-record": event_stream_reply((_sse({"error": {"message": "synthetic decode failure", "code": 500}}),)),
+        "model-stream-error": event_stream_reply(
+            (), then=(model_stream_error("synthetic stream timeout", "ModelInvocationTimeExceeded"),)
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("failure", tuple(_PRE_CONTENT_FAILURES))
+def test_sagemaker_chat_stream_failure_before_any_content_falls_back_to_the_next_model(
+    gateway: Gateway, failure: str
+) -> None:
+    events: Final = vllm_stream_events(f"sagemaker-chat-{uuid.uuid4().hex}")
+
+    with (
+        wire_server(lambda _request: _PRE_CONTENT_FAILURES[failure]) as primary_wire,
+        wire_server(lambda _request: event_stream_reply(events)) as fallback_wire,
+        gateway.scenario() as scenario,
+    ):
+        primary: Final = _deployment(scenario, primary_wire, {})
+        fallback: Final = _deployment(scenario, fallback_wire, {})
+        outcome: Final = asyncio.run(
+            _chat_openai_stream_until_error(gateway, primary, marked_prompt(), {"fallbacks": [fallback]})
+        )
+        primary_attempts: Final = primary_wire.drain()
+        only_request(fallback_wire)
+    assert outcome and all(isinstance(item, str) for item in outcome), outcome
+    assert "".join(item for item in outcome if isinstance(item, str)) == "".join(CONTENT), outcome
+    assert len(primary_attempts) == 1, primary_attempts
 
 
 def _lmi_line(record: Mapping[str, JsonValue]) -> bytes:
