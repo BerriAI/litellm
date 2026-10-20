@@ -3,7 +3,7 @@ import json
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from functools import lru_cache, partial
+from functools import lru_cache, partial, reduce
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -32,7 +32,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
-from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     synthesize_subtitle_document,
 )
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import (
@@ -2150,6 +2151,16 @@ class BaseLLMHTTPHandler:
             merged_headers.update(extra_headers_from_kwargs)
         if provider_specific_headers:
             merged_headers.update(provider_specific_headers)
+        request_params: Final = reduce(
+            delete_nested_value,
+            litellm_params.get("additional_drop_params") or (),
+            anthropic_messages_optional_request_params,
+        )
+        if (
+            request_params.get("safeguards") is not None
+            and anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
+        ):
+            await aload_beta_headers_config()
         (
             headers,
             api_base,
@@ -2157,7 +2168,7 @@ class BaseLLMHTTPHandler:
             headers=merged_headers or {},
             model=model,
             messages=messages,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=request_params,
             litellm_params=dict(litellm_params),
             api_key=api_key,
             api_base=api_base,
@@ -2188,20 +2199,11 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-        additional_drop_params: Final[list[str]] = litellm_params.get("additional_drop_params") or []
-        if additional_drop_params:
-            from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
-
-            for path in additional_drop_params:
-                anthropic_messages_optional_request_params = delete_nested_value(
-                    anthropic_messages_optional_request_params, path
-                )
-
         # Prepare request body
         request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -2307,7 +2309,7 @@ class BaseLLMHTTPHandler:
 
             held_back_tool_names: Final = self._server_fulfilled_tools_in_request(
                 logging_obj=logging_obj,
-                tools=anthropic_messages_optional_request_params.get("tools"),
+                tools=request_params.get("tools"),
             )
             initial_response = AgenticAnthropicStreamingIterator(
                 completion_stream=completion_stream,
@@ -2315,7 +2317,7 @@ class BaseLLMHTTPHandler:
                 model=model,
                 messages=messages,
                 anthropic_messages_provider_config=anthropic_messages_provider_config,
-                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                anthropic_messages_optional_request_params=request_params,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs_for_agentic,
@@ -2338,7 +2340,7 @@ class BaseLLMHTTPHandler:
             model=model,
             messages=messages,
             anthropic_messages_provider_config=anthropic_messages_provider_config,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=request_params,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             kwargs=kwargs_for_agentic,
