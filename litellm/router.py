@@ -9551,9 +9551,9 @@ class Router:
         deployment: Final = self.get_deployment(model_id=deployment_id) if deployment_id is not None else None
         if deployment is None:
             return None
-        extra_params: Final = cast(
+        extra_params: Final = cast(  # cast-ok: pydantic extras are untyped, base_model is isinstance-checked below
             "Mapping[str, object]", deployment.litellm_params.model_extra or {}
-        )  # cast-ok: pydantic extras
+        )
         base_model: Final = extra_params.get("base_model")
         return base_model if isinstance(base_model, str) else None
 
