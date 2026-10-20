@@ -362,3 +362,164 @@ async def test_azure_gpt_transcribe_sends_language_hints_in_sdk_extra_body():
 
     assert response.text == "hello"
     await client.close()
+
+
+def _one_second_wav() -> io.BytesIO:
+    audio_file: Final = io.BytesIO()
+    with wave.open(audio_file, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b"\x00\x00" * 16000)
+    audio_file.name = "sample.wav"
+    audio_file.seek(0)
+    return audio_file
+
+
+class _SuccessCostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.async_costs: Final[asyncio.Queue[float | None]] = asyncio.Queue()
+        self.sync_costs: Final[queue.Queue[float | None]] = queue.Queue()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        await self.async_costs.put(kwargs["standard_logging_object"]["response_cost"])
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.sync_costs.put(kwargs["standard_logging_object"]["response_cost"])
+
+
+@pytest.mark.asyncio
+async def test_atranscription_bills_the_transcript_when_the_model_ignores_stream(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def send_response(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"text": "hello world"})
+
+    recorder: Final = _SuccessCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    client: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://example.com/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(send_response)),
+    )
+    await litellm.atranscription(model="openai/whisper-1", file=_one_second_wav(), client=client)
+    unstreamed_cost: Final = await asyncio.wait_for(recorder.async_costs.get(), timeout=5)
+    ignored_stream: Final = await litellm.atranscription(
+        model="openai/whisper-1", file=_one_second_wav(), stream=True, client=client
+    )
+    ignored_stream_cost: Final = await asyncio.wait_for(recorder.async_costs.get(), timeout=5)
+    await client.close()
+
+    assert isinstance(ignored_stream, TranscriptionResponse)
+    assert ignored_stream.text == "hello world"
+    assert unstreamed_cost is not None
+    assert ignored_stream_cost == unstreamed_cost > 0
+
+
+def test_azure_transcription_bills_the_transcript_when_the_deployment_ignores_stream(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def send_response(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"text": "hello world"})
+
+    recorder: Final = _SuccessCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    client: Final = AzureOpenAI(
+        api_key="azure-test-key",
+        azure_endpoint="https://example.openai.azure.com",
+        api_version=litellm.AZURE_DEFAULT_API_VERSION,
+        http_client=httpx.Client(transport=httpx.MockTransport(send_response)),
+    )
+    azure_params: Final = {
+        "client": client,
+        "api_key": "azure-test-key",
+        "api_base": "https://example.openai.azure.com",
+        "api_version": litellm.AZURE_DEFAULT_API_VERSION,
+    }
+    litellm.transcription(model="azure/whisper-1", file=_one_second_wav(), **azure_params)
+    unstreamed_cost: Final = recorder.sync_costs.get(timeout=5)
+    ignored_stream: Final = litellm.transcription(
+        model="azure/whisper-1", file=_one_second_wav(), stream=True, **azure_params
+    )
+    ignored_stream_cost: Final = recorder.sync_costs.get(timeout=5)
+    client.close()
+
+    assert isinstance(ignored_stream, TranscriptionResponse)
+    assert ignored_stream.text == "hello world"
+    assert unstreamed_cost is not None
+    assert ignored_stream_cost == unstreamed_cost > 0
+
+
+def _duration_priced_transcript(streamed: bool) -> httpx.Response:
+    usage: Final = {"type": "duration", "seconds": 2}
+    if not streamed:
+        return httpx.Response(200, json={"text": "hello world", "usage": usage})
+    events: Final = (
+        {"type": "transcript.text.delta", "delta": "hello world"},
+        {"type": "transcript.text.done", "text": "hello world", "usage": usage},
+    )
+    return httpx.Response(
+        200,
+        content="".join(f"data: {json.dumps(event)}\n\n" for event in events).encode(),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
+def _asks_for_stream(request_body: bytes) -> bool:
+    return b'name="stream"\r\n\r\ntrue' in request_body
+
+
+@pytest.mark.asyncio
+async def test_atranscription_stream_bills_the_provider_duration_like_the_unstreamed_call(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def send_response(request: httpx.Request) -> httpx.Response:
+        return _duration_priced_transcript(streamed=_asks_for_stream(await request.aread()))
+
+    recorder: Final = _SuccessCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    client: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://example.com/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(send_response)),
+    )
+    await litellm.atranscription(model="openai/gpt-transcribe", file=_one_second_wav(), client=client)
+    unstreamed_cost: Final = await asyncio.wait_for(recorder.async_costs.get(), timeout=5)
+    stream: Final = await litellm.atranscription(
+        model="openai/gpt-transcribe", file=_one_second_wav(), stream=True, client=client
+    )
+    events: Final = [event.type async for event in stream]
+    streamed_cost: Final = await asyncio.wait_for(recorder.async_costs.get(), timeout=5)
+    await client.close()
+
+    assert events == ["transcript.text.delta", "transcript.text.done"]
+    assert unstreamed_cost is not None
+    assert streamed_cost == unstreamed_cost > 0
+
+
+def test_transcription_stream_bills_the_provider_duration_like_the_unstreamed_call(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def send_response(request: httpx.Request) -> httpx.Response:
+        return _duration_priced_transcript(streamed=_asks_for_stream(request.read()))
+
+    recorder: Final = _SuccessCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    client: Final = OpenAI(
+        api_key="sk-test",
+        base_url="https://example.com/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(send_response)),
+    )
+    litellm.transcription(model="openai/gpt-transcribe", file=_one_second_wav(), client=client)
+    unstreamed_cost: Final = recorder.sync_costs.get(timeout=5)
+    stream: Final = litellm.transcription(
+        model="openai/gpt-transcribe", file=_one_second_wav(), stream=True, client=client
+    )
+    events: Final = [event.type for event in stream]
+    streamed_cost: Final = recorder.sync_costs.get(timeout=5)
+    client.close()
+
+    assert events == ["transcript.text.delta", "transcript.text.done"]
+    assert unstreamed_cost is not None
+    assert streamed_cost == unstreamed_cost > 0

@@ -2857,6 +2857,10 @@ class Logging(LiteLLMLoggingBaseClass):
             setattr(result, "usage", transformed_usage)
         return result
 
+    @staticmethod
+    def _stream_cost_source(received_result: object, assembled_response: object) -> object:
+        return received_result if isinstance(received_result, TranscriptionResponse) else assembled_response
+
     def _with_client_facing_stream_model(
         self,
         response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
@@ -3229,6 +3233,7 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
+        received_result: Final = result
         start_time, end_time, result, request_logging_payload = self._prepare_success_logging(
             start_time=start_time,
             end_time=end_time,
@@ -3264,7 +3269,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["complete_streaming_response"] = complete_streaming_response
                 self._surface_response_headers_from_result(complete_streaming_response)
                 self.model_call_details["response_cost"] = self.response_cost_calculator(
-                    result=complete_streaming_response
+                    result=self._stream_cost_source(received_result, complete_streaming_response)
                 )
                 self._add_continued_partial_spend(complete_streaming_response)
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
@@ -3802,6 +3807,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 kwargs=self.model_call_details, messages=self.model_call_details.get("messages")
             )
         )
+        received_result: Final = result
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -3843,7 +3849,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     get_base_model_from_metadata(model_call_details=self.model_call_details)
                     # base_model defaults to None if not set on model_info
                     self.model_call_details["response_cost"] = self.response_cost_calculator(
-                        result=complete_streaming_response
+                        result=self._stream_cost_source(received_result, complete_streaming_response)
                     )
 
                 verbose_logger.debug("Model=%s; cost=%s", self.model, self.model_call_details["response_cost"])
