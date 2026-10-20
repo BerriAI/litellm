@@ -53,7 +53,7 @@ class BaseInteractionsAPIStreamingIterator:
         self.finished = False
         self.interactions_api_config = interactions_api_config
         self.completed_response: InteractionsAPIStreamingResponse | None = None
-        self.start_time = datetime.now()
+        self.start_time = logging_obj.start_time
 
         # set request kwargs
         self.litellm_metadata = litellm_metadata
@@ -92,6 +92,8 @@ class BaseInteractionsAPIStreamingIterator:
 
             # Format as InteractionsAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
+                if self.logging_obj.completion_start_time is None:
+                    self.logging_obj.update_completion_start_time(completion_start_time=datetime.now())
                 streaming_response: Final = self.interactions_api_config.transform_streaming_response(
                     model=self.model,
                     parsed_chunk=parsed_chunk,
