@@ -498,6 +498,13 @@
         "ui_name": "Log Prompts Only",
         "description": "Log request messages to S3 but drop the model response from each logged object",
         "required": false
+      },
+      "s3_partition_granularity": {
+        "type": "select",
+        "ui_name": "Folder Partitioning",
+        "description": "day writes one folder per date, hour adds an hour folder below each date (s3_v2 only)",
+        "options": ["day", "hour"],
+        "required": false
       }
     },
     "description": "S3 Bucket (AWS) Logging Integration"

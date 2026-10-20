@@ -69,7 +69,6 @@ class Session(NamedTuple):
     baseline_model: str | None
     turns: int | None = None
     savings_estimated_turns: int | None = None
-    savings_estimated_actual_spend: float | None = None
 
 
 class Credentials(NamedTuple):
@@ -190,7 +189,7 @@ def fetch_session(credentials: Credentials, session_id: str) -> Fetched:
     query: Final = urlencode((("session_id", session_id),))
     request: Final = urllib.request.Request(
         f"{credentials.base_url}{SESSION_ENDPOINT}?{query}",
-        headers={  # mutable-ok: urllib.request.Request takes a dict
+        headers={
             "Authorization": f"Bearer {credentials.api_key}",
             "Accept": "application/json",
         },
@@ -210,10 +209,9 @@ def _session_from_payload(payload: Mapping[str, object]) -> Session | None:
     router_name: Final = printable(payload.get("router_name"))
     last_model: Final = printable(payload.get("last_model"))
     spend: Final = payload.get("spend")
-    baseline_spend: Final = payload.get("savings_estimated_baseline_spend", payload.get("baseline_spend"))
+    baseline_spend: Final = payload.get("baseline_spend")
     turns: Final = payload.get("turns")
     estimated_turns: Final = payload.get("savings_estimated_turns")
-    estimated_actual: Final = payload.get("savings_estimated_actual_spend")
     if not router_name or not last_model:
         return None
     if not isinstance(spend, (int, float)) or isinstance(spend, bool) or not isfinite(spend):
@@ -234,19 +232,11 @@ def _session_from_payload(payload: Mapping[str, object]) -> Session | None:
             if isinstance(estimated_turns, int) and not isinstance(estimated_turns, bool) and estimated_turns >= 0
             else (0 if estimated_turns is not None else None)
         ),
-        savings_estimated_actual_spend=(
-            float(estimated_actual)
-            if isinstance(estimated_actual, (int, float))
-            and not isinstance(estimated_actual, bool)
-            and isfinite(estimated_actual)
-            and estimated_actual >= 0
-            else None
-        ),
     )
 
 
 def cache_path(cache_dir: Path, credentials: Credentials, session_id: str) -> Path:
-    identity: Final = "\n".join((credentials.base_url, credentials.api_key, session_id))
+    identity: Final = "\n".join(("whole-session-v1", credentials.base_url, credentials.api_key, session_id))
     return cache_dir / hashlib.sha256(identity.encode()).hexdigest()
 
 
@@ -305,7 +295,7 @@ def _read_cache(path: Path) -> Mapping[str, object]:
 def _write_cache(path: Path, session: Session | None, fetched_at: float) -> None:
     """Staged beside the entry and renamed into place, so a refresh reading the entry never sees a torn write."""
     entry: Final = session._asdict() if session else None
-    body: Final = json.dumps({"fetched_at": fetched_at, "session": entry})  # mutable-ok: json.dumps takes a dict
+    body: Final = json.dumps({"fetched_at": fetched_at, "session": entry})
     if not _own_private_dir(path.parent):
         return
     try:
@@ -342,34 +332,27 @@ def render(model: str, session: Session | None, config_dir: Path, use_color: boo
     routed: Final = paint(BOLD, f"Routed to: {model}")
     if session is None:
         return routed
-    if session.savings_estimated_turns == 0 or session.baseline_spend is None:
+    if session.baseline_spend is None:
         return f"{routed}{SEPARATOR}Savings unavailable"
     if session.baseline_model is None or session.baseline_spend <= 0:
         return routed
     if session.savings_estimated_turns is not None and (
-        session.savings_estimated_actual_spend is None
-        or session.turns is None
-        or session.savings_estimated_turns > session.turns
+        session.turns is None or session.savings_estimated_turns > session.turns
     ):
         return f"{routed}{SEPARATOR}Savings unavailable"
-    compared_spend: Final = (
-        session.savings_estimated_actual_spend
-        if session.savings_estimated_turns is not None and session.savings_estimated_actual_spend is not None
-        else session.spend
-    )
     coverage: Final = (
-        f"{SEPARATOR}{session.savings_estimated_turns} of {session.turns} turns estimated"
+        f"{SEPARATOR}baseline estimated for {session.savings_estimated_turns} of {session.turns} turns"
         if session.savings_estimated_turns is not None
         else ""
     )
     reference: Final = baseline_label(session.baseline_model, config_dir)
-    pct: Final = round((session.baseline_spend - compared_spend) / session.baseline_spend * 100)
+    pct: Final = round((session.baseline_spend - session.spend) / session.baseline_spend * 100)
     sign: Final = "-" if pct > 0 else "+" if pct < 0 else ""
     delta: Final = paint(LITELLM_COLOR, f"{sign}{abs(pct)}% vs {reference}")
-    peak: Final = max(compared_spend, session.baseline_spend)
+    peak: Final = max(session.spend, session.baseline_spend)
     label_width: Final = max(_display_width(session.router_name), _display_width(reference))
     rows: Final = (
-        (session.router_name, compared_spend, LITELLM_COLOR),
+        (session.router_name, session.spend, LITELLM_COLOR),
         (reference, session.baseline_spend, BASELINE_COLOR),
     )
     lines: Final = (
@@ -415,7 +398,7 @@ def codex_stop_message(
     if session is None:
         return ""
     text: Final = render(model_label(session.last_model, config_dir), session, config_dir, use_color=False)
-    return json.dumps({"systemMessage": f"\n{text}"})  # mutable-ok: json.dumps takes a dict
+    return json.dumps({"systemMessage": f"\n{text}"})
 
 
 def run(stdin: IO[str], stdout: IO[str], env: Mapping[str, str], fetch: Fetch = fetch_session) -> None:

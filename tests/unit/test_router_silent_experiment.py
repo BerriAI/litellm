@@ -1,14 +1,18 @@
 import asyncio
+import json
 import time
 from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router import Router
 from litellm.router import _silent_experiment_kwargs_snapshot
 from litellm.router import _silent_experiment_targets
@@ -30,8 +34,20 @@ class _RecordingLogger(CustomLogger):
         ]
 
 
+async def _settle_shared_logging_worker() -> None:
+    try:
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        await GLOBAL_LOGGING_WORKER.stop()
+
+
 @pytest.fixture
 def recording_logger():
+    settle_loop: Final = asyncio.new_event_loop()
+    try:
+        settle_loop.run_until_complete(_settle_shared_logging_worker())
+    finally:
+        settle_loop.close()
     original_callbacks: Final = litellm.callbacks
     logger: Final = _RecordingLogger()
     litellm.callbacks = [logger]
@@ -44,6 +60,12 @@ def recording_logger():
 async def _wait_for_shadow_successes(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
     deadline: Final = time.monotonic() + timeout
     while len(logger.shadow_successes()) < expected and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+
+
+async def _wait_for_all_successes(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
+    deadline: Final = time.monotonic() + timeout
+    while len(logger.success_kwargs) < expected and time.monotonic() < deadline:
         await asyncio.sleep(0.05)
 
 
@@ -226,6 +248,7 @@ async def test_multiple_shadow_targets_fan_out_async(recording_logger):
     )
     assert [chunk async for chunk in response]
     await _wait_for_shadow_successes(recording_logger, expected=2)
+    await _wait_for_all_successes(recording_logger, expected=3)
 
     shadow_successes = recording_logger.shadow_successes()
     model_groups = sorted(call["litellm_params"]["metadata"]["model_group"] for call in shadow_successes)
@@ -590,6 +613,67 @@ def test_silent_experiment_sends_shadow_request_attributed_to_the_silent_model(r
     assert primary_metadata == {"model_group": "primary-model"}
 
 
+
+
+_EMBEDDING_API_BASE: Final = "https://embeddings.example.test/v1"
+
+
+def _strict_embedding_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(f"{_EMBEDDING_API_BASE}/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "embed-model",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+    )
+
+
+def _embedding_router_with_silent_model() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "embed-primary",
+                "litellm_params": {
+                    "model": "openai/embed-model",
+                    "api_base": _EMBEDDING_API_BASE,
+                    "api_key": "fake-key",
+                    "silent_model": "embed-shadow",
+                },
+            }
+        ]
+    )
+
+
+def test_embedding_with_silent_model_sends_provider_body_without_it(respx_mock: respx.MockRouter) -> None:
+    route: Final = _strict_embedding_route(respx_mock)
+
+    response: Final = _embedding_router_with_silent_model().embedding(
+        model="embed-primary", input=["black dresses"], input_type="query"
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.read())
+    assert request_body == {"model": "embed-model", "input": ["black dresses"], "input_type": "query"}
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+@pytest.mark.asyncio
+async def test_aembedding_with_silent_model_sends_provider_body_without_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = _strict_embedding_route(respx_mock)
+
+    response: Final = await _embedding_router_with_silent_model().aembedding(
+        model="embed-primary", input=["black dresses"], input_type="query"
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.read())
+    assert request_body == {"model": "embed-model", "input": ["black dresses"], "input_type": "query"}
+    assert response.data[0]["embedding"] == [0.1, 0.2]
 @pytest.mark.parametrize("run_silent_experiment", SILENT_EXPERIMENT_RUNNERS)
 def test_silent_experiment_does_not_launch_from_a_shadow_request(run_silent_experiment):
     router = Router(model_list=_streaming_model_list(["shadow-a"]))

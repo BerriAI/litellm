@@ -188,9 +188,7 @@ class ZerobusLogger(CustomBatchLogger):
 
     def _payload_for(self, kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
         """The payload to buffer, redacted the way the framework redacts the success path."""
-        details: Final = self.redact_standard_logging_payload_from_model_call_details(
-            dict(kwargs)  # mutable-ok: both framework helpers take the call details as a dict
-        )
+        details: Final = self.redact_standard_logging_payload_from_model_call_details(dict(kwargs))
         payload: Final = details.get("standard_logging_object")
         if not isinstance(payload, dict):
             return None

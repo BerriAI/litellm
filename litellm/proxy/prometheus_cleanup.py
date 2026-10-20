@@ -1,7 +1,7 @@
 """
 Prometheus multiprocess directory cleanup utilities.
 
-Wipes all .db files on startup so workers start with a clean slate.
+Wipes all .db files and admitted-series files on startup so workers start with a clean slate.
 """
 
 from __future__ import annotations
@@ -12,22 +12,34 @@ import re
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
 
 _LIVE_GAUGE_PID: Final = re.compile(r"gauge_live[a-z]*_(\d+)\.db$")
 
 
 def wipe_directory(directory: str) -> None:
-    """Delete all .db files in the directory. Called once before workers fork."""
-    files: Final = glob.glob(os.path.join(directory, "*.db"))
-    deleted = 0
-    for filepath in files:
-        try:
-            os.remove(filepath)
-            deleted += 1
-        except OSError as e:
-            verbose_proxy_logger.warning("Failed to delete stale prometheus file %s: %s", filepath, e)
+    """Delete all .db files and admitted-series files in the directory. Called once at boot, before any worker
+    starts, so a restart frees every capped slot and drops the samples of the workers that exited."""
+    _remove(directory, (*glob.glob(os.path.join(directory, "*.db")), *_admitted_series_files(directory)))
+
+
+def _admitted_series_files(directory: str) -> tuple[str, ...]:
+    return tuple(glob.glob(os.path.join(directory, f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}*")))
+
+
+def _remove(directory: str, files: tuple[str, ...]) -> None:
+    deleted: Final = sum(_removed(filepath) for filepath in files)
     if deleted:
-        verbose_proxy_logger.info("Prometheus cleanup: wiped %s stale .db files from %s", deleted, directory)
+        verbose_proxy_logger.info("Prometheus cleanup: wiped %s stale files from %s", deleted, directory)
+
+
+def _removed(filepath: str) -> int:
+    try:
+        os.remove(filepath)
+    except OSError as e:
+        verbose_proxy_logger.warning("Failed to delete stale prometheus file %s: %s", filepath, e)
+        return 0
+    return 1
 
 
 def mark_worker_exit(worker_pid: int) -> None:
