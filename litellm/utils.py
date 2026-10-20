@@ -3564,6 +3564,15 @@ def _registration_base(
     return _RegistrationWrite(key=key, entry=dict(fallback.entry))
 
 
+def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
+    return (
+        frozenset({"explicit_cache_read_input_token_cost"})
+        if value.get("cache_read_input_token_cost") is not None
+        and value.get("explicit_cache_read_input_token_cost") is None
+        else frozenset()
+    )
+
+
 def _registration_write(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
@@ -3578,7 +3587,10 @@ def _registration_write(
         for name, field_value in base.entry.items()
         if name != "litellm_provider" or field_value is not None
     }
-    return _RegistrationWrite(key=base.key, entry=update_dictionary(existing_model, value))
+    return _RegistrationWrite(
+        key=base.key,
+        entry={**update_dictionary(existing_model, value), **dict.fromkeys(_base_fields_replaced_by(value))},
+    )
 
 
 def _registration_attempt(
