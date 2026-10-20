@@ -3,8 +3,9 @@ Arize AX and Phoenix show as the trace's, when this logger's provider started th
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -59,11 +60,16 @@ def _reset_request_root_span():
     otel_context._request_root_span.set(None)
 
 
-def _logger(*, capture: str = "span_only", mappers: Sequence[str] = OPENINFERENCE):
+def _logger(
+    *,
+    capture: str = "span_only",
+    mappers: Sequence[str] = OPENINFERENCE,
+    settings: Mapping[str, object] = MappingProxyType({}),
+):
     cfg = OpenTelemetryV2Config(exporter="in_memory", mapper_names=list(mappers), capture_message_content=capture)
     exporter = InMemorySpanExporter()
     tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
-    return build_otel_v2_logger(config=cfg, tracer_provider=tracer_provider), exporter
+    return build_otel_v2_logger(config=cfg, tracer_provider=tracer_provider, settings=settings), exporter
 
 
 def _start_root(logger):
@@ -219,7 +225,7 @@ def test_content_on_destination_stamps_the_root_when_global_capture_is_off():
     assert json.loads(_root_attrs(exporter)["input.value"]) == [{"role": "user", "content": "ping"}]
 
 
-def _logging_obj(dynamic_params: dict) -> Logging:
+def _logging_obj(dynamic_params: dict, *, no_log: bool = False) -> Logging:
     logging_obj = Logging(
         model="gpt-5.4-mini",
         messages=CHAT_DATA["messages"],
@@ -229,7 +235,7 @@ def _logging_obj(dynamic_params: dict) -> Logging:
         litellm_call_id="root-io",
         function_id="fn",
     )
-    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}, "no-log": no_log}, optional_params={})
     logging_obj.model_call_details["standard_callback_dynamic_params"] = dynamic_params
     return logging_obj
 
@@ -266,13 +272,46 @@ def test_root_io_follows_the_request_redaction_setting_on_its_logging_object(tur
     assert ("input.value" in _root_attrs(exporter)) is stamped
 
 
-def test_root_io_is_withheld_for_a_logger_with_message_logging_off():
-    logger, exporter = _logger()
-    logger.message_logging = False
+@pytest.mark.parametrize(
+    "settings",
+    [{"message_logging": False}, {"turn_off_message_logging": True}],
+    ids=["message-logging-false", "turn-off-message-logging"],
+)
+def test_root_io_is_withheld_for_a_logger_with_message_logging_off(settings: dict):
+    logger, exporter = _logger(settings=settings)
 
     _run_request(logger, CHAT_DATA, "acompletion", PONG)
 
     assert set(ROOT_IO_ATTRS).isdisjoint(_root_attrs(exporter))
+
+
+def _no_log_request(on_logging_object: bool) -> dict:
+    return (
+        {**CHAT_DATA, "litellm_logging_obj": _logging_obj({}, no_log=True)}
+        if on_logging_object
+        else {**CHAT_DATA, "no-log": True}
+    )
+
+
+@pytest.mark.parametrize("on_logging_object", [False, True], ids=["request-body", "logging-object"])
+def test_root_io_is_withheld_for_a_no_log_request(on_logging_object: bool):
+    logger, exporter = _logger()
+
+    _run_request(logger, _no_log_request(on_logging_object), "acompletion", PONG)
+
+    assert set(ROOT_IO_ATTRS).isdisjoint(_root_attrs(exporter))
+
+
+@pytest.mark.parametrize("on_logging_object", [False, True], ids=["request-body", "logging-object"])
+def test_root_io_is_stamped_for_a_no_log_request_when_the_no_log_param_is_disabled(
+    on_logging_object: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", True)
+    logger, exporter = _logger()
+
+    _run_request(logger, _no_log_request(on_logging_object), "acompletion", PONG)
+
+    assert json.loads(_root_attrs(exporter)["input.value"]) == [{"role": "user", "content": "ping"}]
 
 
 @pytest.mark.parametrize(

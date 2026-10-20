@@ -98,8 +98,38 @@ def _request_trace(destination: Wire, marker: str) -> tuple[_Span, _Span]:
     return collect((), time.monotonic() + 30)
 
 
+def _chat_root(destination: Wire) -> _Span:
+    """The root span of the rig's one chat completions request, once it has arrived."""
+
+    def collect(previous: tuple[_Span, ...], deadline: float) -> _Span:
+        current: Final = (*previous, *_decoded_spans(destination.drain()))
+        roots: Final = tuple(
+            span
+            for span in current
+            if not span.parent_span_id and span.attributes.get("http.route") == "/v1/chat/completions"
+        )
+        assert len(roots) <= 1, roots
+        if roots:
+            return roots[0]
+        assert time.monotonic() < deadline, "\n".join(
+            f"{span.trace_id.hex()[:8]} {span.parent_span_id.hex()[:8] or 'root'} {dict(span.attributes)}"
+            for span in current
+            if "db.system" not in span.attributes
+        )
+        time.sleep(0.25)
+        return collect(current, deadline)
+
+    return collect((), time.monotonic() + 30)
+
+
 def _chat_request(
-    proxy: Gateway, model: str, marker: str, *, stream: bool = False, headers: Mapping[str, str] | None = None
+    proxy: Gateway,
+    model: str,
+    marker: str,
+    *,
+    stream: bool = False,
+    no_log: bool = False,
+    headers: Mapping[str, str] | None = None,
 ) -> httpx.Response:
     return proxy.request(
         "POST",
@@ -110,6 +140,7 @@ def _chat_request(
             "metadata": {"trace_marker": marker},
             "cache": {"no-cache": True},
             **({"stream": True, "stream_options": {"include_usage": True}} if stream else {}),
+            **({"no-log": True} if no_log else {}),
         },
         headers=headers,
     )
@@ -306,6 +337,42 @@ def test_root_is_left_alone_when_the_request_messages_are_redacted(
 
     _assert_root_left_alone(root)
     assert _json_messages(llm.attributes["input.value"]) == [{"role": "user", "content": "redacted-by-litellm"}], llm
+
+
+@pytest.mark.parametrize(
+    ("callbacks", "callback_settings", "no_log"),
+    [
+        (("arize_phoenix",), _COLLECTOR, True),
+        (
+            ("otel",),
+            {
+                "otel": {
+                    **_COLLECTOR["otel"],
+                    "mapper_names": ["genai", "openinference"],
+                    "turn_off_message_logging": True,
+                }
+            },
+            False,
+        ),
+    ],
+    ids=["no-log-request", "callback-turns-off-message-logging"],
+)
+def test_root_is_left_alone_when_the_messages_stay_off_the_llm_span(
+    callbacks: tuple[str, ...],
+    callback_settings: Mapping[str, JsonValue],
+    no_log: bool,
+    gateway: Gateway,
+    tmp_path: Path,
+) -> None:
+    marker: Final = "root-io-withheld-" + uuid.uuid4().hex
+    _, upstream = _plain_upstream(marker)
+
+    with _rig(gateway, tmp_path, upstream, callbacks=callbacks, callback_settings=callback_settings) as rig:
+        response: Final = _chat_request(rig.proxy, rig.model, marker, no_log=no_log)
+        assert response.status_code == 200, response.text
+        root: Final = _chat_root(rig.destination)
+
+    _assert_root_left_alone(root)
 
 
 def test_phoenix_stream_root_carries_the_reply_a_later_masking_guardrail_served(

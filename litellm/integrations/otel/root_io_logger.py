@@ -2,7 +2,9 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
 from opentelemetry.sdk.trace import ReadableSpan
+from pydantic import TypeAdapter
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.mappers.base import AttributeMap
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import CallTypesLiteral, ModelResponseStream
 
 _JSON_MIME_TYPE: Final = "application/json"
+_LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 class RootIOOpenTelemetryV2(OpenTelemetryV2):
@@ -83,19 +86,26 @@ class RootIOOpenTelemetryV2(OpenTelemetryV2):
         raise NotImplementedError
 
 
-def _redacts_messages(logger: OpenTelemetryV2, data: Mapping[str, object]) -> bool:
-    """Whether the request's logged messages are redacted, as they are on its LLM span."""
-    if logger.message_logging is not True:
+def _withholds_messages(logger: OpenTelemetryV2, data: Mapping[str, object]) -> bool:
+    """Whether the request's messages stay off ``logger``'s LLM span, because the request is not logged to it or its
+    logged messages are redacted."""
+    if logger.message_logging is not True or logger.turn_off_message_logging:
         return True
     logging_obj: Final = data.get("litellm_logging_obj")
-    return should_redact_message_logging(
-        logging_obj.model_call_details if isinstance(logging_obj, Logging) else {"litellm_params": dict(data)}
+    if not isinstance(logging_obj, Logging):
+        return (
+            data.get("no-log") is True and not litellm.global_disable_no_log_param
+        ) or should_redact_message_logging({"litellm_params": dict(data)})
+    details: Final[Mapping[str, object]] = logging_obj.model_call_details
+    runs_for_logger: Final = logging_obj.should_run_callback(  # pyright: ignore[reportUnknownMemberType]  # Logging types the hook's litellm_params as a bare dict
+        logger, _LITELLM_PARAMS.validate_python(details.get("litellm_params", {})), "post_call_hook"
     )
+    return not runs_for_logger or should_redact_message_logging(logging_obj.model_call_details)
 
 
 class OpenInferenceRootIOOpenTelemetryV2(RootIOOpenTelemetryV2):
     """Stamps the request root's OpenInference kind, input and output, which Arize AX and Phoenix show as the
-    trace's, on a root this logger's provider started, unless the request's logged messages are redacted.
+    trace's, on a root this logger's provider started, unless the request's messages stay off this logger's LLM span.
 
     The proxy runs a callback's pre-call hook only when the callback's own class defines it, so this class repeats
     the inherited one that seeds the request's metadata baggage.
@@ -120,7 +130,7 @@ class OpenInferenceRootIOOpenTelemetryV2(RootIOOpenTelemetryV2):
             yield chunk
 
     def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
-        if not _redacts_messages(self, data):
+        if not _withholds_messages(self, data):
             super()._stamp_root_io(data, render_output)
 
     def _stamps_root(self, root: "Span") -> bool:
