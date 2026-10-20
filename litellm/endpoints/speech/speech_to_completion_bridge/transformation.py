@@ -110,7 +110,7 @@ class SpeechToCompletionBridgeTransformationHandler:
 
             reject_unknown_gemini_tts_voice_keys(model, voice, drop_params, custom_llm_provider)
             speech_audio: Final[ChatSpeechConfigAudioParam] = {
-                "speech_config": normalize_gemini_speech_config(voice),
+                "speech_config": normalize_gemini_speech_config(voice, drops_unsupported_params(drop_params)),
                 "format": GEMINI_TTS_CHAT_AUDIO_FORMAT,
             }
             return speech_audio
@@ -222,7 +222,7 @@ class SpeechToCompletionBridgeTransformationHandler:
 
         content, content_type = (
             self._gemini_tts_response_body(decoded_audio, response_format)
-            if self._is_gemini_tts_model(model)
+            if self._is_gemini_tts_model(model) or self._is_gemini_tts_model(model_response.model or "")
             else (decoded_audio, "audio/mpeg")
         )
         response: Final = httpx.Response(

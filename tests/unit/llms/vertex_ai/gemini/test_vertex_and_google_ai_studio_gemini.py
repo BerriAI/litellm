@@ -259,6 +259,69 @@ def test_chat_audio_speech_config_unknown_keys_follow_global_drop_params(monkeyp
     assert dropped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
 
 
+def _chat_speech_config(speech_config: Mapping[str, object], drop_params: bool) -> object:
+    return VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speech_config": speech_config}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=drop_params,
+    )["speechConfig"]
+
+
+def test_chat_audio_drop_params_strips_unknown_fields_inside_speaker_voices():
+    speech_config: Final = {
+        "multi_speaker_voice_config": {
+            "speaker_voice_configs": [
+                {"speaker": "Joe", "voice_config": {"prebuilt_voice_config": {"voice_name": "Puck", "pitch": 2}}},
+                {"speaker_alias": "Jane", "speaker_id": "Kore", "style": "calm"},
+            ]
+        }
+    }
+
+    assert _chat_speech_config(speech_config, drop_params=True) == {
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [
+                {"speaker": "Joe", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
+                {"speaker": "Jane", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+            ]
+        }
+    }
+
+
+def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts():
+    voice_config: Final = {
+        "voice": "Kore",
+        "prebuiltVoiceConfig": {"voiceName": "Kore"},
+        "replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "UklGRg=="},
+    }
+
+    assert _chat_speech_config({"voiceConfig": voice_config, "languageCode": "fr-FR"}, drop_params=True) == {
+        "voiceConfig": voice_config,
+        "languageCode": "fr-FR",
+    }
+
+
+def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
+    mapped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+
+    assert mapped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def test_unknown_voice_key_error_stays_bounded_for_large_voice_objects():
+    voice: Final = {"name": "Kore", **{f"{index:04d}{'x' * 1000}": index for index in range(2000)}}
+
+    with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+        reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, False, "vertex_ai")
+
+    assert "and 1990 more" in excinfo.value.message
+    assert len(excinfo.value.message) < 1500
+
+
 def test_top_logprobs():
     non_default_params = {
         "top_logprobs": 2,

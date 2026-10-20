@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
@@ -302,6 +302,45 @@ def _with_gemini_speaker_voice_configs(config: Mapping[str, object]) -> Mapping[
 
 _GEMINI_SPEECH_CONFIG_FIELDS: Final = frozenset({"voiceConfig", "multiSpeakerVoiceConfig", "languageCode"})
 
+_GeminiSpeechFieldSchema: TypeAlias = Mapping[str, "_GeminiSpeechFieldSchema | None"]
+
+_GEMINI_VOICE_CONFIG_SCHEMA: Final[_GeminiSpeechFieldSchema] = MappingProxyType(
+    {
+        "prebuiltVoiceConfig": MappingProxyType({"voiceName": None}),
+        "replicatedVoiceConfig": MappingProxyType({"mimeType": None, "voiceSampleAudio": None}),
+        "voice": None,
+    }
+)
+
+_GEMINI_SPEECH_CONFIG_SCHEMA: Final[_GeminiSpeechFieldSchema] = MappingProxyType(
+    {
+        "voiceConfig": _GEMINI_VOICE_CONFIG_SCHEMA,
+        "multiSpeakerVoiceConfig": MappingProxyType(
+            {"speakerVoiceConfigs": MappingProxyType({"speaker": None, "voiceConfig": _GEMINI_VOICE_CONFIG_SCHEMA})}
+        ),
+        "languageCode": None,
+    }
+)
+
+
+def _known_gemini_speech_field(value: object, schema: _GeminiSpeechFieldSchema | None) -> object:
+    if schema is None:
+        return value
+    if isinstance(value, list):
+        return [
+            _known_gemini_speech_field(item, schema) if as_str_mapping(item) is not None else item
+            for item in _SPEECH_CONFIG_ITEMS.validate_python(value)
+        ]
+    mapping: Final = as_str_mapping(value)
+    return value if mapping is None else _known_gemini_speech_fields(mapping, schema)
+
+
+def _known_gemini_speech_fields(
+    config: Mapping[str, object], schema: _GeminiSpeechFieldSchema
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    return {key: _known_gemini_speech_field(item, schema[key]) for key, item in config.items() if key in schema}
+
+
 _GEMINI_TTS_VOICE_KEYS: Final = frozenset(
     {
         "format",
@@ -323,15 +362,31 @@ _GEMINI_TTS_VOICE_KEYS: Final = frozenset(
 )
 
 
+_NAMED_UNKNOWN_VOICE_KEYS: Final = 10
+
+_NAMED_VOICE_KEY_CHARS: Final = 100
+
+
 def _gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object] | None:
-    return as_str_mapping(value.get("speechConfig", value.get("speech_config")))
+    camel_config: Final = as_str_mapping(value.get("speechConfig"))
+    return camel_config if camel_config is not None else as_str_mapping(value.get("speech_config"))
+
+
+def _named_voice_keys(keys: Sequence[str]) -> str:
+    named: Final = ", ".join(key[:_NAMED_VOICE_KEY_CHARS] for key in keys[:_NAMED_UNKNOWN_VOICE_KEYS])
+    unnamed_count: Final = len(keys) - _NAMED_UNKNOWN_VOICE_KEYS
+    return f"{named}, and {unnamed_count} more" if unnamed_count > 0 else named
 
 
 def reject_unknown_gemini_tts_voice_keys(
     model: str, voice: Mapping[str, object], drop_params: bool, llm_provider: str | None
 ) -> None:
     nested_config: Final = _gemini_speech_config_wrapper(voice) or {}
-    ignored_wrapper: Final = ("speech_config",) if "speechConfig" in voice and "speech_config" in voice else ()
+    ignored_wrapper: Final = (
+        ("speech_config",)
+        if as_str_mapping(voice.get("speechConfig")) is not None and voice.get("speech_config") is not None
+        else ()
+    )
     unknown_keys: Final = sorted(
         {*(key for key in (*voice, *nested_config) if key not in _GEMINI_TTS_VOICE_KEYS), *ignored_wrapper}
     )
@@ -339,8 +394,8 @@ def reject_unknown_gemini_tts_voice_keys(
         return
     raise UnsupportedParamsError(
         message=(
-            f"{model} does not support the voice keys {', '.join(unknown_keys)}. Remove them, or set drop_params "
-            "to ignore them."
+            f"{model} does not support the voice keys {_named_voice_keys(unknown_keys)}. Remove them, or set "
+            "drop_params to ignore them."
         ),
         model=model,
         llm_provider=llm_provider,
@@ -348,6 +403,17 @@ def reject_unknown_gemini_tts_voice_keys(
 
 
 def normalize_gemini_speech_config(
+    value: Mapping[str, object], drop_unknown_fields: bool = False
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    speech_config: Final = _mapped_gemini_speech_config(value)
+    return (
+        _known_gemini_speech_fields(speech_config, _GEMINI_SPEECH_CONFIG_SCHEMA)
+        if drop_unknown_fields
+        else speech_config
+    )
+
+
+def _mapped_gemini_speech_config(
     value: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
     nested_config: Final = _gemini_speech_config_wrapper(value)
@@ -1349,8 +1415,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
 
     def _map_audio_params(
-        self,
-        value: Mapping[str, object],
+        self, value: Mapping[str, object], drop_unknown_fields: bool = False
     ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
         """
         Expected input:
@@ -1386,7 +1451,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
         language_code: Final = value.get("language_code", value.get("languageCode"))
         if isinstance(speech_config_value, Mapping):
-            return normalize_gemini_speech_config(value)
+            return normalize_gemini_speech_config(value, drop_unknown_fields)
 
         voice: Final = value.get("voice")
         speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
@@ -1418,13 +1483,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
         if _gemini_speech_config_wrapper(value) is not None:
             reject_unknown_gemini_tts_voice_keys(model, value, drop_params, self.custom_llm_provider)
-        return self._map_audio_params(value)
+        return self._map_audio_params(value, drop_unknown_fields=drops_unsupported_params(drop_params))
 
     def map_audio_params(
         self,
         value: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        return self._map_audio_params(value)
+        return self._map_audio_params(value, drop_unknown_fields=False)
 
     @staticmethod
     def _apply_include_server_side_tool_invocations(

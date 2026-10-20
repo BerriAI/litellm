@@ -110,6 +110,45 @@ def test_gemini_request_keeps_voice_and_language_without_audio_format(wrapper: s
     }
 
 
+@pytest.mark.parametrize(
+    ("drop_params", "voice_config"),
+    [
+        (True, {"prebuiltVoiceConfig": {"voiceName": "Kore"}}),
+        (False, {"prebuiltVoiceConfig": {"voiceName": "Kore", "style": "calm"}, "tone": "warm"}),
+    ],
+)
+def test_gemini_request_drops_unknown_nested_voice_fields_only_with_drop_params(
+    drop_params: bool, voice_config: dict[str, object]
+) -> None:
+    request: Final = SpeechToCompletionBridgeTransformationHandler().transform_request(
+        model=GEMINI_TTS_MODEL,
+        input="Bonjour",
+        voice={"voice_config": {"prebuilt_voice_config": {"voice_name": "Kore", "style": "calm"}, "tone": "warm"}},
+        optional_params={},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+        litellm_logging_obj=MagicMock(),
+        custom_llm_provider="gemini",
+    )
+
+    assert request["audio"]["speech_config"] == {"voiceConfig": voice_config}
+
+
+def test_gemini_request_reads_snake_case_wrapper_beside_null_camel_case_wrapper() -> None:
+    request: Final = SpeechToCompletionBridgeTransformationHandler().transform_request(
+        model=GEMINI_TTS_MODEL,
+        input="Bonjour",
+        voice={"speechConfig": None, "speech_config": {"voice_name": "Kore"}},
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=MagicMock(),
+        custom_llm_provider="gemini",
+    )
+
+    assert request["audio"]["speech_config"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
 @pytest.mark.parametrize("response_format", ["mp3", "flac", "opus", "aac"])
 def test_gemini_tts_request_rejects_formats_gemini_cannot_produce(response_format: str) -> None:
     with pytest.raises(litellm.BadRequestError) as excinfo:
@@ -158,10 +197,14 @@ def test_non_gemini_response_keeps_original_bytes_and_mpeg_content_type() -> Non
     assert response.response.headers["content-type"] == "audio/mpeg"
 
 
-def test_gemini_response_uses_requested_model_when_served_name_differs() -> None:
+@pytest.mark.parametrize(
+    ("requested_model", "served_model"),
+    [(GEMINI_TTS_MODEL, "served-speech-alias"), ("requested-speech-alias", GEMINI_TTS_MODEL)],
+)
+def test_gemini_response_wraps_wav_when_either_model_name_is_gemini_tts(requested_model: str, served_model: str) -> None:
     response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
-        model_response=_model_response("served-speech-alias", PCM_BYTES),
-        model=GEMINI_TTS_MODEL,
+        model_response=_model_response(served_model, PCM_BYTES),
+        model=requested_model,
         response_format=None,
     )
 
