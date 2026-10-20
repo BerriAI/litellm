@@ -361,6 +361,7 @@ class BaseResponsesAPIStreamingIterator:
     """
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
+    _on_complete: Callable[[object], None] | None = None
 
     def __init__(
         self,
@@ -412,6 +413,10 @@ class BaseResponsesAPIStreamingIterator:
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
         self._raw_response_headers: Mapping[str, str] = MappingProxyType(dict(self.response.headers or {}))
+
+    def hand_completion_to(self, on_complete: Callable[[object], None]) -> None:
+        """A bridge whose own client stream logs the request takes the completed response instead of the logger."""
+        self._on_complete = on_complete
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -608,7 +613,9 @@ class BaseResponsesAPIStreamingIterator:
         self._restore_provider_response_headers(logging_response)
 
         end_time: Final = datetime.now()
-        if is_async:
+        if self._on_complete is not None:
+            self._on_complete(logging_response)
+        elif is_async:
             logging_coroutine: Final = self.logging_obj.dispatch_success_handlers(
                 logging_response,
                 start_time=self.start_time,
