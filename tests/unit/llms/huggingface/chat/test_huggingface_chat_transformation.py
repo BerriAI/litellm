@@ -8,6 +8,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.utils import _huggingface_tokenizer_or_load_error, _load_huggingface_tokenizer
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.huggingface.common_utils import _fetch_inference_provider_mapping
 
@@ -83,9 +84,13 @@ def isolate_huggingface_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator
     monkeypatch.delenv("HF_API_BASE", raising=False)
     monkeypatch.delenv("HUGGINGFACE_API_BASE", raising=False)
     monkeypatch.delenv("HUGGINGFACE_API_KEY", raising=False)
+    _load_huggingface_tokenizer.cache_clear()
+    _huggingface_tokenizer_or_load_error.cache_clear()
     _fetch_inference_provider_mapping.cache_clear()
     yield
     _fetch_inference_provider_mapping.cache_clear()
+    _load_huggingface_tokenizer.cache_clear()
+    _huggingface_tokenizer_or_load_error.cache_clear()
 
 
 PROVIDER_MAPPING_RESPONSE = {
