@@ -15,7 +15,7 @@ How it works:
 """
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -48,7 +48,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
     def can_handle(
         self,
-        tools: list[dict] | None,
+        tools: Sequence[Mapping[str, object]] | None,
         custom_llm_provider: str | None,
     ) -> bool:
         if not tools:
