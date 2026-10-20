@@ -74,6 +74,7 @@ async def calculate_batch_cost_and_usage(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> BatchCostUsageResult:
     """
     Calculate the cost and usage of a batch.
@@ -83,16 +84,21 @@ async def calculate_batch_cost_and_usage(
             pricing. Threaded through to batch_cost_calculator so that
             deployment-specific pricing (e.g. input_cost_per_token_batches)
             is used instead of the global cost map.
+        vertex_location: The Vertex AI location the batch ran on; non-global
+            locations apply the model's regional-endpoint uplift multiplier.
     """
     first_row: Final = file_content_dictionary[0] if file_content_dictionary else None
     if _uses_native_vertex_output(custom_llm_provider, model_name, first_row):
-        return calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name, model_info=model_info)
+        return calculate_vertex_ai_batch_cost_and_usage(
+            file_content_dictionary, model_name, model_info=model_info, vertex_location=vertex_location
+        )
 
     return _aggregate_batch_cost_usage_models(
         entries=file_content_dictionary,
         custom_llm_provider=custom_llm_provider,
         model_name=model_name,
         model_info=model_info,
+        vertex_location=vertex_location,
     )
 
 
@@ -102,6 +108,7 @@ async def handle_completed_batch(
     model_name: str | None = None,
     litellm_params: dict[str, object] | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> BatchCostUsageResult:
     """Fetch a completed batch's output file and aggregate its cost, usage, and
     models in a single pass over the JSONL lines, so the parsed file content is
@@ -115,6 +122,8 @@ async def handle_completed_batch(
         model_info: Optional deployment-level model info with custom pricing,
             threaded through so a deployment's configured rates win over the
             global cost map.
+        vertex_location: The Vertex AI location the batch ran on; non-global
+            locations apply the model's regional-endpoint uplift multiplier.
     """
     # A completed batch whose request lines all failed has no output file - the
     # results are written to a separate error_file_id and output_file_id is None.
@@ -142,7 +151,10 @@ async def handle_completed_batch(
 
     output_file_result: Final = (
         calculate_vertex_ai_batch_cost_and_usage(
-            _iter_batch_output_entries(file_content), model_name, model_info=model_info
+            _iter_batch_output_entries(file_content),
+            model_name,
+            model_info=model_info,
+            vertex_location=vertex_location,
         )
         if _uses_native_vertex_output(
             custom_llm_provider, model_name, next(_iter_batch_output_entries(file_content), None)
@@ -152,6 +164,7 @@ async def handle_completed_batch(
             custom_llm_provider=custom_llm_provider,
             model_name=model_name,
             model_info=model_info,
+            vertex_location=vertex_location,
         )
     )
 
@@ -190,6 +203,7 @@ def _classify_output_line_stats(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
+    vertex_location: str | None = None,
 ) -> Iterator[_BatchOutputLineStats | _LineOutcome]:
     """Classify every output line in a single pass, so counting failures never needs
     a second read of a potentially huge output file. A line the provider reported as
@@ -200,7 +214,7 @@ def _classify_output_line_stats(
         if not _batch_response_was_successful(entry, custom_llm_provider):
             yield _LineOutcome.PROVIDER_FAILED
             continue
-        stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info)
+        stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
         yield stats if stats is not None else _LineOutcome.UNCOSTABLE
 
 
@@ -209,13 +223,14 @@ def _safe_output_line_stats(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
+    vertex_location: str | None = None,
 ) -> _BatchOutputLineStats | None:
     """Return the stats for one provider-successful batch output line, or None when
     it cannot be costed, so a single bad line never aborts the whole batch's cost
     accounting."""
     custom_id: Final = entry.get("custom_id") if isinstance(entry, dict) else None
     try:
-        return _compute_output_line_stats(entry, custom_llm_provider, model_name, model_info)
+        return _compute_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
     except Exception as e:  # noqa: BLE001  # any single line's costing failure must not abort the whole batch
         verbose_logger.warning(
             "batch output line could not be costed, so it is billed at $0 and the rest of the batch "
@@ -231,6 +246,7 @@ def _compute_output_line_stats(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
+    vertex_location: str | None = None,
 ) -> _BatchOutputLineStats:
     response_body: Final = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
     usage: Final = _get_batch_job_usage_from_response_body(response_body, custom_llm_provider)
@@ -245,6 +261,7 @@ def _compute_output_line_stats(
         model_name=model_name,
         response_model=response_model,
         model_info=model_info,
+        vertex_location=vertex_location,
     )
     return _BatchOutputLineStats(
         prompt_cost=line_prompt_cost,
@@ -274,6 +291,7 @@ def _output_line_cost(
     model_name: str | None,
     response_model: str | None,
     model_info: ModelInfo | None,
+    vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """(prompt_cost, completion_cost) for one output line, priced at batch rates."""
     from litellm.cost_calculator import batch_cost_calculator, ocr_batch_cost
@@ -294,6 +312,7 @@ def _output_line_cost(
         model=cost_model,
         custom_llm_provider=custom_llm_provider,
         model_info=model_info,
+        vertex_location=vertex_location,
     )
 
 
@@ -302,11 +321,14 @@ def _aggregate_batch_cost_usage_models(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> BatchCostUsageResult:
     """Aggregate cost, usage, models, and pass/fail counts from batch output
     entries in a single pass, holding one small stats record per line instead
     of the parsed file."""
-    all_results: Final = tuple(_classify_output_line_stats(entries, custom_llm_provider, model_name, model_info))
+    all_results: Final = tuple(
+        _classify_output_line_stats(entries, custom_llm_provider, model_name, model_info, vertex_location)
+    )
     line_stats: Final = tuple(result for result in all_results if isinstance(result, _BatchOutputLineStats))
     failed_requests: Final = sum(1 for result in all_results if result is _LineOutcome.PROVIDER_FAILED)
     successful_requests: Final = len(all_results) - failed_requests
@@ -353,6 +375,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
     vertex_ai_batch_responses: Iterable[dict[str, object]],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> BatchCostUsageResult:
     """
     Cost and usage of a native Vertex predictions.jsonl, one
@@ -371,6 +394,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
             model_info=model_info,
             calculate_usage=VertexGeminiConfig.calculate_usage,
             cost_calculator=batch_cost_calculator,
+            vertex_location=vertex_location,
         )
         for row in vertex_ai_batch_responses
     )

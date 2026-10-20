@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_regional_uplift_multiplier,
     get_service_tier_cost_key,
     get_token_type_cost_breakdown,
+    get_vertex_regional_endpoint_uplift,
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
@@ -642,6 +643,7 @@ def cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             data_residency=data_residency,
+            vertex_location=vertex_location,
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_usage_has_token_details(usage_block):
@@ -2624,6 +2626,8 @@ def batch_cost_calculator(
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
     data_residency: str | None = None,
+    *,
+    vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """
     Calculate the cost of a batch job.
@@ -2713,7 +2717,8 @@ def batch_cost_calculator(
         total_prompt_cost *= uplift
         total_completion_cost *= uplift
 
-    return total_prompt_cost, total_completion_cost
+    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+    return total_prompt_cost * vertex_uplift, total_completion_cost * vertex_uplift
 
 
 def _batch_prompt_cost(

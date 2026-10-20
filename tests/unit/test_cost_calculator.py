@@ -3424,6 +3424,29 @@ def _batch_cache_usage() -> Usage:
     )
 
 
+def test_batch_cost_calculator_vertex_regional_costs_uplift_over_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/46880: a Vertex batch
+    on a regional location must cost the global batch times the model's
+    regional_endpoint_uplift_multiplier, the same invariant the online path keeps.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    usage = Usage(prompt_tokens=1_000_000, completion_tokens=1_000_000, total_tokens=2_000_000)
+    global_prompt, global_completion = batch_cost_calculator(
+        usage=usage, model="gemini-3.5-flash", custom_llm_provider="vertex_ai", vertex_location="global"
+    )
+    regional_prompt, regional_completion = batch_cost_calculator(
+        usage=usage, model="gemini-3.5-flash", custom_llm_provider="vertex_ai", vertex_location="us-central1"
+    )
+
+    uplift = litellm.get_model_info("vertex_ai/gemini-3.5-flash")["regional_endpoint_uplift_multiplier"]
+    assert global_prompt + global_completion > 0
+    assert regional_prompt == pytest.approx(global_prompt * uplift, rel=1e-9)
+    assert regional_completion == pytest.approx(global_completion * uplift, rel=1e-9)
+
+
 def test_batch_cost_calculator_prices_multimodal_tokens_at_modality_rates():
     model_info: ModelInfo = {
         "input_cost_per_token_batches": 1e-7,

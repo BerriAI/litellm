@@ -743,7 +743,11 @@ class CheckBatchCost:
         from litellm.files.types import FileContentCallOptions
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-        from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info, mask_api_base_credentials
+        from litellm.litellm_core_utils.litellm_logging import (
+            deployment_pricing_model_info,
+            mask_api_base_credentials,
+            resolve_vertex_location_for_cost,
+        )
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
         )
@@ -873,6 +877,12 @@ class CheckBatchCost:
             custom_llm_provider=batch_file_provider,
             model_name=model_name,
             model_info=deployment_model_info,
+            vertex_location=resolve_vertex_location_for_cost(
+                custom_llm_provider=llm_provider,
+                litellm_params=deployment_info.litellm_params.model_dump(exclude_none=True),
+                optional_params=None,
+                model=model_name,
+            ),
         )
         error_file_failed_requests: Final = await count_error_file_failed_requests(
             response,
