@@ -1,6 +1,7 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 import httpx
 
@@ -25,6 +26,8 @@ else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
 
+ReasoningSummaryLevel: TypeAlias = Literal["auto", "concise", "detailed"]
+
 
 class BaseResponsesAPIConfig(ABC):
     def __init__(self):
@@ -37,9 +40,10 @@ class BaseResponsesAPIConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -89,6 +93,10 @@ class BaseResponsesAPIConfig(ABC):
     def get_supported_openai_params(self, model: str) -> list:
         pass
 
+    def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
+        """The ``reasoning.summary`` LiteLLM's opt-in auto summary asks this provider for."""
+        return "detailed"
+
     @abstractmethod
     def map_openai_params(
         self,
@@ -129,6 +137,22 @@ class BaseResponsesAPIConfig(ABC):
         headers: dict,
     ) -> dict:
         pass
+
+    async def async_transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> dict:
+        return self.transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     @abstractmethod
     def transform_response_api_response(
@@ -340,13 +364,22 @@ class BaseResponsesAPIConfig(ABC):
         """
         if not isinstance(input, list):
             return input
-        out: Final[list[Any]] = []
+        out: Final[list[object]] = []
         for item in input:
             if isinstance(item, dict) and item.get("type") == "custom_tool_call":
                 out.append({k: v for k, v in item.items() if k != "namespace"})
             else:
                 out.append(item)
         return cast(ResponseInputParam, out)
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return extra_body
 
     @staticmethod
     def normalize_responses_api_request_dict(data: dict[str, Any]) -> dict[str, Any]:

@@ -14,6 +14,7 @@ import { StatusBadge } from "@/components/shared/table_cells";
 import RouterSettings from "@/components/router_settings";
 import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks";
 import RoutingGroups from "@/components/routing_groups";
+import { RequestTagMappingsEditor, requestTagMappingsAreValid } from "./RequestTagMappings";
 
 const PROMPT_CACHING_TAB = "prompt_caching";
 const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
@@ -34,6 +35,7 @@ export interface generalSettingsItem {
   field_value: any;
   field_description: string;
   stored_in_db: boolean | null;
+  editable?: boolean;
   field_options?: string[] | null;
   field_tab?: string | null;
   field_default_value?: any;
@@ -43,10 +45,29 @@ const NUMERIC_INPUT_WIDTH = "w-36";
 
 const toNumericValue = (raw: string): number | null => (raw === "" ? null : Number(raw));
 
+const toListValue = (raw: string): string[] | null => {
+  const items = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+  return items.length === 0 ? null : items;
+};
+
+const fromListValue = (value: unknown): string => (Array.isArray(value) ? value.join(", ") : "");
+
 const SettingValueEditor: React.FC<{
   setting: generalSettingsItem;
   onChange: (fieldName: string, newValue: any) => void;
 }> = ({ setting, onChange }) => {
+  if (setting.field_name === "request_tag_mappings") {
+    return (
+      <RequestTagMappingsEditor
+        value={setting.field_value}
+        disabled={setting.editable === false}
+        onChange={(rules) => onChange(setting.field_name, rules)}
+      />
+    );
+  }
   if (setting.field_type === "Integer") {
     return (
       <Input
@@ -91,6 +112,17 @@ const SettingValueEditor: React.FC<{
           onChange={(event) => onChange(setting.field_name, toNumericValue(event.target.value))}
         />
       </InputGroup>
+    );
+  }
+  if (setting.field_type === "List") {
+    return (
+      <Input
+        key={String(setting.stored_in_db)}
+        aria-label={setting.field_name}
+        placeholder="Comma-separated values"
+        defaultValue={fromListValue(setting.field_value)}
+        onChange={(event) => onChange(setting.field_name, toListValue(event.target.value))}
+      />
     );
   }
   if (setting.field_type === "Select") {
@@ -219,7 +251,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     setGeneralSettings(updatedSettings);
   };
 
-  const handleUpdateField = (fieldName: string) => {
+  const handleUpdateField = async (fieldName: string) => {
     if (!accessToken) {
       return;
     }
@@ -228,11 +260,11 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     const fieldValue = setting?.field_value;
 
     if (fieldValue == null) {
-      if (setting?.field_type === "Select") handleResetField(fieldName);
+      if (setting?.field_type === "Select" || setting?.field_type === "List") handleResetField(fieldName);
       return;
     }
     try {
-      updateConfigFieldSetting(accessToken, fieldName, fieldValue);
+      await updateConfigFieldSetting(accessToken, fieldName, fieldValue);
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
@@ -333,13 +365,23 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
-                          <span
-                            onClick={() => handleResetField(value.field_name)}
-                            className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
+                          <Button
+                            disabled={
+                              value.field_name === "request_tag_mappings" &&
+                              (value.editable === false || !requestTagMappingsAreValid(value.field_value))
+                            }
+                            onClick={() => handleUpdateField(value.field_name)}
                           >
-                            <Trash2 className="h-5 w-5 shrink-0" />
-                          </span>
+                            Update
+                          </Button>
+                          {value.field_name === "request_tag_mappings" && value.editable === false ? null : (
+                            <span
+                              onClick={() => handleResetField(value.field_name)}
+                              className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
+                            >
+                              <Trash2 className="h-5 w-5 shrink-0" />
+                            </span>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

@@ -1,11 +1,17 @@
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import MakeMCPPublicForm from "./MakeMCPPublicForm";
+import userEvent from "@testing-library/user-event";
+import { toast } from "@/lib/toast";
 import { MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 
 // Mock the networking function
 vi.mock("../../networking", () => ({
   makeMCPPublicCall: vi.fn(),
+}));
+
+vi.mock("@/lib/toast", () => ({
+  toast: { success: vi.fn(), fromError: vi.fn() },
 }));
 
 // Import the mocked function
@@ -28,7 +34,7 @@ describe("MakeMCPPublicForm", () => {
         url: "http://example.com/server1",
         transport: "http",
         status: "active",
-        mcp_info: { is_public: false },
+        mcp_info: { is_public: false, is_public_explicit: false },
         allowed_tools: ["tool-1", "tool-2"],
         auth_type: "bearer",
         credentials: {},
@@ -50,7 +56,7 @@ describe("MakeMCPPublicForm", () => {
         url: "http://example.com/server2",
         transport: "websocket",
         status: "inactive",
-        mcp_info: { is_public: true },
+        mcp_info: { is_public: true, is_public_explicit: true },
         allowed_tools: [],
         auth_type: "none",
         credentials: {},
@@ -80,16 +86,16 @@ describe("MakeMCPPublicForm", () => {
   it("should render the component", () => {
     render(<MakeMCPPublicForm {...mockProps} />);
 
-    expect(screen.getByText("Make MCP Servers Public")).toBeInTheDocument();
-    expect(screen.getByText("Select MCP Servers to Make Public")).toBeInTheDocument();
+    expect(screen.getByText("Manage MCP Hub Visibility")).toBeInTheDocument();
+    expect(screen.getByText("Select MCP Servers for the Hub")).toBeInTheDocument();
   });
 
   it("should initialize with correct state", () => {
     render(<MakeMCPPublicForm {...mockProps} />);
 
     // Check that the component renders with the correct title and content
-    expect(screen.getByText("Make MCP Servers Public")).toBeInTheDocument();
-    expect(screen.getByText("Select MCP Servers to Make Public")).toBeInTheDocument();
+    expect(screen.getByText("Manage MCP Hub Visibility")).toBeInTheDocument();
+    expect(screen.getByText("Select MCP Servers for the Hub")).toBeInTheDocument();
 
     // Check that all server checkboxes are present
     const checkboxes = screen.getAllByRole("checkbox");
@@ -104,7 +110,7 @@ describe("MakeMCPPublicForm", () => {
     render(<MakeMCPPublicForm {...mockProps} />);
 
     // Initially on step 1
-    expect(screen.getByText("Select MCP Servers to Make Public")).toBeInTheDocument();
+    expect(screen.getByText("Select MCP Servers for the Hub")).toBeInTheDocument();
 
     // Select all servers using the select all checkbox
     const selectAllCheckbox = screen.getByRole("checkbox", { name: "Select All (2)" });
@@ -123,7 +129,7 @@ describe("MakeMCPPublicForm", () => {
 
     // Should move to step 2
     await waitFor(() => {
-      expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
+      expect(screen.getByText("Confirm MCP Hub Publication")).toBeInTheDocument();
     });
   });
 
@@ -145,10 +151,10 @@ describe("MakeMCPPublicForm", () => {
 
     // Wait for navigation to complete
     await waitFor(() => {
-      expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
+      expect(screen.getByText("Confirm MCP Hub Publication")).toBeInTheDocument();
     });
 
-    const submitButton = screen.getByRole("button", { name: "Make Public" });
+    const submitButton = screen.getByRole("button", { name: "Save Publication List" });
     await act(async () => {
       fireEvent.click(submitButton);
     });
@@ -187,29 +193,105 @@ describe("MakeMCPPublicForm", () => {
     expect(checkboxes[2]).not.toBeChecked();
   });
 
-  it("should show error when no servers selected", async () => {
+  it("submits an empty publication list after the last server is deselected", async () => {
+    mockMakeMCPPublicCall.mockResolvedValueOnce({});
     render(<MakeMCPPublicForm {...mockProps} />);
 
-    // Deselect all servers first
-    const checkboxes = screen.getAllByRole("checkbox");
-    await act(async () => {
-      fireEvent.click(checkboxes[0]); // Click select all to select all
-    });
-    await act(async () => {
-      fireEvent.click(checkboxes[0]); // Click select all again to deselect all
-    });
+    fireEvent.click(screen.getAllByRole("checkbox")[2]);
+    expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Publication List" }));
 
-    // Try to go to next step
-    const nextButton = screen.getByRole("button", { name: "Next" });
-    await act(async () => {
-      fireEvent.click(nextButton);
-    });
-
-    // Should stay on same step
-    expect(screen.getByText("Select MCP Servers to Make Public")).toBeInTheDocument();
+    await waitFor(() => expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", []));
+    expect(mockProps.onSuccess).toHaveBeenCalled();
   });
 
-  it("should display empty state when no servers are available", () => {
+  it("keeps legacy listings separate from explicitly published selections", () => {
+    render(
+      <MakeMCPPublicForm
+        {...mockProps}
+        mcpHubData={[
+          { ...mockProps.mcpHubData[0], mcp_info: { is_public: true, is_public_explicit: false } },
+          { ...mockProps.mcpHubData[1], mcp_info: { is_public: true, is_public_explicit: true } },
+        ]}
+      />,
+    );
+
+    expect(screen.getAllByRole("checkbox")[1]).not.toBeChecked();
+    expect(screen.getAllByRole("checkbox")[2]).toBeChecked();
+    expect(screen.getByText("Listed by legacy mode")).toBeInTheDocument();
+  });
+
+  it.each([
+    { mode: "all missing, stale true", info: { is_public: true }, mixed: false },
+    { mode: "all missing, stale false", info: { is_public: false }, mixed: false },
+    { mode: "mixed, stale true", info: { is_public: true }, mixed: true },
+    { mode: "mixed, stale false", info: { is_public: false }, mixed: true },
+    { mode: "null explicit status", info: { is_public: true, is_public_explicit: null }, mixed: true },
+    { mode: "nonboolean explicit status", info: { is_public: true, is_public_explicit: "true" }, mixed: true },
+  ])("blocks unknown explicit publication metadata: $mode", ({ info, mixed }) => {
+    const unknownServer = { ...mockProps.mcpHubData[0], mcp_info: info };
+    const catalog = mixed ? [unknownServer, mockProps.mcpHubData[1]] : [unknownServer];
+    render(<MakeMCPPublicForm {...mockProps} mcpHubData={catalog} />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("explicit publication status");
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByText("Configure in YAML")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy code" })).not.toBeInTheDocument();
+    const nextButton = screen.getByRole("button", { name: "Next" });
+    expect(nextButton).toBeDisabled();
+    fireEvent.click(nextButton);
+    expect(screen.queryByText("Confirm MCP Hub Publication")).not.toBeInTheDocument();
+    expect(mockMakeMCPPublicCall).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("blocks confirmation when explicit metadata disappears with stale listing %s", (listed) => {
+    const { rerender } = render(<MakeMCPPublicForm {...mockProps} />);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByRole("button", { name: "Save Publication List" })).toBeEnabled();
+
+    const catalog = [{ ...mockProps.mcpHubData[0], mcp_info: { is_public: listed } }, mockProps.mcpHubData[1]];
+    rerender(<MakeMCPPublicForm {...mockProps} mcpHubData={catalog} />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("explicit publication status");
+    expect(screen.queryByText("Confirm MCP Hub Publication")).not.toBeInTheDocument();
+    const saveButton = screen.getByRole("button", { name: "Save Publication List" });
+    expect(saveButton).toBeDisabled();
+    fireEvent.click(saveButton);
+    expect(mockMakeMCPPublicCall).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Copy code" })).not.toBeInTheDocument();
+
+    const refreshedCatalog = [
+      { ...mockProps.mcpHubData[0], mcp_info: { is_public: true, is_public_explicit: true } },
+      { ...mockProps.mcpHubData[1], mcp_info: { is_public: false, is_public_explicit: false } },
+    ];
+    rerender(<MakeMCPPublicForm {...mockProps} mcpHubData={refreshedCatalog} />);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Publish Test Server 1" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Publish Test Server 2" })).not.toBeChecked();
+  });
+
+  it("copies publication YAML using the selected server IDs", async () => {
+    const user = userEvent.setup();
+    render(<MakeMCPPublicForm {...mockProps} />);
+
+    await user.click(screen.getByText("Configure in YAML"));
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+
+    expect(await navigator.clipboard.readText()).toBe(
+      'litellm_settings:\n  public_mcp_hub_strict_whitelist: true\n  public_mcp_servers:\n    - "server-2"',
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: "Publish Test Server 2" }));
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(await navigator.clipboard.readText()).toBe(
+      "litellm_settings:\n  public_mcp_hub_strict_whitelist: true\n  public_mcp_servers: []",
+    );
+  });
+
+  it("allows clearing publication IDs when the loaded server catalog is empty", async () => {
+    mockMakeMCPPublicCall.mockResolvedValueOnce({});
     const emptyProps = {
       ...mockProps,
       mcpHubData: [] as MCPServerData[],
@@ -223,9 +305,13 @@ describe("MakeMCPPublicForm", () => {
     const selectAllCheckbox = screen.getByRole("checkbox", { name: "Select All" });
     expectDisabledControl(selectAllCheckbox);
 
-    // Next button should be disabled
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).toBeDisabled();
+    expect(nextButton).toBeEnabled();
+    fireEvent.click(nextButton);
+    fireEvent.click(screen.getByRole("button", { name: "Save Publication List" }));
+
+    await waitFor(() => expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", []));
+    expect(mockProps.onSuccess).toHaveBeenCalled();
   });
 
   it("should handle Cancel button functionality", async () => {
@@ -252,7 +338,7 @@ describe("MakeMCPPublicForm", () => {
 
     // Verify we're on step 1
     await waitFor(() => {
-      expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
+      expect(screen.getByText("Confirm MCP Hub Publication")).toBeInTheDocument();
     });
 
     // Click Previous button
@@ -262,7 +348,7 @@ describe("MakeMCPPublicForm", () => {
     });
 
     // Should go back to step 0
-    expect(screen.getByText("Select MCP Servers to Make Public")).toBeInTheDocument();
+    expect(screen.getByText("Select MCP Servers for the Hub")).toBeInTheDocument();
   });
 
   it("should handle individual server selection", async () => {
@@ -322,8 +408,8 @@ describe("MakeMCPPublicForm", () => {
   });
 
   it("should handle submit error properly", async () => {
-    const errorMessage = "Network error";
-    mockMakeMCPPublicCall.mockRejectedValueOnce(new Error(errorMessage));
+    const error = new Error("Update litellm_settings.public_mcp_servers in your YAML configuration");
+    mockMakeMCPPublicCall.mockRejectedValueOnce(error);
 
     render(<MakeMCPPublicForm {...mockProps} />);
 
@@ -333,10 +419,10 @@ describe("MakeMCPPublicForm", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
+      expect(screen.getByText("Confirm MCP Hub Publication")).toBeInTheDocument();
     });
 
-    const submitButton = screen.getByRole("button", { name: "Make Public" });
+    const submitButton = screen.getByRole("button", { name: "Save Publication List" });
     await act(async () => {
       fireEvent.click(submitButton);
     });
@@ -345,6 +431,8 @@ describe("MakeMCPPublicForm", () => {
     await waitFor(() => {
       expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", ["server-2"]);
     });
+
+    expect(toast.fromError).toHaveBeenCalledWith(error);
 
     // Should not call onSuccess or onClose on error
     expect(mockProps.onSuccess).not.toHaveBeenCalled();
@@ -366,10 +454,10 @@ describe("MakeMCPPublicForm", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
+      expect(screen.getByText("Confirm MCP Hub Publication")).toBeInTheDocument();
     });
 
-    const submitButton = screen.getByRole("button", { name: "Make Public" });
+    const submitButton = screen.getByRole("button", { name: "Save Publication List" });
     await act(async () => {
       fireEvent.click(submitButton);
     });
@@ -381,7 +469,7 @@ describe("MakeMCPPublicForm", () => {
     expect(mockMakeMCPPublicCall).toHaveBeenCalledTimes(1);
     expect(mockProps.onSuccess).not.toHaveBeenCalled();
     expect(mockProps.onClose).not.toHaveBeenCalled();
-    expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
+    expect(screen.getByText("Confirm MCP Hub Publication")).toBeInTheDocument();
 
     resolvePromise({});
     await waitFor(() => {
@@ -400,7 +488,7 @@ describe("MakeMCPPublicForm", () => {
 
     // Modal should not be rendered
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.queryByText("Make MCP Servers Public")).not.toBeInTheDocument();
+    expect(screen.queryByText("Manage MCP Hub Visibility")).not.toBeInTheDocument();
   });
 
   it("should preselect already public servers when modal opens", () => {
@@ -415,7 +503,7 @@ describe("MakeMCPPublicForm", () => {
           url: "http://example.com/server1",
           transport: "http",
           status: "active",
-          mcp_info: { is_public: false }, // Not public
+          mcp_info: { is_public: false, is_public_explicit: false }, // Not public
           allowed_tools: [],
           auth_type: "bearer",
           credentials: {},
@@ -437,7 +525,7 @@ describe("MakeMCPPublicForm", () => {
           url: "http://example.com/server2",
           transport: "websocket",
           status: "inactive",
-          mcp_info: { is_public: true }, // Already public
+          mcp_info: { is_public: true, is_public_explicit: true }, // Already public
           allowed_tools: [],
           auth_type: "none",
           credentials: {},
@@ -459,7 +547,7 @@ describe("MakeMCPPublicForm", () => {
           url: "http://example.com/server3",
           transport: "sse",
           status: "healthy",
-          mcp_info: { is_public: true }, // Already public
+          mcp_info: { is_public: true, is_public_explicit: true }, // Already public
           allowed_tools: [],
           auth_type: "oauth",
           credentials: {},

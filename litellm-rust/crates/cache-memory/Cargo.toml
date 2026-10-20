@@ -7,8 +7,8 @@ repository.workspace = true
 
 [dependencies]
 litellm-cache.workspace = true
-serde_json.workspace = true
 
 [dev-dependencies]
+litellm-cache-testing.workspace = true
 rstest.workspace = true
 tokio.workspace = true

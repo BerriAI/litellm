@@ -1,124 +1,53 @@
+use std::pin::pin;
 use std::sync::Arc;
-use std::task::Poll;
+use std::task::{Context, Poll, Waker};
 
-use futures_util::future::{AbortHandle, Abortable};
-use litellm_callbacks::event::{CallEvent, FailureOrigin, Timing, epoch_seconds};
-use litellm_callbacks::host::{HostOp, HostResult, HostStep};
-use litellm_callbacks::machine::{HostFailure, Machine, MachineStep};
-use litellm_callbacks::route::Route;
+use parking_lot::{Mutex, MutexGuard};
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use tokio::sync::Mutex;
 
-use crate::adapter::{AdapterStep, CallbackAdapter, PublicValue, RouteHost, missing_state};
-use crate::execution::{poll_async_value, run_async_value, run_sync_value};
-use crate::handle::{Execution, ExecutionBody, ExecutionStep};
+use litellm_coroutine::{Coroutine, CoroutineState};
+use litellm_host::{
+    call::HostedCompletion,
+    lifecycle::{CallEvent, ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
+    machine::{HostFailure, Machine, MachineStep},
+    observation::ObservationSender,
+    protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
+};
 
-type RouteOf<H> = <H as RouteHost>::Route;
-type ErrorOf<H> = <RouteOf<H> as Route>::Error;
-type ResponseOf<H> = <RouteOf<H> as Route>::Response;
-type NativeStep<H> = MachineStep<RouteOf<H>, ResponseOf<H>>;
-type NativeResult<H> = Result<NativeStep<H>, ErrorOf<H>>;
-type NativeResume<H> = Option<Result<HostResult<RouteOf<H>>, HostFailure<ErrorOf<H>>>>;
+use crate::PythonHostCalls;
+use crate::caller::{Answer, PythonCaller, Yielded};
+use crate::handle::{Execution, ExecutionBody, ExecutionStep, StepTypes};
+use crate::hooks::{HookStep, PythonCallEvent, PythonCallHooks};
+use crate::native::{NativeMachine, NativePoll};
+use crate::{Error, InvokeError, PythonBinding};
 
-type MachineResult<M> = Result<
-    MachineStep<<M as Machine>::Route, <M as Machine>::Complete>,
-    <<M as Machine>::Route as Route>::Error,
+type ProtocolOf<H> = <H as PythonBinding>::Protocol;
+type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
+type ResponseOf<H> = <ProtocolOf<H> as Protocol>::Response;
+type Interruption<H> = Option<HostFailure<ErrorOf<H>>>;
+type StartMachine<P, M> = Box<
+    dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, <P as Protocol>::Request) -> PyResult<M>
+        + Send
+        + Sync,
 >;
+type Body = Coroutine<Yielded, PyResult<Py<PyAny>>>;
 
-struct MachineState<M: Machine> {
-    machine: M,
-    result: Option<MachineResult<M>>,
+pub struct CallOptions {
+    pub asynchronous: bool,
+    pub steps: StepTypes,
+    pub observers: Option<ObservationSender>,
 }
 
-enum Stage {
-    Begin,
-    Call,
-    AfterSuccess,
-    Succeeded(Py<PyAny>),
-    Failed(Py<PyBaseException>),
-}
-
-#[derive(Clone, Copy)]
-enum Expect {
-    Arguments,
-    Wire,
-    Emitted,
-    Response,
-    Terminal,
-}
-
-enum Pending {
-    Native,
-    Adapter(Expect),
-}
-
-enum Next<H: RouteHost> {
-    Return(ExecutionStep),
-    Continue(HostStep<NativeResult<H>, Py<PyAny>>),
-}
-
-struct PythonDriver<H, M>
-where
-    H: RouteHost,
-    M: Machine<Route = H::Route, Complete = ResponseOf<H>> + 'static,
-{
-    route: H,
-    adapter: Box<dyn CallbackAdapter>,
-    machine: Option<Arc<Mutex<MachineState<M>>>>,
-    arguments: Option<Py<PyDict>>,
-    started_at: f64,
-    ended_at: Option<f64>,
-    stage: Stage,
-    pending: Option<Pending>,
-    native_abort: Option<AbortHandle>,
-    interrupted: Option<Py<PyBaseException>>,
-    asynchronous: bool,
-}
-
-/// Runs one native call for Python: synchronously, or as a coroutine that awaits every
-/// host suspension inline in the caller's task.
-pub fn run_call<H, M>(
-    py: Python<'_>,
-    machine: M,
-    route: H,
-    adapter: Box<dyn CallbackAdapter>,
-    arguments: Py<PyDict>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>>
-where
-    H: RouteHost + 'static,
-    M: Machine<Route = H::Route, Complete = ResponseOf<H>> + 'static,
-{
-    let mut driver = PythonDriver {
-        route,
-        adapter,
-        machine: Some(Arc::new(Mutex::new(MachineState {
-            machine,
-            result: None,
-        }))),
-        arguments: Some(arguments),
-        started_at: 0.0,
-        ended_at: None,
-        stage: Stage::Begin,
-        pending: None,
-        native_abort: None,
-        interrupted: None,
-        asynchronous,
-    };
-    if asynchronous {
-        let execution = Py::new(py, Execution::new(driver))?;
-        return py
-            .import("litellm.rust_bridge.lifecycle")?
-            .getattr("drive")?
-            .call1((execution,))
-            .map(Bound::unbind);
-    }
-    match driver.resume(None)? {
-        ExecutionStep::Return(value) => Ok(value),
-        ExecutionStep::Await(_) => Err(PyRuntimeError::new_err("sync call suspended")),
+impl CallOptions {
+    pub fn new(asynchronous: bool, steps: StepTypes) -> Self {
+        Self {
+            asynchronous,
+            steps,
+            observers: None,
+        }
     }
 }
 
@@ -126,11 +55,15 @@ fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
     !error.is_instance_of::<PyException>(py)
 }
 
-impl<H, M> PythonDriver<H, M>
-where
-    H: RouteHost,
-    M: Machine<Route = H::Route, Complete = ResponseOf<H>> + 'static,
-{
+struct Observation {
+    observers: Option<ObservationSender>,
+    observing: bool,
+    started_at: f64,
+    ended_at: Option<f64>,
+    terminal: Option<CallEvent>,
+}
+
+impl Observation {
     fn timing(&self) -> Timing {
         Timing {
             start_time: self.started_at,
@@ -138,1048 +71,572 @@ where
         }
     }
 
-    fn drive(
-        &mut self,
-        py: Python<'_>,
-        result: Option<PyResult<Py<PyAny>>>,
-    ) -> PyResult<ExecutionStep> {
-        match (self.pending.take(), result) {
-            (None, None) => {
-                self.started_at = epoch_seconds();
-                let arguments = self.arguments.take().ok_or_else(missing_state)?;
-                match self.adapter.begin(py, arguments, self.started_at) {
-                    Ok(step) => self.on_adapter(py, step, Expect::Arguments),
-                    Err(error) => self.adapter_failed(py, error),
-                }
-            }
-            (Some(Pending::Native), Some(Ok(_))) => {
-                let result = self.take_native_result()?;
-                self.run_steps(py, HostStep::Ready(result))
-            }
-            (Some(Pending::Native), Some(Err(error))) => self.interrupt(py, error),
-            (Some(Pending::Adapter(expect)), Some(result)) => {
-                match self.adapter.resume(py, result) {
-                    Ok(step) => self.on_adapter(py, step, expect),
-                    Err(error) => self.adapter_failed(py, error),
-                }
-            }
-            _ => Err(missing_state()),
+    fn emit(&self, event: &PythonCallEvent<'_>) {
+        if let Some(observers) = &self.observers {
+            observers.emit(event.snapshot());
         }
     }
 
-    fn on_adapter(
-        &mut self,
-        py: Python<'_>,
-        step: AdapterStep,
-        expect: Expect,
-    ) -> PyResult<ExecutionStep> {
-        match (expect, step) {
-            (_, AdapterStep::Await(awaitable)) => {
-                self.pending = Some(Pending::Adapter(expect));
-                Ok(ExecutionStep::Await(awaitable))
-            }
-            (Expect::Arguments, AdapterStep::Arguments(arguments)) => {
-                self.arguments = Some(arguments);
-                self.stage = Stage::Call;
-                self.resume_machine(py, None)
-            }
-            (Expect::Wire, AdapterStep::Wire(wire)) => {
-                self.resume_machine(py, Some(Ok(HostResult::BeforeSend(wire))))
-            }
-            (Expect::Emitted, AdapterStep::Done) => {
-                self.resume_machine(py, Some(Ok(HostResult::Emitted)))
-            }
-            (Expect::Response, AdapterStep::Response(response)) => self.succeeded(py, response),
-            (Expect::Terminal, AdapterStep::Done) => match &self.stage {
-                Stage::Succeeded(response) => Ok(ExecutionStep::Return(response.clone_ref(py))),
-                Stage::Failed(error) => Err(PyErr::from_value(error.bind(py).clone().into_any())),
-                _ => Err(missing_state()),
-            },
-            _ => Err(missing_state()),
+    fn retain_terminal(&mut self, event: &PythonCallEvent<'_>) {
+        self.terminal = self.observers.as_ref().map(|_| event.snapshot());
+    }
+
+    fn finish(&mut self) {
+        if let Some(event) = self.terminal.take()
+            && let Some(observers) = &self.observers
+        {
+            observers.emit(event);
         }
-    }
-
-    fn adapter_failed(&mut self, py: Python<'_>, error: PyErr) -> PyResult<ExecutionStep> {
-        match self.stage {
-            Stage::Begin | Stage::AfterSuccess => self.failure(py, error, FailureOrigin::Host),
-            Stage::Call => self.interrupt(py, error),
-            Stage::Succeeded(_) | Stage::Failed(_) => Err(error),
-        }
-    }
-
-    fn resume_machine(
-        &mut self,
-        py: Python<'_>,
-        result: NativeResume<H>,
-    ) -> PyResult<ExecutionStep> {
-        let step = self.resume_core(py, result)?;
-        self.run_steps(py, step)
-    }
-
-    fn run_steps(
-        &mut self,
-        py: Python<'_>,
-        mut step: HostStep<NativeResult<H>, Py<PyAny>>,
-    ) -> PyResult<ExecutionStep> {
-        loop {
-            let result = match step {
-                HostStep::Suspend(awaitable) => {
-                    self.pending = Some(Pending::Native);
-                    return Ok(ExecutionStep::Await(awaitable));
-                }
-                HostStep::Ready(result) => result,
-            };
-            step = match self.handle_native(py, result)? {
-                Next::Return(step) => return Ok(step),
-                Next::Continue(step) => step,
-            };
-        }
-    }
-
-    /// Answers one machine step: performs the op it asked for, or finishes the call.
-    fn handle_native(&mut self, py: Python<'_>, result: NativeResult<H>) -> PyResult<Next<H>> {
-        let op = match result {
-            Ok(MachineStep::Host(op)) => op,
-            Ok(MachineStep::Complete(response)) => {
-                return self.completed(py, response).map(Next::Return);
-            }
-            Err(error) => return self.machine_failed(py, error).map(Next::Return),
-        };
-        let answer = match op {
-            HostOp::Route(op) => {
-                let arguments = self.arguments.as_ref().ok_or_else(missing_state)?;
-                self.route
-                    .invoke(py, arguments.bind(py), op)
-                    .map(HostResult::Route)
-            }
-            HostOp::BeforeSend { wire, context } => {
-                match self.adapter.before_send(py, wire, &context) {
-                    Ok(AdapterStep::Wire(wire)) => Ok(HostResult::BeforeSend(wire)),
-                    Ok(AdapterStep::Await(awaitable)) => {
-                        self.pending = Some(Pending::Adapter(Expect::Wire));
-                        return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                    }
-                    Ok(_) => return Err(missing_state()),
-                    Err(error) => Err(error),
-                }
-            }
-            HostOp::Emit(event) => match self.adapter.emit(py, &event, None) {
-                Ok(AdapterStep::Done) => Ok(HostResult::Emitted),
-                Ok(AdapterStep::Await(awaitable)) => {
-                    self.pending = Some(Pending::Adapter(Expect::Emitted));
-                    return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                }
-                Ok(_) => return Err(missing_state()),
-                Err(error) => Err(error),
-            },
-        };
-        match answer {
-            Ok(answer) => self.resume_core(py, Some(Ok(answer))).map(Next::Continue),
-            Err(error) => self.interrupt(py, error).map(Next::Return),
-        }
-    }
-
-    fn interrupt(&mut self, py: Python<'_>, error: PyErr) -> PyResult<ExecutionStep> {
-        let cancelled = is_cancellation(py, &error);
-        let native = H::host_error(&error);
-        self.interrupted = Some(error.into_value(py));
-        let failure = if cancelled {
-            HostFailure::Cancelled(native)
-        } else {
-            HostFailure::Error(native)
-        };
-        self.resume_machine(py, Some(Err(failure)))
-    }
-
-    fn resume_core(
-        &mut self,
-        py: Python<'_>,
-        result: NativeResume<H>,
-    ) -> PyResult<HostStep<NativeResult<H>, Py<PyAny>>> {
-        let state = Arc::clone(self.machine.as_ref().ok_or_else(missing_state)?);
-        let future = async move {
-            let mut state = state.lock().await;
-            let result = match result {
-                Some(Err(failure)) => state
-                    .machine
-                    .interrupt(failure)
-                    .await
-                    .map(MachineStep::Complete),
-                Some(Ok(result)) => state.machine.resume(Some(result)).await,
-                None => state.machine.resume(None).await,
-            };
-            state.result = Some(result);
-            Ok(())
-        };
-        if self.asynchronous {
-            let mut future = Box::pin(future);
-            if let Poll::Ready(()) = poll_async_value(py, future.as_mut())? {
-                return Ok(HostStep::Ready(self.take_native_result()?));
-            }
-            let (abort, registration) = AbortHandle::new_pair();
-            self.native_abort = Some(abort);
-            Ok(HostStep::Suspend(
-                run_async_value(py, async move {
-                    Abortable::new(future, registration)
-                        .await
-                        .map_err(|_| PyRuntimeError::new_err("native execution closed"))?
-                })?
-                .unbind(),
-            ))
-        } else {
-            run_sync_value(py, future)?;
-            Ok(HostStep::Ready(self.take_native_result()?))
-        }
-    }
-
-    fn take_native_result(&self) -> PyResult<NativeResult<H>> {
-        self.machine
-            .as_ref()
-            .ok_or_else(missing_state)?
-            .try_lock()
-            .map_err(|_| missing_state())?
-            .result
-            .take()
-            .ok_or_else(missing_state)
-    }
-
-    fn completed(&mut self, py: Python<'_>, response: ResponseOf<H>) -> PyResult<ExecutionStep> {
-        self.ended_at = Some(epoch_seconds());
-        let public = match self.route.complete(py, response) {
-            Ok(public) => public,
-            Err(error) => return self.failure(py, error, FailureOrigin::Call),
-        };
-        self.stage = Stage::AfterSuccess;
-        match self.adapter.after_success(py, public, self.timing()) {
-            Ok(step) => self.on_adapter(py, step, Expect::Response),
-            Err(error) => self.failure(py, error, FailureOrigin::Host),
-        }
-    }
-
-    fn machine_failed(&mut self, py: Python<'_>, error: ErrorOf<H>) -> PyResult<ExecutionStep> {
-        self.ended_at.get_or_insert_with(epoch_seconds);
-        let error = match self.interrupted.take() {
-            Some(retained) => PyErr::from_value(retained.into_bound(py).into_any()),
-            None => H::native_error(error),
-        };
-        self.failure(py, error, FailureOrigin::Call)
-    }
-
-    fn succeeded(&mut self, py: Python<'_>, response: Py<PyAny>) -> PyResult<ExecutionStep> {
-        let event = CallEvent::Succeeded {
-            timing: self.timing(),
-        };
-        let step = self
-            .adapter
-            .emit(py, &event, Some(PublicValue::Response(&response)))?;
-        self.stage = Stage::Succeeded(response);
-        self.on_adapter(py, step, Expect::Terminal)
-    }
-
-    fn failure(
-        &mut self,
-        py: Python<'_>,
-        error: PyErr,
-        origin: FailureOrigin,
-    ) -> PyResult<ExecutionStep> {
-        self.ended_at.get_or_insert_with(epoch_seconds);
-        if is_cancellation(py, &error) {
-            return Err(error);
-        }
-        let public = match origin {
-            FailureOrigin::Call => self.route.map_failure(py, &error).unwrap_or(error),
-            FailureOrigin::Host => error,
-        };
-        let event = CallEvent::Failed {
-            timing: self.timing(),
-            origin,
-        };
-        let step = self
-            .adapter
-            .emit(py, &event, Some(PublicValue::Error(&public)))?;
-        self.stage = Stage::Failed(public.into_value(py));
-        self.on_adapter(py, step, Expect::Terminal)
-    }
-
-    fn clear(&mut self) {
-        if let Some(abort) = self.native_abort.take() {
-            abort.abort();
-        }
-        if self.machine.take().is_some() {
-            Python::attach(|py| {
-                self.adapter.close(py);
-                self.route.close(py);
-            });
-        }
+        self.observing = false;
     }
 }
 
-impl<H, M> ExecutionBody for PythonDriver<H, M>
+/// What the running call shares with its handle: the binding and hooks the handle
+/// traverses and closes, and the Python values the call retains across a suspension.
+struct Parts<H, L> {
+    binding: H,
+    hooks: L,
+    arguments: Option<Py<PyDict>>,
+    interrupted: Option<Py<PyBaseException>>,
+    selected: Option<Py<PyAny>>,
+    observation: Observation,
+}
+
+type SharedParts<H, L> = Arc<Mutex<Parts<H, L>>>;
+
+enum Setup<E> {
+    Host(PyErr),
+    Decode(InvokeError<E>),
+}
+
+/// The route's public exception for a native failure. When classification itself fails,
+/// that failure is raised with the native error's text as its `__context__`.
+fn classified<H: PythonBinding>(py: Python<'_>, binding: &H, error: ErrorOf<H>) -> PyErr {
+    let native = error.to_string();
+    let classifier_error = match binding.map_error(py, error) {
+        Ok(failure) => return failure.into(),
+        Err(classifier_error) => classifier_error,
+    };
+    classifier_error.set_context(py, Some(PyRuntimeError::new_err(native)));
+    classifier_error
+}
+
+/// The call as one async body. Every hook step and host call is awaited in place on the
+/// caller's task; the parts lock is never held across an await.
+struct CallBody<H, M, L>
 where
-    H: RouteHost,
-    M: Machine<Route = H::Route, Complete = ResponseOf<H>> + 'static,
+    H: PythonBinding,
+    M: Machine,
 {
-    fn resume(&mut self, result: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
-        Python::attach(|py| self.drive(py, result))
+    caller: PythonCaller,
+    parts: SharedParts<H, L>,
+    native: NativeMachine<M>,
+    start: Option<StartMachine<ProtocolOf<H>, M>>,
+    streaming: bool,
+}
+
+impl<H, M, L> CallBody<H, M, L>
+where
+    L: PythonCallHooks + 'static,
+    H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
+{
+    fn parts(&self) -> MutexGuard<'_, Parts<H, L>> {
+        self.parts.lock()
+    }
+
+    async fn run(mut self) -> PyResult<Py<PyAny>> {
+        match self.begin().await {
+            Ok(()) => self.execute().await,
+            Err(Setup::Host(error)) => self.failure(error, FailureOrigin::Host).await,
+            Err(Setup::Decode(InvokeError::Python(error))) => {
+                self.failure(error, FailureOrigin::Call).await
+            }
+            Err(Setup::Decode(InvokeError::Native(error))) => self.machine_failed(error).await,
+        }
+    }
+
+    async fn begin(&mut self) -> Result<(), Setup<ErrorOf<H>>> {
+        let started_at = epoch_seconds();
+        let started = {
+            let mut parts = self.parts();
+            parts.observation.started_at = started_at;
+            parts.observation.observing = true;
+            let event = PythonCallEvent::Started {
+                start_time: started_at,
+            };
+            parts.observation.emit(&event);
+            Python::attach(|py| parts.hooks.on_event(py, event)).map_err(Setup::Host)?
+        };
+        self.settle(started).await.map_err(Setup::Host)?;
+        let arguments = self
+            .parts()
+            .arguments
+            .take()
+            .ok_or_else(|| Setup::Host(Error::MissingState.into()))?;
+        let prepare = {
+            let mut parts = self.parts();
+            Python::attach(|py| parts.hooks.prepare_arguments(py, arguments, started_at))
+                .map_err(Setup::Host)?
+        };
+        let prepared = self.settle(prepare).await.map_err(Setup::Host)?;
+        let request = {
+            let mut parts = self.parts();
+            let Parts {
+                binding,
+                hooks,
+                arguments,
+                ..
+            } = &mut *parts;
+            Python::attach(|py| {
+                hooks
+                    .arguments_prepared(py, &prepared)
+                    .map_err(Setup::Host)?;
+                let decoded = binding.decode_request(py, prepared.bind(py));
+                *arguments = Some(prepared);
+                decoded.map_err(Setup::Decode)
+            })?
+        };
+        let start = self
+            .start
+            .take()
+            .ok_or_else(|| Setup::Host(Error::MissingState.into()))?;
+        let machine = {
+            let parts = self.parts();
+            let arguments = parts
+                .arguments
+                .as_ref()
+                .ok_or_else(|| Setup::Host(Error::MissingState.into()))?;
+            Python::attach(|py| start(py, arguments.bind(py), request)).map_err(Setup::Host)?
+        };
+        self.native.start(machine);
+        Ok(())
+    }
+
+    /// Runs one hook step to its value, handing each awaitable it produces to the caller.
+    async fn settle<T>(&self, step: HookStep<L, T>) -> PyResult<T> {
+        let mut step = step;
+        loop {
+            let (awaitable, resume) = match step {
+                HookStep::Ready(value) => return Ok(value),
+                HookStep::Await(awaitable, resume) => (awaitable, resume),
+            };
+            let answer = self.caller.await_python(awaitable).await;
+            step = {
+                let mut parts = self.parts();
+                Python::attach(|py| resume(&mut parts.hooks, py, answer))?
+            };
+        }
+    }
+
+    async fn execute(&mut self) -> PyResult<Py<PyAny>> {
+        let mut interruption: Interruption<H> = None;
+        loop {
+            let poll = Python::attach(|py| self.native.resume(py, interruption.take()))?;
+            let result = match poll {
+                NativePoll::Ready(result) => result,
+                NativePoll::Suspend(awaitable) => match self.caller.await_python(awaitable).await {
+                    Ok(_) => self.native.take_result()?,
+                    Err(error) if self.parts().interrupted.is_none() => {
+                        interruption = Some(self.interrupt(error));
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                },
+            };
+            let op = match result {
+                Ok(MachineStep::Suspended(op)) => op,
+                Ok(MachineStep::Complete(completion)) => {
+                    return self.completed(completion).await;
+                }
+                Err(error) => return self.machine_failed(error).await,
+            };
+            interruption = match self.answer(op).await {
+                Ok(()) => None,
+                Err(InvokeError::Native(error)) => Some(HostFailure::Error(error)),
+                Err(InvokeError::Python(error)) => Some(self.interrupt(error)),
+            };
+        }
+    }
+
+    fn interrupt(&self, error: PyErr) -> HostFailure<ErrorOf<H>> {
+        Python::attach(|py| {
+            let cancelled = is_cancellation(py, &error);
+            let native = H::host_error(&error);
+            self.parts().interrupted = Some(error.into_value(py));
+            if cancelled {
+                HostFailure::Cancelled(native)
+            } else {
+                HostFailure::Error(native)
+            }
+        })
+    }
+
+    /// Answers one machine op. A Python error interrupts the call as raised, a native
+    /// rejection resumes the machine with it.
+    async fn answer(
+        &mut self,
+        op: HostRequest<ProtocolOf<H>>,
+    ) -> Result<(), InvokeError<ErrorOf<H>>> {
+        match op {
+            HostRequest::HostCall(call) => self.host_call(call).await,
+            HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            }) => {
+                let step = {
+                    let mut parts = self.parts();
+                    Python::attach(|py| parts.hooks.before_provider_request(py, wire, &context))?
+                };
+                let wire = self.settle(step).await?;
+                reply.send(*wire);
+                Ok(())
+            }
+            HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
+                self.notify(PythonCallEvent::Execution(ExecutionEvent::ResultReady {
+                    facts,
+                }))
+                .await?;
+                reply.send(());
+                Ok(())
+            }
+            HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
+                self.notify(PythonCallEvent::Execution(
+                    ExecutionEvent::ProviderResponseReceived { raw: &raw },
+                ))
+                .await?;
+                reply.send(());
+                Ok(())
+            }
+            HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
+                self.streaming = true;
+                let head = {
+                    let mut parts = self.parts();
+                    let Parts { binding, hooks, .. } = &mut *parts;
+                    Python::attach(|py| {
+                        let head = binding.encode_stream_head(py, head)?;
+                        hooks.on_stream_open(py, &head)?;
+                        Ok::<_, PyErr>(head)
+                    })?
+                };
+                reply.send(self.caller.open_stream(head).await);
+                Ok(())
+            }
+            HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
+                let chunk = {
+                    let mut parts = self.parts();
+                    let Parts { binding, hooks, .. } = &mut *parts;
+                    Python::attach(|py| {
+                        let chunk = binding.encode_chunk(py, chunk)?;
+                        hooks.on_stream_chunk(py, &chunk)?;
+                        Ok::<_, PyErr>(chunk)
+                    })?
+                };
+                reply.send(self.caller.yield_chunk(chunk).await);
+                Ok(())
+            }
+        }
+    }
+
+    async fn host_call(
+        &self,
+        call: <ProtocolOf<H> as Protocol>::HostCall,
+    ) -> Result<(), InvokeError<ErrorOf<H>>> {
+        let mut pending = {
+            let mut parts = self.parts();
+            Python::attach(|py| parts.binding.begin_host_call(py, call))?
+        };
+        while let Some(awaitable) = pending {
+            let result = self.caller.await_python(awaitable).await;
+            pending = {
+                let mut parts = self.parts();
+                Python::attach(|py| parts.binding.resume_host_call(py, result))?
+            };
+        }
+        Ok(())
+    }
+
+    async fn notify(&self, event: PythonCallEvent<'_>) -> PyResult<()> {
+        let step = {
+            let mut parts = self.parts();
+            parts.observation.emit(&event);
+            Python::attach(|py| parts.hooks.on_event(py, event))?
+        };
+        self.settle(step).await
+    }
+
+    async fn completed(
+        &mut self,
+        completion: HostedCompletion<ResponseOf<H>>,
+    ) -> PyResult<Py<PyAny>> {
+        self.parts().observation.ended_at = Some(epoch_seconds());
+        let response = match completion {
+            HostedCompletion::Complete(response) => response,
+            HostedCompletion::StreamEnded | HostedCompletion::Detached => {
+                let none = Python::attach(|py| py.None());
+                return self.succeeded(none).await;
+            }
+        };
+        let encoded = {
+            let mut parts = self.parts();
+            Python::attach(|py| parts.binding.encode_response(py, response))
+        };
+        let public = match encoded {
+            Ok(public) => public,
+            Err(error) => return self.failure(error, FailureOrigin::Call).await,
+        };
+        if self.streaming {
+            return self.succeeded(public).await;
+        }
+        let transform = {
+            let mut parts = self.parts();
+            let timing = parts.observation.timing();
+            Python::attach(|py| parts.hooks.transform_response(py, public, timing))
+        };
+        let step = match transform {
+            Ok(step) => step,
+            Err(error) => return self.failure(error, FailureOrigin::Host).await,
+        };
+        match self.settle(step).await {
+            Ok(response) => self.succeeded(response).await,
+            Err(error) => self.failure(error, FailureOrigin::Host).await,
+        }
+    }
+
+    async fn machine_failed(&mut self, error: ErrorOf<H>) -> PyResult<Py<PyAny>> {
+        let error = {
+            let mut parts = self.parts();
+            parts.observation.ended_at.get_or_insert_with(epoch_seconds);
+            Python::attach(|py| match parts.interrupted.take() {
+                Some(retained) => PyErr::from_value(retained.into_bound(py).into_any()),
+                None => classified(py, &parts.binding, error),
+            })
+        };
+        self.failure(error, FailureOrigin::Call).await
+    }
+
+    /// The terminal hooks may suspend. Until they finish, the selected response is held
+    /// only in the traversed parts, so a cycle through it stays collectable.
+    async fn succeeded(&mut self, response: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        let step = {
+            let mut parts = self.parts();
+            let timing = parts.observation.timing();
+            let event = PythonCallEvent::Succeeded {
+                timing,
+                response: &response,
+            };
+            parts.observation.retain_terminal(&event);
+            let step = Python::attach(|py| parts.hooks.on_event(py, event))?;
+            parts.selected = Some(response);
+            step
+        };
+        self.settle(step).await?;
+        let mut parts = self.parts();
+        parts.observation.finish();
+        parts
+            .selected
+            .take()
+            .ok_or_else(|| Error::MissingState.into())
+    }
+
+    /// As [`Self::succeeded`], with the selected exception held as its value and raised
+    /// again once the hooks finish.
+    async fn failure(&mut self, error: PyErr, origin: FailureOrigin) -> PyResult<Py<PyAny>> {
+        let step = {
+            let mut parts = self.parts();
+            parts.observation.ended_at.get_or_insert_with(epoch_seconds);
+            let timing = parts.observation.timing();
+            Python::attach(|py| {
+                if is_cancellation(py, &error) {
+                    return Err(error);
+                }
+                let event = PythonCallEvent::Failed {
+                    timing,
+                    origin,
+                    error: &error,
+                };
+                parts.observation.retain_terminal(&event);
+                let step = parts.hooks.on_event(py, event)?;
+                parts.selected = Some(error.into_value(py).into_any());
+                Ok(step)
+            })?
+        };
+        self.settle(step).await?;
+        let mut parts = self.parts();
+        parts.observation.finish();
+        let selected = parts.selected.take().ok_or(Error::MissingState)?;
+        Err(Python::attach(|py| {
+            PyErr::from_value(selected.into_bound(py))
+        }))
+    }
+}
+
+struct CallDriver<H, L>
+where
+    H: PythonBinding,
+    L: PythonCallHooks,
+{
+    body: Mutex<Body>,
+    reply: Option<Reply<Answer>>,
+    parts: SharedParts<H, L>,
+}
+
+impl<H, L> CallDriver<H, L>
+where
+    H: PythonBinding + 'static,
+    L: PythonCallHooks + 'static,
+{
+    /// A failure the body raised past its terminal hooks, or a cancellation, is the last
+    /// thing the observers hear about the call.
+    fn observe_host_failure(&self, error: &PyErr) {
+        let mut parts = self.parts.lock();
+        if !parts.observation.observing {
+            return;
+        }
+        let timing = parts.observation.timing();
+        Python::attach(|py| {
+            let event = if is_cancellation(py, error) {
+                PythonCallEvent::Cancelled { timing }
+            } else {
+                PythonCallEvent::Failed {
+                    timing,
+                    origin: FailureOrigin::Host,
+                    error,
+                }
+            };
+            parts.observation.emit(&event);
+        });
+        parts.observation.observing = false;
+        parts.observation.terminal = None;
+    }
+}
+
+impl<H, L> ExecutionBody for CallDriver<H, L>
+where
+    H: PythonBinding + 'static,
+    L: PythonCallHooks + 'static,
+{
+    fn resume(&mut self, answer: Option<Answer>) -> PyResult<ExecutionStep> {
+        match (self.reply.take(), answer) {
+            (Some(reply), Some(answer)) => reply.send(answer),
+            (None, None) => {}
+            (Some(_), None) | (None, Some(_)) => return Err(Error::MissingState.into()),
+        }
+        let step = {
+            let body = self.body.get_mut();
+            let mut resume = pin!(body.resume());
+            match resume
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+            {
+                Poll::Ready(step) => step,
+                Poll::Pending => return Err(Error::MissingState.into()),
+            }
+        };
+        match step {
+            Ok(CoroutineState::Yielded(Yielded { suspension, reply })) => {
+                self.reply = Some(reply);
+                Ok(ExecutionStep::Suspended(suspension))
+            }
+            Ok(CoroutineState::Complete(Ok(value))) => Ok(ExecutionStep::Return(value)),
+            Ok(CoroutineState::Complete(Err(error))) => {
+                self.observe_host_failure(&error);
+                Err(error)
+            }
+            Err(_) => Err(Error::MissingState.into()),
+        }
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.route.traverse(visit)?;
-        self.adapter.traverse(visit)?;
-        visit.call(&self.arguments)?;
-        visit.call(&self.interrupted)?;
-        match &self.stage {
-            Stage::Succeeded(response) => visit.call(response),
-            Stage::Failed(error) => visit.call(error),
-            _ => Ok(()),
-        }
+        let Some(parts) = self.parts.try_lock() else {
+            return Ok(());
+        };
+        parts.binding.traverse(visit)?;
+        parts.hooks.traverse(visit)?;
+        visit.call(&parts.arguments)?;
+        visit.call(&parts.interrupted)?;
+        visit.call(&parts.selected)
     }
 }
 
-impl<H, M> Drop for PythonDriver<H, M>
+impl<H, L> Drop for CallDriver<H, L>
 where
-    H: RouteHost,
-    M: Machine<Route = H::Route, Complete = ResponseOf<H>> + 'static,
+    H: PythonBinding,
+    L: PythonCallHooks,
 {
     fn drop(&mut self) {
-        self.clear();
+        self.body.get_mut().cancel();
+        self.reply = None;
+        let mut parts = self.parts.lock();
+        Python::attach(|py| {
+            if parts.observation.observing {
+                let timing = parts.observation.timing();
+                parts
+                    .observation
+                    .emit(&PythonCallEvent::Cancelled { timing });
+                parts.observation.observing = false;
+            }
+            parts.hooks.close(py);
+            parts.binding.close(py);
+        });
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use litellm_callbacks::event::{RequestContext, WireRequest};
-    use litellm_callbacks::machine::{Interrupted, Step};
-    use pyo3::exceptions::{PyBaseException, PyValueError};
-    use pyo3::types::PyDict;
-
-    use super::*;
-
-    static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
-
-    fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
-        py.run(
-            pyo3::ffi::c_str!(
-                r#"
-import sys
-import types
-
-sys.modules.setdefault('litellm', types.ModuleType('litellm'))
-sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bridge'))
-"#
-            ),
-            None,
-            None,
-        )
-        .unwrap();
-        let source =
-            std::ffi::CString::new(include_str!("../../../../litellm/rust_bridge/lifecycle.py"))
-                .unwrap();
-        PyModule::from_code(
-            py,
-            &source,
-            pyo3::ffi::c_str!("lifecycle.py"),
-            pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
-        )
-        .unwrap()
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct Error(String);
-
-    struct Synthetic;
-
-    impl Route for Synthetic {
-        type Response = String;
-        type Error = Error;
-        type Op = &'static str;
-        type OpResult = String;
-    }
-
-    /// Yields the scripted ops in order, then completes or fails as scripted.
-    struct ScriptedMachine {
-        ops: Vec<HostOp<Synthetic>>,
-        outcome: Option<Result<String, Error>>,
-        answers: Vec<String>,
-    }
-
-    fn wire() -> WireRequest {
-        WireRequest {
-            url: "https://example.invalid".into(),
-            headers: Vec::new(),
-            body: serde_json::json!({}),
-        }
-    }
-
-    fn context() -> RequestContext {
-        RequestContext {
-            model: "model".into(),
-            custom_llm_provider: "provider".into(),
-            optional_params: serde_json::json!({}),
-            passthrough_fields: Default::default(),
-            secret_fields: Vec::new(),
-        }
-    }
-
-    impl Machine for ScriptedMachine {
-        type Route = Synthetic;
-        type Complete = String;
-
-        fn resume(&mut self, result: Option<HostResult<Synthetic>>) -> Step<'_, Self> {
-            Box::pin(async move {
-                if let Some(result) = result {
-                    self.answers.push(match result {
-                        HostResult::Route(value) => value,
-                        HostResult::BeforeSend(wire) => wire.url,
-                        HostResult::Emitted => "emitted".into(),
-                    });
-                }
-                if !self.ops.is_empty() {
-                    return Ok(MachineStep::Host(self.ops.remove(0)));
-                }
-                self.outcome
-                    .take()
-                    .ok_or_else(|| Error("resumed after completion".into()))?
-                    .map(MachineStep::Complete)
-            })
-        }
-
-        fn interrupt(&mut self, failure: HostFailure<Error>) -> Interrupted<'_, Self> {
-            self.ops.clear();
-            self.outcome = None;
-            Box::pin(async move { Err(failure.into_error()) })
-        }
-    }
-
-    #[derive(Default)]
-    struct Log(Arc<Mutex<Vec<String>>>);
-
-    impl Log {
-        fn push(&self, entry: impl Into<String>) {
-            self.0.lock().unwrap().push(entry.into());
-        }
-
-        fn entries(&self) -> Vec<String> {
-            self.0.lock().unwrap().clone()
-        }
-    }
-
-    struct SyntheticHost {
-        log: Log,
-        fail_op: bool,
-    }
-
-    impl RouteHost for SyntheticHost {
-        type Route = Synthetic;
-
-        fn invoke(
-            &mut self,
-            _: Python<'_>,
-            arguments: &Bound<'_, PyDict>,
-            op: &'static str,
-        ) -> PyResult<String> {
-            self.log.push(format!("route:{op}"));
-            if self.fail_op {
-                return Err(PyValueError::new_err("op failed"));
+pub fn run_call<H, M, L>(
+    py: Python<'_>,
+    start: impl FnOnce(
+        Python<'_>,
+        &Bound<'_, PyDict>,
+        <H::Protocol as Protocol>::Request,
+    ) -> PyResult<M>
+    + Send
+    + Sync
+    + 'static,
+    binding: H,
+    hooks: L,
+    arguments: Py<PyDict>,
+    options: CallOptions,
+) -> PyResult<Py<PyAny>>
+where
+    L: PythonCallHooks + 'static,
+    H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
+{
+    let parts = Arc::new(Mutex::new(Parts {
+        binding,
+        hooks,
+        arguments: Some(arguments),
+        interrupted: None,
+        selected: None,
+        observation: Observation {
+            observers: options.observers,
+            observing: false,
+            started_at: 0.0,
+            ended_at: None,
+            terminal: None,
+        },
+    }));
+    let body = Coroutine::new({
+        let parts = Arc::clone(&parts);
+        let asynchronous = options.asynchronous;
+        move |co| {
+            CallBody {
+                caller: PythonCaller::new(co),
+                parts,
+                native: NativeMachine::new(asynchronous),
+                start: Some(Box::new(start)),
+                streaming: false,
             }
-            Ok(format!("{op}:{}", arguments.len()))
+            .run()
         }
-
-        fn complete(&mut self, py: Python<'_>, response: String) -> PyResult<Py<PyAny>> {
-            self.log.push("complete");
-            Ok(pyo3::types::PyString::new(py, &response)
-                .into_any()
-                .unbind())
-        }
-
-        fn native_error(error: Error) -> PyErr {
-            PyValueError::new_err(error.0)
-        }
-
-        fn host_error(error: &PyErr) -> Error {
-            Error(error.to_string())
-        }
-
-        fn map_failure(&self, py: Python<'_>, error: &PyErr) -> PyResult<PyErr> {
-            self.log.push("map_failure");
-            Ok(PyValueError::new_err(format!(
-                "mapped: {}",
-                error.value(py)
-            )))
-        }
-
-        fn close(&mut self, _: Python<'_>) {
-            self.log.push("route.close");
-        }
-
-        fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-            Ok(())
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    enum AdapterScript {
-        Plain,
-        FailBegin,
-        ReplaceResponse,
-        FailAfterSuccess,
-    }
-
-    struct SyntheticAdapter {
-        log: Log,
-        script: AdapterScript,
-    }
-
-    impl CallbackAdapter for SyntheticAdapter {
-        fn begin(&mut self, _: Python<'_>, arguments: Py<PyDict>, _: f64) -> PyResult<AdapterStep> {
-            self.log.push("begin");
-            if matches!(self.script, AdapterScript::FailBegin) {
-                return Err(PyValueError::new_err("begin failed"));
-            }
-            Ok(AdapterStep::Arguments(arguments))
-        }
-
-        fn before_send(
-            &mut self,
-            _: Python<'_>,
-            wire: Box<WireRequest>,
-            _: &RequestContext,
-        ) -> PyResult<AdapterStep> {
-            self.log.push("before_send");
-            Ok(AdapterStep::Wire(Box::new(WireRequest {
-                url: "rewritten".into(),
-                ..*wire
-            })))
-        }
-
-        fn after_success(
-            &mut self,
-            py: Python<'_>,
-            response: Py<PyAny>,
-            _: Timing,
-        ) -> PyResult<AdapterStep> {
-            self.log.push("after_success");
-            match self.script {
-                AdapterScript::ReplaceResponse => Ok(AdapterStep::Response(
-                    "replaced".into_pyobject(py)?.into_any().unbind(),
-                )),
-                AdapterScript::FailAfterSuccess => {
-                    Err(PyValueError::new_err("after_success failed"))
-                }
-                AdapterScript::Plain | AdapterScript::FailBegin => {
-                    Ok(AdapterStep::Response(response))
-                }
-            }
-        }
-
-        fn emit(
-            &mut self,
-            py: Python<'_>,
-            event: &CallEvent,
-            public: Option<PublicValue<'_>>,
-        ) -> PyResult<AdapterStep> {
-            self.log.push(match (event, public) {
-                (CallEvent::ResponseReceived { raw }, None) => format!("response:{}", raw.body),
-                (CallEvent::Succeeded { .. }, Some(PublicValue::Response(value))) => {
-                    format!("succeeded:{}", value.bind(py))
-                }
-                (CallEvent::Failed { origin, .. }, Some(PublicValue::Error(error))) => {
-                    format!("failed:{origin:?}:{}", error.value(py))
-                }
-                _ => "unexpected".into(),
-            });
-            Ok(AdapterStep::Done)
-        }
-
-        fn resume(&mut self, _: Python<'_>, _: PyResult<Py<PyAny>>) -> PyResult<AdapterStep> {
-            Err(missing_state())
-        }
-
-        fn close(&mut self, _: Python<'_>) {
-            self.log.push("adapter.close");
-        }
-
-        fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-            Ok(())
-        }
-    }
-
-    fn run_scripted(
-        py: Python<'_>,
-        machine: ScriptedMachine,
-        fail_op: bool,
-        script: AdapterScript,
-        asynchronous: bool,
-    ) -> (PyResult<Py<PyAny>>, Vec<String>) {
-        let log = Log::default();
-        let route = SyntheticHost {
-            log: Log(log.0.clone()),
-            fail_op,
-        };
-        let adapter = SyntheticAdapter {
-            log: Log(log.0.clone()),
-            script,
-        };
-        let arguments = PyDict::new(py);
-        arguments.set_item("model", "m").unwrap();
-        let result = run_call(
-            py,
-            machine,
-            route,
-            Box::new(adapter),
-            arguments.unbind(),
-            asynchronous,
-        );
-        let result = if asynchronous {
-            result.and_then(|coroutine| {
-                let completed = coroutine
-                    .call_method1(py, "send", (py.None(),))
-                    .unwrap_err();
-                if !completed.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
-                    return Err(completed);
-                }
-                completed.value(py).getattr("value").map(Bound::unbind)
-            })
-        } else {
-            result
-        };
-        (result, log.entries())
-    }
-
-    fn success_machine() -> ScriptedMachine {
-        ScriptedMachine {
-            ops: vec![
-                HostOp::Route("project"),
-                HostOp::BeforeSend {
-                    wire: Box::new(wire()),
-                    context: Box::new(context()),
-                },
-                HostOp::Emit(CallEvent::ResponseReceived {
-                    raw: litellm_callbacks::event::RawResponse { body: "raw".into() },
-                }),
-            ],
-            outcome: Some(Ok("done".into())),
-            answers: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn success_runs_every_step_in_order_and_returns_the_public_response() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        crate::initialize_python();
-        Python::attach(|py| {
-            install_lifecycle_module(py);
-            for asynchronous in [false, true] {
-                let (result, log) = run_scripted(
-                    py,
-                    success_machine(),
-                    false,
-                    AdapterScript::Plain,
-                    asynchronous,
-                );
-                assert_eq!(result.unwrap().extract::<String>(py).unwrap(), "done");
-                assert_eq!(
-                    log,
-                    [
-                        "begin",
-                        "route:project",
-                        "before_send",
-                        "response:raw",
-                        "complete",
-                        "after_success",
-                        "succeeded:done",
-                        "adapter.close",
-                        "route.close",
-                    ]
-                );
-            }
-        });
-    }
-
-    #[test]
-    fn machine_failures_are_mapped_and_dispatched_once_as_call_failures() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        crate::initialize_python();
-        Python::attach(|py| {
-            let machine = ScriptedMachine {
-                ops: vec![HostOp::Route("project")],
-                outcome: Some(Err(Error("provider exploded".into()))),
-                answers: Vec::new(),
-            };
-            let (result, log) = run_scripted(py, machine, false, AdapterScript::Plain, false);
-            let error = result.unwrap_err();
-            assert_eq!(error.value(py).to_string(), "mapped: provider exploded");
-            assert_eq!(
-                log,
-                [
-                    "begin",
-                    "route:project",
-                    "map_failure",
-                    "failed:Call:mapped: provider exploded",
-                    "adapter.close",
-                    "route.close",
-                ]
-            );
-        });
-    }
-
-    #[test]
-    fn host_operation_failures_interrupt_the_call_and_keep_the_python_exception() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        crate::initialize_python();
-        Python::attach(|py| {
-            let (result, log) =
-                run_scripted(py, success_machine(), true, AdapterScript::Plain, false);
-            let error = result.unwrap_err();
-            assert_eq!(error.value(py).to_string(), "mapped: op failed");
-            assert!(!log.contains(&"before_send".to_string()));
-            assert!(log.contains(&"failed:Call:mapped: op failed".to_string()));
-        });
-    }
-
-    #[test]
-    fn begin_failures_are_host_failures_without_provider_mapping() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        crate::initialize_python();
-        Python::attach(|py| {
-            let (result, log) = run_scripted(
-                py,
-                success_machine(),
-                false,
-                AdapterScript::FailBegin,
-                false,
-            );
-            let error = result.unwrap_err();
-            assert_eq!(error.value(py).to_string(), "begin failed");
-            assert_eq!(
-                log,
-                [
-                    "begin",
-                    "failed:Host:begin failed",
-                    "adapter.close",
-                    "route.close"
-                ]
-            );
-        });
-    }
-
-    #[test]
-    fn the_adapters_finalized_response_is_what_the_call_returns_and_reports() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        crate::initialize_python();
-        Python::attach(|py| {
-            install_lifecycle_module(py);
-            for asynchronous in [false, true] {
-                let (result, log) = run_scripted(
-                    py,
-                    success_machine(),
-                    false,
-                    AdapterScript::ReplaceResponse,
-                    asynchronous,
-                );
-                assert_eq!(result.unwrap().extract::<String>(py).unwrap(), "replaced");
-                assert!(log.contains(&"succeeded:replaced".to_string()));
-                assert!(!log.contains(&"succeeded:done".to_string()));
-            }
-        });
-    }
-
-    #[test]
-    fn a_failure_while_finalizing_fails_the_call_instead_of_succeeding() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        crate::initialize_python();
-        Python::attach(|py| {
-            install_lifecycle_module(py);
-            for asynchronous in [false, true] {
-                let (result, log) = run_scripted(
-                    py,
-                    success_machine(),
-                    false,
-                    AdapterScript::FailAfterSuccess,
-                    asynchronous,
-                );
-                let error = result.unwrap_err();
-                assert_eq!(error.value(py).to_string(), "after_success failed");
-                assert_eq!(
-                    &log[log.len() - 4..],
-                    [
-                        "after_success",
-                        "failed:Host:after_success failed",
-                        "adapter.close",
-                        "route.close"
-                    ]
-                );
-                assert!(!log.iter().any(|entry| entry.starts_with("succeeded")));
-            }
-        });
-    }
-
-    #[test]
-    fn cancellation_ends_the_call_without_terminal_dispatch() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        crate::initialize_python();
-        Python::attach(|py| {
-            struct Cancelling(Log);
-            impl RouteHost for Cancelling {
-                type Route = Synthetic;
-                fn invoke(
-                    &mut self,
-                    py: Python<'_>,
-                    _: &Bound<'_, PyDict>,
-                    _: &'static str,
-                ) -> PyResult<String> {
-                    self.0.push("route");
-                    Err(PyErr::from_value(
-                        py.import("asyncio")
-                            .unwrap()
-                            .getattr("CancelledError")
-                            .unwrap()
-                            .call0()
-                            .unwrap(),
-                    ))
-                }
-                fn complete(&mut self, _: Python<'_>, _: String) -> PyResult<Py<PyAny>> {
-                    Err(missing_state())
-                }
-                fn native_error(error: Error) -> PyErr {
-                    PyValueError::new_err(error.0)
-                }
-                fn host_error(error: &PyErr) -> Error {
-                    Error(error.to_string())
-                }
-                fn map_failure(&self, _: Python<'_>, _: &PyErr) -> PyResult<PyErr> {
-                    self.0.push("map_failure");
-                    Err(missing_state())
-                }
-                fn close(&mut self, _: Python<'_>) {}
-                fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-                    Ok(())
-                }
-            }
-            let log = Log::default();
-            let route = Cancelling(Log(log.0.clone()));
-            let adapter = SyntheticAdapter {
-                log: Log(log.0.clone()),
-                script: AdapterScript::Plain,
-            };
-            let error = run_call(
-                py,
-                success_machine(),
-                route,
-                Box::new(adapter),
-                PyDict::new(py).unbind(),
-                false,
-            )
-            .unwrap_err();
-            assert!(!error.is_instance_of::<pyo3::exceptions::PyException>(py));
-            assert_eq!(log.entries(), ["begin", "route", "adapter.close"]);
-        });
-    }
-
-    #[test]
-    fn python_driver_preserves_inline_await_and_native_ownership() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        crate::initialize_python();
-        Python::attach(|py| {
-            py.import("asyncio").unwrap();
-            let module = install_lifecycle_module(py);
-            let locals = PyDict::new(py);
-            locals
-                .set_item("drive", module.getattr("drive").unwrap())
-                .unwrap();
-            locals
-                .set_item(
-                    "await_execution",
-                    wrap_pyfunction!(await_execution, py).unwrap(),
-                )
-                .unwrap();
-            locals
-                .set_item(
-                    "calling_execution",
-                    wrap_pyfunction!(calling_execution, py).unwrap(),
-                )
-                .unwrap();
-            let probe = std::ffi::CString::new(include_str!("../tests/lifecycle.py")).unwrap();
-            py.run(&probe, Some(&locals), Some(&locals)).unwrap();
-        });
-    }
-    struct RetainingHost {
-        retained: Option<Py<PyAny>>,
-    }
-
-    impl ExecutionBody for RetainingHost {
-        fn resume(&mut self, _: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
-            Python::attach(|py| Ok(ExecutionStep::Return(py.None())))
-        }
-
-        fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-            visit.call(&self.retained)
-        }
-    }
-
-    #[pyfunction]
-    fn retaining_coroutine(py: Python<'_>, retained: Py<PyAny>) -> PyResult<Py<Execution>> {
-        Py::new(
-            py,
-            Execution::new(RetainingHost {
-                retained: Some(retained),
-            }),
-        )
-    }
-
-    struct AwaitBody(Option<Py<PyAny>>);
-
-    impl ExecutionBody for AwaitBody {
-        fn resume(&mut self, result: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
-            match self.0.take() {
-                Some(awaitable) => Ok(ExecutionStep::Await(awaitable)),
-                None => result
-                    .expect("selected await completed")
-                    .map(ExecutionStep::Return),
-            }
-        }
-
-        fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-            visit.call(&self.0)
-        }
-    }
-
-    #[pyfunction]
-    fn await_execution(awaitable: Py<PyAny>) -> Execution {
-        Execution::new(AwaitBody(Some(awaitable)))
-    }
-
-    struct CallingBody(Py<PyAny>);
-
-    impl ExecutionBody for CallingBody {
-        fn resume(&mut self, _: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
-            Python::attach(|py| self.0.call0(py).map(ExecutionStep::Return))
-        }
-
-        fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-            visit.call(&self.0)
-        }
-    }
-
-    #[pyfunction]
-    fn calling_execution(callback: Py<PyAny>) -> Execution {
-        Execution::new(CallingBody(callback))
-    }
-
-    struct ErrorBody(Option<Py<PyBaseException>>);
-
-    impl ExecutionBody for ErrorBody {
-        fn resume(&mut self, _: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
-            Python::attach(|py| {
-                Err(PyErr::from_value(
-                    self.0.take().unwrap().into_bound(py).into_any(),
-                ))
-            })
-        }
-
-        fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-            visit.call(&self.0)
-        }
-    }
-
-    #[pyfunction]
-    fn error_execution(error: Bound<'_, PyBaseException>) -> Execution {
-        Execution::new(ErrorBody(Some(error.unbind())))
-    }
-
-    #[test]
-    fn retained_exception_frames_are_collectable() {
-        crate::initialize_python();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            locals
-                .set_item(
-                    "error_execution",
-                    wrap_pyfunction!(error_execution, py).unwrap(),
-                )
-                .unwrap();
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-import gc
-import weakref
-
-class Retained:
-    pass
-
-def cycle():
-    retained = Retained()
-    try:
-        raise ValueError('retained traceback')
-    except ValueError as error:
-        retained.owner = error_execution(error)
-    return weakref.ref(retained)
-
-reference = cycle()
-gc.collect()
-assert reference() is None
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-        });
-    }
-
-    #[test]
-    fn coroutine_collects_cycles_retained_by_bridge_host() {
-        crate::initialize_python();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            locals
-                .set_item(
-                    "retaining_coroutine",
-                    wrap_pyfunction!(retaining_coroutine, py).unwrap(),
-                )
-                .unwrap();
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-import gc
-import weakref
-
-class Retained:
-    pass
-
-def cycle():
-    retained = Retained()
-    coroutine = retaining_coroutine(retained)
-    retained.coroutine = coroutine
-    return weakref.ref(retained)
-
-retained_ref = cycle()
-gc.collect()
-assert retained_ref() is None
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-        });
-    }
+    });
+    let driver = CallDriver {
+        body: Mutex::new(body),
+        reply: None,
+        parts,
+    };
+    Py::new(py, Execution::new(driver, options.steps)).map(Py::into_any)
 }
