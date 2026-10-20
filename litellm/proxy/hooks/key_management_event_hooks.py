@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from pydantic import TypeAdapter
 
@@ -532,7 +532,7 @@ class KeyManagementEventHooks:
         from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
         # generate_key_fn remaps token to the hashed token_id. The plaintext sk- key stays on key.
-        plaintext_key: Final = response.get("key") or response.get("token") or ""
+        plaintext_key: Final[str] = cast(str, response.get("key") or response.get("token") or "")
 
         ##########################
         # v2 integration for emails (enterprise)
