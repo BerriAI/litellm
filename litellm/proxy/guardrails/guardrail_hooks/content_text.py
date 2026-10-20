@@ -12,8 +12,10 @@ therefore only be written back over a run of text parts, never across a
 non-text part, which is what ``is_all_text_parts`` gates.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.prompt_templates.factory import get_attribute_or_key
 
@@ -94,3 +96,27 @@ def assistant_text_from_response(response: object) -> str | None:
         if output_parts:
             return "".join(output_parts)
     return None
+
+
+_TEXT_PARTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def is_rewriteable_text_content(content: object) -> bool:
+    if isinstance(content, str):
+        return True
+    if not isinstance(content, list) or len(content) != 1:
+        return False
+    try:
+        parts: Final = _TEXT_PARTS_ADAPTER.validate_python(content)
+    except ValidationError:
+        return False
+    return parts[0].get("type") in ("text", "input_text", "output_text") and isinstance(parts[0].get("text"), str)
+
+
+def replace_text_content(content: object, text: str) -> object:
+    if not text.strip() or not is_rewriteable_text_content(content):
+        return None
+    if isinstance(content, str):
+        return text
+    parts: Final = _TEXT_PARTS_ADAPTER.validate_python(content)
+    return [{**parts[0], "text": text}]

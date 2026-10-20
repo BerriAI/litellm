@@ -32,6 +32,7 @@ import copy
 import json
 import time
 import uuid
+from collections import Counter
 from collections.abc import Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, repeat
@@ -266,13 +267,21 @@ def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
     return _PATCHABLE_ITEM_FIELDS.get(item_type)
 
 
-def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+def _rewritten_input_item(
+    item: Mapping[str, object], rewritten: object, *, preserve_text_metadata: bool = False
+) -> Mapping[str, object] | None:
     field: Final = _item_rewrite_field(item)
     if field is None or not isinstance(rewritten, Mapping):
         return None
     rewritten_content: Final = rewritten.get("content")
     if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
         return {**item, field: rewritten_content}
+    if preserve_text_metadata:
+        from litellm.proxy.guardrails.guardrail_hooks.content_text import content_to_text, replace_text_content
+
+        typed_rewritten: Final = _item_fields_adapter.validate_python(rewritten)
+        replaced: Final = replace_text_content(item.get(field), content_to_text(typed_rewritten.get("content")))
+        return {**item, field: replaced} if replaced is not None else None
     rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
     converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
         [rewritten_row]
@@ -472,6 +481,42 @@ def _input_item_provenance(
     return item_for_message, tainted
 
 
+_RESPONSE_INPUT_ITEMS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def rewriteable_response_message_indices(
+    raw_input: object, instructions: object, original_messages: Sequence[object]
+) -> frozenset[int]:
+    from litellm.proxy.guardrails.guardrail_hooks.content_text import is_rewriteable_text_content
+
+    input_items: Final = [{"role": "user", "content": raw_input}] if isinstance(raw_input, str) else raw_input
+    if not isinstance(input_items, list):
+        return frozenset()
+    try:
+        items: Final = _RESPONSE_INPUT_ITEMS_ADAPTER.validate_python(input_items)
+    except ValidationError:
+        return frozenset()
+    offset: Final = 1 if instructions else 0
+    provenance: Final = _input_item_provenance(items, tuple(original_messages)[offset:])
+    if provenance is None:
+        return frozenset()
+    item_for_message, tainted = provenance
+    text_rows: Final = tuple(
+        (message_index, item_index)
+        for message_index, item_index in item_for_message.items()
+        if stream_item_field(original_messages[message_index + offset], "role") != "assistant"
+    )
+    item_counts: Final = Counter(item_index for _, item_index in text_rows)
+    return frozenset(
+        message_index + offset
+        for message_index, item_index in text_rows
+        if message_index not in tainted
+        and item_counts[item_index] == 1
+        and (field := _item_rewrite_field(items[item_index])) is not None
+        and is_rewriteable_text_content(items[item_index].get(field))
+    )
+
+
 class _RequestFields(NamedTuple):
     input: tuple[object, ...]
     instructions: str | None
@@ -493,23 +538,30 @@ def _input_item_role(item: object) -> str:
     return role.lower() if isinstance(role, str) else ""
 
 
-def _patched_request_fields(
+def patch_response_request_fields(
     raw_input: object,
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[object],
+    *,
+    preserve_text_metadata: bool = False,
+    scoped_indices: Sequence[int] | None = None,
 ) -> _RequestFields | None:
-    if not isinstance(raw_input, list) or len(original_messages) != len(structured_messages):
+    input_items: Final = (
+        [{"role": "user", "content": raw_input}] if isinstance(raw_input, str) and preserve_text_metadata else raw_input
+    )
+    message_indices: Final = range(len(original_messages)) if scoped_indices is None else scoped_indices
+    if not isinstance(input_items, list) or len(message_indices) != len(structured_messages):
         return None
     offset: Final = 1 if instructions else 0
-    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:])
+    provenance: Final = _input_item_provenance(input_items, tuple(original_messages)[offset:])
     if provenance is None:
         return None
     item_for_message, tainted = provenance
     changed: Final = tuple(
         (index, rewritten)
-        for index, (original, rewritten) in enumerate(zip(original_messages, structured_messages))
-        if original != rewritten
+        for index, rewritten in zip(message_indices, structured_messages)
+        if original_messages[index] != rewritten
     )
     instruction_rewrites: Final = tuple(rewritten for index, rewritten in changed if index < offset)
     rewritten_instructions: Final = (
@@ -526,8 +578,9 @@ def _patched_request_fields(
     replacements: Final = MappingProxyType(
         {
             item_for_message[message_index]: _rewritten_input_item(
-                cast("Mapping[str, object]", raw_input[item_for_message[message_index]]),  # cast-ok: checked Mappings
+                cast("Mapping[str, object]", input_items[item_for_message[message_index]]),  # cast-ok: checked Mappings
                 rewritten,
+                preserve_text_metadata=preserve_text_metadata,
             )
             for message_index, rewritten in body_changes
         }
@@ -535,7 +588,7 @@ def _patched_request_fields(
     if len(replacements) != len(body_changes) or any(item is None for item in replacements.values()):
         return None
     return _RequestFields(
-        input=tuple(replacements.get(index, item) for index, item in enumerate(raw_input)),
+        input=tuple(replacements.get(index, item) for index, item in enumerate(input_items)),
         instructions=instructions_value,
     )
 
@@ -545,11 +598,15 @@ def _patch_or_convert_request_fields(
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[AllMessageValues],
+    *,
+    preserve_text_metadata: bool = False,
 ) -> _RequestFields | None:
     if not isinstance(structured_messages, list):
         return None
-    patched: Final = _patched_request_fields(raw_input, instructions, original_messages, structured_messages)
-    if patched is not None:
+    patched: Final = patch_response_request_fields(
+        raw_input, instructions, original_messages, structured_messages, preserve_text_metadata=preserve_text_metadata
+    )
+    if patched is not None or preserve_text_metadata:
         return patched
     input_items, converted_instructions = (
         LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
@@ -762,7 +819,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         )
         return _patch_or_convert_request_fields(
-            data.get("input"), data.get("instructions"), structured_messages, merged
+            data.get("input"),
+            data.get("instructions"),
+            structured_messages,
+            merged,
+            preserve_text_metadata=guardrail_to_apply.preserve_request_text_metadata(),
         )
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
