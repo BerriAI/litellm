@@ -34,7 +34,7 @@ load_dotenv()
 # this file is to test litellm/proxy
 
 
-from fastapi import Request
+from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.types import Message
 
@@ -386,7 +386,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
 
     try:
         # Call the endpoint
-        response = await count_tokens(mock_request, mock_user_api_key_dict)
+        response = await count_tokens(Response(), mock_request, mock_user_api_key_dict)
 
         # Verify response format matches Anthropic spec
         assert isinstance(response, dict)
@@ -466,7 +466,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
 
     try:
         # Call the endpoint
-        response = await count_tokens(mock_request, mock_user_api_key_dict)
+        response = await count_tokens(Response(), mock_request, mock_user_api_key_dict)
 
         # Verify response format matches Anthropic spec
         assert isinstance(response, dict)
@@ -574,7 +574,7 @@ async def test_anthropic_endpoint_error_handling():
     anthropic_endpoints.read_request_body = mock_read_request_body
 
     try:
-        response = await count_tokens(mock_request, mock_user_api_key_dict)
+        response = await count_tokens(Response(), mock_request, mock_user_api_key_dict)
 
         assert response.status_code == 400
         assert json.loads(response.body) == {
@@ -614,6 +614,8 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
                     "model_info": {},
                 }
             ]
+
+            mock_router.get_model_list.return_value = mock_router.model_list
 
             # Mock the async method properly
             mock_router.async_get_available_deployment = AsyncMock(
@@ -675,6 +677,8 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
                         "model_info": {},
                     }
                 ]
+
+                mock_router.get_model_list.return_value = mock_router.model_list
 
                 # Mock the async method properly
                 mock_router.async_get_available_deployment = AsyncMock(
@@ -1273,7 +1277,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
     proxy_server.count_request_tokens = mock_token_counter_error
 
     try:
-        response: Final[object] = await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+        response: Final[object] = await anthropic_count_tokens(Response(), mock_request, mock_user_api_key_dict)
 
         assert isinstance(response, JSONResponse)
         assert response.status_code == 400
@@ -1330,7 +1334,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
     proxy_server.count_request_tokens = mock_token_counter_error
 
     try:
-        response: Final[object] = await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+        response: Final[object] = await anthropic_count_tokens(Response(), mock_request, mock_user_api_key_dict)
 
         assert isinstance(response, JSONResponse)
         assert response.status_code == 403
@@ -1387,7 +1391,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     proxy_server.count_request_tokens = mock_token_counter_error
 
     try:
-        response: Final[object] = await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+        response: Final[object] = await anthropic_count_tokens(Response(), mock_request, mock_user_api_key_dict)
 
         assert isinstance(response, JSONResponse)
         assert response.status_code == 429
@@ -1463,7 +1467,7 @@ async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_dr
         route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens").mock(
             return_value=httpx.Response(200, json={"input_tokens": 9})
         )
-        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
+        response: Final = await anthropic_count_tokens(Response(), request, UserAPIKeyAuth())
 
     assert response["input_tokens"] == 9
     sent: Final = json.loads(route.calls.last.request.content)
@@ -1508,7 +1512,7 @@ async def _count_on_a_model_without_a_count_api(
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
     with respx.mock:
-        return await anthropic_count_tokens(request, UserAPIKeyAuth())
+        return await anthropic_count_tokens(Response(), request, UserAPIKeyAuth())
 
 
 @pytest.mark.asyncio
@@ -1589,7 +1593,7 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_t
         route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
             return_value=httpx.Response(200, json={"input_tokens": 7})
         )
-        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
+        response: Final = await anthropic_count_tokens(Response(), request, UserAPIKeyAuth())
 
     assert response["input_tokens"] == 7
     sent: Final = json.loads(route.calls.last.request.content)
@@ -3033,7 +3037,7 @@ async def _count_through_the_messages_endpoint(
             return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
         ),
     ):
-        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+        response: Final = await anthropic_count_tokens(Response(), mock_request, MagicMock())
     return response, peer.request_bodies
 
 

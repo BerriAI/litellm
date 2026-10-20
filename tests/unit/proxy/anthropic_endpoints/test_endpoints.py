@@ -468,7 +468,7 @@ class TestErrorLogCarriesCallId:
             ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
         ):
-            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            response = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
         assert response.status_code == 500
         record = self._error_record(caplog)
@@ -520,7 +520,7 @@ async def test_count_tokens_answers_400_for_malformed_tools_without_counting(mod
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
         patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
     assert response.status_code == 400
     assert json.loads(response.body)["error"]["type"] == "invalid_request_error"
@@ -543,7 +543,7 @@ async def test_count_tokens_counts_malformed_tool_entries_for_a_model_the_router
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
         patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
     assert response == {"input_tokens": 7}
     assert counter.await_args.kwargs["request"].tools == _MALFORMED_TOOL_ENTRY
@@ -576,7 +576,7 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
         patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
     assert response == {"input_tokens": 7}
     counted: Final = counter.await_args.kwargs["request"]
@@ -615,7 +615,7 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
         patch.object(proxy_server, "llm_router", new=router),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
     assert response == {"input_tokens": 7}
     assert counter.await_args.kwargs["request"].tools is None
