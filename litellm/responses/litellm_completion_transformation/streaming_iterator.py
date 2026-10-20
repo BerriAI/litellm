@@ -1441,6 +1441,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             messages=LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
                 input=self.request_input,
                 responses_api_request=dict(self.responses_api_request),
+                only_since_compaction=True,
             ),
             logging_obj=self.litellm_logging_obj,
         )

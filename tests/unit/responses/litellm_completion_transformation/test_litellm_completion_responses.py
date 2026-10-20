@@ -6771,6 +6771,55 @@ def test_native_compaction_replay_moves_a_call_its_compaction_item_splits_from_i
     assert [tool_call["id"] for tool_call in messages[2]["tool_calls"]] == ["call_osaka"]
     assert messages[3]["tool_call_id"] == "call_osaka"
 
+
+@pytest.mark.parametrize(
+    ("responses_api_request", "expected_turns"),
+    [
+        pytest.param(
+            _COMPACTION_REQUESTED,
+            [("user", ()), ("assistant", ("call_0",)), ("tool", "Sunny."), ("assistant", ()), ("assistant", ("call_0",)), ("tool", "Rain.")],
+            id="native_compaction_block",
+        ),
+        pytest.param(
+            ResponsesAPIOptionalRequestParams(),
+            [("user", ()), ("assistant", ("call_0",)), ("tool", "Rain.")],
+            id="summary_as_text",
+        ),
+    ],
+)
+def test_compaction_replay_moves_only_the_call_a_later_output_answers_when_an_earlier_call_reused_its_id(
+    responses_api_request: ResponsesAPIOptionalRequestParams, expected_turns: list[tuple[str, object]]
+) -> None:
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="anthropic/claude-sonnet-5-5",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"role": "user", "content": "Plan a Tokyo trip."},
+                {"type": "function_call", "call_id": "call_0", "name": "get_weather", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_0", "output": "Sunny."},
+                _reasoning_item("rs_osaka", _ANSWERED_THINKING),
+                _CHECKING_OSAKA,
+                {"type": "function_call", "call_id": "call_0", "name": "get_weather", "arguments": "{}"},
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                {"type": "function_call_output", "call_id": "call_0", "output": "Rain."},
+            ],
+        ),
+        responses_api_request=responses_api_request,
+    )["messages"]
+
+    assert [
+        (
+            message["role"],
+            message["content"]
+            if message["role"] == "tool"
+            else tuple(tool_call["id"] for tool_call in message.get("tool_calls") or ()),
+        )
+        for message in messages
+    ] == expected_turns
+    assert messages[-2]["thinking_blocks"] == [_ANSWERED_THINKING]
+
+
 def _continued_chain_request(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
         assert previous_response_id == "resp_turn_1"
@@ -6872,3 +6921,47 @@ async def test_bridge_partial_response_on_disconnect_bills_the_relayed_chat_chun
     assert incomplete_event.response.usage is not None
     assert incomplete_event.response.usage.output_tokens == litellm.token_counter(model="gpt-4o-mini", text=relayed_text)
     assert incomplete_event.response.usage.input_tokens > 0
+
+
+async def _input_tokens_billed_on_disconnect(request_input: ResponseInputParam) -> int:
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    chat_stream: Final = await litellm.acompletion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Which day is driest?"}],
+        mock_response="Thursday looks driest, so plan the walking tour then.",
+        stream=True,
+        api_key="test-key",
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="anthropic/claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=chat_stream,
+        request_input=request_input,
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+    )
+    _ = [await iterator.__anext__() for _ in range(6)]
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+    assert incomplete_event is not None and incomplete_event.response.usage is not None
+    return incomplete_event.response.usage.input_tokens
+
+
+@pytest.mark.asyncio
+async def test_bridge_partial_response_on_disconnect_bills_only_the_input_since_the_newest_compaction_item():
+    since_compaction: Final = cast(
+        ResponseInputParam,
+        [
+            {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+            {"role": "user", "content": "Which day is driest?"},
+        ],
+    )
+    history_it_replaces: Final = cast(
+        ResponseInputParam,
+        [{"role": "user", "content": "Plan a Tokyo trip, day by day, with every museum and food stall. " * 200}],
+    )
+
+    assert await _input_tokens_billed_on_disconnect(
+        cast(ResponseInputParam, [*history_it_replaces, *since_compaction])
+    ) == await _input_tokens_billed_on_disconnect(since_compaction)

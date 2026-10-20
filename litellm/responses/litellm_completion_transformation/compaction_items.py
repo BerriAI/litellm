@@ -3,6 +3,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
+from types import MappingProxyType
 from typing import Final, TypeVar
 
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
@@ -209,19 +210,29 @@ def _is_turn_item(item: object) -> bool:
     return item_type == "reasoning" or (_call_id(fields) is not None and not item_type.endswith("_output"))
 
 
-def _turn_indices_answered_later(turn: tuple[tuple[int, object], ...], answered: frozenset[str]) -> tuple[int, ...]:
-    if not any(_call_id(item) in answered for _, item in turn):
+def _turn_indices_answered_later(
+    turn: tuple[tuple[int, object], ...], calls_answered_later: frozenset[int]
+) -> tuple[int, ...]:
+    if not any(index in calls_answered_later for index, _ in turn):
         return ()
-    return tuple(index for index, item in turn if _call_id(item) is None or _call_id(item) in answered)
+    return tuple(index for index, item in turn if _call_id(item) is None or index in calls_answered_later)
 
 
 def _is_turn_entry(entry: tuple[int, object]) -> bool:
     return _is_turn_item(entry[1])
 
 
+def _calls_answered_only_later(earlier: Sequence[object], answered: frozenset[str]) -> frozenset[int]:
+    last_index_by_call_id: Final = MappingProxyType(
+        {call_id: index for index, item in enumerate(earlier) if (call_id := _call_id(item)) is not None}
+    )
+    return frozenset(index for call_id, index in last_index_by_call_id.items() if call_id in answered)
+
+
 def _earlier_turn_indices_answered_later(earlier: Sequence[object], answered: frozenset[str]) -> tuple[int, ...]:
+    calls_answered_later: Final = _calls_answered_only_later(earlier, answered)
     turns: Final = (tuple(turn) for is_turn, turn in groupby(enumerate(earlier), key=_is_turn_entry) if is_turn)
-    return tuple(chain.from_iterable(_turn_indices_answered_later(turn, answered) for turn in turns))
+    return tuple(chain.from_iterable(_turn_indices_answered_later(turn, calls_answered_later) for turn in turns))
 
 
 def _call_ids(items: Sequence[object]) -> frozenset[str]:
