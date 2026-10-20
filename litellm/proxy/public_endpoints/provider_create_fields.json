@@ -3408,6 +3408,34 @@
     "default_model_placeholder": "inferenceapis/deepseek-ai/DeepSeek-V4-Flash"
   },
   {
+    "provider": "RUNCRATE",
+    "provider_display_name": "Runcrate",
+    "litellm_provider": "runcrate",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.runcrate.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "runcrate/deepseek-ai/DeepSeek-V3.2"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",
