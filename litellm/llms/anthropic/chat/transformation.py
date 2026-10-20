@@ -327,6 +327,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
 
+    @property
+    def _carries_thinking_block_binding(self) -> bool:
+        return type(self) is AnthropicConfig
+
     @classmethod
     def get_config(cls, *, model: str | None = None):
         config: Final = super().get_config()
@@ -1588,7 +1592,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 else:
                     optional_params["thinking"] = value
                     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-                        model=model, optional_params=optional_params, custom_llm_provider=self._resolved_provider
+                        model=model,
+                        optional_params=optional_params,
+                        custom_llm_provider=self._resolved_provider,
+                        carry_block_binding=self._carries_thinking_block_binding,
                     )
             elif param == "reasoning_effort":
                 # Accept both string ("low") and dict ({"effort": "low",

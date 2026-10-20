@@ -1,4 +1,11 @@
 model_list:
+  - model_name: anthropic/claude-opus-5-5
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+    model_info:
+      token_count_framing: 0
   - model_name: perplexity/pplx-decider-v1-27b
     litellm_params:
       model: perplexity/pplx-decider-v1-27b

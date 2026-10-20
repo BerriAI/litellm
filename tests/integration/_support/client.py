@@ -23,6 +23,11 @@ def object_value(value: JsonValue) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_python(value)
 
 
+def list_value(value: JsonValue) -> Sequence[JsonValue]:
+    assert isinstance(value, list), f"Expected a list, received {type(value).__name__}"
+    return value
+
+
 def string_value(value: JsonValue) -> str:
     assert isinstance(value, str), f"Expected a string, received {type(value).__name__}"
     return value
