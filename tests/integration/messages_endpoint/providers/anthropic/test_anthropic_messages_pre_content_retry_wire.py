@@ -131,24 +131,24 @@ def _stream(gateway: Gateway, body: Mapping[str, JsonValue]) -> tuple[int, tuple
     return response.status_code, parse_sse(response.text)
 
 
-def _rows(request_id: str) -> list[dict[str, JsonValue]]:
-    return read_rows('SELECT status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,))
+def _rows(gateway: Gateway, request_id: str) -> list[dict[str, JsonValue]]:
+    return gateway.rows('SELECT status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,))
 
 
-def _success_rows(request_id: str) -> list[dict[str, JsonValue]]:
-    return eventually(lambda: _rows(request_id), lambda rows: len(rows) >= 1, seconds=70)
+def _success_rows(gateway: Gateway, request_id: str) -> list[dict[str, JsonValue]]:
+    return eventually(lambda: _rows(gateway, request_id), lambda rows: len(rows) >= 1, seconds=70)
 
 
 def _assert_completed_by_retry(
-    status: int, events: tuple[SseEvent, ...], prompt: str, model: str, wire: Wire, *, attempts: int = 2
+    gateway: Gateway, status: int, events: tuple[SseEvent, ...], prompt: str, model: str, wire: Wire, *, attempts: int = 2
 ) -> None:
     assert status == 200, events
     assert event_types(events) == LIFECYCLE, events
     assert message_id(events) == _served_id(prompt, attempts), events
     assert delta_text(events) == _TEXT, events
     assert [request.target for request in wire.drain()] == ["/v1/messages"] * attempts
-    assert _success_rows(_served_id(prompt, attempts)) == [{"status": "success", "model_group": model}]
-    superseded_rows: Final = {attempt: _rows(_served_id(prompt, attempt)) for attempt in range(1, attempts)}
+    assert _success_rows(gateway, _served_id(prompt, attempts)) == [{"status": "success", "model_group": model}]
+    superseded_rows: Final = {attempt: _rows(gateway, _served_id(prompt, attempt)) for attempt in range(1, attempts)}
     assert not any(superseded_rows.values()), superseded_rows
 
 
@@ -187,7 +187,7 @@ def test_stream_failing_before_content_is_retried_on_the_same_group_and_complete
             **({"num_retries": 1} if source == "deployment" else {}),
         )
         status, events = _stream(gateway, _body(model, prompt, source))
-        _assert_completed_by_retry(status, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, status, events, prompt, model, wire)
 
 
 @pytest.mark.parametrize("source", ["deployment", "request"])
@@ -208,7 +208,7 @@ def test_stream_rejected_before_it_opens_is_retried_and_completes(
             **({"num_retries": 1} if source == "deployment" else {}),
         )
         status, events = _stream(gateway, _body(model, prompt, source))
-        _assert_completed_by_retry(status, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, status, events, prompt, model, wire)
 
 
 def _sdk(gateway: Gateway) -> anthropic.Anthropic:
@@ -236,7 +236,7 @@ def test_anthropic_sdk_sync_stream_completes_after_a_drop_following_message_star
         assert final.id == _served_id(prompt, 2), final
         assert [block.text for block in final.content if block.type == "text"] == [_TEXT], final
         assert [request.target for request in wire.drain()] == ["/v1/messages"] * 2
-        assert _success_rows(final.id) == [{"status": "success", "model_group": model}]
+        assert _success_rows(gateway, final.id) == [{"status": "success", "model_group": model}]
 
 
 async def test_anthropic_sdk_async_stream_completes_after_a_drop_following_message_start(gateway: Gateway) -> None:
@@ -325,7 +325,7 @@ def test_stream_error_frame_after_content_is_not_retried_and_keeps_its_spend_row
         assert message_id(events) == _served_id(prompt, 1), events
         assert delta_text(events) == _TEXT, events
         assert [request.target for request in wire.drain()] == ["/v1/messages"]
-        assert [row["model_group"] for row in _success_rows(_served_id(prompt, 1))] == [model]
+        assert [row["model_group"] for row in _success_rows(gateway, _served_id(prompt, 1))] == [model]
 
 
 def test_stream_rejected_with_401_before_it_opens_is_not_retried(gateway: Gateway) -> None:
@@ -397,8 +397,22 @@ def test_retry_rejected_before_it_opens_counts_against_the_same_budget(gateway: 
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         response: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "deployment"))
         _assert_rejected_before_content(response, wire, status=500, attempts=2, error="error")
-        rows: Final = eventually(lambda: _request_rows(model), lambda values: len(values) >= 1, seconds=70)
-        assert rows == [{"status": "failure", "prompt_tokens": 5, "completion_tokens": 1}], rows
+        rows: Final = eventually(
+            lambda: _request_rows(gateway, response.headers["x-litellm-call-id"]),
+            lambda values: len(values) >= 1,
+            seconds=70,
+        )
+        rejected: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "request", budget=0))
+        _assert_rejected_before_content(rejected, wire, status=500, attempts=1, error="error")
+        rejection_rows: Final = eventually(
+            lambda: _request_rows(gateway, rejected.headers["x-litellm-call-id"]),
+            lambda values: len(values) >= 1,
+            seconds=70,
+        )
+        estimated_input: Final = rejection_rows[0]["prompt_tokens"]
+        assert isinstance(estimated_input, int)
+        assert rejection_rows == [{"status": "failure", "prompt_tokens": estimated_input, "completion_tokens": 0}]
+        assert rows == [{"status": "failure", "prompt_tokens": 5 + estimated_input, "completion_tokens": 1}], rows
 
 
 def test_non_stream_messages_rejected_with_500_is_retried_per_the_deployment_budget(gateway: Gateway) -> None:
@@ -415,7 +429,7 @@ def test_non_stream_messages_rejected_with_500_is_retried_per_the_deployment_bud
         assert payload["id"] == _served_id(prompt, 2), response.text
         assert payload["content"] == [{"type": "text", "text": _TEXT}], response.text
         assert [request.target for request in wire.drain()] == ["/v1/messages"] * 2
-        assert _success_rows(_served_id(prompt, 2)) == [{"status": "success", "model_group": model}]
+        assert _success_rows(gateway, _served_id(prompt, 2)) == [{"status": "success", "model_group": model}]
 
 
 def test_retried_stream_response_headers_name_the_attempt(gateway: Gateway) -> None:
@@ -428,7 +442,7 @@ def test_retried_stream_response_headers_name_the_attempt(gateway: Gateway) -> N
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         response: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "deployment"))
         events: Final = parse_sse(response.text)
-        _assert_completed_by_retry(response.status_code, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, response.status_code, events, prompt, model, wire)
         assert response.headers.get("x-litellm-attempted-retries") == "1", dict(response.headers)
         assert response.headers.get("x-litellm-max-retries") == "1", dict(response.headers)
 
@@ -460,7 +474,7 @@ def test_retried_stream_spend_row_records_the_attempt_count(gateway: Gateway) ->
     ):
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         status, events = _stream(gateway, _body(model, prompt, "deployment"))
-        _assert_completed_by_retry(status, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, status, events, prompt, model, wire)
         rows: Final = read_rows(
             "SELECT metadata->>'attempted_retries' AS attempted, metadata->>'max_retries' AS budget "
             'FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
@@ -504,9 +518,9 @@ class _SinkReader:
         )
 
 
-def _request_rows(model: str) -> list[dict[str, JsonValue]]:
-    return read_rows(
-        'SELECT status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE model=%s', (model,)
+def _request_rows(gateway: Gateway, call_id: str) -> list[dict[str, JsonValue]]:
+    return gateway.rows(
+        'SELECT status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s', (call_id,)
     )
 
 
@@ -528,7 +542,7 @@ def test_superseded_attempt_and_its_retry_each_log_their_own_usage(
     ):
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         status, events = _stream(candidate, _body(model, prompt, "deployment"))
-        _assert_completed_by_retry(status, events, prompt, model, wire)
+        _assert_completed_by_retry(candidate, status, events, prompt, model, wire)
         delivered: Final = eventually(
             _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
         )
@@ -547,14 +561,24 @@ def test_every_dropped_attempt_logs_its_own_failure_and_the_request_row_still_bi
         candidate.scenario() as scenario,
     ):
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
-        status, events = _stream(candidate, _body(model, prompt, "deployment"))
-        _assert_stream_failed_after_message_start(status, events, wire, attempts=2)
+        response: Final = candidate.request("POST", "/v1/messages", _body(model, prompt, "deployment"))
+        _assert_stream_failed_after_message_start(response.status_code, parse_sse(response.text), wire, attempts=2)
         delivered: Final = eventually(
             _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
         )
         assert delivered == (("failure", 5, 1), ("failure", 5, 1)), delivered
-        rows: Final = eventually(lambda: _request_rows(model), lambda values: len(values) >= 1, seconds=70)
-        assert rows == [{"status": "failure", "prompt_tokens": 5, "completion_tokens": 1}], rows
+        rows: Final = eventually(
+            lambda: _request_rows(candidate, response.headers["x-litellm-call-id"]),
+            lambda values: len(values) >= 1,
+            seconds=70,
+        )
+        assert rows == [
+            {
+                "status": "failure",
+                "prompt_tokens": sum(input_tokens for _, input_tokens, _ in delivered),
+                "completion_tokens": sum(output_tokens for _, _, output_tokens in delivered),
+            }
+        ], rows
 
 
 def _string_values(cache: Redis) -> tuple[bytes, ...]:
@@ -579,7 +603,7 @@ def test_retried_stream_is_cached_and_the_identical_request_is_served_without_th
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         body: Final = _body(model, prompt, "deployment")
         status, events = _stream(gateway, body)
-        _assert_completed_by_retry(status, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, status, events, prompt, model, wire)
         eventually(lambda: _cached_somewhere(_served_id(prompt, 2)), bool, seconds=30)
         replay_status, replay = _stream(gateway, body)
         assert replay_status == 200, replay

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -753,11 +754,11 @@ async def test_chunk_processor_logs_failure_not_success_on_mid_stream_exception(
     assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadTimeout)
 
 
-def _anthropic_stream_dropping_after(frames: tuple[bytes, ...]):
-    mock = MagicMock(spec=httpx.Response)
+def _anthropic_stream_dropping_after(frames: tuple[bytes, ...]) -> httpx.Response:
+    mock: Final = MagicMock(spec=httpx.Response)
     mock.status_code = 200
 
-    async def _aiter_bytes():
+    async def _aiter_bytes() -> AsyncIterator[bytes]:
         for frame in frames:
             yield frame
         raise httpx.ReadError("upstream closed the connection")
@@ -766,7 +767,9 @@ def _anthropic_stream_dropping_after(frames: tuple[bytes, ...]):
     return mock
 
 
-def _anthropic_messages_attempt(logging_obj: LiteLLMLoggingObj, response):
+def _anthropic_messages_attempt(
+    logging_obj: LiteLLMLoggingObj, response: httpx.Response
+) -> AsyncGenerator[bytes, None]:
     return PassThroughStreamingHandler.chunk_processor(
         response=response,
         request_body={"model": "claude-sonnet-5", "stream": True},
@@ -793,7 +796,7 @@ def _anthropic_messages_logging_obj(recorder: _EventRecorder, call_id: str) -> L
 
 
 async def _drop_after_message_start(logging_obj: LiteLLMLoggingObj, message_id: str, input_tokens: int) -> None:
-    dropped = _anthropic_messages_attempt(
+    dropped: Final = _anthropic_messages_attempt(
         logging_obj, _anthropic_stream_dropping_after((_anthropic_message_start_frame(message_id, input_tokens),))
     )
     with pytest.raises(httpx.ReadError):
@@ -802,13 +805,13 @@ async def _drop_after_message_start(logging_obj: LiteLLMLoggingObj, message_id: 
 
 
 @pytest.mark.asyncio
-async def test_dropped_attempt_logs_its_failure_without_claiming_the_shared_logging_object():
+async def test_dropped_attempt_logs_its_failure_without_claiming_the_shared_logging_object() -> None:
     """The router retries a /v1/messages stream the provider drops after message_start on the same logging
     object. The dropped attempt's failure log bills its own usage and leaves the shared object free: the
     retry's success log carries the retry's usage and no stale exception, while the stash stays for the
     failure row of a request that runs out of retries until the router opens the next attempt."""
-    recorder = _EventRecorder()
-    logging_obj = _anthropic_messages_logging_obj(recorder, "test-dropped-attempt")
+    recorder: Final = _EventRecorder()
+    logging_obj: Final = _anthropic_messages_logging_obj(recorder, "test-dropped-attempt")
 
     await _drop_after_message_start(logging_obj, "msg_a1", 52)
     await _settle(recorder.failure_kwargs)
@@ -817,18 +820,18 @@ async def test_dropped_attempt_logs_its_failure_without_claiming_the_shared_logg
     assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadError)
     assert logging_obj.model_call_details.get("has_logged_async_failure") is not True
     assert "exception" not in logging_obj.model_call_details
-    stashed = logging_obj.model_call_details.get("combined_usage_object")
+    stashed: Final = logging_obj.model_call_details.get("combined_usage_object")
     assert isinstance(stashed, litellm.Usage) and stashed.prompt_tokens == 52
 
     logging_obj.discard_partial_usage_for_failure()
-    retry = _anthropic_messages_attempt(
+    retry: Final = _anthropic_messages_attempt(
         logging_obj, _anthropic_stream_of((_anthropic_message_start_frame("msg_a2", 7), *_anthropic_completed_stream_tail()))
     )
     async for _ in retry:
         pass
     await _settle(recorder.success_kwargs)
 
-    success_payload = recorder.success_kwargs[0]["standard_logging_object"]
+    success_payload: Final = recorder.success_kwargs[0]["standard_logging_object"]
     assert success_payload["status"] == "success"
     assert (success_payload["prompt_tokens"], success_payload["completion_tokens"]) == (7, 3)
     assert recorder.success_kwargs[0].get("exception") is None
@@ -836,12 +839,12 @@ async def test_dropped_attempt_logs_its_failure_without_claiming_the_shared_logg
 
 
 @pytest.mark.asyncio
-async def test_every_dropped_attempt_logs_its_own_failure():
+async def test_every_dropped_attempt_logs_its_own_failure() -> None:
     """Two attempts of one /v1/messages request dropped in a row each log a failure billing their own usage;
     the first attempt's log must not swallow the second's, and the shared object ends up holding the last
     attempt's usage for the request's failure row."""
-    recorder = _EventRecorder()
-    logging_obj = _anthropic_messages_logging_obj(recorder, "test-every-dropped-attempt")
+    recorder: Final = _EventRecorder()
+    logging_obj: Final = _anthropic_messages_logging_obj(recorder, "test-every-dropped-attempt")
 
     await _drop_after_message_start(logging_obj, "msg_a1", 52)
     await _settle(recorder.failure_kwargs)
@@ -851,7 +854,7 @@ async def test_every_dropped_attempt_logs_its_own_failure():
 
     assert [kwargs["standard_logging_object"]["prompt_tokens"] for kwargs in recorder.failure_kwargs] == [52, 9]
     assert all(isinstance(kwargs["exception"], httpx.ReadError) for kwargs in recorder.failure_kwargs)
-    stashed = logging_obj.model_call_details.get("combined_usage_object")
+    stashed: Final = logging_obj.model_call_details.get("combined_usage_object")
     assert isinstance(stashed, litellm.Usage) and stashed.prompt_tokens == 9
 
 def _anthropic_message_start_frame(message_id: str = "msg_1", input_tokens: int = 52) -> bytes:
@@ -892,7 +895,7 @@ def _anthropic_completed_stream_tail() -> tuple[bytes, ...]:
     )
 
 
-async def _settle(recorded: list[dict[str, object]], count: int = 1) -> None:
+async def _settle(recorded: Sequence[Mapping[str, object]], count: int = 1) -> None:
     for _ in range(300):
         if len(recorded) >= count:
             return

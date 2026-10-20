@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Any, Final, Literal, NoReturn
@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
@@ -20,7 +21,7 @@ from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments, mark_advisor_orchestration_failure
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import Choices, Message, ModelResponse, StandardLoggingPayload, Usage
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     PRE_ROUTING_SELECTED_MODEL_KEY,
@@ -165,21 +166,25 @@ class _SuccessRecorder(CustomLogger):
         super().__init__()
         self.logged: list[tuple[int, float]] = []
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        payload = kwargs["standard_logging_object"]
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
         self.logged.append((payload["completion_tokens"], payload["response_cost"]))
 
 
 class HopLoggingItsOwnSuccessRouter(FakeRouter):
-    async def async_function_with_fallbacks(self, *args, **kwargs):
-        hop_response = ModelResponse(
+    async def async_function_with_fallbacks(self, *args: object, **kwargs: object) -> StreamingWrapper:
+        hop_response: Final = ModelResponse(
             id="chatcmpl-hop",
             model="gpt-4o-mini",
             choices=[Choices(index=0, message=Message(role="assistant", content="served by the hop"))],
             usage=Usage(prompt_tokens=52, completion_tokens=7, total_tokens=59),
         )
-        now = datetime(2026, 1, 1)
-        await kwargs["litellm_logging_obj"].async_success_handler(result=hop_response, start_time=now, end_time=now)
+        now: Final = datetime(2026, 1, 1)
+        logging_obj: Final = kwargs["litellm_logging_obj"]
+        assert isinstance(logging_obj, Logging)
+        await logging_obj.async_success_handler(result=hop_response, start_time=now, end_time=now)
         return StreamingWrapper()
 
 
@@ -187,8 +192,8 @@ class HopLoggingItsOwnSuccessRouter(FakeRouter):
 async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_partial_usage():
     """A stream the failed attempt dropped stashed the usage it consumed on the request's logging object. The
     hop that replaces it logs its own usage, so the integrations see the hop's tokens and cost, not the stash."""
-    recorder = _SuccessRecorder()
-    logging_obj = Logging(
+    recorder: Final = _SuccessRecorder()
+    logging_obj: Final = Logging(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "ping"}],
         stream=False,
@@ -268,13 +273,15 @@ async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_l
     """The manual cooldown stands in for the failure callbacks the logging object blocks once a failure has
     been logged. A hop whose own failure was the first one logged already ran them, so only a hop that failed
     with the flag already set gets the manual cooldown."""
-    router = _two_deployment_router()
-    logging_obj = _request_logging_obj()
+    router: Final = _two_deployment_router()
+    logging_obj: Final = _request_logging_obj()
     if failure_already_logged:
         logging_obj.model_call_details["has_logged_async_failure"] = True
 
-    async def rate_limited_hop(*args, **kwargs):
-        kwargs["litellm_logging_obj"].model_call_details["has_logged_async_failure"] = True
+    async def rate_limited_hop(*args: object, **kwargs: object) -> NoReturn:
+        hop_logging_obj: Final = kwargs["litellm_logging_obj"]
+        assert isinstance(hop_logging_obj, Logging)
+        hop_logging_obj.model_call_details["has_logged_async_failure"] = True
         raise _RateLimitedHop()
 
     with pytest.raises(_RateLimitedHop):
@@ -290,7 +297,7 @@ async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_l
             metadata={},
         )
 
-    cooled_down = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooled_down: Final = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert cooled_down == (["fallback-dep-1"] if failure_already_logged else [])
 
 

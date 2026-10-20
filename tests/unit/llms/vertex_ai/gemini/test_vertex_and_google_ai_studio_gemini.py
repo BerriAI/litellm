@@ -2831,7 +2831,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        def attempt_scoped_copy(self):
+        def attempt_scoped_copy(self) -> "DummyLogging":
             return self
 
     async def failing_make_call(client=None, **kwargs):

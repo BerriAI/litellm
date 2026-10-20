@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from openai.types.chat import ChatCompletionChunk
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import traceback
 import litellm
@@ -37,6 +37,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
+    StandardLoggingPayload,
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
@@ -4187,8 +4188,14 @@ class _FailureRecorder(CustomLogger):
         self.failures: list[tuple[int, int]] = []
         self.logged = asyncio.Event()
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        payload = kwargs["standard_logging_object"]
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
         self.failures.append((payload["prompt_tokens"], payload["completion_tokens"]))
         self.logged.set()
 
@@ -4199,8 +4206,8 @@ async def test_log_stream_failure_bills_the_dropped_attempt_even_after_the_route
     fallback hop before that log runs. The log must still bill what the dropped attempt consumed, and the shared
     logging object must not be marked as already failed, since the hop's own failure still has to reach the
     integrations."""
-    recorder = _FailureRecorder()
-    logging_obj = Logging(
+    recorder: Final = _FailureRecorder()
+    logging_obj: Final = Logging(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "Hey"}],
         stream=True,
@@ -4211,7 +4218,7 @@ async def test_log_stream_failure_bills_the_dropped_attempt_even_after_the_route
         dynamic_async_failure_callbacks=[recorder],
     )
     logging_obj.model_call_details["custom_llm_provider"] = "openai"
-    wrapper = CustomStreamWrapper(
+    wrapper: Final = CustomStreamWrapper(
         completion_stream=None,
         model="gpt-4o-mini",
         logging_obj=logging_obj,
