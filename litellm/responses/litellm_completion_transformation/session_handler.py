@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -71,6 +71,14 @@ def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> s
     return instructions if isinstance(instructions, str) and instructions else None
 
 
+def _latest_replayable_instructions(proxy_server_requests: Sequence[Mapping[str, object] | None]) -> str | None:
+    latest: Final = next(
+        (instructions for instructions in map(_stored_instructions, reversed(proxy_server_requests)) if instructions),
+        None,
+    )
+    return None if latest == REDACTED_BY_LITELLM else latest
+
+
 class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
@@ -127,14 +135,7 @@ class ResponsesSessionHandler:
         return ChatCompletionSession(
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
-            instructions=next(
-                (
-                    instructions
-                    for instructions in map(_stored_instructions, reversed(proxy_server_requests))
-                    if instructions
-                ),
-                None,
-            ),
+            instructions=_latest_replayable_instructions(proxy_server_requests),
         )
 
     @staticmethod
