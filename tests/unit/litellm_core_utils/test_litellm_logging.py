@@ -10168,6 +10168,7 @@ class TestAzurePTUSpilloverCost:
 
     ROUTER_MODEL_ID: Final = "ptu-spill-router-model-id"
     SERVED_MODEL: Final = "azure/spill-served-model-ptu"
+    PTU_DEPLOYMENT: Final = "azure/spill-ptu-deployment"
     PTU_MODEL_INFO: Final = {
         "id": ROUTER_MODEL_ID,
         "team_id": "team-1",
@@ -10203,7 +10204,9 @@ class TestAzurePTUSpilloverCost:
         litellm.model_cost.pop(TestAzurePTUSpilloverCost.ROUTER_MODEL_ID, None)
         litellm.model_cost.pop(TestAzurePTUSpilloverCost.SERVED_MODEL, None)
 
-    def _logging_obj(self, model_info: dict, *, flag: str, litellm_rate: float, monkeypatch) -> LitellmLogging:
+    def _logging_obj(
+        self, model_info: dict, *, flag: str, litellm_rate: float, monkeypatch, deployment: str | None = None
+    ) -> LitellmLogging:
         monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", flag)
         obj = LitellmLogging(
             model=self.SERVED_MODEL,
@@ -10220,7 +10223,7 @@ class TestAzurePTUSpilloverCost:
             optional_params={},
             litellm_params={
                 "api_base": "",
-                "metadata": {"model_info": model_info},
+                "metadata": {"model_info": model_info, "deployment": deployment},
                 "input_cost_per_token": litellm_rate,
                 "output_cost_per_token": litellm_rate,
             },
@@ -10322,6 +10325,50 @@ class TestAzurePTUSpilloverCost:
                 100 * model_map_value["input_cost_per_token"] + 50 * model_map_value["output_cost_per_token"]
             )
         finally:
+            self._unregister_models()
+
+    def test_spillover_without_base_model_reports_the_pay_as_you_go_rates_billing_used(self, monkeypatch) -> None:
+        self._register_models()
+        litellm.model_cost[self.PTU_DEPLOYMENT] = {"litellm_provider": "azure", "mode": "chat"}
+        try:
+            obj = self._logging_obj(
+                dict(self.PTU_MODEL_INFO),
+                flag="True",
+                litellm_rate=0.0,
+                monkeypatch=monkeypatch,
+                deployment=self.PTU_DEPLOYMENT,
+            )
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+            response._hidden_params["provider_response_model"] = response.model
+            response_cost: Final = obj.response_cost_calculator(result=response)
+            response.model = "spill-model-group-alias"
+
+            payload: Final = get_standard_logging_object_payload(
+                kwargs={
+                    "model": self.SERVED_MODEL,
+                    "custom_llm_provider": "azure",
+                    "litellm_params": obj.litellm_params,
+                    "response_cost": response_cost,
+                },
+                init_response_obj=response,
+                start_time=datetime.datetime.now(),
+                end_time=datetime.datetime.now(),
+                logging_obj=obj,
+                status="success",
+            )
+
+            assert response_cost == pytest.approx(self.EXPECTED_SPILL_COST)
+            assert payload is not None
+            model_map_information: Final = payload["model_map_information"]
+            assert model_map_information["model_map_key"] != self.PTU_DEPLOYMENT
+            model_map_value: Final = model_map_information["model_map_value"]
+            assert model_map_value is not None
+            assert response_cost == pytest.approx(
+                100 * model_map_value["input_cost_per_token"] + 50 * model_map_value["output_cost_per_token"]
+            )
+        finally:
+            litellm.model_cost.pop(self.PTU_DEPLOYMENT, None)
             self._unregister_models()
 
     def test_spillover_header_does_not_touch_non_ptu_custom_pricing(self, monkeypatch) -> None:
