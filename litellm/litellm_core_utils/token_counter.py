@@ -5,8 +5,10 @@ import io
 import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import cached_property
 from itertools import accumulate, chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
 import anyio
@@ -35,6 +37,7 @@ from litellm.constants import (
     OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS,
     PDF_DATA_URL_PREFIX,
     PDF_MAX_FORM_XOBJECT_DEPTH,
+    PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
@@ -459,18 +462,24 @@ def _is_openai_chat_model(model: str) -> bool:
 
 
 def _openai_deployment_name(model: str) -> str:
-    return model.rpartition("/")[2]
+    name: Final = model.rpartition("/")[2]
+    return name.split(":")[1] if name.startswith("ft:") else name
 
 
 def _openai_model_family(model: str) -> str | None:
     words: Final = _openai_deployment_name(model).split("-", OPENAI_MODEL_NAME_MAX_DASHES)
     prefixes: Final = ("-".join(words[:end]) for end in range(len(words), 0, -1))
-    return next((prefix for prefix in prefixes if _is_openai_chat_model(prefix)), None)
+    listed: Final = next((prefix for prefix in prefixes if _is_openai_chat_model(prefix)), None)
+    return None if listed is None or _is_listed_non_chat_model(listed) else listed
+
+
+def _untyped_cost_map() -> object:
+    return litellm.model_cost  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # loaded untyped
 
 
 def _cost_map_entry(model: str) -> Mapping[str, object]:
-    entry: Final[object] = litellm.model_cost.get(model)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]  # cost map is loaded untyped
-    return _pdf_dictionary(entry) or {}
+    cost_map: Final = _pdf_dictionary(_untyped_cost_map()) or {}
+    return _pdf_dictionary(cost_map.get(model)) or {}
 
 
 def _is_azure_openai_chat_model(model: str) -> bool:
@@ -828,8 +837,8 @@ def _tiktoken_model_name(model: str) -> str:
 
 
 def _is_listed_non_chat_model(model: str) -> bool:
-    mode: Final = _cost_map_entry(model).get("mode")
-    return mode is not None and mode not in OPENAI_CHAT_MODES
+    modes: Final = (_cost_map_entry(name).get("mode") for name in (model, f"azure/{model}"))
+    return any(mode is not None and mode not in OPENAI_CHAT_MODES for mode in modes)
 
 
 def openai_tokenizer_encoding_name(model: str) -> str:
@@ -956,67 +965,88 @@ def _pdf_value(container: Mapping[str, object], key: str) -> object:
     return container[key] if key in container else None  # noqa: SIM401  # pypdf resolves references only in []
 
 
-_PdfDrawing: TypeAlias = tuple[_PdfContent, Mapping[str, object] | None]
+_PdfXObjects: TypeAlias = Mapping[str, object] | None
+_PdfXObjectUse: TypeAlias = tuple[Mapping[str, object], _PdfXObjects]
 
 
-def _pdf_resources(
-    container: Mapping[str, object], inherited: Mapping[str, object] | None
-) -> Mapping[str, object] | None:
-    return _pdf_dictionary(_pdf_value(container, "/Resources")) or inherited
+@dataclass(frozen=True, slots=True)
+class _PdfContentSummary:
+    drawn_names: tuple[str, ...]
+    draws_inline_image: bool
 
 
-def _pdf_drawn_xobjects(drawing: _PdfDrawing) -> tuple[tuple[Mapping[str, object], Mapping[str, object] | None], ...]:
-    content, resources = drawing
-    xobjects: Final = _pdf_dictionary(_pdf_value(resources, "/XObject")) if resources is not None else None
-    if xobjects is None:
-        return ()
-    operand_lists: Final = (operands for operands, operator in content.operations if operator == b"Do")
+_PdfDrawing: TypeAlias = tuple[_PdfContentSummary, _PdfXObjects]
+
+
+@dataclass(frozen=True, slots=True)
+class _PdfWalk:
+    frontier: tuple[_PdfDrawing, ...]
+    seen: frozenset[tuple[int, int]]
+    summaries: Mapping[int, _PdfContentSummary | None]
+    draws: int
+
+
+def _pdf_xobjects(container: Mapping[str, object], inherited: _PdfXObjects) -> _PdfXObjects:
+    resources: Final = _pdf_dictionary(_pdf_value(container, "/Resources"))
+    if resources is None:
+        return inherited
+    return _pdf_dictionary(_pdf_value(resources, "/XObject"))
+
+
+def _pdf_content_summary(content: _PdfContent) -> _PdfContentSummary:
+    operations: Final = content.operations
+    operand_lists: Final = (operands for operands, operator in operations if operator == b"Do")
     names: Final[Iterable[object]] = (
         cast(Sequence[object], operands)[0]  # cast-ok: pypdf parses an operator's operands into a list
         for operands in operand_lists
         if isinstance(operands, list) and operands
     )
-    resolved: Final = (_pdf_dictionary(_pdf_value(xobjects, name)) for name in names if isinstance(name, str))
-    return tuple((xobject, resources) for xobject in resolved if xobject is not None)
+    return _PdfContentSummary(
+        drawn_names=tuple(name for name in names if isinstance(name, str)),
+        draws_inline_image=any(operator == b"INLINE IMAGE" for _, operator in operations),
+    )
 
 
-def _draws_inline_image(content: _PdfContent) -> bool:
-    return any(operator == b"INLINE IMAGE" for _, operator in content.operations)
-
-
-def _pdf_form_drawing(form: Mapping[str, object], inherited: Mapping[str, object] | None) -> _PdfDrawing | None:
+def _pdf_form_summary(form: Mapping[str, object]) -> _PdfContentSummary | None:
     from pypdf.generic import ContentStream, StreamObject
 
     if not isinstance(form, StreamObject):
         return None
-    return cast(_PdfContent, ContentStream(form, None)), _pdf_resources(form, inherited)  # cast-ok: pypdf is untyped
+    return _pdf_content_summary(cast(_PdfContent, ContentStream(form, None)))  # cast-ok: pypdf is untyped
 
 
-def _pdf_drawing_key(xobject: Mapping[str, object], inherited: Mapping[str, object] | None) -> tuple[int, int]:
-    return id(xobject), id(_pdf_resources(xobject, inherited))
+def _pdf_drawn_xobjects(drawing: _PdfDrawing) -> tuple[_PdfXObjectUse, ...]:
+    summary, xobjects = drawing
+    if xobjects is None:
+        return ()
+    resolved: Final = (_pdf_dictionary(_pdf_value(xobjects, name)) for name in summary.drawn_names)
+    return tuple((xobject, xobjects) for xobject in resolved if xobject is not None)
 
 
-def _pdf_unseen_form_drawings(
-    drawn: tuple[tuple[Mapping[str, object], Mapping[str, object] | None], ...], seen: frozenset[tuple[int, int]]
-) -> tuple[_PdfDrawing, ...]:
-    forms: Final = {
-        _pdf_drawing_key(xobject, inherited): (xobject, inherited)
-        for xobject, inherited in drawn
-        if _pdf_value(xobject, "/Subtype") == "/Form"
-    }
-    form_drawings: Final = (_pdf_form_drawing(*forms[key]) for key in forms.keys() - seen)
-    return tuple(drawing for drawing in form_drawings if drawing is not None)
+def _pdf_drawing_key(use: _PdfXObjectUse) -> tuple[int, int]:
+    xobject, inherited = use
+    return id(xobject), id(_pdf_xobjects(xobject, inherited))
 
 
-_PdfWalkStep: TypeAlias = tuple[tuple[_PdfDrawing, ...], frozenset[tuple[int, int]]]
-
-
-def _pdf_walk_step(frontier: tuple[_PdfDrawing, ...], seen: frozenset[tuple[int, int]]) -> _PdfWalkStep | None:
-    drawn: Final = tuple(chain.from_iterable(map(_pdf_drawn_xobjects, frontier)))
+def _pdf_next_walk(walk: _PdfWalk) -> _PdfWalk | None:
+    draws: Final = walk.draws + sum(len(summary.drawn_names) for summary, _ in walk.frontier)
+    if draws > PDF_MAX_XOBJECT_DRAWS_PER_PAGE:
+        return None
+    drawn: Final = tuple(chain.from_iterable(map(_pdf_drawn_xobjects, walk.frontier)))
     if any(_pdf_value(xobject, "/Subtype") == "/Image" for xobject, _ in drawn):
         return None
-    return _pdf_unseen_form_drawings(drawn, seen), seen | frozenset(
-        _pdf_drawing_key(xobject, inherited) for xobject, inherited in drawn
+    forms: Final = {_pdf_drawing_key(use): use for use in drawn if _pdf_value(use[0], "/Subtype") == "/Form"}
+    unseen: Final = tuple(forms[key] for key in forms.keys() - walk.seen)
+    unparsed: Final = {id(form): form for form, _ in unseen if id(form) not in walk.summaries}
+    summaries: Final = MappingProxyType(
+        {**walk.summaries, **{key: _pdf_form_summary(form) for key, form in unparsed.items()}}
+    )
+    drawings: Final = ((summaries[id(form)], _pdf_xobjects(form, inherited)) for form, inherited in unseen)
+    return _PdfWalk(
+        frontier=tuple((summary, xobjects) for summary, xobjects in drawings if summary is not None),
+        seen=walk.seen | frozenset(forms),
+        summaries=summaries,
+        draws=draws,
     )
 
 
@@ -1025,35 +1055,28 @@ def _pdf_page_draws_raster_image(page: _PdfPage) -> bool:
     page_dictionary: Final = _pdf_dictionary(page)
     if contents is None or page_dictionary is None:
         return False
-    frontier: tuple[_PdfDrawing, ...] = (  # rebind-ok: breadth-first walk, recursion is banned
-        (contents, _pdf_resources(page_dictionary, None)),
+    walk: _PdfWalk = _PdfWalk(  # rebind-ok: breadth-first walk, recursion is banned
+        frontier=((_pdf_content_summary(contents), _pdf_xobjects(page_dictionary, None)),),
+        seen=frozenset(),
+        summaries=MappingProxyType({}),
+        draws=0,
     )
-    seen: frozenset[tuple[int, int]] = frozenset()  # rebind-ok: breadth-first walk, recursion is banned
     for _ in range(PDF_MAX_FORM_XOBJECT_DEPTH):
-        if not frontier:
+        if not walk.frontier:
             return False
-        if any(_draws_inline_image(content) for content, _ in frontier):
+        if any(summary.draws_inline_image for summary, _ in walk.frontier):
             return True
-        if (step := _pdf_walk_step(frontier, seen)) is None:
+        if (next_walk := _pdf_next_walk(walk)) is None:
             return True
-        frontier, seen = step
-    return bool(frontier)
-
-
-def _openai_page_image_tokens(width: float, height: float) -> int:
-    if width <= 0 or height <= 0:
-        return 0
-    resized_width, resized_height = resize_image_high_res(math.ceil(width), math.ceil(height))
-    base_tokens: Final = 85
-    return base_tokens + 2 * base_tokens * calculate_tiles_needed(resized_width, resized_height)
+        walk = next_walk
+    return bool(walk.frontier)
 
 
 def _openai_pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
+    if _pdf_page_draws_raster_image(page):
+        return _claude_pdf_page_tokens(page, count_function)
     text: Final = page.extract_text() or ""
-    text_tokens: Final = count_function(text) + OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS if text.strip() else 0
-    if not _pdf_page_draws_raster_image(page):
-        return text_tokens
-    return text_tokens + _openai_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
+    return count_function(text) + OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS if text.strip() else 0
 
 
 def _claude_pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:

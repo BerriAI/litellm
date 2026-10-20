@@ -1923,7 +1923,8 @@ def _as_pdf_document(pdf_base64: str) -> Mapping[str, object]:
 
 
 def _as_pdf_file(pdf_base64: str) -> Mapping[str, object]:
-    return {"type": "file", "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64," + pdf_base64}}
+    file_data: Final = "data:application/pdf;base64," + pdf_base64
+    return {"type": "file", "file": {"filename": "report.pdf", "file_data": file_data}}
 
 
 def _as_pdf_tool_result(pdf_base64: str) -> Mapping[str, object]:
@@ -1940,9 +1941,16 @@ def _text_cost(model: str, *lines: str) -> int:
     )
 
 
-@pytest.mark.parametrize("wrap", [_as_pdf_document, _as_pdf_file, _as_pdf_tool_result], ids=["document", "file", "tool_result"])
+def _rendered_page_cost(width: int = 612, height: int = 792) -> int:
+    return _pdf_cost("my-private-model", _pdf_base64(("",), width, height))
+
+
 @pytest.mark.parametrize(
-    "model", ["gpt-4o", "azure/gpt-5.6-sol", "o3-2025-04-16", "azure/gpt-41", "eu/gpt-5.6-sol", "gpt-5.6-sol-2026-07-09"]
+    "wrap", [_as_pdf_document, _as_pdf_file, _as_pdf_tool_result], ids=["document", "file", "tool_result"]
+)
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-4o", "azure/gpt-5.6-sol", "o3-2025-04-16", "azure/gpt-41", "eu/gpt-5.6-sol", "gpt-5.6-sol-2026-07-09"],
 )
 def test_openai_model_prices_each_pdf_text_page_as_its_text_plus_framing(
     model: str, wrap: Callable[[str], Mapping[str, object]]
@@ -1971,21 +1979,23 @@ def test_openai_model_prices_each_pdf_text_page_as_its_text_plus_framing(
     [(_ONE_PIXEL_IMAGE,), (_form_xobject(7), _xobject_resources(8), _ONE_PIXEL_IMAGE)],
     ids=["image_on_the_page", "image_inside_a_form"],
 )
-def test_openai_model_prices_a_page_that_draws_a_raster_image_as_a_high_detail_page_image(xobjects: tuple[bytes, ...]):
-    """A page embedding a raster image also bills a picture of the page. It is priced as a high-detail image of the
-    page's size with gpt-4o's tile math (85 tokens plus 170 per 512 px tile after fitting the short side to 768 px):
-    https://developers.openai.com/api/docs/guides/images-vision, read 2026-10-20, when a full-page scanned Letter page
-    billed +798 on gpt-4o and a vector-drawn chart page billed no image.
+def test_openai_model_prices_a_page_that_draws_a_raster_image_as_its_text_plus_the_rendered_page(
+    xobjects: tuple[bytes, ...],
+):
+    """A page embedding a raster image keeps the rendered-page estimate every model got before, so a reservation
+    never undercounts it: on 2026-10-20 /v1/responses/input_tokens billed a page with one drawn image at 1620 on
+    gpt-5.6-sol and gpt-6-sol, above OpenAI's own high-detail page image (765 for Letter), while a vector-drawn
+    chart page billed no image.
     """
     model: Final = "gpt-4o"
-    letter_page_image: Final = 85 + 4 * 170
-    small_page_image: Final = 85 + 170
 
     assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=xobjects, drawing=_DRAW_X0)) == (
-        _text_cost(model, _REVENUE_LINE) + 13 + letter_page_image
+        _text_cost(model, _REVENUE_LINE) + _rendered_page_cost()
     )
-    assert _pdf_cost(model, _pdf_base64(("",), xobjects=xobjects, drawing=_DRAW_X0)) == letter_page_image
-    assert _pdf_cost(model, _pdf_base64(("",), 300, 300, xobjects=xobjects, drawing=_DRAW_X0)) == small_page_image
+    assert _pdf_cost(model, _pdf_base64(("",), xobjects=xobjects, drawing=_DRAW_X0)) == _rendered_page_cost()
+    assert _pdf_cost(model, _pdf_base64(("",), 300, 300, xobjects=xobjects, drawing=_DRAW_X0)) == (
+        _rendered_page_cost(300, 300)
+    )
 
 
 def test_openai_model_prices_no_page_image_for_an_image_the_page_lists_but_never_draws():
@@ -2013,7 +2023,7 @@ def test_openai_model_prices_no_image_for_forms_that_draw_none():
 _INLINE_IMAGE: Final = b" q 200 0 0 200 72 400 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x00 EI Q"
 
 
-def test_openai_model_prices_a_page_that_draws_an_inline_image_as_a_high_detail_page_image():
+def test_openai_model_prices_a_page_that_draws_an_inline_image_like_an_image_xobject():
     """An image drawn inline in the content stream (BI ... ID ... EI) bills like an image XObject: measured
     2026-10-20, the same 200x200 pt picture billed 351 either way on Azure gpt-5.6-sol and 303 on gpt-4o."""
     model: Final = "gpt-4o"
@@ -2024,11 +2034,13 @@ def test_openai_model_prices_a_page_that_draws_an_inline_image_as_a_high_detail_
     )
 
     assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), drawing=_INLINE_IMAGE)) == (
-        _text_cost(model, _REVENUE_LINE) + 13 + 85 + 4 * 170
+        _text_cost(model, _REVENUE_LINE) + _rendered_page_cost()
     )
-    assert _pdf_cost(model, _pdf_base64(("",), drawing=_INLINE_IMAGE, page_resources="<< >>")) == 85 + 4 * 170
+    assert _pdf_cost(model, _pdf_base64(("",), drawing=_INLINE_IMAGE, page_resources="<< >>")) == (
+        _rendered_page_cost()
+    )
     assert _pdf_cost(model, _pdf_base64(("",), xobjects=(form_drawing_inline_image,), drawing=_DRAW_X0)) == (
-        85 + 4 * 170
+        _rendered_page_cost()
     )
 
 
@@ -2045,7 +2057,7 @@ def test_openai_model_keeps_the_text_of_a_page_whose_forms_nest_too_deep_to_walk
     )
 
     assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=chain_objects, drawing=_DRAW_X0)) == (
-        _text_cost(model, _REVENUE_LINE) + 13 + 85 + 4 * 170
+        _text_cost(model, _REVENUE_LINE) + _rendered_page_cost()
     )
 
 
@@ -2054,7 +2066,9 @@ def test_openai_model_finds_an_image_a_shared_form_without_resources_draws_from_
     """A form with no /Resources resolves names in the resources of whichever form draws it, so a child that two
     parents share reaches the image only through the parent whose resources list it."""
     model: Final = "gpt-4o"
-    child_without_resources: Final = b"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 5 >>\nstream\n/Y Do\nendstream"
+    child_without_resources: Final = (
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 5 >>\nstream\n/Y Do\nendstream"
+    )
     parents_and_child: Final = (
         _form_xobject(7, b"/C Do"),
         b"<< /XObject << /C 10 0 R >> >>",
@@ -2072,7 +2086,7 @@ def test_openai_model_finds_an_image_a_shared_form_without_resources_draws_from_
             drawing=drawing,
             page_resources="<< /XObject << /A 6 0 R /B 8 0 R >> >>",
         ),
-    ) == 85 + 4 * 170
+    ) == _rendered_page_cost()
 
 
 @pytest.mark.timeout(10)
@@ -2089,6 +2103,42 @@ def test_openai_model_reads_resources_shared_by_many_forms_once():
     assert _pdf_cost(
         model, _pdf_base64((_REVENUE_LINE,), xobjects=(forms[0], shared_resources, *forms), drawing=_DRAW_X0)
     ) == (_text_cost(model, _REVENUE_LINE) + 13)
+
+
+@pytest.mark.timeout(10)
+def test_openai_model_prices_a_child_form_shared_by_many_parents_promptly():
+    """1,000 forms that each list their own /Resources and draw one shared 4,000-operator child took about 45
+    seconds to price, since the child was parsed and walked again under every parent. A page now prices as if it
+    drew an image once its forms draw more than a fixed number of XObjects, and each form is parsed once."""
+    model: Final = "gpt-4o"
+    parent_count: Final = 1000
+    first: Final = 6
+    child_number: Final = first + 2 * parent_count
+    child_drawing: Final = b" ".join((b"/D Do",) * 4000)
+    child: Final = (
+        f"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length {len(child_drawing)} >>\nstream\n".encode()
+        + child_drawing
+        + b"\nendstream"
+    )
+    parents: Final = tuple(
+        chain.from_iterable(
+            (_form_xobject(first + 2 * index + 1, b"/C Do"), f"<< /XObject << /C {child_number} 0 R >> >>".encode())
+            for index in range(parent_count)
+        )
+    )
+    page_resources: Final = (
+        "<< /Font << /F1 3 0 R >> /XObject << "
+        + " ".join(f"/P{index} {first + 2 * index} 0 R" for index in range(parent_count))
+        + " >> >>"
+    )
+    page_drawing: Final = b" " + b" ".join(f"/P{index} Do".encode() for index in range(parent_count))
+
+    assert _pdf_cost(
+        model,
+        _pdf_base64(
+            (_REVENUE_LINE,), xobjects=(*parents, child), drawing=page_drawing, page_resources=page_resources
+        ),
+    ) == _text_cost(model, _REVENUE_LINE) + _rendered_page_cost()
 
 
 _NON_LATIN_SAMPLE: Final = "Привет, как дела? これは日本語のテキストです。 Ceci est un texte en français: éèàç. " * 8
@@ -2139,8 +2189,8 @@ def test_azure_openai_models_only_azure_lists_get_openai_pdf_pricing(model: str)
 )
 def test_gpt_names_behind_any_provider_or_route_prefix_count_like_the_bare_name(model: str):
     """The proxy counts a deployment with its model name minus the provider prefix, so the SDK prices and encodes
-    a prefixed GPT name the same way the bare name counts. OpenRouter gpt-4o billed a text PDF page at 237 and a
-    full-page image at 297 on 2026-10-20, closer to OpenAI's pricing than to Claude's 1534 for either."""
+    a prefixed GPT name the same way the bare name counts. OpenRouter gpt-4o billed a text PDF page at 237 on
+    2026-10-20, closer to OpenAI's pricing than to Claude's 1534."""
     bare_name: Final = model.rpartition("/")[2]
     pdf_with_a_drawn_image: Final = _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,), drawing=_DRAW_X0)
 
@@ -2151,12 +2201,39 @@ def test_gpt_names_behind_any_provider_or_route_prefix_count_like_the_bare_name(
     )
 
 
-@pytest.mark.parametrize("model", ["text-embedding-ada-002-v2", "tts-1", "whisper-1", "azure/whisper-1"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "text-embedding-ada-002-v2",
+        "tts-1",
+        "whisper-1",
+        "azure/whisper-1",
+        "github_copilot/text-embedding-3-small-inference",
+        "azure_text/gpt-35-turbo-instruct",
+        "ft:davinci-002:my-org::abc123",
+    ],
+)
 def test_openai_models_that_are_not_chat_models_keep_counting_with_cl100k_and_claude_pdf_pricing(model: str):
     assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
         tiktoken.get_encoding("cl100k_base").encode(_NON_LATIN_SAMPLE)
     )
     assert _pdf_cost(model, _pdf_base64(("",))) == 1534
+
+
+@pytest.mark.parametrize(
+    ("fine_tune", "base_model"),
+    [
+        ("ft:gpt-4o-mini-2024-07-18:my-org::abc123", "gpt-4o-mini-2024-07-18"),
+        ("openai/ft:gpt-4.1-2025-04-14:my-org:support:def456", "gpt-4.1-2025-04-14"),
+    ],
+)
+def test_openai_fine_tunes_count_like_their_base_model(fine_tune: str, base_model: str):
+    pdf: Final = _pdf_base64((_REVENUE_LINE,))
+
+    assert _pdf_cost(fine_tune, pdf) == _pdf_cost(base_model, pdf) == _text_cost(base_model, _REVENUE_LINE) + 13
+    assert token_counter_new(model=fine_tune, text=_NON_LATIN_SAMPLE) == token_counter_new(
+        model=base_model, text=_NON_LATIN_SAMPLE
+    )
 
 
 @pytest.mark.timeout(10)
@@ -2171,7 +2248,14 @@ def test_a_very_long_unknown_model_name_counts_promptly():
 
 @pytest.mark.parametrize(
     "model",
-    ["", "anthropic/claude-fable-5", "DeepSeek-V4-Flash-0731", "my-private-model", "azure/mistral-large-latest", "command-r-plus"],
+    [
+        "",
+        "anthropic/claude-fable-5",
+        "DeepSeek-V4-Flash-0731",
+        "my-private-model",
+        "azure/mistral-large-latest",
+        "command-r-plus",
+    ],
 )
 def test_non_openai_models_keep_pricing_pdf_pages_as_claude_renders_them(model: str):
     """Only known OpenAI and Azure OpenAI models switch to OpenAI's PDF billing, so an empty or unknown model keeps
