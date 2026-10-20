@@ -18,6 +18,7 @@ import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
+from httpx._config import DEFAULT_LIMITS
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
 
@@ -99,6 +100,13 @@ def _aiohttp_env_proxies_disabled() -> bool:
     from litellm.secret_managers.main import str_to_bool
 
     return litellm.disable_aiohttp_trust_env or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False")) is True
+
+
+_AIOHTTP_EQUIVALENT_LIMITS: Final = httpx.Limits(
+    max_connections=AIOHTTP_CONNECTOR_LIMIT if AIOHTTP_CONNECTOR_LIMIT > 0 else None,
+    max_keepalive_connections=None,
+    keepalive_expiry=AIOHTTP_KEEPALIVE_TIMEOUT,
+)
 
 
 def _environment_proxy_mounts(
@@ -705,6 +713,8 @@ class AsyncHTTPHandler:
                 trust_env=False,
             )
         use_http2: Final = _resolve_http2(self.http2, ssl_verify)
+        replaces_aiohttp: Final = use_http2 and AsyncHTTPHandler.should_use_aiohttp_transport()
+        limits: Final = _AIOHTTP_EQUIVALENT_LIMITS if replaces_aiohttp else DEFAULT_LIMITS
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration(ssl_verify, http2=use_http2)
 
@@ -722,17 +732,21 @@ class AsyncHTTPHandler:
             shared_session=shared_session,
             http2=use_http2,
             cert=cert,
+            limits=limits,
         )
 
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers()
-        trust_env: Final = not (use_http2 and _aiohttp_env_proxies_disabled())
+        trust_env: Final = not (replaces_aiohttp and _aiohttp_env_proxies_disabled())
 
         return httpx.AsyncClient(
             transport=transport,
-            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert, http2=use_http2)
+            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(
+                transport, verify=ssl_config, cert=cert, http2=use_http2, limits=limits
+            )
             if trust_env
             else None,
+            limits=limits,
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
@@ -1233,6 +1247,7 @@ class AsyncHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
         http2: bool = False,
         cert: CertTypes | None = None,
+        limits: httpx.Limits = DEFAULT_LIMITS,
     ) -> LiteLLMAiohttpTransport | AsyncHTTPTransport | None:
         """
         - Creates a transport for httpx.AsyncClient
@@ -1265,6 +1280,7 @@ class AsyncHTTPHandler:
             http2=http2,
             verify=ssl_context if ssl_context is not None else ssl_verify is not False,
             cert=cert,
+            limits=limits,
         )
 
     _create_async_transport = create_async_transport
@@ -1416,6 +1432,7 @@ class AsyncHTTPHandler:
         http2: bool = False,
         verify: ssl.SSLContext | bool = True,
         cert: CertTypes | None = None,
+        limits: httpx.Limits = DEFAULT_LIMITS,
     ) -> AsyncHTTPTransport | None:
         """
         Creates an AsyncHTTPTransport
@@ -1425,7 +1442,11 @@ class AsyncHTTPHandler:
         """
         if litellm.force_ipv4:
             return AsyncHTTPTransport(
-                local_address=_IPV4_LOCAL_ADDRESS, verify=verify, cert=cert, http2=http2 or http2_enabled()
+                local_address=_IPV4_LOCAL_ADDRESS,
+                verify=verify,
+                cert=cert,
+                http2=http2 or http2_enabled(),
+                limits=limits,
             )
         else:
             return None
@@ -1436,12 +1457,13 @@ class AsyncHTTPHandler:
         verify: VerifyTypes,
         cert: CertTypes | None,
         http2: bool = False,
+        limits: httpx.Limits = DEFAULT_LIMITS,
     ) -> Mapping[str, AsyncHTTPTransport | None] | None:
         if not isinstance(transport, AsyncHTTPTransport):
             return None
         return _environment_proxy_mounts(
             lambda proxy_url: AsyncHTTPTransport(
-                proxy=proxy_url, verify=verify, cert=cert, http2=http2 or http2_enabled()
+                proxy=proxy_url, verify=verify, cert=cert, http2=http2 or http2_enabled(), limits=limits
             )
         )
 

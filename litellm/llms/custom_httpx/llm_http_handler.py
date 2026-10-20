@@ -25,6 +25,7 @@ from typing import (
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+from h2.events import ConnectionTerminated
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
@@ -340,17 +341,31 @@ class _SignedBodyKwargs(TypedDict, total=False):
     json: ReadOnly[dict[str, object]]
 
 
-async def _asend_idempotent(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
+_GOAWAY_RETRY_MESSAGE: Final = "Vector store search connection was closed by an HTTP/2 GOAWAY, retrying once"
+
+
+def _closed_by_http2_goaway(error: httpx.RemoteProtocolError) -> bool:
+    cause: Final = error.__cause__
+    return cause is not None and any(isinstance(arg, ConnectionTerminated) for arg in cause.args)
+
+
+async def _asend_with_goaway_retry(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
     try:
         return await send()
-    except httpx.RemoteProtocolError:
+    except httpx.RemoteProtocolError as error:
+        if not _closed_by_http2_goaway(error):
+            raise
+        verbose_logger.warning(_GOAWAY_RETRY_MESSAGE)
         return await send()
 
 
-def _send_idempotent(send: Callable[[], httpx.Response]) -> httpx.Response:
+def _send_with_goaway_retry(send: Callable[[], httpx.Response]) -> httpx.Response:
     try:
         return send()
-    except httpx.RemoteProtocolError:
+    except httpx.RemoteProtocolError as error:
+        if not _closed_by_http2_goaway(error):
+            raise
+        verbose_logger.warning(_GOAWAY_RETRY_MESSAGE)
         return send()
 
 
@@ -10405,7 +10420,7 @@ class BaseLLMHTTPHandler:
         request_data: Final = json.dumps(request_body) if signed_json_body is None else signed_json_body
 
         try:
-            response: Final = await _asend_idempotent(
+            response: Final = await _asend_with_goaway_retry(
                 partial(async_httpx_client.post, url=url, headers=headers, data=request_data, timeout=timeout)
             )
         except httpx.TimeoutException:
@@ -10544,7 +10559,7 @@ class BaseLLMHTTPHandler:
         request_data: Final = json.dumps(request_body) if signed_json_body is None else signed_json_body
 
         try:
-            response: Final = _send_idempotent(
+            response: Final = _send_with_goaway_retry(
                 partial(sync_httpx_client.post, url=url, headers=headers, data=request_data, timeout=timeout)
             )
         except httpx.TimeoutException:
