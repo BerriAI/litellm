@@ -670,6 +670,50 @@ async def test_bedrock_converse_sends_a_signed_block_once_when_thinking_blocks_h
     }
 
 
+_WEATHER_TOOL_CALL: Final = {
+    "id": "tooluse_weather_1",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+
+
+def _block_split_across_assistant_messages(blocks: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {"role": "assistant", "content": list(blocks)},
+        {"role": "assistant", "content": None, "thinking_blocks": list(blocks), "tool_calls": [_WEATHER_TOOL_CALL]},
+        {"role": "tool", "tool_call_id": "tooluse_weather_1", "content": "18C, sunny"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_sends_a_block_once_when_two_assistant_messages_carry_it(use_async: bool):
+    bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
+        {"reasoningText": {"text": "Let me look this up.", "signature": "sig-abc"}},
+        {"redactedContent": _CONVERSE_REDACTED_DATA},
+    ]
+    reasoning: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
+    messages: Final = _block_split_across_assistant_messages(reasoning)
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            *({"reasoningContent": block} for block in bedrock_reasoning_blocks),
+            {"toolUse": {"toolUseId": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}}},
+        ],
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
 @SPLIT_REASONING
@@ -1045,6 +1089,26 @@ def test_anthropic_messages_pt_sends_a_signed_block_once_when_thinking_blocks_ho
 
     assert result[1] == {"role": "assistant", "content": [signed, redacted, {"type": "text", "text": "hello"}]}
 
+
+
+def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_carry_it():
+    signed: Final = {"type": "thinking", "thinking": "Let me look this up.", "signature": "sig-abc"}
+    redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
+
+    result: Final = anthropic_messages_pt(
+        messages=_block_split_across_assistant_messages([signed, redacted]),
+        model="claude-sonnet-4-6",
+        llm_provider="anthropic",
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            signed,
+            redacted,
+            {"type": "tool_use", "id": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}},
+        ],
+    }
 
 @REASONING_PLACEMENTS
 @pytest.mark.parametrize("drop_params", [False, True])

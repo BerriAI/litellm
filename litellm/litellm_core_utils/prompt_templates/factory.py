@@ -6,7 +6,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
@@ -2588,7 +2588,7 @@ def _thinking_identity(item: object) -> tuple[object, ...] | None:
 _Replayed: Final = TypeVar("_Replayed")
 
 
-def with_missing_thinking_blocks(
+def _with_missing_thinking_blocks(
     content: Iterable[_Replayed], thinking_blocks: Sequence[_Replayed]
 ) -> tuple[_Replayed, ...]:
     content_items: Final = tuple(content)
@@ -2615,6 +2615,18 @@ def with_missing_thinking_blocks(
     return tuple(_interleave(content_items, missing_before, missing_after))
 
 
+def _without_repeated_thinking(
+    items: Sequence[_Replayed], identity: Callable[[_Replayed], tuple[object, ...] | None]
+) -> tuple[_Replayed, ...]:
+    identities: Final = tuple(map(identity, items))
+    first_positions: Final[Mapping[tuple[object, ...], int]] = MappingProxyType(
+        {key: index for index, key in reversed(tuple(enumerate(identities))) if key is not None}
+    )
+    return tuple(
+        item for index, (item, key) in enumerate(zip(items, identities)) if key is None or first_positions[key] == index
+    )
+
+
 def _interleave(
     content: Sequence[_Replayed],
     before: Mapping[int, Sequence[_Replayed]],
@@ -2632,7 +2644,7 @@ def _thinking_in_replay_order(
     content_items: Final = content if isinstance(content, list) else ()
     return tuple(
         block
-        for item in with_missing_thinking_blocks(content_items, thinking_blocks or ())
+        for item in _with_missing_thinking_blocks(content_items, thinking_blocks or ())
         if (block := _as_thinking_block(item)) is not None
     )
 
@@ -3048,7 +3060,7 @@ def anthropic_messages_pt(
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
-                    for m in with_missing_thinking_blocks(_content_list, thinking_blocks or ()):
+                    for m in _with_missing_thinking_blocks(_content_list, thinking_blocks or ()):
                         if not isinstance(m, dict):
                             continue
                         # handle thinking blocks
@@ -3131,7 +3143,12 @@ def anthropic_messages_pt(
             msg_i += 1
 
         if assistant_content:
-            new_messages.append({"role": "assistant", "content": assistant_content})
+            new_messages.append(
+                {
+                    "role": "assistant",
+                    "content": list(_without_repeated_thinking(assistant_content, _thinking_identity)),
+                }
+            )
 
         ## MID-CONVERSATION SYSTEM MESSAGES (placement is the caller's job) ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "system":
@@ -4263,6 +4280,16 @@ def _convert_to_bedrock_tool_call_result(
     return content_block
 
 
+def _reasoning_identity(block: BedrockContentBlock) -> tuple[object, ...] | None:
+    match block:
+        case {"reasoningContent": {"redactedContent": redacted}}:
+            return ("redacted_thinking", redacted)
+        case {"reasoningContent": {"reasoningText": {"signature": str() as signature}}} if signature:
+            return ("thinking", signature)
+        case _:
+            return None
+
+
 def _deduplicate_bedrock_content_blocks(
     blocks: list[BedrockContentBlock],
     block_key: str,
@@ -4963,7 +4990,11 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
 
-            assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
+            assistant_content = list(
+                _without_repeated_thinking(
+                    _deduplicate_bedrock_content_blocks(assistant_content, "toolUse"), _reasoning_identity
+                )
+            )
             assistant_content = _sort_bedrock_assistant_content_blocks(assistant_content)
 
             if assistant_content:
@@ -5366,7 +5397,11 @@ def _bedrock_converse_messages_pt(
 
             msg_i += 1
 
-        assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
+        assistant_content = list(
+            _without_repeated_thinking(
+                _deduplicate_bedrock_content_blocks(assistant_content, "toolUse"), _reasoning_identity
+            )
+        )
         assistant_content = _sort_bedrock_assistant_content_blocks(assistant_content)
 
         if assistant_content:

@@ -23,10 +23,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_tool_result,
     create_anthropic_image_param,
     select_anthropic_content_block_type_for_file,
-    with_missing_thinking_blocks,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
@@ -195,14 +193,6 @@ def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-
     ]
 
 
-def _assistant_content_blocks(content: object, thinking_blocks: Sequence[object]) -> tuple[object, ...]:
-    parts: Final = parts_of(content)
-    content_items: Final[Sequence[object]] = (
-        copy.deepcopy(parts) if parts else [{"type": "text", "text": content}] if content else []
-    )
-    return with_missing_thinking_blocks(content_items, thinking_blocks)
-
-
 def _clean_input_schema(schema: object) -> object:
     return {key: value for key, value in schema.items() if key != "$schema"} if isinstance(schema, Mapping) else schema
 
@@ -344,9 +334,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             elif role == "assistant":
                 tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
                 thinking_blocks = _signed_thinking_blocks(msg)
-                if tool_calls or thinking_blocks:
-                    tool_use_blocks: list[dict[str, object]] = []  # mutable-ok: JSON wire blocks
-                    for tc in tool_calls or ():
+                if tool_calls:
+                    content_blocks: list[dict[str, object]] = list(thinking_blocks)  # mutable-ok: JSON wire blocks
+                    if content:
+                        content_blocks.append({"type": "text", "text": content})
+                    for tc in tool_calls:
                         func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
                         tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
                         func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")
@@ -357,7 +349,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                             input_data = json.loads(func_args) if isinstance(func_args, str) else func_args
                         except (json.JSONDecodeError, TypeError):
                             input_data = {}
-                        tool_use_blocks.append(
+                        content_blocks.append(
                             {
                                 "type": "tool_use",
                                 "id": tc_id,
@@ -365,12 +357,17 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                                 "input": input_data,
                             }
                         )
-                    conversation.append(
-                        {
-                            "role": "assistant",
-                            "content": [*_assistant_content_blocks(content, thinking_blocks), *tool_use_blocks],
-                        }
+                    conversation.append({"role": "assistant", "content": content_blocks})
+                elif thinking_blocks:
+                    thinking_content = (
+                        [
+                            *thinking_blocks,
+                            *copy.deepcopy(content),
+                        ]
+                        if isinstance(content, list)
+                        else [*thinking_blocks, *([{"type": "text", "text": content}] if content else [])]
                     )
+                    conversation.append({"role": "assistant", "content": thinking_content})
                 else:
                     conversation.append({"role": "assistant", "content": content})
             elif role == "tool":

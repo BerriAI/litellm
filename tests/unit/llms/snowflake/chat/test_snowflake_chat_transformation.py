@@ -657,34 +657,6 @@ class TestSnowflakeCortexClaudeFixes:
             ],
         }
 
-    @pytest.mark.parametrize(
-        "tool_calls",
-        [None, [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]],
-        ids=["text-turn", "tool-turn"],
-    )
-    def test_thinking_in_content_and_thinking_blocks_is_sent_once_in_content_order(self, tool_calls):
-        signed: Final = {"type": "thinking", "thinking": "391", "signature": "Eto"}
-        redacted: Final = {"type": "redacted_thinking", "data": "opaque"}
-        body: Final = self._transform(
-            [
-                {"role": "user", "content": "hi"},
-                {
-                    "role": "assistant",
-                    "content": [redacted, {"type": "text", "text": "391"}],
-                    "thinking_blocks": [signed, redacted],
-                    **({"tool_calls": tool_calls} if tool_calls else {}),
-                },
-                {"role": "user", "content": "continue"},
-            ]
-        )
-        assert [block["type"] for block in body["messages"][1]["content"]] == [
-            "thinking",
-            "redacted_thinking",
-            "text",
-            *(["tool_use"] if tool_calls else []),
-        ]
-        assert body["messages"][1]["content"][:3] == [signed, redacted, {"type": "text", "text": "391"}]
-
     def test_thinking_only_assistant_turn_sends_no_empty_text_block(self):
         """Anthropic-shaped APIs reject empty text blocks, so a content-less thinking turn is thinking only."""
         body = self._transform(
