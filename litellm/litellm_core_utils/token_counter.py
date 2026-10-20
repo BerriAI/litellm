@@ -356,7 +356,7 @@ PDF_LITERAL_ESCAPE: Final = re.compile(rb"\\([nrtbf()\\]|[0-7]{1,3}|\r\n?|\n|[\s
 PDF_INLINE_IMAGE: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND
     + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|(?P<inline_image>(?<![^\s\]>)])BI(?=\s)"
-    + rb"[\s\S]*?(?:(?<=\s)ID\s[\s\S]*?(?P<image_end>\sEI(?![^\s\[/<(%]))|\Z))"
+    + rb"[\s\S]*?(?:(?<=\s)ID\s[\s\S]*?(?:(?P<image_end>\sEI(?![^\s\[/<(%]))|\Z)|\Z))"
 )
 PDF_XOBJECT_INVOCATION: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND + rb"|%[^\r\n]*(?:[\r\n]|\Z)|/([^\s/\[\]()<>{}%]+)(?:\s|%[^\r\n]*(?:[\r\n]|\Z))+Do\b"
