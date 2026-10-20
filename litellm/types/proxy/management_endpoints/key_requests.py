@@ -54,6 +54,16 @@ class LiteLLMKeyType(str, enum.Enum):
     DEFAULT = "default"  # Uses default allowed routes
 
 
+def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: raw before-validator payload
+    return isinstance(value, Mapping)
+
+
+def _reject_expires(values: object) -> object:
+    if _is_mapping(values) and "expires" in values:
+        raise ValueError('expires is not supported on key requests. Set duration instead, e.g. "3600s" or "30d"')
+    return values
+
+
 class GenerateKeyRequest(KeyRequestBase):
     soft_budget: float | None = None
     send_invite_email: bool | None = None
@@ -69,16 +79,17 @@ class GenerateKeyRequest(KeyRequestBase):
     organization_id: str | None = None
     project_id: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_expires(cls, values: object) -> object:
+        return _reject_expires(values)
+
     @field_validator("team_id", "organization_id", "project_id", mode="before")
     @classmethod
     def treat_cleared_id_as_unset(cls, v: object) -> object:
         if v == "":
             return None
         return v
-
-
-def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: raw before-validator payload
-    return isinstance(value, Mapping)
 
 
 class UpdateKeyRequest(KeyRequestBase):
@@ -98,6 +109,11 @@ class UpdateKeyRequest(KeyRequestBase):
         default=None,
         description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_expires(cls, values: object) -> object:
+        return _reject_expires(values)
 
     @model_validator(mode="before")
     @classmethod
