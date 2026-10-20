@@ -35,6 +35,13 @@ def _in_us_west_2() -> str:
             TokenCountSettings(framing=5, count_model=TokenCountModel(model="custom-model", region="ap-southeast-4")),
         ),
         (
+            {"token_count_model": {"model": "custom-model", "litellm_provider": "bedrock_mantle"}},
+            TokenCountSettings(
+                framing=97,
+                count_model=TokenCountModel(model="custom-model", region=None, litellm_provider="bedrock_mantle"),
+            ),
+        ),
+        (
             {"token_count_model": {"model": "custom-model"}},
             TokenCountSettings(framing=97, count_model=TokenCountModel(model="custom-model", region=None)),
         ),
@@ -174,7 +181,7 @@ def test_every_shipped_token_count_model_resolves_to_a_mapped_aws_model() -> Non
     }
     assert count_models
     for name, count_model in count_models.items():
-        model: Final = count_model["model"].removeprefix("bedrock/").removeprefix("bedrock_mantle/")
+        model: Final = count_model["model"]
         assert get_bedrock_base_model(model) in aws_models
         assert cost_map[name]["litellm_provider"] in ("bedrock", "bedrock_converse")
         assert "region" not in count_model or count_model["region"].strip()

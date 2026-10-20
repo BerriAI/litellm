@@ -14804,9 +14804,14 @@ async def _provider_token_count(
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
     estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
     count_model: Final = settings.count_model
-    counted: Final = await (
-        count_with(model_to_use, None) if count_model is None else count_with(count_model.model, count_model.region)
+    counting_model: Final = (
+        model_to_use
+        if count_model is None
+        else count_model.model
+        if count_model.litellm_provider is None
+        else f"{count_model.litellm_provider}/{count_model.model.removeprefix('bedrock/').removeprefix('bedrock_mantle/')}"
     )
+    counted: Final = await count_with(counting_model, None if count_model is None else count_model.region)
     if counted is None:
         return None
     if isinstance(counted, TokenCountResponse):
