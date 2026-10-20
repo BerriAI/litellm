@@ -87,7 +87,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
 )
 
 _CACHE_CALL: Final = re.compile(
-    r"\.(?:async_)?(?:get_cache|set_cache|batch_get_cache|batch_get_cache_shared|increment_cache|increment"
+    r"\.(?:async_)?(?:get_cache|set_cache|batch_get_cache|batch_get_cache_shared|increment_cache|increment_if_present|increment"
     r"|set_cache_pipeline|set_cache_pipeline_with_ttls|set_cache_sadd|delete_cache|batch_set_cache|increment_pipeline"
     r"|rpush|lpop|scan_iter|get_ttl|mget)\("
     r"|\b(?:reserve_redis_batch_reads|_prepare_batch_get)\("
