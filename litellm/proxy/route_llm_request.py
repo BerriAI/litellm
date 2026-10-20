@@ -624,6 +624,43 @@ RouteType = Literal[
 ]
 
 
+def _merge_router_settings_override(
+    data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
+) -> frozenset[str]:
+    data.pop("enable_tag_filtering", None)
+    drop_params: Final = litellm.drop_params is True or normalize_drop_params(data.get("drop_params")) is True
+    router_settings_override_adapter: Final = (
+        _JSON_OBJECT_OR_DROPPED_ADAPTER if drop_params else _OPTIONAL_JSON_OBJECT_ADAPTER
+    )
+    try:
+        router_settings_override: Final = router_settings_override_adapter.validate_python(
+            data.pop("router_settings_override", None)
+        )
+    except ValidationError:
+        raise ProxyException(
+            message="router_settings_override must be a JSON object.",
+            type="invalid_request_error",
+            param="router_settings_override",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from None
+    if "user_config" in data and data["user_config"] is None:
+        data.pop("user_config")
+    user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))
+    router_settings_from_override: Final = MappingProxyType(
+        {
+            key: router_settings_override[key]
+            for key in _PER_REQUEST_ROUTER_SETTINGS
+            if router_settings_override.get(key) is not None
+            and key not in data
+            and (user_config is None or key not in user_config)
+        }
+        if router_settings_override is not None
+        else {}
+    )
+    data.update(router_settings_from_override)
+    return _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)
+
+
 async def route_request(
     data: dict,
     llm_router: LitellmRouter | None,
@@ -634,12 +671,14 @@ async def route_request(
     """
     Common helper to route the request
     """
+    router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(
             data=data,
             llm_router=llm_router,
             user_model=user_model,
             route_type=route_type,
+            router_only_settings_from_override=router_only_settings_from_override,
             user_api_key_dict=user_api_key_dict,
         )
     except (ProxyModelNotFoundError, ProxyMissingParamWithoutLoadedModelError) as e:
@@ -662,6 +701,7 @@ async def route_request(
             llm_router=proxy_server.llm_router,
             user_model=user_model,
             route_type=route_type,
+            router_only_settings_from_override=router_only_settings_from_override,
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -671,6 +711,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: RouteType,
+    router_only_settings_from_override: frozenset[str],
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=llm_router)
@@ -678,39 +719,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     await add_shared_session_to_data(data)
 
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
-
-    data.pop("enable_tag_filtering", None)
-    drop_params: Final = litellm.drop_params is True or normalize_drop_params(data.get("drop_params")) is True  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # route_request takes an untyped dict body
-    router_settings_override_adapter: Final = (
-        _JSON_OBJECT_OR_DROPPED_ADAPTER if drop_params else _OPTIONAL_JSON_OBJECT_ADAPTER
-    )
-    try:
-        router_settings_override: Final = router_settings_override_adapter.validate_python(
-            data.pop("router_settings_override", None)
-        )
-    except ValidationError:
-        raise ProxyException(
-            message="router_settings_override must be a JSON object.",
-            type="invalid_request_error",
-            param="router_settings_override",
-            code=status.HTTP_400_BAD_REQUEST,
-        ) from None
-    if "user_config" in data and data["user_config"] is None:
-        data.pop("user_config")  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
-    user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
-    router_settings_from_override: Final = MappingProxyType(
-        {
-            key: router_settings_override[key]
-            for key in _PER_REQUEST_ROUTER_SETTINGS
-            if router_settings_override.get(key) is not None
-            and key not in data
-            and (user_config is None or key not in user_config)
-        }
-        if router_settings_override is not None
-        else {}
-    )
-    data.update(router_settings_from_override)
-    router_only_settings_from_override: Final = _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)
 
     def direct_litellm_kwargs() -> Mapping[str, object]:
         return MappingProxyType(

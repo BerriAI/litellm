@@ -1895,6 +1895,35 @@ async def test_route_request_read_through_recovers_model_created_on_sibling_repl
 
 
 @pytest.mark.asyncio
+async def test_route_request_read_through_retry_keeps_key_router_settings(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from unittest.mock import AsyncMock, patch
+
+    model_name = "sibling-replica-model-for-key-with-router-settings"
+    router = litellm.Router(
+        model_list=[{"model_name": "some-other-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
+    )
+    fake_prisma, _ = _fake_prisma_client_with_models([_db_model_row(model_name, "hello-from-db")])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    data = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": "hi"}],
+        "router_settings_override": {"enable_tag_filtering": True, "num_retries": 2},
+    }
+
+    with patch.object(router, "acompletion", new=AsyncMock(return_value="served_after_read_through")) as spy:
+        response = await (await route_request(data, router, None, "acompletion"))
+
+    assert response == "served_after_read_through"
+    assert {key: spy.call_args.kwargs.get(key) for key in ("enable_tag_filtering", "num_retries")} == {
+        "enable_tag_filtering": True,
+        "num_retries": 2,
+    }
+
+
+@pytest.mark.asyncio
 async def test_route_request_unknown_model_raises_and_hits_db_once_within_ttl(monkeypatch):
     import litellm
     import litellm.proxy.proxy_server as proxy_server
