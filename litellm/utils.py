@@ -2113,7 +2113,9 @@ def client(original_function):
                         or should_retry(status_code)
                     ) and isinstance(e, (openai.APIError, openai.APITimeoutError, openai.APIConnectionError)):
                         kwargs["num_retries"] = num_retries
-                        return litellm.completion_with_retries(*args, _initial_exception=e, **kwargs)
+                        return litellm.completion_with_retries(
+                            *args, original_function=litellm.completion, **{**kwargs, "_initial_exception": e}
+                        )
                 if (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
@@ -2422,12 +2424,17 @@ def client(original_function):
             )
             if acompletion_retried:
                 kwargs["num_retries"] = num_retries
+                _restore_correlation_context_if_supported(logging_obj)
                 try:
                     result = await litellm.acompletion_with_retries(
                         *args,
                         original_function=litellm.acompletion,
-                        _initial_exception=e,
-                        **{**request_kwargs, "num_retries": num_retries, _RETRY_ATTEMPT_KWARG: _RETRY_ATTEMPT_MARKER},
+                        **{
+                            **request_kwargs,
+                            "num_retries": num_retries,
+                            "_initial_exception": e,
+                            _RETRY_ATTEMPT_KWARG: _RETRY_ATTEMPT_MARKER,
+                        },
                     )
                 except openai.APIError as retry_err:
                     _add_retry_context(retry_err, kwargs)

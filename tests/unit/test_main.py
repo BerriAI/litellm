@@ -53,7 +53,14 @@ from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.router import RetryPolicy
-from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from litellm.types.utils import (
+    Delta,
+    ModelResponse,
+    ModelResponseStream,
+    StandardCallbackDynamicParams,
+    StreamingChoices,
+    Usage,
+)
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
@@ -10205,6 +10212,24 @@ async def test_completion_num_retries_waits_for_provider_retry_after(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_num_retries_still_retries_when_the_caller_sends_an_initial_exception_key(
+    retry_upstream: respx.MockRouter, sync_mode: bool
+):
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "0"}), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        response: Final = await _completion_with_retries_kwargs(
+            sync_mode, _ANTHROPIC, num_retries=1, _initial_exception="x"
+        )
+
+    assert route.call_count == 2
+    assert isinstance(response, ModelResponse)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
     "retry_kwargs",
     [
@@ -10583,7 +10608,7 @@ _ANTHROPIC_STREAM_EVENTS: Final = (
 
 
 @pytest.mark.asyncio
-async def test_async_streaming_retry_keeps_the_call_ids_while_the_caller_reads_the_stream(
+async def test_async_streaming_retry_keeps_the_call_ids_while_read_and_restores_the_callers_after(
     retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
@@ -10603,6 +10628,7 @@ async def test_async_streaming_retry_keeps_the_call_ids_while_the_caller_reads_t
             )
         ids_while_reading: Final = (trace_id_var.get(), session_id_var.get())
         text: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+        ids_after_reading: Final = (trace_id_var.get(), session_id_var.get())
     finally:
         trace_id_var.set("")
         session_id_var.set("")
@@ -10611,6 +10637,7 @@ async def test_async_streaming_retry_keeps_the_call_ids_while_the_caller_reads_t
     assert text == "ok"
     assert ids_while_reading[1] == "retried-stream-session"
     assert ids_while_reading[0] != "outer-trace"
+    assert ids_after_reading == ("outer-trace", "outer-session")
 
 
 @pytest.mark.asyncio
