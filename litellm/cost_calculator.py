@@ -1646,7 +1646,7 @@ def completion_cost(
             *(((model, request_pricing_provider),) if model is not None else ()),
         )
         potential_model_names: Final = (
-            raw_candidates if explicit_pricing else _priced_candidates_before_unpriced_rules(raw_candidates)
+            raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
         for idx, (model, pricing_provider) in enumerate(potential_model_names):

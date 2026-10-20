@@ -2359,7 +2359,6 @@ def test_register_model_with_scientific_notation():
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
 @respx.mock
 def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
@@ -4803,8 +4802,7 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 @pytest.mark.parametrize("rate", (0.0, 0.000123))
 @pytest.mark.parametrize("updated_rate", (None, 0.0, 0.000456))
 def test_reapply_runtime_registrations_replays_register_model_overrides(
@@ -4871,8 +4869,7 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
         _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkeypatch):
     """
     Per-request custom pricing describes one call, so it must not be re-asserted
