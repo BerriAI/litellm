@@ -266,6 +266,7 @@ jobs:
               tests/unit/llms/featherless_ai
               tests/unit/llms/firecrawl
               tests/unit/llms/fireworks_ai
+              tests/unit/llms/friendliai
               tests/unit/llms/gdc
               tests/unit/llms/gemini
               tests/unit/llms/gigachat
