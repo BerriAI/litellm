@@ -11,6 +11,7 @@ import boto3
 import pytest
 import yaml
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from integration._support.budget import case_timeout_seconds
 from integration._support.client import Gateway
 from integration._support.process import graceful_stop_seconds, owned_proxy
@@ -24,6 +25,7 @@ _MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 _EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 _BLOCKED_WORD: Final = "zzzforbidden"
 _BLOCKED_TEXT: Final = "Blocked by guardrail"
+_VERSIONLESS_GUARDRAIL_MESSAGE: Final = "guardrailIdentifier and guardrailVersion must be provided together."
 _ACTIONS: Final = ("converse", "converse-stream", "invoke", "invoke-with-response-stream")
 _DEPLOYMENT_GUARDRAIL: Final[Mapping[str, str]] = {
     "guardrailIdentifier": "deployment-guardrail",
@@ -105,8 +107,16 @@ def _assessment(applied: Applied) -> Mapping[str, JsonValue]:
 
 def _bedrock_with_guardrails(request: Request) -> Reply:
     """Bedrock's runtime as the caller sees it: the guardrail the request names blocks a prompt holding the blocked
-    word, answering with its message and, when the request enabled tracing, a trace naming that guardrail."""
+    word, answering with its message and, when the request enabled tracing, a trace naming that guardrail. A guardrail
+    named without a version is refused with a 400 ValidationException, as real Bedrock in us-east-1 refused it on
+    every one of these actions on 2026-10-19."""
     applied: Final = _applied(request)
+    if applied is not None and applied.version is None:
+        return Reply(
+            status=400,
+            body=json.dumps({"message": _VERSIONLESS_GUARDRAIL_MESSAGE}).encode(),
+            headers={"x-amzn-errortype": "ValidationException"},
+        )
     blocked: Final = applied is not None and _BLOCKED_WORD.encode() in request.body
     traced: Final = blocked and applied is not None and (applied.trace or "").lower() == "enabled"
     text: Final = _BLOCKED_TEXT if blocked else "ok"
@@ -257,6 +267,7 @@ class Rig:
     failing_wire: Wire
     fallback_wire: Wire
     mantle_model: str
+    versionless_model: str
     key: str
 
     def runtime(  # noqa: ANN201  # boto3 clients are untyped
@@ -288,6 +299,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
     failing_model: Final = f"bedrock-failing-{suffix}"
     fallback_model: Final = f"bedrock-fallback-{suffix}"
     mantle_model: Final = f"bedrock-mantle-{suffix}"
+    versionless_model: Final = f"bedrock-versionless-{suffix}"
     directory: Final = tmp_path_factory.mktemp("bedrock-guardrail-config")
     base_config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     with (
@@ -321,13 +333,21 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                 {
                     "model_name": failing_model,
                     "litellm_params": _deployment(
-                        failing_wire, {"guardrailIdentifier": "failing-guardrail", "trace": "enabled"}
+                        failing_wire,
+                        {"guardrailIdentifier": "failing-guardrail", "guardrailVersion": "5", "trace": "enabled"},
                     ),
                 },
                 {
                     "model_name": fallback_model,
                     "litellm_params": _deployment(
-                        fallback_wire, {"guardrailIdentifier": "fallback-guardrail", "trace": "enabled"}
+                        fallback_wire,
+                        {"guardrailIdentifier": "fallback-guardrail", "guardrailVersion": "6", "trace": "enabled"},
+                    ),
+                },
+                {
+                    "model_name": versionless_model,
+                    "litellm_params": _deployment(
+                        wire, {"guardrailIdentifier": "versionless-guardrail", "trace": "enabled"}
                     ),
                 },
                 {
@@ -338,7 +358,11 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                         "api_key": _MANTLE_KEY,
                         "aws_region_name": "us-east-1",
                         "use_in_pass_through": True,
-                        "guardrailConfig": {"guardrailIdentifier": "mantle-guardrail", "trace": "enabled"},
+                        "guardrailConfig": {
+                            "guardrailIdentifier": "mantle-guardrail",
+                            "guardrailVersion": "4",
+                            "trace": "enabled",
+                        },
                     },
                 },
             ],
@@ -364,6 +388,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                 failing_wire=failing_wire,
                 fallback_wire=fallback_wire,
                 mantle_model=mantle_model,
+                versionless_model=versionless_model,
                 key=scenario.key(key_alias=f"guardrail-key-{suffix}"),
             )
 
@@ -426,8 +451,26 @@ def test_mantle_deployment_passthrough_sends_its_guardrail_with_bearer_auth(
     (request,) = rig.received(rig.wire, marker)
     assert request.headers["authorization"] == f"Bearer {_MANTLE_KEY}", request.headers
     assert _applied(request) == Applied(
-        "mantle-guardrail", None, "ENABLED" if action.startswith("invoke") else "enabled", None
+        "mantle-guardrail", "4", "ENABLED" if action.startswith("invoke") else "enabled", None
     ), (request.headers, request.body)
+
+
+@pytest.mark.parametrize("action", _ACTIONS)
+def test_deployment_guardrail_without_a_version_returns_the_bedrock_rejection(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    runtime: Final = rig.runtime(monkeypatch)
+
+    with pytest.raises(ClientError) as raised:
+        _send(runtime, action, rig.versionless_model, f"{marker} say hello", caller_guardrail=False)
+
+    error: Final = raised.value.response.get("Error", {})
+    assert (error.get("Code"), error.get("Message")) == ("ValidationException", _VERSIONLESS_GUARDRAIL_MESSAGE), error
+    received: Final = rig.received(rig.wire, marker)
+    assert {_applied(request) for request in received} == {
+        Applied("versionless-guardrail", None, "ENABLED" if action.startswith("invoke") else "enabled", None)
+    }, [(request.headers, request.body) for request in received]
 
 
 @pytest.mark.parametrize("action", _ACTIONS)
