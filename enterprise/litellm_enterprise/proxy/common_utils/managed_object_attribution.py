@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeGuard, cast
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import CLI_SESSION_KEY_PREFIX
+from litellm.repositories.table_repositories import (
+    DeletedVerificationTokenRepository,
+    DeprecatedVerificationTokenRepository,
+)
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
@@ -89,6 +93,20 @@ def _team_table(prisma_client: PrismaClient) -> TableActions[prisma_models.LiteL
     return TeamRepository(prisma_client).table
 
 
+def _rotated_token_table(
+    prisma_client: PrismaClient,
+) -> TableActions[prisma_models.LiteLLM_DeprecatedVerificationToken]:
+    return DeprecatedVerificationTokenRepository(prisma_client).table
+
+
+def _deleted_token_table(prisma_client: PrismaClient) -> TableActions[prisma_models.LiteLLM_DeletedVerificationToken]:
+    return DeletedVerificationTokenRepository(prisma_client).table
+
+
+def _deleted_team_table(prisma_client: PrismaClient) -> TableActions[prisma_models.LiteLLM_DeletedTeamTable]:
+    return TeamRepository(prisma_client).deleted_table
+
+
 @dataclass(frozen=True, slots=True)
 class _CreatorRows:
     key: prisma_models.LiteLLM_VerificationToken | None
@@ -99,9 +117,9 @@ class _CreatorRows:
 @dataclass(frozen=True, slots=True)
 class ResponseCreator:
     metadata: Mapping[str, object]
-    key_metadata: Mapping[str, object] | None
+    key_metadata: Mapping[str, object]
     team_id: str | None
-    team_metadata: Mapping[str, object] | None
+    team_metadata: Mapping[str, object]
 
 
 class ManagedObjectCreatorAttribution:
@@ -118,8 +136,9 @@ class ManagedObjectCreatorAttribution:
     A background response also carries its end user and the key, team, and user budgets, the
     way the read that billed it before did, and never names a key-scoped creator as its user.
     Its creator's key and team metadata come along too, so the billed event reaches the key's
-    and team's logging callbacks like that read did. A key or team the row names that can no
-    longer be read comes back as None instead of empty, since its logging settings are unknown.
+    and team's logging callbacks like that read did. A rotated key's metadata is read from the
+    key it was rotated to, and a deleted key's or team's from its deleted row. A key or team
+    lookup that fails raises instead, so the bill waits for the next read or poll.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -131,7 +150,13 @@ class ManagedObjectCreatorAttribution:
         return {"user_api_key_user_id": job.created_by, **_shared_metadata(job, rows)}
 
     async def response_creator(self, job: ManagedObjectRow, object_id: str) -> ResponseCreator:
-        rows: Final = await self._rows(job, object_id)
+        api_key: Final = getattr(job, "api_key", None)
+        team_id: Final = getattr(job, "team_id", None)
+        rows: Final = _CreatorRows(
+            key=await self._live_key_row(api_key, job.created_by),
+            team=await self._live_team_row(team_id),
+            user=await self._user_row(object_id, _creator_user_id(job.created_by)),
+        )
         end_user_id: Final = getattr(job, "end_user_id", None)
         return ResponseCreator(
             metadata={
@@ -142,9 +167,36 @@ class ManagedObjectCreatorAttribution:
                 **_budget_fields(rows.team, "user_api_key_team_spend", "user_api_key_team_max_budget"),
                 **_budget_fields(rows.user, "user_api_key_user_spend", "user_api_key_user_max_budget"),
             },
-            key_metadata=_named_row_metadata(rows.key, _names_a_key_row(getattr(job, "api_key", None))),
-            team_id=getattr(job, "team_id", None),
-            team_metadata=_named_row_metadata(rows.team, bool(getattr(job, "team_id", None))),
+            key_metadata=row_metadata(rows.key) if rows.key is not None else await self._retired_key_metadata(api_key),
+            team_id=team_id,
+            team_metadata=row_metadata(rows.team) if rows.team is not None else await self._deleted_team_metadata(team_id),
+        )
+
+    async def _retired_key_metadata(self, api_key: str | None) -> Mapping[str, object]:
+        if not _names_a_key_row(api_key):
+            return {}
+        rotation: Final = await _rotated_token_table(self._prisma_client).find_unique(where={"token": api_key})
+        current_token: Final = rotation.active_token_id if rotation is not None else api_key
+        current_key: Final = (
+            await _token_table(self._prisma_client).find_unique(where={"token": current_token})
+            if rotation is not None
+            else None
+        )
+        if current_key is not None:
+            return row_metadata(current_key)
+        return row_metadata(
+            await _deleted_token_table(self._prisma_client).find_first(
+                where={"token": current_token}, order={"deleted_at": "desc"}
+            )
+        )
+
+    async def _deleted_team_metadata(self, team_id: str | None) -> Mapping[str, object]:
+        if not team_id:
+            return {}
+        return row_metadata(
+            await _deleted_team_table(self._prisma_client).find_first(
+                where={"team_id": team_id}, order={"deleted_at": "desc"}
+            )
         )
 
     async def _rows(self, job: ManagedObjectRow, object_id: str) -> _CreatorRows:
@@ -168,22 +220,30 @@ class ManagedObjectCreatorAttribution:
     async def _key_row(
         self, object_id: str, api_key: str | None, created_by: str | None
     ) -> prisma_models.LiteLLM_VerificationToken | None:
-        if not api_key or _is_cli_session_key(api_key, created_by):
-            return None
         try:
-            return await _token_table(self._prisma_client).find_unique(where={"token": api_key})
+            return await self._live_key_row(api_key, created_by)
         except Exception as e:
             verbose_proxy_logger.error(f"{self._poller_name}: could not look up the creating key for {object_id}: {e}")
             return None
 
-    async def _team_row(self, object_id: str, team_id: str | None) -> prisma_models.LiteLLM_TeamTable | None:
-        if not team_id:
+    async def _live_key_row(
+        self, api_key: str | None, created_by: str | None
+    ) -> prisma_models.LiteLLM_VerificationToken | None:
+        if not api_key or _is_cli_session_key(api_key, created_by):
             return None
+        return await _token_table(self._prisma_client).find_unique(where={"token": api_key})
+
+    async def _team_row(self, object_id: str, team_id: str | None) -> prisma_models.LiteLLM_TeamTable | None:
         try:
-            return await _team_table(self._prisma_client).find_unique(where={"team_id": team_id})
+            return await self._live_team_row(team_id)
         except Exception as e:
             verbose_proxy_logger.error(f"{self._poller_name}: could not look up team {team_id} for {object_id}: {e}")
             return None
+
+    async def _live_team_row(self, team_id: str | None) -> prisma_models.LiteLLM_TeamTable | None:
+        if not team_id:
+            return None
+        return await _team_table(self._prisma_client).find_unique(where={"team_id": team_id})
 
 
 def _shared_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, object]:
@@ -217,13 +277,7 @@ def row_metadata(row: object) -> Mapping[str, object]:
     return cast(Mapping[str, object], metadata) if isinstance(metadata, dict) else {}  # cast-ok: prisma Json object column
 
 
-def _named_row_metadata(row: object, named: bool) -> Mapping[str, object] | None:
-    if row is None and named:
-        return None
-    return row_metadata(row)
-
-
-def _names_a_key_row(api_key: object) -> bool:
+def _names_a_key_row(api_key: object) -> TypeGuard[str]:
     from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 
     return isinstance(api_key, str) and is_valid_sha256_hash(api_key)

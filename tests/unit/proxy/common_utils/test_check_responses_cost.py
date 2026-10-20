@@ -129,10 +129,21 @@ class _InMemoryManagedObjectTable:
         return len(matched)
 
 
+def _prisma_with_no_creator_rows() -> MagicMock:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deprecatedverificationtoken.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deletedteamtable.find_first = AsyncMock(return_value=None)
+    return prisma_client
+
+
 def _poller_over(table: _InMemoryManagedObjectTable, billed_logger: _RecordingBilledLogger):
     from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
 
-    prisma_client: Final = MagicMock()
+    prisma_client: Final = _prisma_with_no_creator_rows()
     prisma_client.db.litellm_managedobjecttable = table
     poller: Final = CheckResponsesCost(
         proxy_logging_obj=MagicMock(),
@@ -176,8 +187,7 @@ class TestCheckResponsesCost:
     @pytest.fixture
     def mock_prisma_client(self):
         """Create a mock Prisma client"""
-        client = MagicMock()
-        client.db = MagicMock()
+        client = _prisma_with_no_creator_rows()
         client.db.litellm_managedobjecttable = MagicMock()
         return client
 
@@ -1593,14 +1603,31 @@ class _PricedBilling:
     logging_obj: object
 
 
+@dataclass(frozen=True)
+class _PricedPoller:
+    poller: object
+    prisma_client: MagicMock
+    table: _InMemoryManagedObjectTable
+    response_id: str
+
+    async def bill(self, read: ResponsesAPIResponse) -> object:
+        from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
+
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        assert isinstance(self.poller, CheckResponsesCost)
+        charge: Final = await self.poller.bill_if_finished(response_id=self.response_id, response=read)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+        return charge
+
+
 _PRICED_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType(
     {"model": "openai/gpt-5.6", "api_key": "sk-unused", "input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
 )
 _CREATING_KEY_HASH: Final = hashlib.sha256(b"sk-alice").hexdigest()
 
 
-async def _bill_through_a_priced_deployment(
-    read: ResponsesAPIResponse,
+def _priced_poller(
     litellm_params: Mapping[str, object] = _PRICED_LITELLM_PARAMS,
     model_info: Mapping[str, object] = MappingProxyType({}),
     key_row: object = None,
@@ -1608,11 +1635,15 @@ async def _bill_through_a_priced_deployment(
     key_lookup_error: Exception | None = None,
     default_team_settings: tuple[Mapping[str, object], ...] = (),
     api_key: str = _CREATING_KEY_HASH,
-) -> _PricedBilling:
+    rotated_to: Mapping[str, object] = MappingProxyType({}),
+    deleted_key_row: object = None,
+    deleted_team_row: object = None,
+) -> _PricedPoller:
+    from types import SimpleNamespace
+
     import litellm
     from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
 
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
     response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
@@ -1625,17 +1656,23 @@ async def _bill_through_a_priced_deployment(
                 unified_object_id=response_id,
                 status="queued",
                 api_key=api_key,
-                team_id="team-alpha" if team_row is not None or default_team_settings else None,
+                team_id="team-alpha" if team_row is not None or deleted_team_row is not None or default_team_settings else None,
             ),
         )
     )
-    prisma_client: Final = MagicMock()
+    key_rows: Final = {api_key: key_row, **{token: row for token, row in rotated_to.items()}}
+    prisma_client: Final = _prisma_with_no_creator_rows()
     prisma_client.db.litellm_managedobjecttable = table
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
-        return_value=key_row, side_effect=key_lookup_error
+        side_effect=key_lookup_error or (lambda where: key_rows.get(where["token"]))
     )
+    prisma_client.db.litellm_deprecatedverificationtoken.find_unique = AsyncMock(
+        return_value=SimpleNamespace(token=api_key, active_token_id=next(iter(rotated_to))) if rotated_to else None
+    )
+    prisma_client.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=deleted_key_row)
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    prisma_client.db.litellm_deletedteamtable.find_first = AsyncMock(return_value=deleted_team_row)
     router: Final = litellm.Router(
         model_list=[
             {
@@ -1645,18 +1682,50 @@ async def _bill_through_a_priced_deployment(
             }
         ]
     )
-    charge: Final = await CheckResponsesCost(
-        proxy_logging_obj=MagicMock(),
+    return _PricedPoller(
+        poller=CheckResponsesCost(
+            proxy_logging_obj=MagicMock(),
+            prisma_client=prisma_client,
+            llm_router=router,
+            proxy_config=_proxy_config_with(default_team_settings),
+        ),
         prisma_client=prisma_client,
-        llm_router=router,
-        proxy_config=_proxy_config_with(default_team_settings),
-    ).bill_if_finished(response_id=response_id, response=read)
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
-    return _PricedBilling(
         table=table,
         response_id=response_id,
-        cost=charge.cost if charge is not None else None,
-        logging_obj=charge.logging_obj if charge is not None else None,
+    )
+
+
+async def _bill_through_a_priced_deployment(
+    read: ResponsesAPIResponse,
+    litellm_params: Mapping[str, object] = _PRICED_LITELLM_PARAMS,
+    model_info: Mapping[str, object] = MappingProxyType({}),
+    key_row: object = None,
+    team_row: object = None,
+    key_lookup_error: Exception | None = None,
+    default_team_settings: tuple[Mapping[str, object], ...] = (),
+    api_key: str = _CREATING_KEY_HASH,
+    rotated_to: Mapping[str, object] = MappingProxyType({}),
+    deleted_key_row: object = None,
+    deleted_team_row: object = None,
+) -> _PricedBilling:
+    priced: Final = _priced_poller(
+        litellm_params=litellm_params,
+        model_info=model_info,
+        key_row=key_row,
+        team_row=team_row,
+        key_lookup_error=key_lookup_error,
+        default_team_settings=default_team_settings,
+        api_key=api_key,
+        rotated_to=rotated_to,
+        deleted_key_row=deleted_key_row,
+        deleted_team_row=deleted_team_row,
+    )
+    charge: Final = await priced.bill(read)
+    return _PricedBilling(
+        table=priced.table,
+        response_id=priced.response_id,
+        cost=getattr(charge, "cost", None),
+        logging_obj=getattr(charge, "logging_obj", None),
     )
 
 
@@ -1919,13 +1988,38 @@ async def test_the_billing_event_reaches_the_langfuse_projects_the_creators_own_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key_lookup_error", [None, RuntimeError("database unavailable")], ids=["deleted", "failed"])
-async def test_a_creating_key_that_can_no_longer_be_read_bills_only_through_the_proxys_callbacks(
-    monkeypatch: pytest.MonkeyPatch, key_lookup_error: Exception | None
+@pytest.mark.parametrize("retired", ["rotated key", "deleted key", "deleted team"])
+async def test_a_creator_rotated_or_deleted_before_the_bill_still_gets_the_charge_in_its_own_langfuse_project(
+    monkeypatch: pytest.MonkeyPatch, retired: str
 ):
-    """A deleted key, or one whose lookup fails, leaves its own logging settings unknown, so the charge
-    goes to the proxy's callbacks alone instead of falling back to its team's project, which that key's
-    own requests may never have logged to."""
+    """A key rotated or deleted, or a team deleted, while its background response ran logged that response's
+    create to its own project, so the charge follows the settings kept on the key it was rotated to or on
+    its deleted row instead of leaving that project for the proxy's callbacks alone."""
+    import litellm
+    from litellm.litellm_core_utils import litellm_logging
+
+    langfuse: Final = _recording_langfuse()
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [langfuse])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    key_logging: Final = _creator_logging("key logging").key_row
+
+    await _bill_through_a_priced_deployment(
+        _terminal_response(),
+        rotated_to={hashlib.sha256(b"sk-alice-rotated").hexdigest(): key_logging} if retired == "rotated key" else {},
+        deleted_key_row=key_logging if retired == "deleted key" else None,
+        deleted_team_row=_creator_logging("team callback_settings").team_row if retired == "deleted team" else None,
+    )
+
+    assert langfuse.events == ((pytest.approx(_PRICED_COST), _CREATOR_LANGFUSE_VARS["langfuse_public_key"]),)
+
+
+@pytest.mark.asyncio
+async def test_a_creator_lookup_that_fails_leaves_the_response_for_the_next_read_to_bill_into_the_creators_project(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A key lookup that fails once must not bill the response without its creator's settings, since billing
+    it once claims it and no later read would ever send the charge to the creator's own project."""
     import litellm
     from litellm.litellm_core_utils import litellm_logging
 
@@ -1934,14 +2028,18 @@ async def test_a_creating_key_that_can_no_longer_be_read_bills_only_through_the_
     monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [langfuse])
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [capture])
-
-    await _bill_through_a_priced_deployment(
-        _terminal_response(),
-        team_row=_creator_logging("team callback_settings").team_row,
-        key_lookup_error=key_lookup_error,
+    priced: Final = _priced_poller()
+    priced.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        side_effect=[RuntimeError("database unavailable"), _creator_logging("key logging").key_row]
     )
 
-    assert langfuse.events == ()
+    with pytest.raises(RuntimeError):
+        await priced.bill(_terminal_response())
+    unbilled_statuses: Final = dict(priced.table.statuses)
+    await priced.bill(_terminal_response())
+
+    assert unbilled_statuses == {"job-priced": "queued"}
+    assert langfuse.events == ((pytest.approx(_PRICED_COST), _CREATOR_LANGFUSE_VARS["langfuse_public_key"]),)
     (payload,) = capture.payloads
     assert payload["response_cost"] == pytest.approx(_PRICED_COST)
 
@@ -1993,19 +2091,26 @@ def _key_logging_to_langfuse(callback_vars: Mapping[str, object]) -> object:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("key_row", "text_logged"),
+    ("key_row", "deleted_key_row", "text_logged"),
     [
-        (_key_logging_to_langfuse(_CREATOR_LANGFUSE_VARS), True),
-        (_key_logging_to_langfuse({**_CREATOR_LANGFUSE_VARS, "turn_off_message_logging": "true"}), False),
-        (None, False),
+        (_key_logging_to_langfuse(_CREATOR_LANGFUSE_VARS), None, True),
+        (_key_logging_to_langfuse({**_CREATOR_LANGFUSE_VARS, "turn_off_message_logging": "true"}), None, False),
+        (None, _key_logging_to_langfuse({**_CREATOR_LANGFUSE_VARS, "turn_off_message_logging": "true"}), False),
+        (None, None, True),
     ],
-    ids=["creator keeps message logging", "creator turns message logging off", "creator can no longer be read"],
+    ids=[
+        "creator keeps message logging",
+        "creator turns message logging off",
+        "deleted creator turned message logging off",
+        "creator has no key row anywhere",
+    ],
 )
 async def test_the_billing_event_logs_the_response_text_only_as_the_creators_logging_settings_allow(
-    monkeypatch: pytest.MonkeyPatch, key_row: object, text_logged: bool
+    monkeypatch: pytest.MonkeyPatch, key_row: object, deleted_key_row: object, text_logged: bool
 ):
-    """The billed event follows the creating key's or team's message logging setting, which falls back to the
-    proxy's, the way the batch poll decides it, and a creator it can no longer read gets no response text."""
+    """The billed event follows the creating key's or team's message logging setting, a deleted key's included,
+    which falls back to the proxy's the way the batch poll decides it, so a key with no stored settings
+    anywhere logs the text exactly as the proxy is set."""
     import litellm
     from litellm.litellm_core_utils import litellm_logging
 
@@ -2015,7 +2120,9 @@ async def test_the_billing_event_logs_the_response_text_only_as_the_creators_log
     monkeypatch.setattr(litellm, "_async_success_callback", [capture])
     monkeypatch.setattr(litellm, "turn_off_message_logging", False)
 
-    await _bill_through_a_priced_deployment(_read_with_text("the stored answer"), key_row=key_row)
+    await _bill_through_a_priced_deployment(
+        _read_with_text("the stored answer"), key_row=key_row, deleted_key_row=deleted_key_row
+    )
 
     (payload,) = capture.payloads
     assert payload["response_cost"] == pytest.approx(_PRICED_COST)
@@ -2023,11 +2130,14 @@ async def test_the_billing_event_logs_the_response_text_only_as_the_creators_log
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("caller_token", ["oauth2-raw-access-token", "sk-custom-auth-1234"])
 async def test_a_response_created_without_a_virtual_key_bills_into_its_teams_langfuse_project(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caller_token: str
 ):
-    """Under OAuth2 or custom auth the row keeps the caller's raw token, which names no key row, so the charge
-    follows the team's logging settings the way the batch poll treats such a creator."""
+    """Under OAuth2 the row keeps the caller's raw token, and under custom auth the hash of an sk- token that
+    has no key row, so the charge follows the team's logging settings like that caller's own requests."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
     import litellm
     from litellm.litellm_core_utils import litellm_logging
 
@@ -2038,7 +2148,7 @@ async def test_a_response_created_without_a_virtual_key_bills_into_its_teams_lan
 
     await _bill_through_a_priced_deployment(
         _terminal_response(),
-        api_key="oauth2-raw-access-token",
+        api_key=UserAPIKeyAuth(api_key=caller_token).api_key or caller_token,
         team_row=_creator_logging("team callback_settings").team_row,
     )
 
@@ -2046,17 +2156,28 @@ async def test_a_response_created_without_a_virtual_key_bills_into_its_teams_lan
 
 
 @pytest.mark.asyncio
-async def test_the_billing_event_skips_the_callbacks_the_creating_key_disabled(monkeypatch: pytest.MonkeyPatch):
-    """A key that turned a callback off keeps its billed charge out of that callback too."""
+async def test_a_key_that_disabled_a_callback_has_its_charge_logged_wherever_its_own_requests_are(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A key's stored list of disabled callbacks must treat the billed charge like that key's own requests, or
+    a project that shows the key's requests at $0 never shows the charge they add up to."""
+    import litellm
+    from litellm.litellm_core_utils import litellm_logging
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "premium_user", True)
-
-    billing: Final = await _bill_through_a_priced_deployment(
-        _terminal_response(), key_row=_key_row({"litellm_disabled_callbacks": ["langfuse"]})
+    langfuse: Final = _recording_langfuse()
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [langfuse])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [langfuse])
+    creator: Final = _CreatorLogging(
+        key_row=_key_row({"litellm_disabled_callbacks": ["langfuse"]}), team_row=_team_row({}), default_team_settings=()
     )
 
-    logging_obj: Final = billing.logging_obj
-    assert logging_obj is not None
-    assert logging_obj.should_run_callback("langfuse", logging_obj.litellm_params, "async_success_handler") is False
-    assert logging_obj.should_run_callback("s3_v2", logging_obj.litellm_params, "async_success_handler") is True
+    await _log_a_request_from(creator)
+    request_events: Final = langfuse.events
+    await _bill_through_a_priced_deployment(_terminal_response(), key_row=creator.key_row)
+    billed_events: Final = langfuse.events[len(request_events) :]
+
+    assert len(billed_events) == len(request_events)
+    assert all(cost == pytest.approx(_PRICED_COST) for cost, _ in billed_events)

@@ -8,10 +8,11 @@ with BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN and client reads are marked man
 managed files hook, so both stay free. The spend event carries the id the client holds, the row's
 unified_object_id, so its spend log is found under that id with the _background_cost suffix.
 The spend event reaches the creating key's or team's own logging callbacks the way that creator's
-requests do, and skips the callbacks the key disabled. Its message content is redacted when the
-creator's key or team logging turns message logging off, else as the proxy is set, the way the batch
-poll decides it. A creator whose key or team can no longer be read, or whose logging settings the
-logger rejects, is billed through the proxy's own callbacks only, with its message content redacted.
+requests do. Its message content is redacted when the creator's key or team logging turns message
+logging off, else as the proxy is set, the way the batch poll decides it. The creator is read before
+the row is claimed, so a lookup that fails leaves the response for the next read or poll to bill. A
+creator whose logging settings the logger rejects is billed through the proxy's own callbacks only,
+with its message content redacted.
 A read that finds no row, because the create could not store one, stores it under the reading key
 and bills it the same way, so a response the create left untracked is still billed once. A streamed
 background create is free on its own; its stream stores the row under the creating key and bills
@@ -69,7 +70,7 @@ _STORED_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(di
 _CALLBACK_LIST_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _RETRIEVE_RESPONSE_CALL_TYPE: Final = "aget_responses"
 _CALLBACK_LIST_FIELDS: Final = frozenset({"success_callback", "failure_callback", "litellm_disabled_callbacks"})
-_UNKNOWN_CREATOR_LOGGING: Final[Mapping[str, object]] = MappingProxyType({"turn_off_message_logging": True})
+_REJECTED_CREATOR_LOGGING: Final[Mapping[str, object]] = MappingProxyType({"turn_off_message_logging": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,12 +124,6 @@ def creator_logging_fields(creator: ResponseCreator, proxy_config: "ProxyConfig 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
 
-    if creator.key_metadata is None or creator.team_metadata is None:
-        verbose_proxy_logger.warning(
-            "CheckResponsesCost: the creating key or team can no longer be read, so only the proxy's "
-            "callbacks get the billed event"
-        )
-        return _UNKNOWN_CREATOR_LOGGING
     try:
         return key_and_team_logging_fields(
             user_api_key_dict=UserAPIKeyAuth(
@@ -143,7 +138,7 @@ def creator_logging_fields(creator: ResponseCreator, proxy_config: "ProxyConfig 
             f"CheckResponsesCost: could not read the creator's logging settings, so only the proxy's "
             f"callbacks get the billed event: {e}"
         )
-        return _UNKNOWN_CREATOR_LOGGING
+        return _REJECTED_CREATOR_LOGGING
 
 
 def _billed_logging_obj(billed: BilledBackgroundResponse, creator_logging: Mapping[str, object]) -> "LiteLLMLogging":
@@ -153,7 +148,7 @@ def _billed_logging_obj(billed: BilledBackgroundResponse, creator_logging: Mappi
     sync_callbacks, async_callbacks = split_dynamic_success_callbacks(
         _string_callbacks(creator_logging.get("success_callback"))
     )
-    logging_obj: Final = LiteLLMLogging(
+    return LiteLLMLogging(
         model=billed.model,
         messages=[{"role": "user", "content": "<retrieve_response>"}],
         stream=False,
@@ -165,13 +160,6 @@ def _billed_logging_obj(billed: BilledBackgroundResponse, creator_logging: Mappi
         dynamic_async_success_callbacks=list(async_callbacks) or None,
         kwargs={key: value for key, value in creator_logging.items() if key not in _CALLBACK_LIST_FIELDS},
     )
-    disabled_callbacks: Final = _string_callbacks(creator_logging.get("litellm_disabled_callbacks"))
-    if disabled_callbacks:
-        logging_obj.standard_callback_dynamic_params = {
-            **logging_obj.standard_callback_dynamic_params,
-            "litellm_disabled_callbacks": list(disabled_callbacks),
-        }
-    return logging_obj
 
 
 def _creator_or_proxy_logging_obj(billed: BilledBackgroundResponse) -> "LiteLLMLogging":
@@ -182,7 +170,7 @@ def _creator_or_proxy_logging_obj(billed: BilledBackgroundResponse) -> "LiteLLML
             f"CheckResponsesCost: the creator's logging settings were rejected, so only the proxy's "
             f"callbacks get the billed event: {e}"
         )
-        return _billed_logging_obj(billed, _UNKNOWN_CREATOR_LOGGING)
+        return _billed_logging_obj(billed, _REJECTED_CREATOR_LOGGING)
 
 
 async def log_billed_background_response(billed: BilledBackgroundResponse) -> BilledCharge:
@@ -378,14 +366,14 @@ class CheckResponsesCost:
             data={"status": job.status or PENDING_RESPONSE_STATUSES[0]},
         )
 
-    async def _billed_response(
+    def _billed_response(
         self,
         job: ManagedObjectRow,
         target: _PollTarget,
         response: ResponsesAPIResponse,
+        creator: ResponseCreator,
     ) -> BilledBackgroundResponse:
         deployment: Final = target.deployment
-        creator: Final = await self._creator_attribution.response_creator(job, job.unified_object_id)
         return BilledBackgroundResponse(
             response=response.model_copy(update={"id": job.unified_object_id}),
             model=deployment.litellm_params.model if deployment is not None else (response.model or ""),
@@ -410,11 +398,12 @@ class CheckResponsesCost:
         target: _PollTarget,
         response: ResponsesAPIResponse,
     ) -> BilledCharge | None:
+        creator: Final = await self._creator_attribution.response_creator(job, job.unified_object_id)
         if not await self._claim_for_billing(job):
             verbose_proxy_logger.info(f"Response {job.unified_object_id} was already billed elsewhere, skipping")
             return None
         try:
-            charge: Final = await self._log_billed_response(await self._billed_response(job, target, response))
+            charge: Final = await self._log_billed_response(self._billed_response(job, target, response, creator))
         except BaseException:
             await self._release_billing_claim(job)
             raise
