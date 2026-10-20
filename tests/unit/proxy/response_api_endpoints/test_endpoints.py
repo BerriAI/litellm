@@ -4408,6 +4408,48 @@ class TestResponsesInputTokens:
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["responses_request"]["model_file_id_mapping"] == mapping
 
+    @pytest.mark.parametrize("caller_mapping", [5, "lots", [1], {"file-x": {"deployment-a": 7}}])
+    def test_a_caller_sent_model_file_id_mapping_does_not_break_the_count(
+        self, monkeypatch: pytest.MonkeyPatch, caller_mapping: object
+    ) -> None:
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
+        from litellm.proxy.proxy_server import count_request_tokens
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-files",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "test-key",
+                        "api_base": "https://count.test/v1",
+                    },
+                    "model_info": {"id": "deployment-a"},
+                }
+            ]
+        )
+        monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+        sent: Final[list[object]] = []  # mutable-ok: collects what the mock peer receives
+
+        def count_peer(request: httpx.Request) -> httpx.Response:
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 7}, request=request)
+
+        with patch.object(
+            openai_count_tokens_http,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+        ):
+            response, _ = self._post_input_tokens(
+                {"model": "gpt-files", "input": "hi", "model_file_id_mapping": caller_mapping},
+                counter=AsyncMock(side_effect=count_request_tokens),
+                llm_router=router,
+            )
+
+        assert (response.status_code, response.json().get("input_tokens")) == (200, 7), response.text
+        assert sent == [{"model": "gpt-4o-mini", "input": "hi"}]
+
     def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
         from litellm.integrations.custom_logger import CustomLogger
 

@@ -665,7 +665,7 @@ def update_responses_input_with_model_file_ids(
             for content_item in content:
                 if isinstance(content_item, dict) and content_item.get("type") == "input_file":
                     file_id = content_item.get("file_id")
-                    if file_id:
+                    if isinstance(file_id, str) and file_id:
                         provider_file_id = file_id  # Default to original
 
                         # Check if we have a mapping for this file ID

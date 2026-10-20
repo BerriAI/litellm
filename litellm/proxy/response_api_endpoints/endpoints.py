@@ -1445,11 +1445,12 @@ _managed_files_hook_dep: Final = Depends(_proxy_managed_files_hook)
 async def _with_managed_file_id_mapping(
     data: Mapping[str, object], managed_files: _ManagedFileAccess | None, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, object]:
+    caller_fields: Final = {name: value for name, value in data.items() if name != MODEL_FILE_ID_MAPPING_FIELD}
     if managed_files is None:
-        return data
+        return caller_fields
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    hooked: Final = dict(data)
+    hooked: Final = dict(caller_fields)
     try:
         await managed_files.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict, cache=user_api_key_cache, data=hooked, call_type="aresponses"
@@ -1457,7 +1458,7 @@ async def _with_managed_file_id_mapping(
     except HTTPException as e:
         raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
     mapping: Final = hooked.get(MODEL_FILE_ID_MAPPING_FIELD)
-    return data if mapping is None else {**data, MODEL_FILE_ID_MAPPING_FIELD: mapping}
+    return caller_fields if mapping is None else {**caller_fields, MODEL_FILE_ID_MAPPING_FIELD: mapping}
 
 
 def _with_authorized_previous_response(
