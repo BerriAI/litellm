@@ -15,8 +15,9 @@ litellm-model-catalog.workspace = true
 memchr = "2"
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "rt"] }
 tracing.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
