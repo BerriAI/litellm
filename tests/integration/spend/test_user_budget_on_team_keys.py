@@ -45,7 +45,7 @@ def test_team_key_is_denied_before_provider_once_owner_personal_budget_is_exhaus
         assert read_rows(
             'SELECT max_budget FROM "LiteLLM_VerificationToken" WHERE token=%s', (sha256(key.encode()).hexdigest(),)
         ) == [{"max_budget": None}]
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = candidate.request(
             "POST",
             "/v1/chat/completions",
