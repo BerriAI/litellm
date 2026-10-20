@@ -85,9 +85,11 @@ def test_github_copilot_config_get_openai_compatible_provider_info(monkeypatch: 
 @patch("litellm.main.openai_chat_completions.completion")
 @patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion")
 def test_completion_github_copilot_mock_response(
-    mock_class_completion, mock_instance_completion, mock_get_api_key, monkeypatch
+    mock_class_completion, mock_instance_completion, mock_get_api_key, monkeypatch, tmp_path
 ):
     """Test the completion function with GitHub Copilot provider."""
+
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
 
     # Force chat path through the patched openai_chat_completions instance even if
     # a previous test left EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER set in the env.
