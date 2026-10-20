@@ -327,16 +327,18 @@ class CheckResponsesCost:
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                     **target.model_metadata,
                     **(_deployment_metadata(deployment) if deployment is not None else {}),
-                    **self._requested_model_group(target),
+                    **self._requested_model_group(target, job.team_id),
                 }
             ),
         )
 
-    def _requested_model_group(self, target: _PollTarget) -> Mapping[str, object]:
+    def _requested_model_group(self, target: _PollTarget, team_id: str | None) -> Mapping[str, object]:
         requested: Final = target.model_metadata.get("model_group")
         if target.deployment is None or not isinstance(requested, str):
             return MappingProxyType({})
-        routed: Final = _ROUTED_DEPLOYMENTS.validate_python(self.llm_router.get_model_list(model_name=requested) or ())
+        routed: Final = _ROUTED_DEPLOYMENTS.validate_python(
+            self.llm_router.get_model_list(model_name=requested, team_id=team_id) or ()
+        )
         serving_id: Final = target.deployment.model_info.id
         return MappingProxyType(
             {"model_group": requested} if any(row.model_info.id == serving_id for row in routed) else {}
