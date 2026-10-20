@@ -5,6 +5,7 @@ import json
 import uuid
 from typing import Final
 
+import httpx
 import pytest
 from integration._support.client import Gateway
 from integration._support.mcp import (
