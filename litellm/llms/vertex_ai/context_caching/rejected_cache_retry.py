@@ -5,6 +5,7 @@ from typing import Final, TypeVar
 
 import httpx
 
+from litellm.litellm_core_utils.core_helpers import independent_snapshot
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import RequestBody
@@ -22,7 +23,7 @@ def cache_rebuild(
     """Copies the inputs before the first transform, which pops keys from ``optional_params`` and ``messages``."""
     if not any(map(is_cached_message, messages)):
         return None
-    return partial(build, **deepcopy({"messages": messages, "optional_params": optional_params}))
+    return partial(build, messages=deepcopy(messages), optional_params=independent_snapshot(optional_params))
 
 
 def _status_and_message(error: httpx.HTTPStatusError | BaseLLMException) -> tuple[int, str]:

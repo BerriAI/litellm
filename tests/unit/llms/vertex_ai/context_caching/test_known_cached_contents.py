@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -448,6 +449,36 @@ async def _complete(sync_mode: bool, stream: bool, **kwargs) -> str:
     if stream:
         return "".join([chunk.choices[0].delta.content or "" async for chunk in response])
     return response.choices[0].message.content
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_rejected_cache_is_replaced_when_a_request_param_cannot_be_deep_copied(
+    respx_mock: respx.MockRouter,
+    fake_provider_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    stream: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.get(url__regex=r".*/cachedContents.*").mock(return_value=httpx.Response(200, json={}))
+    respx_mock.post(url__regex=r".*/cachedContents$").mock(
+        side_effect=[
+            httpx.Response(200, json=_created("cachedContents/deleted", _FAR_FUTURE)),
+            httpx.Response(200, json=_created("cachedContents/fresh", _FAR_FUTURE)),
+        ]
+    )
+    generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
+        side_effect=[_generated(stream), _rejected(404, "CachedContent not found"), _generated(stream)]
+    )
+    lock: Final = threading.Lock()
+
+    assert await _complete(sync_mode, stream, lock_holder=lock) == "ok"
+    assert await _complete(sync_mode, stream, lock_holder=lock) == "ok"
+
+    sent: Final = [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls]
+    assert sent == ["cachedContents/deleted", "cachedContents/deleted", "cachedContents/fresh"]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
