@@ -16580,6 +16580,24 @@
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
         "supports_vision": true
     },
+    "cloudflare/clairic": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "extraction",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/clairic/",
+        "supports_vision": true
+    },
+    "cloudflare/@cf/cloudflare/clairic": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "extraction",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/clairic/",
+        "supports_vision": true
+    },
     "cloudflare/@cf/meta/llama-2-7b-chat-fp16": {
         "input_cost_per_token": 1.923e-06,
         "litellm_provider": "cloudflare",

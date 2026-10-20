@@ -48,6 +48,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_E
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import MCPPreCallRequestObject, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -8686,3 +8687,78 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
         await _rpm_request(limiter, cache, auth, "a2a/cheap")
     assert denied.value.status_code == 429
     assert "expensive" in str(denied.value.detail)
+
+
+def _extraction_request(state: str, call_id: str) -> dict[str, object]:
+    return {
+        "model": "invoice-reader",
+        "state": state,
+        "fields": {"vendor": {"type": "text", "instructions": "Who sent the invoice"}},
+        "litellm_call_id": call_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_extraction_request_passes_a_tpm_limited_key_without_an_injected_output_cap():
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-extraction-cap"), tpm_limit=2000)
+    data: Final = _extraction_request("Invoice from Acme Tools", "extraction-cap")
+    sent: Final = dict(data)
+
+    await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=data, call_type="aextraction")
+
+    assert data == sent
+
+
+@pytest.mark.asyncio
+async def test_an_extraction_request_reserves_its_state_and_no_output_budget(monkeypatch):
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-extraction-estimate"), tpm_limit=1_000_000)
+    state_tokens: Final = 500
+
+    reserved: Final = await _reserved_tokens_for(
+        handler, cache, key, _extraction_request("word" * state_tokens, "extraction-estimate"), call_type="aextraction"
+    )
+
+    assert state_tokens <= reserved < 2 * state_tokens
+
+
+@pytest.mark.asyncio
+async def test_a_successful_extraction_counts_its_input_tokens_toward_the_key_tpm_limit(monkeypatch):
+    monkeypatch.setattr(_PROXY_MaxParallelRequestsHandler, "get_rate_limit_type", lambda self: "total")
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    api_key: Final = hash_token("sk-extraction-usage")
+    key: Final = UserAPIKeyAuth(api_key=api_key, tpm_limit=500)
+    await handler.async_pre_call_hook(
+        user_api_key_dict=key, cache=cache, data=_extraction_request("Invoice", "extraction-1"), call_type="aextraction"
+    )
+
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "extraction-1",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+        },
+        response_obj=ExtractionResponse.model_validate(
+            {
+                "model": "invoice-reader",
+                "answers": {"vendor": {"type": "text", "value": "Acme Tools"}},
+                "truncated": False,
+                "usage": {"input_tokens": 480, "output_tokens": 0},
+            }
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=cache,
+            data=_extraction_request("Invoice " * 40, "extraction-2"),
+            call_type="aextraction",
+        )
+    assert refused.value.status_code == 429
