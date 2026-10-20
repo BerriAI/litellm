@@ -10191,7 +10191,9 @@ class TestAzurePTUSpilloverCost:
             )
             response = self._response()
             response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+            response._hidden_params["provider_response_model"] = response.model
             response_cost: Final = obj.response_cost_calculator(result=response)
+            response.model = "spill-model-group-alias"
 
             payload: Final = get_standard_logging_object_payload(
                 kwargs={

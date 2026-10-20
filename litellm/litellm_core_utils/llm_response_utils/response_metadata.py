@@ -101,6 +101,13 @@ def response_timing_metrics(
     return {"_response_ms": total_response_time_ms, "litellm_overhead_time_ms": overhead_ms}
 
 
+def _provider_response_model(result: object) -> str | None:
+    """The model the provider answered with, kept because the proxy later rewrites ``result.model`` to the alias the
+    client asked for and cost-map lookups for the standard logging payload would otherwise miss."""
+    model: Final = getattr(result, "model", None) if isinstance(result, ModelResponse) else None
+    return model if isinstance(model, str) and model else None
+
+
 class ResponseMetadata:
     """
     Handles setting and managing `_hidden_params`, `response_time_ms`, and `litellm_overhead_time_ms` for LiteLLM responses
@@ -147,6 +154,7 @@ class ResponseMetadata:
                 preserve_litellm_internal_headers=True,
             ),
             "litellm_model_name": model,
+            "provider_response_model": _provider_response_model(self.result),
         }
         self._update_hidden_params(new_params)
 
