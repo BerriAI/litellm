@@ -3035,15 +3035,12 @@ class DBSpendUpdateWriter:
             return
 
         request_tags: Final = daily_spend_entity_ids(payload, "tag")
-        # .get, not indexing: the caller swallows exceptions at debug level, so a payload without
-        # team_id must still record its tag spend (as unattributed) rather than drop it silently.
+        # .get, not indexing: the caller swallows exceptions, so a KeyError would silently drop tag spend
         team_id: Final = payload.get("team_id") or ""  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
         for tag in request_tags:
             if tag is None:
                 continue
             endpoint_str = base_daily_transaction.get("endpoint") or ""
-            # team_id is part of the key so the queue never folds two teams' spend on one tag
-            # into a single entry before the upsert can keep them apart.
             daily_transaction_key = f"{tag}_{team_id}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
             daily_transaction = DailyTagSpendTransaction(
                 tag=tag, team_id=team_id, **base_daily_transaction, request_id=payload["request_id"]
