@@ -923,7 +923,14 @@ def test_partial_pricing_does_not_overwrite_explicit_cache_fields():
         _restore_model_cost_entries(model_keys)
 
 
-def test_partial_custom_pricing_inherits_builtin_explicit_cache_read_rate():
+@pytest.mark.parametrize(
+    ("deployment_cache_prices", "billed_cache_read_rate"),
+    [({}, 2.5e-07), ({"cache_read_input_token_cost": 1e-07}, 1e-07)],
+    ids=["inherits-builtin-explicit-rate", "own-cache-read-price-wins"],
+)
+def test_partial_custom_pricing_bills_explicit_cache_hits(
+    deployment_cache_prices: dict[str, float], billed_cache_read_rate: float
+):
     backend_model = "dashscope/qwen-explicit-cache-inherit-backend"
     deploy_id = "qwen-deploy-partial-pricing"
     model_keys = {
@@ -948,19 +955,31 @@ def test_partial_custom_pricing_inherits_builtin_explicit_cache_read_rate():
                     "litellm_params": {
                         "model": backend_model,
                         "api_key": "fake-key",
+                        "input_cost_per_token": 2e-06,
+                        "output_cost_per_token": 6e-06,
+                        **deployment_cache_prices,
                     },
-                    "model_info": {
-                        "id": deploy_id,
-                        "input_cost_per_token": 2.5e-06,
-                        "output_cost_per_token": 7.5e-06,
-                    },
+                    "model_info": {"id": deploy_id},
                 }
             ],
         )
+        response = litellm.ModelResponse(
+            model=backend_model,
+            usage=litellm.Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                prompt_tokens_details={"cached_tokens": 1000, "cache_type": "ephemeral"},
+            ),
+        )
 
-        entry = litellm.model_cost[deploy_id]
-        assert entry.get("explicit_cache_read_input_token_cost") == 2.5e-07
-        assert entry.get("cache_read_input_token_cost") == 5e-07
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model=backend_model,
+            custom_pricing=True,
+            router_model_id=deploy_id,
+        )
+
+        assert cost == pytest.approx(1000 * billed_cache_read_rate)
     finally:
         _restore_model_cost_entries(model_keys)
 

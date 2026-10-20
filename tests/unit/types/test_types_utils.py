@@ -222,6 +222,21 @@ def test_prompt_tokens_details_preserves_qwen_cache_type():
     assert details.model_dump()["cache_type"] == "ephemeral"
 
 
+@pytest.mark.parametrize("cache_type", [1, {"mode": "explicit"}, ["ephemeral"]])
+def test_usage_ignores_a_non_string_cache_type(cache_type: object):
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        prompt_tokens_details={"cached_tokens": 600, "cache_type": cache_type},
+    )
+
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 600
+    assert getattr(usage.prompt_tokens_details, "cache_type", None) is None
+
+
 def test_custom_pricing_accepts_qwen_explicit_cache_rate():
     from litellm.types.utils import CustomPricingLiteLLMParams
 

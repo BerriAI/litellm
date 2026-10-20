@@ -1842,6 +1842,11 @@ class PromptTokensDetailsWrapper(
     cache_type: str | None = None
     """Provider-reported cache mode. DashScope returns ``ephemeral`` for explicit Qwen Context Cache requests."""
 
+    @field_validator("cache_type", mode="before")
+    @classmethod
+    def _drop_non_string_cache_type(cls, value: object) -> str | None:
+        return value if isinstance(value, str) else None
+
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
         if name == "cache_write_tokens":
