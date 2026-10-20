@@ -460,7 +460,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     if partial_responses_event is not None:
         verbose_proxy_logger.debug(
             "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",
-            logging_obj.litellm_call_id,
+            sanitize_for_log(logging_obj.litellm_call_id),
         )
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
