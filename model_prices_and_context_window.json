@@ -40685,6 +40685,229 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "dothoosh/deepseek-flash": {
+        "cache_read_input_token_cost": 7.7e-09,
+        "input_cost_per_token": 3.85e-07,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 1.54e-06,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 5.6467e-08,
+        "input_cost_per_token": 1.694e-06,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 5.082e-06,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/gemini-3.5-flash-lite": {
+        "cache_read_input_token_cost": 3.85e-08,
+        "input_cost_per_token": 3.85e-07,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 3.208333e-06,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/gemini-3.8-flash": {
+        "cache_read_input_token_cost": 9.625e-08,
+        "input_cost_per_token": 9.625e-07,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 4.8125e-06,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/gemini-4-argon": {
+        "cache_read_input_token_cost": 1.28333e-07,
+        "input_cost_per_token": 2.566667e-06,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.2833333e-05,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/gpt-6-astra": {
+        "cache_read_input_token_cost": 1.283333e-06,
+        "input_cost_per_token": 1.2833333e-05,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 6.4166667e-05,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/gpt-6-luna": {
+        "cache_read_input_token_cost": 1.2833e-08,
+        "input_cost_per_token": 1.28333e-07,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 6.41667e-07,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/gpt-6.1-sol": {
+        "cache_read_input_token_cost": 1.28333e-07,
+        "input_cost_per_token": 2.566667e-06,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2833333e-05,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/kimi-k2.6": {
+        "cache_read_input_token_cost": 2.05333e-07,
+        "input_cost_per_token": 1.219167e-06,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 5.133333e-06,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 2.43833e-07,
+        "input_cost_per_token": 1.219167e-06,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 5.133333e-06,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "dothoosh/kimi-k3": {
+        "cache_read_input_token_cost": 3.85e-07,
+        "input_cost_per_token": 3.85e-06,
+        "litellm_provider": "dothoosh",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.925e-05,
+        "source": "https://gateway.dothoosh.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "text-completion-inception/mercury-edit-2": {
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,

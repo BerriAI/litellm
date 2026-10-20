@@ -249,5 +249,14 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "dothoosh": {
+    "base_url": "https://gateway.dothoosh.com/v1",
+    "api_key_env": "DOTHOOSH_API_KEY",
+    "api_base_env": "DOTHOOSH_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   }
 }

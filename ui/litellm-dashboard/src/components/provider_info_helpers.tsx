@@ -15,6 +15,7 @@ import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
 import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
+import dothooshLogo from "../../public/assets/logos/dothoosh.svg";
 import edenaiLogo from "../../public/assets/logos/edenai.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
 import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
@@ -109,6 +110,7 @@ export enum Providers {
   Deepgram = "Deepgram",
   Deepseek = "Deepseek",
   DOCKER_MODEL_RUNNER = "Docker Model Runner",
+  DOTHOOSH = "DotHoosh (دات‌هوش)",
   DOTPROMPT = "Dotprompt",
   EDENAI = "Eden AI",
   ElevenLabs = "ElevenLabs",
@@ -235,6 +237,7 @@ export const provider_map: Record<string, string> = {
   Deepgram: "deepgram",
   Deepseek: "deepseek",
   DOCKER_MODEL_RUNNER: "docker_model_runner",
+  DOTHOOSH: "dothoosh",
   DOTPROMPT: "dotprompt",
   EDENAI: "edenai",
   ElevenLabs: "elevenlabs",
@@ -359,6 +362,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Deepseek]: deepseekLogo.src,
   [Providers.Deepgram]: deepgramLogo.src,
   [Providers.DeepInfra]: deepinfraLogo.src,
+  [Providers.DOTHOOSH]: dothooshLogo.src,
   [Providers.EDENAI]: edenaiLogo.src,
   [Providers.ElevenLabs]: elevenlabsLogo.src,
   [Providers.FalAI]: falAiLogo.src,
