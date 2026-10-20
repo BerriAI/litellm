@@ -419,6 +419,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # tokens) to the attacker's host, or coerces the proxy into
     # authenticating against the attacker's host with admin secrets.
     "aws_bedrock_runtime_endpoint",
+    "aws_bedrock_control_plane_endpoint",
     # Bedrock project/workspace association. Deployments pin this to
     # enforce a data-retention policy, so a caller-supplied value would
     # re-route the request's retention and accounting to any project
@@ -461,6 +462,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # stored credential's values and the caller's connection by the proxy's own
     # secret_fields, so a body-supplied value could only spoof either.
     "github_copilot_auth_type",
+    "github_copilot_host",
     "user_provider_credentials",
     "github_copilot_user_session",
     # Observability credentials, hosts, and project identifiers: derived

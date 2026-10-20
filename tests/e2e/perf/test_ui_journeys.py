@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import time
+from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import FrameType
 from typing import Final
 
 import pytest
+from playwright.sync_api import Page
 from e2e_config import MASTER_KEY, UI_BASE_URL, UI_PASSWORD, UI_USERNAME
 from e2e_http import send_text_external, without_retries
 from setup.ui_journeys import (
@@ -56,7 +61,30 @@ def _metrics(transport: HttpTransport) -> float:
 
 def _samples(dashboard: Dashboard, journey: Journey, timeout: float, repeats: int) -> tuple[Sample, ...]:
     with dashboard_page(dashboard, timeout) as page:
-        return tuple(measure(page, journey, timeout) for _ in range(repeats + 1))
+        return tuple(_within_budget(page, journey, timeout, repeats))
+
+
+def _within_budget(page: Page, journey: Journey, timeout: float, repeats: int) -> Generator[Sample]:
+    """One hanging browser call must not eat the lane: SIGALRM ends the journey at timeout x (repeats + 2),
+    the budget every sample needs (start plus act plus settle) with one spare sample of slack."""
+    budget: Final = timeout * (repeats + 2)
+
+    def expire(signum: int, frame: FrameType | None) -> None:
+        raise TimeoutError(f"{journey.name} exceeded its {budget:.0f}s wall clock")
+
+    previous: Final = signal.signal(signal.SIGALRM, expire)
+    started: Final = time.monotonic()
+    try:
+        _ = signal.setitimer(signal.ITIMER_REAL, budget)
+        for _ in range(repeats + 1):
+            yield measure(page, journey, timeout)
+    except Exception as error:
+        if time.monotonic() - started < budget:
+            raise
+        yield Sample(seconds=time.monotonic() - started, error=f"wall_clock {type(error).__name__}: {error}"[:300])
+    finally:
+        _ = signal.setitimer(signal.ITIMER_REAL, 0)
+        _ = signal.signal(signal.SIGALRM, previous)
 
 
 def test_ui_journey_latency(journey_name: str, ui_fixture: UiFixture, request: pytest.FixtureRequest) -> None:

@@ -121,10 +121,12 @@ def advance_size_state(state: SizeCleanupState | None, probe: StorageProbe) -> S
     """
     Roll the reclaimable count forward to what the catalog shows now.
 
-    Without a prior state, or after the cumulative counters went backwards (a statistics reset), the count
-    starts from the dead rows Postgres still knows about, at the files' average bytes per row. A probe with no
-    row counters at all (`stats_are_stale`) cannot seed anything: the prior count is carried forward, and with
-    no prior count the files are taken as fully reclaimable so nothing is deleted on its say-so.
+    Without a prior state the count starts from the dead rows Postgres still knows about, at the files' average
+    bytes per row. After the cumulative counters went backwards (a statistics reset, e.g. a crash) the prior
+    count is carried forward less any shrink of the files, or the dead-row seed if that is larger, because the
+    reset changed the counters and not the files. A probe with no row counters at all (`stats_are_stale`)
+    cannot seed anything: the prior count is carried forward, and with no prior count the files are taken as
+    fully reclaimable so nothing is deleted on its say-so.
     """
     if probe.stats_are_stale:
         return SizeCleanupState(
@@ -138,10 +140,26 @@ def advance_size_state(state: SizeCleanupState | None, probe: StorageProbe) -> S
         )
     if state is None or probe.inserted_total < state.inserted_total or probe.deleted_total < state.deleted_total:
         seed_bytes_per_row: Final = probe.allocated_bytes / max(probe.live_rows + probe.dead_rows, 1)
+        seeded: Final = min(probe.allocated_bytes, round(probe.dead_rows * seed_bytes_per_row))
+        if state is None:
+            return SizeCleanupState(
+                allocated_bytes=probe.allocated_bytes,
+                reclaimable_bytes=seeded,
+                bytes_per_row=max(seed_bytes_per_row, 1.0),
+                inserted_total=probe.inserted_total,
+                deleted_total=probe.deleted_total,
+            )
+        carried: Final = max(
+            seeded,
+            min(probe.allocated_bytes, state.reclaimable_bytes - max(0, state.allocated_bytes - probe.allocated_bytes)),
+        )
+        carried_live_bytes: Final = probe.allocated_bytes - carried
         return SizeCleanupState(
             allocated_bytes=probe.allocated_bytes,
-            reclaimable_bytes=min(probe.allocated_bytes, round(probe.dead_rows * seed_bytes_per_row)),
-            bytes_per_row=max(seed_bytes_per_row, 1.0),
+            reclaimable_bytes=carried,
+            bytes_per_row=max(carried_live_bytes / probe.live_rows, 1.0)
+            if probe.live_rows > 0
+            else state.bytes_per_row,
             inserted_total=probe.inserted_total,
             deleted_total=probe.deleted_total,
         )
@@ -356,6 +374,11 @@ _STORAGE_SQL: Final = """
 
 # The age job and the size job are scheduled on separate SpendLogCleanup instances, so the lock is per process.
 _PASS_LOCK: Final = asyncio.Lock()
+
+_ANALYZE_SQL: Final = 'ANALYZE "LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"'
+# pg_stat_user_tables publishes what ANALYZE counted up to a second later (the stats collector on Postgres 14).
+_STATS_SETTLE_SECONDS: Final = 1.0
+_STATS_SETTLE_ATTEMPTS: Final = 5
 
 SPEND_LOG_CLEANUP_BOUND_SETTINGS: Final = (
     "maximum_spend_logs_cleanup_batch_size",
@@ -585,6 +608,48 @@ class SpendLogCleanup:
             inserted_total=row.inserted_total,
             deleted_total=row.deleted_total,
         )
+
+    async def _reprobe_after_analyze(
+        self, prisma_client: PrismaClient, deadline: float, stale: StorageProbe
+    ) -> StorageProbe | None:
+        """
+        Row counters that are all zero under a file with data were reset, e.g. by a crash. ANALYZE rebuilds
+        n_live_tup and n_dead_tup from a 30,000-row sample in seconds and blocks nothing, so the pass runs it and
+        reads the catalog again rather than trusting an estimate of zero or waiting a day for autoanalyze. The
+        new counts show up in pg_stat_user_tables a moment after ANALYZE returns, hence the settled re-reads.
+        """
+        verbose_proxy_logger.warning(
+            "Spend-log row statistics are stale (allocated=%s bytes, live_rows=0, dead_rows=0); running %s before "
+            "the size pass",
+            stale.allocated_bytes,
+            _ANALYZE_SQL,
+        )
+        if time.monotonic() >= deadline:
+            return None
+        timeout_ms: Final = self._timeout_ms(deadline)
+        try:
+            async with db_span("analyze", "LiteLLM_SpendLogs"), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                await tx.execute_raw(trusted_sql(_ANALYZE_SQL))
+        except Exception as e:  # noqa: BLE001 - a failed ANALYZE skips the size pass, it must not fail the run
+            verbose_proxy_logger.warning("Could not ANALYZE the spend-log tables: %s: %s", type(e).__name__, e)
+            return None
+        refreshed: Final = await self._probe_once_settled(prisma_client, deadline, _STATS_SETTLE_ATTEMPTS)
+        if refreshed is None or refreshed.stats_are_stale:
+            verbose_proxy_logger.warning(
+                "Spend-log row statistics are still stale after ANALYZE; skipping the size pass"
+            )
+            return None
+        return refreshed
+
+    async def _probe_once_settled(
+        self, prisma_client: PrismaClient, deadline: float, attempts_left: int
+    ) -> StorageProbe | None:
+        await asyncio.sleep(_STATS_SETTLE_SECONDS)
+        refreshed: Final = await self._probe_storage(prisma_client, deadline)
+        if refreshed is None or not refreshed.stats_are_stale or attempts_left <= 1:
+            return refreshed
+        return await self._probe_once_settled(prisma_client, deadline, attempts_left - 1)
 
     async def _load_size_state(self, prisma_client: PrismaClient, deadline: float) -> SizeCleanupState | None:
         """The reclaimable count saved by the last check, or None on the first check or when it cannot be read."""
@@ -1042,15 +1107,15 @@ class SpendLogCleanup:
         second. The run's batch cap and budget apply to the whole pass, so a pass that stops short reports how
         far above the target it still is and the next check continues from there.
         """
-        probe: Final = await self._probe_storage(prisma_client, deadline)
-        if probe is None:
+        measured: Final = await self._probe_storage(prisma_client, deadline)
+        if measured is None:
             return None
-        if probe.stats_are_stale:
-            verbose_proxy_logger.warning(
-                "Spend-log row statistics are stale (allocated=%s bytes, live_rows=0, dead_rows=0); skipping the "
-                'size pass until pg_stat_user_tables is repopulated, ANALYZE "LiteLLM_SpendLogs" refreshes it',
-                probe.allocated_bytes,
-            )
+        probe: Final = (
+            await self._reprobe_after_analyze(prisma_client, deadline, measured)
+            if measured.stats_are_stale
+            else measured
+        )
+        if probe is None:
             return None
         state: Final = advance_size_state(await self._load_size_state(prisma_client, deadline), probe)
         before: Final = SpendLogStorage(

@@ -1877,19 +1877,41 @@ async def test_size_pass_stops_at_the_run_batch_cap_and_reports_how_far_above_th
 
 
 @pytest.mark.asyncio
-async def test_size_pass_skips_on_stale_row_statistics_instead_of_trusting_an_estimate_of_zero(caplog):
+async def test_size_pass_analyzes_and_measures_again_when_the_row_statistics_were_reset(caplog):
+    """A crash zeroes pg_stat_user_tables under a full file; the pass rebuilds the counters instead of skipping.
+    The first read after ANALYZE still shows zeros, as the stats collector publishes them a moment later"""
     db = MagicMock()
     _wire_tx(db)
-    db.execute_raw = AsyncMock(return_value=1000)
-    _wire_size_probes(db, [_storage(allocated=5 * 1024**3, live=0, dead=0)], cutoff=datetime.now(timezone.utc))
+    statements = AsyncMock(return_value=0)
+    db.execute_raw = statements
+    saves = _wire_size_probes(
+        db,
+        [
+            _storage(allocated=10 * 1024**3, live=0, dead=0, inserted=0, deleted=0),
+            _storage(allocated=10 * 1024**3, live=0, dead=0, inserted=0, deleted=0),
+            _storage(10 * 1024**3, 1000, 0, 0, 0),
+        ],
+        cutoff=datetime.now(timezone.utc),
+        saved_state=SizeCleanupState(
+            allocated_bytes=10 * 1024**3,
+            reclaimable_bytes=9 * 1024**3 + 512 * 1024**2,
+            bytes_per_row=1024.0,
+            inserted_total=50_000,
+            deleted_total=49_000,
+        ),
+    )
     client = MagicMock()
     client.db = db
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await _size_cleaner({}).cleanup_spend_logs_by_size(client)
 
-    assert db.deletes.await_count == 0
+    issued = [call.args[0] for call in statements.await_args_list]
+    assert issued == ['ANALYZE "LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"'], (
+        "the only statement is the ANALYZE: no DELETE, the carried count puts the table under 1GB"
+    )
     assert any("row statistics are stale" in record.getMessage() for record in caplog.records)
+    assert saves[0].reclaimable_bytes == 9 * 1024**3 + 512 * 1024**2
 
 
 @pytest.mark.asyncio
@@ -1957,9 +1979,19 @@ _RUN_STATE = SizeCleanupState(
         ),
         ("the retention job deleted 2000 more rows", _storage(32_030_720, 3000, 2000, 20_000, 17_000), 27_217_000),
         (
-            "statistics reset: counters restart from the dead rows",
+            "statistics reset (a crash, then ANALYZE): the count is carried forward, not restarted from the dead rows",
             _storage(32_030_720, 5000, 1000, 5000, 1000),
-            5_338_453,
+            24_015_000,
+        ),
+        (
+            "statistics reset on a file VACUUM FULL shrank meanwhile: the carried count loses the shrink",
+            _storage(8_015_720, 5000, 0, 5000, 0),
+            0,
+        ),
+        (
+            "statistics reset with more dead rows than the carried count explains: the dead rows win",
+            _storage(32_030_720, 1000, 19_000, 1000, 19_000),
+            30_429_184,
         ),
     ],
 )

@@ -1505,6 +1505,7 @@ def _schedule_async_success_logging(
         return
 
     def _enqueue_async_logging() -> None:
+        logging_obj.mark_async_success_log_enqueued()
         asyncio.create_task(
             _client_async_logging_helper(
                 logging_obj=logging_obj,
@@ -1620,7 +1621,7 @@ async def _end_async_wrapper_failure(
         return
     _stamp_correlation_context_if_supported(logging_obj)
     logging_obj.failure_handler(
-        error, traceback_exception, start_time, end_time
+        error, traceback_exception, start_time, end_time, for_async_request=True
     )  # DO NOT MAKE THREADED - router retry fallback relies on this!
     await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
 
