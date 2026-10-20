@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -227,6 +228,37 @@ class _UpstreamThatTimesOutAfterThreeDeltas:
         raise httpx.ReadTimeout("Timeout on reading data from socket")
 
 
+class _UpstreamThatFailsWithUsageAfterThreeDeltas:
+    headers: dict[str, str] = {}
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for sequence_number, delta in enumerate(_SEA_DELTAS):
+            event = {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta,
+                "sequence_number": sequence_number,
+            }
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        failed = {
+            "type": "response.failed",
+            "sequence_number": len(_SEA_DELTAS),
+            "response": {
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "failed",
+                "model": "gpt-5.4-nano",
+                "output": [],
+                "error": {"code": "server_error", "message": "The model had an internal error"},
+                "usage": {"input_tokens": 400, "output_tokens": 9, "total_tokens": 409},
+            },
+        }
+        yield f"data: {json.dumps(failed)}\n\n".encode()
+
+
 async def _failure_payload_after_mid_stream_timeout(
     monkeypatch: pytest.MonkeyPatch, request_input: str | list[dict[str, object]]
 ) -> tuple[FailureRecorder, StandardLoggingPayload]:
@@ -298,3 +330,31 @@ async def test_mid_stream_failure_usage_estimate_never_fetches_image_dimensions(
         use_default_image_token_count=True,
     )
     assert payload["completion_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_keeps_the_usage_the_provider_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    logging_obj = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    iterator = ResponsesAPIStreamingIterator(
+        response=cast(httpx.Response, _UpstreamThatFailsWithUsageAfterThreeDeltas()),
+        model="gpt-5.4-nano",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        request_data={"model": "gpt-5.4-nano", "input": _SEA_PROMPT, "stream": True},
+    )
+
+    with pytest.raises(MidStreamFallbackError, match="The model had an internal error"):
+        await _ChunkRecorder().drain(iterator)
+    await iterator._await_pending_logging()
+
+    (payload,) = recorder.failure_payloads
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (400, 9)
