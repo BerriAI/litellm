@@ -346,9 +346,10 @@ Type for a function that counts tokens in a string.
 
 EXTRAPOLATION_SAMPLES: Final = 16
 PDF_PAGE_MAX_EXACT_CONTENT_BYTES: Final = 64 * 1024
-PDF_STRING_OPERAND: Final = re.compile(rb"\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\)?)*\)?|<[0-9A-Fa-f\s]+>")
+PDF_LITERAL_STRING_OPERAND: Final = rb"\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\)?)*\)?"
+PDF_STRING_OPERAND: Final = re.compile(PDF_LITERAL_STRING_OPERAND + rb"|<[0-9A-Fa-f\s]+>")
 PDF_XOBJECT_INVOCATION: Final = re.compile(
-    rb"%[^\r\n]*(?:\r\n?|\n|\Z)|/([^\s/\[\]()<>{}%]+)(?:\s|%[^\r\n]*(?:\r\n?|\n|\Z))+Do\b"
+    PDF_LITERAL_STRING_OPERAND + rb"|%[^\r\n]*(?:\r\n?|\n|\Z)|/([^\s/\[\]()<>{}%]+)(?:\s|%[^\r\n]*(?:\r\n?|\n|\Z))+Do\b"
 )
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
@@ -864,7 +865,7 @@ def _pdf_resolve_object(value: object) -> object:
     return value.get_object() if isinstance(value, _PdfIndirectReference) else value
 
 
-_PdfStreamMetrics: TypeAlias = tuple[int, int, tuple[tuple[int, bytes], ...], bool]
+_PdfStreamMetrics: TypeAlias = tuple[int, int, tuple[tuple[int, bytes], ...]]
 
 
 def _pdf_decode_name(name: bytes) -> str:
@@ -880,7 +881,6 @@ def _pdf_invocation_name(invocation: re.Match[bytes]) -> str | None:
 
 
 def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStreamMetrics:
-    form_data_memo: Final[dict[int, bytes]] = {}  # mutable-ok: page-local cache avoids repeated stream decoding
     form_metrics_memo: Final[dict[int, _PdfStreamMetrics]] = {}  # mutable-ok: page-local cache avoids repeated walks
 
     def stream_metrics(
@@ -890,7 +890,7 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
     ) -> _PdfStreamMetrics:
         xobjects: Final = _pdf_resolve_object(resources.get("/XObject"))
         if not isinstance(xobjects, _PdfResourceDictionary):
-            return len(content), _pdf_string_operand_bytes(content), (), False
+            return len(content), _pdf_string_operand_bytes(content), ()
         invoked_names: Final = tuple(
             name
             for invocation in PDF_XOBJECT_INVOCATION.finditer(content)
@@ -908,7 +908,6 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
             len(content) + sum(metric[0] for metric in form_metrics),
             _pdf_string_operand_bytes(content) + sum(metric[1] for metric in form_metrics),
             tuple(dict.fromkeys(chain.from_iterable(metric[2] for metric in form_metrics))),
-            any(metric[3] for metric in form_metrics),
         )
 
     def form_metrics_for_xobject(
@@ -919,16 +918,13 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
         resolved: Final = _pdf_resolve_object(xobject)
         identity: Final = id(resolved)
         if identity in ancestors:
-            return 0, 0, (), True
+            return 0, 0, ()
         if not isinstance(resolved, _PdfFormXObject) or resolved.get("/Subtype") != "/Form":
-            return 0, 0, (), False
+            return 0, 0, ()
         cached: Final = form_metrics_memo.get(identity)
         if cached is not None:
             return cached
-        cached_content: Final = form_data_memo.get(identity)
-        content: Final = cached_content if cached_content is not None else resolved.get_data()
-        if cached_content is None:
-            form_data_memo[identity] = content
+        content: Final = resolved.get_data()
         form_resources: Final = _pdf_resolve_object(resolved.get("/Resources"))
         resources: Final = form_resources if isinstance(form_resources, _PdfResourceDictionary) else inherited_resources
         metrics: Final = stream_metrics(content, resources, ancestors | {identity})
@@ -936,15 +932,13 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
             metrics[0],
             metrics[1],
             tuple(dict.fromkeys(((identity, _pdf_string_operand_sample(content)), *metrics[2]))),
-            metrics[3],
         )
-        if not result[3]:
-            form_metrics_memo[identity] = result
+        form_metrics_memo[identity] = result
         return result
 
     resources: Final = _pdf_resolve_object(page.get("/Resources"))
     if not isinstance(resources, _PdfResourceDictionary):
-        return len(page_content), _pdf_string_operand_bytes(page_content), (), False
+        return len(page_content), _pdf_string_operand_bytes(page_content), ()
     return stream_metrics(page_content, resources, frozenset())
 
 
@@ -975,7 +969,7 @@ def _pdf_page_text_tokens(page: _PdfPage, count_function: TokenCounterFunction) 
     """Oversized pages use bounded string-operand sampling and scale its token estimate to the full page."""
     contents: Final = page.get_contents()
     content: Final = contents.get_data() if contents is not None else b""
-    content_bytes, operand_bytes, form_samples, _ = _pdf_page_content_metrics(page, content)
+    content_bytes, operand_bytes, form_samples = _pdf_page_content_metrics(page, content)
     if content_bytes > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
         sample: Final = _pdf_bounded_operand_sample(
             (_pdf_string_operand_sample(content), *(form_sample for _, form_sample in form_samples))

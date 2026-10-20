@@ -1854,6 +1854,33 @@ def test_exponential_pdf_form_draws_avoid_full_text_extraction():
     assert priced >= 2 ** (depth - 1)
 
 
+@pytest.mark.timeout(10)
+def test_cyclic_exponential_pdf_form_walk_is_memoized():
+    depth: Final = 25
+
+    def cyclic_form(index: int) -> bytes:
+        next_index: Final = (index + 1) % depth
+        next_form_content: Final = f"/Fm{next_index} Do\n/Fm{next_index} Do\n".encode()
+        form_content: Final = b"(x) Tj\n" + next_form_content
+        form_dictionary: Final = (
+            f"/Type /XObject /Subtype /Form /BBox [0 0 612 792] "
+            f"/Resources << /XObject << /Fm{next_index} {7 + next_index} 0 R >> >>"
+        ).encode()
+        return _pdf_stream(form_content, form_dictionary)
+
+    form_objects: Final = tuple(cyclic_form(index) for index in range(depth))
+    data_url: Final = _pdf_data_url_with_shared_xobjects((b"/Fm0 Do\n",), form_objects)
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert priced > 0
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+
+
 def test_cyclic_pdf_form_xobject_is_priced():
     path_operator: Final = b"10 10 m 200 300 l S\n"
     form_content: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1) + b"/Fm1 Do\n"
@@ -1992,6 +2019,30 @@ def test_pdf_form_invocations_allow_comments_and_escaped_names():
 
     assert priced is not None
     assert priced >= 2 * len(string_operand) * repetitions
+
+
+def test_pdf_percent_inside_literal_does_not_hide_form_invocation():
+    string_operand: Final = b"(form text)"
+    text_operator: Final = string_operand + b" Tj\n"
+    repetitions: Final = 100 * 1024 // len(text_operator) + 1
+    form_object: Final = _pdf_stream(
+        text_operator * repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << >>",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        b"(50%) Tj /Fm1 Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert priced >= len(string_operand) * repetitions
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
 
 
 def test_oversized_pdf_text_uses_a_sampled_token_estimate():
