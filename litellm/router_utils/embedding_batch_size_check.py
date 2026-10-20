@@ -30,20 +30,18 @@ def count_embedding_inputs(input: str | Sequence[object]) -> int:
 
 
 def effective_embedding_input(
-    input: str | Sequence[object],
+    input: object,
     extra_body: object,
-) -> str | Sequence[object]:
-    """Return the input shape used for batch-size checks.
+) -> str | Sequence[object] | None:
+    """Return the input shape used for batch-size checks, or None when neither is an embedding input.
 
     Some providers merge ``extra_body`` over the request body (OpenAI-compatible paths);
     others ignore ``extra_body.input`` and use the top-level input (e.g. Bedrock Titan).
     Use whichever of the two yields the larger input count so limits cannot be bypassed.
     """
-    if _is_str_keyed_mapping(extra_body):
-        override: Final = extra_body.get("input")
-        if _is_embedding_input(override) and count_embedding_inputs(override) > count_embedding_inputs(input):
-            return override
-    return input
+    override: Final = extra_body.get("input") if _is_str_keyed_mapping(extra_body) else None
+    candidates: Final = tuple(value for value in (input, override) if _is_embedding_input(value))
+    return max(candidates, key=count_embedding_inputs, default=None)
 
 
 def _litellm_param(deployment: Mapping[str, object], key: str) -> object:
@@ -59,16 +57,17 @@ def _embedding_batch_limit(deployment: Mapping[str, object]) -> int | None:
 
 def _requested_embedding_count(
     deployment: Mapping[str, object],
-    input: str | Sequence[object],
+    input: object,
     request_kwargs: Mapping[str, object],
 ) -> int:
     extra_body: Final = request_kwargs.get("extra_body", _litellm_param(deployment, "extra_body"))
-    return count_embedding_inputs(effective_embedding_input(input, extra_body))
+    effective_input: Final = effective_embedding_input(input, extra_body)
+    return 0 if effective_input is None else count_embedding_inputs(effective_input)
 
 
 def _deployment_admits_embedding_batch(
     deployment: Mapping[str, object],
-    input: str | Sequence[object],
+    input: object,
     request_kwargs: Mapping[str, object],
 ) -> bool:
     limit: Final = _embedding_batch_limit(deployment)
@@ -101,7 +100,7 @@ def raise_if_embedding_batch_too_large(
     model: str,
 ) -> None:
     """Reject an embeddings request that exceeds its deployment's input limit."""
-    if not _is_str_keyed_mapping(deployment) or not _is_embedding_input(input):
+    if not _is_str_keyed_mapping(deployment):
         return
     limit: Final = _embedding_batch_limit(deployment)
     if limit is None:

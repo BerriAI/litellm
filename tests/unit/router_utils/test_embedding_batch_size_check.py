@@ -8,6 +8,7 @@ import respx
 
 import litellm
 from litellm import Router
+from litellm.types.router import RouterRateLimitError
 from litellm.router_utils.embedding_batch_size_check import (
     count_embedding_inputs,
     deployments_admitting_embedding_batch,
@@ -139,11 +140,14 @@ class TestEffectiveEmbeddingInput:
             (["a", "b", "c"], {"input": None, "truncate": "END"}, ["a", "b", "c"]),
             (["a", "b"], {"input": {"nested": "dict"}, "truncate": "END"}, ["a", "b"]),
             (["a", "b"], {"input": 42, "dimensions": 128}, ["a", "b"]),
+            (None, {"input": ["a", "b"]}, ["a", "b"]),
+            (7, {"input": ["a", "b"]}, ["a", "b"]),
+            (None, None, None),
         ],
     )
     def test_resolves_provider_bound_input(
         self,
-        top_level: str | list,
+        top_level: object,
         extra_body: dict[str, object] | None,
         expected: object,
     ) -> None:
@@ -237,6 +241,16 @@ class TestRaiseIfEmbeddingBatchTooLarge:
         if message_match is not None:
             assert f"max_embedding_batch_size={limit}" in excinfo.value.message
 
+    @pytest.mark.parametrize("top_level", [None, 7, {"text": "a"}])
+    def test_extra_body_override_counts_when_top_level_input_is_not_a_list(self, top_level: object) -> None:
+        with pytest.raises(litellm.BadRequestError, match="3 inputs"):
+            raise_if_embedding_batch_too_large(
+                deployment={"model_info": _model_info(2), "litellm_params": {"custom_llm_provider": _PROVIDER}},
+                input=top_level,
+                request_kwargs={"extra_body": {"input": ["a", "b", "c"]}},
+                model=_MODEL,
+            )
+
 
 class TestRouterEmbeddingBatchLimit:
     @pytest.fixture(autouse=True)
@@ -322,6 +336,42 @@ class TestRouterEmbeddingBatchLimit:
             for _ in range(5):
                 await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
             assert (capped_route.call_count, uncapped_route.call_count) == (0, 5)
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_oversized_batch_waits_for_a_cooling_down_deployment_that_admits_it(self, sync: bool) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed",
+                    "litellm_params": {"model": "hosted_vllm/bge-m3", "api_key": "sk-fake", "api_base": _VLLM_EMBED_BASE},
+                    "model_info": {"id": "vllm-embed-capped", "max_embedding_batch_size": 2},
+                },
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "hosted_vllm/bge-m3",
+                        "api_key": "sk-fake",
+                        "api_base": _UNCAPPED_EMBED_BASE,
+                    },
+                    "model_info": {"id": "vllm-embed-uncapped"},
+                },
+            ],
+            num_retries=0,
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
+                return_value=_vllm_embedding_response(3)
+            )
+            uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
+                return_value=httpx.Response(429, json={"error": {"message": "rate limited"}})
+            )
+            with pytest.raises(litellm.RateLimitError):
+                await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
+            with pytest.raises(RouterRateLimitError):
+                await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
+            assert (capped_route.call_count, uncapped_route.call_count) == (0, 1)
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     @pytest.mark.asyncio

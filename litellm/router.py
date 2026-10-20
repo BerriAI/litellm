@@ -14263,7 +14263,11 @@ class Router:
 
         # Health-check-based filtering (before cooldown)
         healthy_deployments = await self._async_filter_health_check_unhealthy_deployments(
-            healthy_deployments=healthy_deployments,
+            healthy_deployments=deployments_admitting_embedding_batch(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                _OPAQUE_VALUE_ADAPTER.validate_python(input),
+                _OPAQUE_VALUE_ADAPTER.validate_python(request_kwargs),
+            ),
             parent_otel_span=parent_otel_span,
             health_check_probe=health_check_probe,
         )
@@ -14340,12 +14344,7 @@ class Router:
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            deployments_admitting_embedding_batch(
-                cast(list[dict[str, object]], healthy_deployments),
-                _OPAQUE_VALUE_ADAPTER.validate_python(input),
-                _OPAQUE_VALUE_ADAPTER.validate_python(request_kwargs),
-            ),
-            target_order=_target_order,
+            cast(list[dict], healthy_deployments), target_order=_target_order
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
@@ -15497,7 +15496,11 @@ class Router:
 
         # Health-check-based filtering (before cooldown)
         healthy_deployments = self._filter_health_check_unhealthy_deployments(
-            healthy_deployments=healthy_deployments,
+            healthy_deployments=deployments_admitting_embedding_batch(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                _OPAQUE_VALUE_ADAPTER.validate_python(input),
+                routing_kwargs,
+            ),
             parent_otel_span=parent_otel_span,
         )
 
@@ -15533,10 +15536,7 @@ class Router:
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            deployments_admitting_embedding_batch(
-                healthy_deployments, _OPAQUE_VALUE_ADAPTER.validate_python(input), routing_kwargs
-            ),
-            target_order=_target_order,
+            healthy_deployments, target_order=_target_order
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
