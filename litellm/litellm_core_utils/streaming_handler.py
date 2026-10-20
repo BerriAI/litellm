@@ -2400,7 +2400,7 @@ class CustomStreamWrapper:
     def has_dispatched_failure_logging(self) -> bool:
         return self._failure_logging is not None
 
-    async def wait_for_failure_logging(self, timeout: float) -> None:
+    async def wait_for_failure_logging(self, timeout: float | None) -> None:
         """Let this stream's failure log read its own deployment before a fallback reuses the logging object."""
         if self._failure_logging is None:
             return

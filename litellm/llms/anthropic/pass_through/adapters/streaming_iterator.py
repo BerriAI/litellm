@@ -24,7 +24,6 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import MID_STREAM_FAILURE_LOG_WAIT_SECONDS
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
@@ -72,7 +71,7 @@ class _FailureLoggingWaiter(Protocol):
     @property
     def has_dispatched_failure_logging(self) -> bool: ...
 
-    async def wait_for_failure_logging(self, timeout: float) -> None: ...
+    async def wait_for_failure_logging(self, timeout: float | None) -> None: ...
 
 
 def _optional_attr(obj: object, name: str) -> object:
@@ -203,7 +202,7 @@ class _CombinedChunkSplitter:
     def has_dispatched_failure_logging(self) -> bool:
         return isinstance(self._stream, _FailureLoggingWaiter) and self._stream.has_dispatched_failure_logging is True
 
-    async def wait_for_failure_logging(self, timeout: float) -> None:
+    async def wait_for_failure_logging(self, timeout: float | None) -> None:
         if isinstance(self._stream, _FailureLoggingWaiter):
             await self._stream.wait_for_failure_logging(timeout=timeout)
 
@@ -1266,9 +1265,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 raise provider_error from e
             stream_has_dispatched_failure_logging: Final = self._combined_chunk_splitter.has_dispatched_failure_logging
             if stream_has_dispatched_failure_logging:
-                await self._combined_chunk_splitter.wait_for_failure_logging(
-                    timeout=MID_STREAM_FAILURE_LOG_WAIT_SECONDS
-                )
+                await self._combined_chunk_splitter.wait_for_failure_logging(timeout=None)
             elif logging_obj is not None:
                 try:
                     await logging_obj.dispatch_failure_handlers(
