@@ -28,7 +28,6 @@ from litellm.integrations.anthropic_cache_control_hook import (
     configured_injection_points,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -40,6 +39,7 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.native.responses import execute_responses
 from litellm.native.route_plan import NativeChat, plan_responses_route
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -1398,7 +1398,6 @@ def responses(
 
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
         skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
         require_encrypted_task_support: Final = kwargs.pop("_require_encrypted_task_support", False) is True
@@ -1618,81 +1617,30 @@ def responses(
                 **bridge_kwargs,
             )
 
-        # Get optional parameters for the responses API
-        request_drop_params: Final = kwargs.get("drop_params")
-        responses_api_request_params: Final[dict] = ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_params=response_api_optional_params,
-            allowed_openai_params=allowed_openai_params,
-            drop_params=normalize_drop_params(request_drop_params),
-        )
-
-        litellm_logging_obj.update_from_kwargs(
-            kwargs=kwargs,
-            model=model,
-            user=user,
-            optional_params=dict(responses_api_request_params),
-            litellm_params={
-                **responses_api_request_params,
-                "aresponses": _is_async,
-                "litellm_call_id": litellm_call_id,
-                "model_info": kwargs.get("model_info"),
-                "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
-                "metadata": (kwargs["litellm_metadata"] if "litellm_metadata" in kwargs else kwargs.get("metadata")),
-                "provider_affinity_header": litellm_params.provider_affinity_header,
-            },
-            custom_llm_provider=custom_llm_provider,
-        )
-
-        # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
-        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
-
-        # Call the handler with _is_async flag instead of directly calling the async handler
-        if custom_llm_provider is None:
+        if custom_llm_provider is None or responses_api_provider_config is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        fake_stream: Final = responses_api_provider_config.should_fake_stream(
-            model=model, stream=stream, custom_llm_provider=custom_llm_provider
-        )
-        applied_timeout: Final = CompletionTimeout.for_stream(
-            (StreamKind.FAKED if fake_stream else StreamKind.LIVE) if stream is True else StreamKind.NOT_STREAMED,
-            CompletionTimeout.as_limit(timeout or request_timeout),
-            None
-            if stream is not True or litellm_params.stream_timeout is None
-            else float(litellm_params.stream_timeout),
-        )
-        litellm_logging_obj.record_applied_timeout(applied_timeout)
-        response = base_llm_http_handler.response_api_handler(
+        return execute_responses(
+            http_handler=base_llm_http_handler,
             model=model,
             input=input,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_request_params=responses_api_request_params,
+            provider_config=responses_api_provider_config,
+            requested_params=response_api_optional_params,
+            allowed_openai_params=allowed_openai_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
+            user=user,
             extra_headers=effective_extra_headers,
             extra_body=extra_body,
-            timeout=applied_timeout,
-            _is_async=_is_async,
+            timeout=timeout or request_timeout,
+            is_async=_is_async,
+            stream=stream,
             client=kwargs.get("client"),
-            fake_stream=fake_stream,
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
             shared_session=kwargs.get("shared_session"),
+            litellm_metadata=kwargs.get("litellm_metadata", {}),
+            request_kwargs=kwargs,
         )
-
-        # Update the responses_api_response_id with the model_id
-        if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
-                responses_api_response=response,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
-                custom_llm_provider=custom_llm_provider,
-            )
-            # Stamp custom_llm_provider so callbacks can identify the provider
-            # (mirrors litellm/main.py:1371 for chat completions)
-            response.hidden_params["custom_llm_provider"] = custom_llm_provider
-
-        return response
     except Exception as e:
         raise litellm.exception_type(
             model=model,
