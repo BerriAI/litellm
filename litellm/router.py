@@ -4593,7 +4593,21 @@ class Router:
         )
         caller_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: router call kwargs are a str-keyed dict
         caller_endpoint_keys: Final = github_copilot_caller_endpoint_keys(deployment_litellm_params, caller_kwargs)
-        call_drop_params: Final = caller_kwargs.get("drop_params", deployment_litellm_params.get("drop_params"))
+        router_defaults: Final = cast(  # cast-ok: router default params are a str-keyed dict
+            "Mapping[str, object]", self.default_litellm_params
+        )
+        call_drop_params: Final = next(
+            (
+                value
+                for value in (
+                    caller_kwargs.get("drop_params"),
+                    deployment_litellm_params.get("drop_params"),
+                    router_defaults.get("drop_params"),
+                )
+                if value is not None
+            ),
+            None,
+        )
         if caller_endpoint_keys and not drops_unsupported_params(call_drop_params):
             raise litellm.BadRequestError(
                 message=(

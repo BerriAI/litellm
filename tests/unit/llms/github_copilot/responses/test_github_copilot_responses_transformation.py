@@ -64,11 +64,11 @@ class TestGithubCopilotResponsesAPITransformation:
         assert config.custom_llm_provider == LlmProviders.GITHUB_COPILOT, "custom_llm_provider should be GITHUB_COPILOT"
 
     @pytest.mark.parametrize(
-        ("api_base", "environment_base", "expected_base"),
+        ("api_base", "environment_base", "shared_base", "per_user_base"),
         (
-            (None, "https://copilot-env.example", "https://copilot-env.example"),
-            ("http://localhost:8080", "https://copilot-env.example", "http://localhost:8080"),
-            ("https://copilot-deployment.example/", None, "https://copilot-deployment.example"),
+            (None, "https://copilot-env.example", "https://copilot-env.example", "https://copilot-env.example"),
+            ("http://localhost:8080", "https://copilot-env.example", "http://localhost:8080", "https://copilot-env.example"),
+            ("https://copilot-deployment.example/", None, "https://copilot-deployment.example", DEFAULT_GITHUB_COPILOT_API_BASE),
         ),
     )
     @pytest.mark.parametrize("per_user", (False, True))
@@ -76,7 +76,8 @@ class TestGithubCopilotResponsesAPITransformation:
         self,
         api_base: str | None,
         environment_base: str | None,
-        expected_base: str,
+        shared_base: str,
+        per_user_base: str,
         per_user: bool,
         monkeypatch: pytest.MonkeyPatch,
     ):
@@ -94,7 +95,7 @@ class TestGithubCopilotResponsesAPITransformation:
                 else {}
             ),
         )
-        assert url == f"{expected_base}/responses"
+        assert url == f"{per_user_base if per_user else shared_base}/responses"
         config.authenticator.get_api_key.assert_not_called()
 
     def test_github_copilot_responses_url_falls_back_to_the_default_base_without_a_known_plan_host(self, monkeypatch):

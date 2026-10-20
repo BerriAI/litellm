@@ -353,7 +353,8 @@ def test_github_copilot_messages_config_probes_capabilities_under_copilot_namesp
     [
         (None, None, DEFAULT_GITHUB_COPILOT_API_BASE),
         (None, "http://localhost:8080/", "http://localhost:8080"),
-        ("https://deployment.example.test", "http://localhost:8080/", "https://deployment.example.test"),
+        ("https://deployment.example.test", "http://localhost:8080/", "http://localhost:8080"),
+        ("https://deployment.example.test", None, DEFAULT_GITHUB_COPILOT_API_BASE),
     ],
 )
 def test_validate_environment_uses_per_user_session_and_skips_authenticator(

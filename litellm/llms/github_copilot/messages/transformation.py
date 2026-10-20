@@ -8,11 +8,10 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 from ..authenticator import Authenticator
 from ..common_utils import (
     GetAPIKeyError,
-    get_copilot_api_base,
     get_copilot_default_headers,
     pin_session_authorization,
 )
-from ..per_user_auth import require_github_copilot_user_session
+from ..per_user_auth import require_github_copilot_user_session, resolve_copilot_api_base
 
 _MESSAGES_PROXY_API_VERSION: Final = "2026-06-01"
 
@@ -75,7 +74,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
                 llm_provider="github_copilot",
                 message=str(e),
             )
-        dynamic_api_base: Final = get_copilot_api_base(api_base, lambda: dynamic_api_key).rstrip("/")
+        dynamic_api_base: Final = resolve_copilot_api_base(api_base, user_session, lambda: dynamic_api_key).rstrip("/")
 
         # Merge Copilot headers with provided headers
         copilot_headers: Final = get_copilot_default_headers(dynamic_api_key)
@@ -116,8 +115,5 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        resolved: Final = get_copilot_api_base(
-            api_base,
-            lambda: user_session.token if user_session is not None else self.authenticator.get_api_key(),
-        ).rstrip("/")
+        resolved: Final = resolve_copilot_api_base(api_base, user_session, self.authenticator.get_api_key).rstrip("/")
         return resolved if resolved.endswith("/v1/messages") else f"{resolved}/v1/messages"

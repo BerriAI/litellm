@@ -40,6 +40,7 @@ from .authenticator import (
 from .common_utils import (
     aget_copilot_api_base,
     aprefetch_copilot_plan_api_base,
+    get_copilot_api_base,
     get_copilot_auth_headers,
     get_copilot_default_headers,
     prefetch_copilot_plan_api_base,
@@ -420,6 +421,14 @@ def require_github_copilot_user_session(litellm_params: object) -> GithubCopilot
     return None
 
 
+def resolve_copilot_api_base(
+    api_base: str | None, user_session: GithubCopilotUserSession | None, shared_token: Callable[[], str | None]
+) -> str:
+    if user_session is None:
+        return get_copilot_api_base(api_base, shared_token)
+    return get_copilot_api_base(None, lambda: user_session.token)
+
+
 def github_copilot_caller_rejection(
     original_exception: object, request_kwargs: object
 ) -> CallerCredentialAuthenticationError | None:
@@ -515,7 +524,7 @@ def _plan_api_base_request(kwargs: Mapping[str, object], model: object) -> tuple
     api_base: Final = api_base_obj if isinstance(api_base_obj, str) else None
     session: Final = kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY)
     if isinstance(session, GithubCopilotUserSession):
-        return session.token, api_base
+        return session.token, None
     targets_github_copilot: Final = kwargs.get("custom_llm_provider") == _LLM_PROVIDER or (
         isinstance(model, str) and model.startswith(f"{_LLM_PROVIDER}/")
     )

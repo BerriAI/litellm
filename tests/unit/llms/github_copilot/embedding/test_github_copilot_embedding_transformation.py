@@ -316,12 +316,9 @@ def test_per_user_session_token_wins_over_caller_authorization(authorization_hea
     assert config.authenticator.mock_calls == []
 
 
-@pytest.mark.parametrize(
-    ("deployment_base", "expected_base"),
-    [(None, "http://localhost:8080"), ("https://deployment.example.test/", "https://deployment.example.test")],
-)
-def test_get_complete_url_uses_the_deployment_base_with_per_user_session(
-    monkeypatch: pytest.MonkeyPatch, deployment_base: str | None, expected_base: str
+@pytest.mark.parametrize("deployment_base", [None, "https://deployment.example.test/"])
+def test_get_complete_url_with_per_user_session_ignores_the_deployment_base(
+    monkeypatch: pytest.MonkeyPatch, deployment_base: str | None
 ) -> None:
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
@@ -337,5 +334,5 @@ def test_get_complete_url_uses_the_deployment_base_with_per_user_session(
         litellm_params={"github_copilot_user_session": session},
     )
 
-    assert url == f"{expected_base}/embeddings"
+    assert url == "http://localhost:8080/embeddings"
     assert config.authenticator.mock_calls == []

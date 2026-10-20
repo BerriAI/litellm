@@ -502,12 +502,9 @@ def _call_surface(target, surface, **kwargs):
 
 
 @pytest.mark.parametrize("surface", ["completion", "embedding", "responses"])
-@pytest.mark.parametrize(
-    ("deployment_base", "expected_base"),
-    [(None, "https://configured.example.com/v1"), ("https://deployment.example.com/v1", "https://deployment.example.com/v1")],
-)
-def test_per_user_request_uses_the_deployment_base_else_the_configured_base(
-    per_user_credential, monkeypatch, surface, deployment_base, expected_base
+@pytest.mark.parametrize("deployment_base", [None, "https://deployment.example.com/v1"])
+def test_per_user_request_goes_to_the_configured_base_never_the_deployment_base(
+    per_user_credential, monkeypatch, surface, deployment_base
 ):
     monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "https://configured.example.com/v1")
     lookups: list[httpx.Request] = []
@@ -526,13 +523,14 @@ def test_per_user_request_uses_the_deployment_base_else_the_configured_base(
             extra_headers=dict(_EVIL_AUTH_HEADERS),
             api_base=deployment_base,
         )
-    assert [str(request.url) for request in requests] == [f"{expected_base}/{_SURFACE_PATHS[surface]}"]
+    assert [str(request.url) for request in requests] == [f"https://configured.example.com/v1/{_SURFACE_PATHS[surface]}"]
     assert requests[0].headers["authorization"] == "Bearer stored-github-token"
     assert lookups == []
 
 
-def _copilot_router(surface, mode, **deployment_params):
+def _copilot_router(surface, mode, default_litellm_params=None, **deployment_params):
     return litellm.Router(
+        default_litellm_params=default_litellm_params,
         model_list=[
             {
                 "model_name": "copilot",
@@ -573,16 +571,20 @@ def test_caller_endpoint_on_a_copilot_deployment_answers_400(per_user_credential
 
 @pytest.mark.parametrize("surface", ["completion", "embedding", "responses"])
 @pytest.mark.parametrize("mode", ["shared", "per_user"])
+@pytest.mark.parametrize(
+    "router_settings",
+    [{"drop_params": True}, {"default_litellm_params": {"drop_params": True}}],
+    ids=["deployment_drop_params", "router_default_drop_params"],
+)
 def test_caller_endpoint_on_a_copilot_deployment_is_dropped_under_drop_params(
-    per_user_credential, tmp_path, monkeypatch, surface, mode
+    per_user_credential, tmp_path, monkeypatch, surface, mode, router_settings
 ):
     _shared_login(tmp_path, monkeypatch)
-    router = _copilot_router(surface, mode, drop_params=True)
-    with github_http(_copilot_surface_responder(_surface_payload(surface))) as requests:
+    router = _copilot_router(surface, mode, **router_settings)
+    with github_http(_copilot_surface_responder(_surface_payload(surface)), answer_plan(PLAN_COPILOT_HOST)) as requests:
         _call_with_caller_endpoint(router, surface, mode)
-    assert [str(request.url) for request in requests] == [
-        f"https://deployment.example.com/v1/{_SURFACE_PATHS[surface]}"
-    ]
+    expected_base = PLAN_COPILOT_HOST if mode == "per_user" else "https://deployment.example.com/v1"
+    assert [str(request.url) for request in requests] == [f"{expected_base}/{_SURFACE_PATHS[surface]}"]
     expected_token = "stored-github-token" if mode == "per_user" else "shared-copilot-token"
     assert requests[0].headers["authorization"] == f"Bearer {expected_token}"
 
@@ -1102,12 +1104,9 @@ def test_router_constructs_with_per_user_credential_deployment(per_user_credenti
     assert any(d["model_name"] == "copilot" for d in deployments)
 
 
-@pytest.mark.parametrize(
-    ("deployment_base", "expected_base"),
-    [(None, "https://api.githubcopilot.com"), ("https://deployment.example.com", "https://deployment.example.com")],
-)
-def test_provider_info_per_user_without_session_returns_the_deployment_base_and_no_key(
-    per_user_credential, deployment_base, expected_base
+@pytest.mark.parametrize("deployment_base", [None, "https://deployment.example.com"])
+def test_provider_info_per_user_without_session_returns_the_copilot_base_and_no_key(
+    per_user_credential, deployment_base
 ):
     from litellm.llms.github_copilot.authenticator import Authenticator
     from litellm.types.router import LiteLLM_Params
@@ -1121,7 +1120,7 @@ def test_provider_info_per_user_without_session_returns_the_deployment_base_and_
             model="github_copilot/gpt-4.1", api_base=deployment_base, litellm_params=params
         )
     get_key.assert_not_called()
-    assert api_base == expected_base
+    assert api_base == "https://api.githubcopilot.com"
     assert dynamic_api_key is None
 
 
