@@ -11,7 +11,7 @@ from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.served import assert_served_natively
 
-__all__ = ["CALL_ID", "assert_served_natively", "call_public", "native_route"]
+__all__ = ["CALL_ID", "assert_served_natively", "call_public", "native_route", "routed"]
 
 CALL_ID: Final = "callback-contract"
 
@@ -19,6 +19,12 @@ CALL_ID: Final = "callback-contract"
 @contextmanager
 def native_route(*routes: Route) -> Generator[None]:
     with rebound(catalog, "RULES", (*(RouteRule(route, Rollout.RUST_REQUIRED) for route in routes), *catalog.RULES)):
+        yield
+
+
+@contextmanager
+def routed(*rules: RouteRule) -> Generator[None]:
+    with rebound(catalog, "RULES", rules):
         yield
 
 

@@ -7,8 +7,6 @@ from typing import Final, Generic, TypeAlias, TypeVar
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, Rules
-from litellm.rust_bridge.configuration import Decision
-from litellm.rust_bridge.configuration import decision as rollout_decision
 
 RequestT: Final = TypeVar("RequestT")
 NativeT: Final = TypeVar("NativeT")
@@ -31,29 +29,12 @@ class PublicDispatch(Generic[RequestT]):
     route: Route
     request: Callable[[tuple[object, ...], Mapping[str, object]], RequestT | None]
     context: Callable[[RequestT], RouteContext]
-    bypass: Callable[[RequestT], bool] | None = None
-
-    def _requires_projection(self, rules: Rules) -> bool:
-        for rule in rules:
-            if rule.route is not self.route:
-                continue
-            if rule.providers is not None or rule.models is not None:
-                if rollout_decision(rule.rollout) is not Decision.PYTHON:
-                    return True
-                continue
-            return rollout_decision(rule.rollout) is not Decision.PYTHON
-        return False
 
     def _native_request(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> RequestT:
         request: Final = self.request(args, kwargs)
         if request is None:
             raise runtime.NoPythonImplementationError(
                 f"{self.route.value} has no Python implementation, so every call must project to a native request"
-            )
-        if self.bypass is not None and self.bypass(request):
-            raise runtime.NoPythonImplementationError(
-                f"{self.route.value} has no Python implementation, so a call its bypass predicate matches cannot "
-                "be served"
             )
         return request
 
@@ -77,10 +58,10 @@ class PublicDispatch(Generic[RequestT]):
                 python=python,
                 rules=selected_rules,
             )
-        if not self._requires_projection(selected_rules):
+        if not catalog.rust_might_handle(self.route, selected_rules):
             return python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
-        if request is None or (self.bypass is not None and self.bypass(request)):
+        if request is None:
             return python(*args, **kwargs)
         return runtime.run(
             self.context(request),
@@ -110,10 +91,10 @@ class PublicDispatch(Generic[RequestT]):
                 python=python,
                 rules=selected_rules,
             )
-        if not self._requires_projection(selected_rules):
+        if not catalog.rust_might_handle(self.route, selected_rules):
             return await python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
-        if request is None or (self.bypass is not None and self.bypass(request)):
+        if request is None:
             return await python(*args, **kwargs)
         return await runtime.arun(
             self.context(request),
