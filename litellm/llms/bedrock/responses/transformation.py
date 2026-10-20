@@ -227,7 +227,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         configured_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint")
         override: Final = (
             api_base
-            or (configured_endpoint if isinstance(configured_endpoint, str) else None)
+            or (f"{configured_endpoint}" if configured_endpoint else None)
             or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
         )
         # Partition-aware: bedrock-runtime is amazonaws.com.cn in China, and other

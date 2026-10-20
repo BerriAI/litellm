@@ -99,7 +99,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         params_api_base: Final = litellm_params.get("api_base")
         resolved_api_base: Final = (
             api_base
-            or (params_api_base if isinstance(params_api_base, str) else None)
+            or (f"{params_api_base}" if params_api_base else None)
             or get_secret_str("RAGFLOW_API_BASE")
             or "http://localhost:9380"
         )

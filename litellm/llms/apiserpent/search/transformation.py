@@ -78,7 +78,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         Build the search URL. APISerpent uses GET, so the transformed request is
         serialized into the query string. The endpoint path (quick vs deep) is
         always applied; an ``api_base`` / ``APISERPENT_API_BASE`` override only
-        changes the host. ``join_api_base`` keeps this idempotent, since the
+        changes the host. ``ensure_api_route`` keeps this idempotent, since the
         handler re-invokes this method with the already-resolved URL as api_base.
         """
         path: Final = DEEP_SEARCH_PATH if self._is_deep_search(optional_params) else QUICK_SEARCH_PATH

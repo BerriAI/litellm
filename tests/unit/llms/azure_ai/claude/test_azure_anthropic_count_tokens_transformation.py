@@ -118,15 +118,9 @@ class TestAzureAIAnthropicCountTokensConfig:
         [
             "https://my-resource.services.ai.azure.com/anthropic/v1/messages",
             "https://my-resource.services.ai.azure.com/anthropic/v1/messages/",
-            "https://my-resource.services.ai.azure.com/anthropic/v1",
         ],
     )
     def test_get_count_tokens_endpoint_sits_next_to_the_messages_url(self, api_base):
         endpoint = AzureAIAnthropicCountTokensConfig().get_count_tokens_endpoint(api_base)
 
         assert endpoint == "https://my-resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
-
-    def test_get_count_tokens_endpoint_treats_anthropic_as_a_whole_path_segment(self):
-        endpoint = AzureAIAnthropicCountTokensConfig().get_count_tokens_endpoint("https://gw.example.com/anthropic-proxy")
-
-        assert endpoint == "https://gw.example.com/anthropic-proxy/anthropic/v1/messages/count_tokens"

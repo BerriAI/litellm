@@ -98,8 +98,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
         # Build the base endpoint URL for AgentCore
         # Note: We don't use get_runtime_endpoint as AgentCore has its own endpoint structure
-        if isinstance(aws_bedrock_runtime_endpoint, str) and aws_bedrock_runtime_endpoint:
-            base_url = aws_bedrock_runtime_endpoint
+        if aws_bedrock_runtime_endpoint:
+            base_url = f"{aws_bedrock_runtime_endpoint}"
         else:
             base_url = f"https://bedrock-agentcore.{region}.{get_aws_dns_suffix(region)}"
 
