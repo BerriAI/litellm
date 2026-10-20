@@ -1197,13 +1197,25 @@ def function_setup(
             for index in reversed(removed_async_items):
                 litellm.failure_callback.pop(index)
         ### DYNAMIC CALLBACKS ###
+        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None
+        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None
         dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None
         dynamic_async_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = None
-        dynamic_success_callbacks, dynamic_async_success_callbacks = (
-            split_dynamic_success_callbacks(kwargs.pop("success_callback"))
-            if isinstance(kwargs.get("success_callback"), list)
-            else (None, None)
-        )
+        if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
+            removed_async_items = []
+            for index, callback in enumerate(kwargs["success_callback"]):
+                if coroutine_checker.is_async_callable(callback) or callback == "dynamodb" or callback == "s3":
+                    if dynamic_async_success_callbacks is not None and isinstance(
+                        dynamic_async_success_callbacks, list
+                    ):
+                        dynamic_async_success_callbacks.append(callback)
+                    else:
+                        dynamic_async_success_callbacks = [callback]
+                    removed_async_items.append(index)
+            # Pop the async items from success_callback in reverse order to avoid index issues
+            for index in reversed(removed_async_items):
+                kwargs["success_callback"].pop(index)
+            dynamic_success_callbacks = kwargs.pop("success_callback")
         if kwargs.get("failure_callback", None) is not None and isinstance(kwargs["failure_callback"], list):
             dynamic_failure_callbacks = kwargs.pop("failure_callback")
 
@@ -1568,15 +1580,18 @@ def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
 
 def _runs_as_async_success_callback(callback: str | Callable[..., object] | CustomLogger) -> bool:
     get_coroutine_checker: Final = litellm_utils.get_coroutine_checker
-    return get_coroutine_checker().is_async_callable(callback) or callback == "dynamodb" or callback == "s3"
+    return get_coroutine_checker().is_async_callable(callback) or callback in ("dynamodb", "s3")
 
 
 def split_dynamic_success_callbacks(
     callbacks: Sequence[str | Callable[..., object] | CustomLogger],
-) -> tuple[list[str | Callable[..., object] | CustomLogger], list[str | Callable[..., object] | CustomLogger] | None]:
-    async_callbacks: Final = [callback for callback in callbacks if _runs_as_async_success_callback(callback)]
-    sync_callbacks: Final = [callback for callback in callbacks if not _runs_as_async_success_callback(callback)]
-    return sync_callbacks, async_callbacks or None
+) -> tuple[
+    tuple[str | Callable[..., object] | CustomLogger, ...], tuple[str | Callable[..., object] | CustomLogger, ...]
+]:
+    return (
+        tuple(callback for callback in callbacks if not _runs_as_async_success_callback(callback)),
+        tuple(callback for callback in callbacks if _runs_as_async_success_callback(callback)),
+    )
 
 
 def check_coroutine(value) -> bool:

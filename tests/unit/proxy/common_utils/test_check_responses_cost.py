@@ -4,6 +4,8 @@ Unit tests for CheckResponsesCost class
 
 import asyncio
 import dataclasses
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -1594,6 +1596,7 @@ class _PricedBilling:
 _PRICED_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType(
     {"model": "openai/gpt-5.6", "api_key": "sk-unused", "input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
 )
+_CREATING_KEY_HASH: Final = hashlib.sha256(b"sk-alice").hexdigest()
 
 
 async def _bill_through_a_priced_deployment(
@@ -1604,6 +1607,7 @@ async def _bill_through_a_priced_deployment(
     team_row: object = None,
     key_lookup_error: Exception | None = None,
     default_team_settings: tuple[Mapping[str, object], ...] = (),
+    api_key: str = _CREATING_KEY_HASH,
 ) -> _PricedBilling:
     import litellm
     from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
@@ -1620,7 +1624,7 @@ async def _bill_through_a_priced_deployment(
                 id="job-priced",
                 unified_object_id=response_id,
                 status="queued",
-                api_key="hash-alice",
+                api_key=api_key,
                 team_id="team-alpha" if team_row is not None or default_team_settings else None,
             ),
         )
@@ -1687,7 +1691,7 @@ async def test_the_billing_event_prices_the_fetched_usage_at_the_deployment_rate
     assert billing.cost == pytest.approx(_PRICED_COST)
     assert payload["model_id"] == "deployment-custom"
     assert payload["model_group"] == "priced-gpt"
-    assert payload["metadata"]["user_api_key_hash"] == "hash-alice"
+    assert payload["metadata"]["user_api_key_hash"] == _CREATING_KEY_HASH
     assert read.hidden_params == {"response_cost": 0.0}
     assert billing.table.statuses == {"job-priced": "completed"}
 
@@ -1965,17 +1969,8 @@ async def test_a_team_logging_setting_the_logger_rejects_still_bills_the_respons
     assert billing.table.statuses == {"job-priced": "completed"}
 
 
-@pytest.mark.asyncio
-async def test_the_billing_event_reaches_loggers_without_the_response_text(monkeypatch: pytest.MonkeyPatch):
-    """The billed event is a cost event, often logged by a poll long after the client read the response,
-    so no logger gets the response text through it, whatever redaction the client asked for on its reads."""
-    import json
-
-    import litellm
-
-    capture: Final = _spend_capture_logger()
-    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
-    read: Final = _terminal_response().model_copy(
+def _read_with_text(text: str) -> ResponsesAPIResponse:
+    return _terminal_response().model_copy(
         update={
             "output": [
                 {
@@ -1983,17 +1978,71 @@ async def test_the_billing_event_reaches_loggers_without_the_response_text(monke
                     "id": "msg_stored",
                     "status": "completed",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": "the stored answer", "annotations": []}],
+                    "content": [{"type": "output_text", "text": text, "annotations": []}],
                 }
             ]
         }
     )
 
-    await _bill_through_a_priced_deployment(read)
+
+def _key_logging_to_langfuse(callback_vars: Mapping[str, object]) -> object:
+    return _key_row(
+        {"logging": [{"callback_name": "langfuse", "callback_type": "success", "callback_vars": dict(callback_vars)}]}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_row", "text_logged"),
+    [
+        (_key_logging_to_langfuse(_CREATOR_LANGFUSE_VARS), True),
+        (_key_logging_to_langfuse({**_CREATOR_LANGFUSE_VARS, "turn_off_message_logging": "true"}), False),
+        (None, False),
+    ],
+    ids=["creator keeps message logging", "creator turns message logging off", "creator can no longer be read"],
+)
+async def test_the_billing_event_logs_the_response_text_only_as_the_creators_logging_settings_allow(
+    monkeypatch: pytest.MonkeyPatch, key_row: object, text_logged: bool
+):
+    """The billed event follows the creating key's or team's message logging setting, which falls back to the
+    proxy's, the way the batch poll decides it, and a creator it can no longer read gets no response text."""
+    import litellm
+    from litellm.litellm_core_utils import litellm_logging
+
+    capture: Final = _spend_capture_logger()
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [_recording_langfuse()])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+    await _bill_through_a_priced_deployment(_read_with_text("the stored answer"), key_row=key_row)
 
     (payload,) = capture.payloads
     assert payload["response_cost"] == pytest.approx(_PRICED_COST)
-    assert "the stored answer" not in json.dumps(payload, default=str)
+    assert ("the stored answer" in json.dumps(payload, default=str)) is text_logged
+
+
+@pytest.mark.asyncio
+async def test_a_response_created_without_a_virtual_key_bills_into_its_teams_langfuse_project(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Under OAuth2 or custom auth the row keeps the caller's raw token, which names no key row, so the charge
+    follows the team's logging settings the way the batch poll treats such a creator."""
+    import litellm
+    from litellm.litellm_core_utils import litellm_logging
+
+    langfuse: Final = _recording_langfuse()
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [langfuse])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+
+    await _bill_through_a_priced_deployment(
+        _terminal_response(),
+        api_key="oauth2-raw-access-token",
+        team_row=_creator_logging("team callback_settings").team_row,
+    )
+
+    assert langfuse.events == ((pytest.approx(_PRICED_COST), _CREATOR_LANGFUSE_VARS["langfuse_public_key"]),)
 
 
 @pytest.mark.asyncio

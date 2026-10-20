@@ -142,7 +142,7 @@ class ManagedObjectCreatorAttribution:
                 **_budget_fields(rows.team, "user_api_key_team_spend", "user_api_key_team_max_budget"),
                 **_budget_fields(rows.user, "user_api_key_user_spend", "user_api_key_user_max_budget"),
             },
-            key_metadata=_named_row_metadata(rows.key, _names_a_key_row(getattr(job, "api_key", None), job.created_by)),
+            key_metadata=_named_row_metadata(rows.key, _names_a_key_row(getattr(job, "api_key", None))),
             team_id=getattr(job, "team_id", None),
             team_metadata=_named_row_metadata(rows.team, bool(getattr(job, "team_id", None))),
         )
@@ -168,7 +168,7 @@ class ManagedObjectCreatorAttribution:
     async def _key_row(
         self, object_id: str, api_key: str | None, created_by: str | None
     ) -> prisma_models.LiteLLM_VerificationToken | None:
-        if not api_key or not _names_a_key_row(api_key, created_by):
+        if not api_key or _is_cli_session_key(api_key, created_by):
             return None
         try:
             return await _token_table(self._prisma_client).find_unique(where={"token": api_key})
@@ -223,10 +223,10 @@ def _named_row_metadata(row: object, named: bool) -> Mapping[str, object] | None
     return row_metadata(row)
 
 
-def _names_a_key_row(api_key: str | None, created_by: str | None) -> bool:
-    if not api_key:
-        return False
-    return not _is_cli_session_key(api_key, created_by)
+def _names_a_key_row(api_key: object) -> bool:
+    from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
+
+    return isinstance(api_key, str) and is_valid_sha256_hash(api_key)
 
 
 def _is_cli_session_key(api_key: str, created_by: str | None) -> bool:
