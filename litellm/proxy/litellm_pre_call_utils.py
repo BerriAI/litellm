@@ -621,7 +621,7 @@ class _BaggageClientBody:
 def _detach_auth_metadata_from_client_body(
     request: Request,
     request_data: MutableMapping[str, object],  # mutable-ok: auth's own copy takes the normalized metadata objects
-) -> ProxyException | None:
+) -> None:
     client_body: Final = detach_request_parsed_body(request, request_data)
     request.state.litellm_baggage_client_body = _BaggageClientBody(client_body)  # rebind-ok: mirror tag merges
     slots: Final = tuple(
@@ -630,11 +630,7 @@ def _detach_auth_metadata_from_client_body(
         if field in request_data
     )
     for field, normalized in slots:
-        if isinstance(normalized, ProxyException):
-            _ = request_data.pop(field)
-        else:
-            request_data[field] = normalized  # rebind-ok: auth's copy stops sharing the client's metadata object
-    return next((normalized for _, normalized in slots if isinstance(normalized, ProxyException)), None)
+        request_data[field] = {} if isinstance(normalized, ProxyException) else normalized  # rebind-ok: auth's copy
 
 
 def _metadata_string_tags(metadata_objects: Iterable[Mapping[str, object]]) -> tuple[str, ...]:
@@ -2183,14 +2179,12 @@ class LiteLLMProxyRequestSetup:
         try:
             mapped: Final = resolve_baggage_tag_mappings(header, rules)
         except ProxyException:
-            _ = _detach_auth_metadata_from_client_body(request, request_data)
+            _detach_auth_metadata_from_client_body(request, request_data)
             raise
         if not mapped:
             return
         client_metadata: Final[object] = request_data.get("metadata")
-        invalid_metadata: Final = _detach_auth_metadata_from_client_body(request, request_data)
-        if invalid_metadata is not None:
-            raise invalid_metadata
+        _detach_auth_metadata_from_client_body(request, request_data)
         budgeted_tags: Final = tuple(tag for tag, require_budget in mapped if require_budget)
         unbudgeted_tag: Final = (
             await _unbudgeted_mapped_tag(budgeted_tags, prisma_client, user_api_key_cache) if budgeted_tags else None
@@ -2489,9 +2483,6 @@ async def add_litellm_data_to_request(
         )
     )
 
-    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
-        request=request, request_data=data, metadata_key=_metadata_variable_name
-    )
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
         data=data,
@@ -2829,10 +2820,13 @@ async def add_litellm_data_to_request(
         )
 
     # caller_tags: the tags the request's headers and body carry (x-litellm-tags, body "tags", and body
-    # "metadata.tags" / "litellm_metadata.tags" read before the mapped tags were added back above),
+    # "metadata.tags" / "litellm_metadata.tags" read before the mapped tags are added below),
     # never derived from the shared "tags" list.
     data[_metadata_variable_name]["caller_tags"] = tuple(  # rebind-ok: matches file idiom
         dict.fromkeys((*(tags or ()), *_client_sent_metadata_tags))
+    )
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
+        request=request, request_data=data, metadata_key=_metadata_variable_name
     )
 
     # Team Callbacks controls

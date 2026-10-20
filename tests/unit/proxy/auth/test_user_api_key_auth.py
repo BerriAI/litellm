@@ -2266,8 +2266,12 @@ async def test_auth_header_tag_merge_keeps_json_string_metadata_tags_routable(mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_metadata", ["run-123", 42, ["x"]])
-@pytest.mark.parametrize("baggage", [[], [(b"baggage", b"region=sg")]], ids=["no_baggage", "unmapped_baggage"])
-async def test_request_that_maps_nothing_serves_non_object_metadata_like_unset_mappings(
+@pytest.mark.parametrize(
+    "baggage",
+    [[], [(b"baggage", b"region=sg")], [(b"baggage", b"entrypoint=a")]],
+    ids=["no_baggage", "unmapped_baggage", "mapped_baggage"],
+)
+async def test_non_object_metadata_is_served_like_unset_mappings_whatever_the_baggage_maps(
     monkeypatch, client_metadata, baggage
 ):
     body = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "metadata": client_metadata}

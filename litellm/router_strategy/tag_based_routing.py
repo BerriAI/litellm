@@ -497,22 +497,40 @@ def without_baggage_mapped_tags(
     return tuple(tag for tag in request_tags if tag not in stamp.tags or tag in asked_for_tags) or None
 
 
-def baggage_stamp_for_serving_deployment(
-    metadata: object, deployment_litellm_params: object
-) -> BaggageMappedTagsStamp | None:
-    if not isinstance(metadata, Mapping) or not isinstance(deployment_litellm_params, Mapping):
+def baggage_stamp_for_serving_deployment(metadata: object, deployment_tags: object) -> BaggageMappedTagsStamp | None:
+    if not isinstance(metadata, Mapping):
         return None
     typed_metadata: Final[Mapping[str, object]] = metadata
-    typed_litellm_params: Final[Mapping[str, object]] = deployment_litellm_params
     stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
     if not isinstance(stamp, BaggageMappedTagsStamp):
         return None
-    deployment_tags: Final = _metadata_tags(typed_litellm_params, "tags")
-    return replace(stamp, serving_deployment_tags=tuple(tag for tag in deployment_tags if isinstance(tag, str)))
+    return replace(
+        stamp, serving_deployment_tags=tuple(tag for tag in _tag_sequence(deployment_tags) if isinstance(tag, str))
+    )
+
+
+def tags_with_serving_deployment_tags(metadata: object, deployment_tags: object) -> tuple[object, ...] | None:
+    """Merge the serving deployment's tags ahead of baggage-mapped tags, so baggage never changes tag precedence."""
+    serving_tags: Final = _tag_sequence(deployment_tags)
+    if not isinstance(metadata, Mapping) or not serving_tags:
+        return None
+    typed_metadata: Final[Mapping[str, object]] = metadata
+    existing_tags: Final = _metadata_tags(typed_metadata, "tags")
+    stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
+    mapped_tags: Final = stamp.tags if isinstance(stamp, BaggageMappedTagsStamp) else ()
+    kept_tags: Final = tuple(tag for tag in existing_tags if tag not in mapped_tags)
+    candidates: Final = (*serving_tags, *existing_tags)
+    added_tags: Final = tuple(
+        tag for index, tag in enumerate(candidates) if tag not in kept_tags and tag not in candidates[:index]
+    )
+    return (*kept_tags, *added_tags)
 
 
 def _metadata_tags(metadata: Mapping[str, object], key: str) -> Sequence[object]:
-    tags: Final = metadata.get(key)
+    return _tag_sequence(metadata.get(key))
+
+
+def _tag_sequence(tags: object) -> Sequence[object]:
     typed_tags: Final[Sequence[object]] = tags if isinstance(tags, (list, tuple)) else ()
     return typed_tags
 

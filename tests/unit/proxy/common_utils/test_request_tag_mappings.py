@@ -48,8 +48,7 @@ async def test_mapping_rejection_keeps_string_metadata_safe_for_auth_failure_log
 @pytest.mark.asyncio
 @pytest.mark.parametrize("slot", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("invalid_metadata", [[], 42, "not-json", '"not-an-object"'])
-async def test_invalid_mapper_metadata_rejects_without_breaking_failure_logging_or_client_cache(slot, invalid_metadata):
-    from litellm.proxy._types import ProxyException
+async def test_invalid_mapper_metadata_maps_like_empty_metadata_and_keeps_the_client_cache(slot, invalid_metadata):
     from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
     from litellm.utils import get_request_guardrails
 
@@ -65,15 +64,15 @@ async def test_invalid_mapper_metadata_rejects_without_breaking_failure_logging_
     )
     data, parse_error = await _read_request_body_deferring_parse_failure(request)
     assert parse_error is None
-    with pytest.raises(ProxyException) as error:
-        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
-            request,
-            data,
-            {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
-            None,
-            MagicMock(),
-        )
-    assert error.value.code == "400"
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        data,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        MagicMock(),
+    )
+    assert "usecase:a" in data["litellm_metadata"]["tags"]
+    assert "tags" not in data[slot] or slot == "litellm_metadata"
     assert get_request_guardrails(data) == []
     assert await read_request_body(request) == body
 
