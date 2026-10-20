@@ -1,14 +1,26 @@
+import asyncio
+import itertools
 import json
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from typing import Final, Literal
 
+import anthropic
+import openai
 import pytest
 from integration._support.anthropic_sse import CONTENT_BLOCK_START, CONTENT_TAIL, message_start, text_delta
 from integration._support.client import Gateway, Scenario, string_value
-from integration._support.openai_wire import answering_model_discovery
+from integration._support.openai_wire import answering_model_discovery, posted_targets
 from integration._support.responses_stream import data_frames, spend_row, sse_events
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration.providers._count_tokens_system_lift import (
+    anthropic_client,
+    async_anthropic_client,
+    async_openai_client,
+    openai_client,
+)
 from pydantic import JsonValue
 
 Ending = Literal["ending-complete", "ending-clean-eof", "ending-done-without-finish", "ending-done-only"]
@@ -130,10 +142,10 @@ def _ending(request: Request) -> Ending:
     return endings[0]
 
 
-def _upstream(family: Family) -> Callable[[Request], Reply]:
+def _upstream(family: Family, ending: Ending | None = None) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and _TARGETS[family] in request.target, request.target
-        frames: Final = _frames(family, f"upstream-{uuid.uuid4().hex}", _ending(request))
+        frames: Final = _frames(family, f"upstream-{uuid.uuid4().hex}", ending or _ending(request))
         return Reply(content_type="text/event-stream", chunks=frames)
 
     return answering_model_discovery(respond)
@@ -173,22 +185,17 @@ def _chat(gateway: Gateway, model: str, ending: Ending) -> tuple[str, str]:
     )
 
 
+def _choices(text: str) -> Iterator[Mapping[str, JsonValue]]:
+    for frame in data_frames(text):
+        yield from (choice for choice in frame.get("choices") or [] if isinstance(choice, dict))
+
+
 def _finish_reasons(text: str) -> tuple[str, ...]:
-    return tuple(
-        string_value(choice["finish_reason"])
-        for frame in data_frames(text)
-        for choice in frame.get("choices") or []
-        if isinstance(choice, dict) and choice.get("finish_reason")
-    )
+    return tuple(string_value(choice["finish_reason"]) for choice in _choices(text) if choice.get("finish_reason"))
 
 
 def _chat_text(text: str) -> str:
-    deltas: Final = (
-        choice.get("delta")
-        for frame in data_frames(text)
-        for choice in frame.get("choices") or []
-        if isinstance(choice, dict)
-    )
+    deltas: Final = (choice.get("delta") for choice in _choices(text))
     return "".join(string_value(delta.get("content") or "") for delta in deltas if isinstance(delta, dict))
 
 
@@ -294,3 +301,146 @@ def test_responses_over_a_chat_bridged_anthropic_deployment_completes_only_a_fin
         assert ("response.completed" in types) is terminal, text
         assert (types[-1] in {"error", "response.failed"}) is not terminal, text
         assert spend_row(call_id)["status"] == ("success" if terminal else "failure")
+
+
+def _drain_openai_sdk(gateway: Gateway, model: str, sync_mode: bool) -> None:
+    messages: Final = [{"role": "user", "content": _prompt("ending-clean-eof")}]
+    if sync_mode:
+        for _ in openai_client(gateway).chat.completions.create(model=model, messages=messages, stream=True):
+            pass
+        return
+
+    async def drain() -> None:
+        stream: Final = await async_openai_client(gateway).chat.completions.create(
+            model=model, messages=messages, stream=True
+        )
+        async for _ in stream:
+            pass
+
+    asyncio.run(drain())
+
+
+def _drain_anthropic_sdk(gateway: Gateway, model: str, sync_mode: bool) -> None:
+    messages: Final = [{"role": "user", "content": _prompt("ending-clean-eof")}]
+    if sync_mode:
+        for _ in anthropic_client(gateway).messages.create(model=model, max_tokens=64, messages=messages, stream=True):
+            pass
+        return
+
+    async def drain() -> None:
+        stream: Final = await async_anthropic_client(gateway).messages.create(
+            model=model, max_tokens=64, messages=messages, stream=True
+        )
+        async for _ in stream:
+            pass
+
+    asyncio.run(drain())
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+def test_openai_sdk_stream_cut_before_a_finish_reason_raises(gateway: Gateway, sync_mode: bool) -> None:
+    with wire_server(_upstream("openai")) as wire, gateway.scenario() as scenario:
+        model: Final = _deploy(scenario, "openai", wire)
+        with pytest.raises(openai.APIError, match="Stream ended before a finish_reason was received"):
+            _drain_openai_sdk(gateway, model, sync_mode)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+def test_anthropic_sdk_messages_stream_cut_before_a_finish_reason_raises(gateway: Gateway, sync_mode: bool) -> None:
+    with wire_server(_upstream("hosted_vllm")) as wire, gateway.scenario() as scenario:
+        model: Final = _deploy(scenario, "hosted_vllm", wire)
+        with pytest.raises(anthropic.APIError, match="Stream ended before a finish_reason was received"):
+            _drain_anthropic_sdk(gateway, model, sync_mode)
+
+
+def test_responses_stream_cut_on_its_deployment_finishes_on_the_request_fallback(gateway: Gateway) -> None:
+    with (
+        wire_server(_upstream("anthropic")) as primary,
+        wire_server(_upstream("anthropic", "ending-complete")) as backup,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deploy(scenario, "anthropic", primary)
+        fallback: Final = _deploy(scenario, "anthropic", backup)
+        text, _ = _post(
+            gateway, "/v1/responses", {"model": model, "input": _prompt("ending-clean-eof"), "fallbacks": [fallback]}
+        )
+        types: Final = tuple(string_value(frame.get("type") or "") for frame in data_frames(text))
+        assert "response.completed" in types and "response.failed" not in types, text
+        assert (len(posted_targets(primary)), len(posted_targets(backup))) == (1, 1), text
+
+
+def test_chat_stream_cut_after_its_content_is_not_replayed_on_the_request_fallback(gateway: Gateway) -> None:
+    with (
+        wire_server(_upstream("openai")) as primary,
+        wire_server(_upstream("openai", "ending-complete")) as backup,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deploy(scenario, "openai", primary)
+        fallback: Final = _deploy(scenario, "openai", backup)
+        text, _ = _post(
+            gateway,
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": _prompt("ending-clean-eof")}],
+                "fallbacks": [fallback],
+            },
+        )
+        assert _chat_text(text) == "".join(_PARTIAL), text
+        assert len(_chat_errors(text)) == 1, text
+        assert posted_targets(backup) == (), text
+
+
+Route = Literal["/v1/chat/completions", "/v1/messages", "/v1/responses"]
+
+
+def _route_body(route: Route, model: str, ending: Ending) -> Mapping[str, JsonValue]:
+    match route:
+        case "/v1/chat/completions":
+            return {"model": model, "messages": [{"role": "user", "content": _prompt(ending)}]}
+        case "/v1/messages":
+            return {"model": model, "max_tokens": 64, "messages": [{"role": "user", "content": _prompt(ending)}]}
+        case "/v1/responses":
+            return {"model": model, "input": _prompt(ending)}
+
+
+def _finished(route: Route, text: str) -> bool:
+    match route:
+        case "/v1/chat/completions":
+            return _finish_reasons(text) == ("stop",) and _chat_errors(text) == ()
+        case "/v1/messages":
+            return "message_stop" in _event_types(text) and "error" not in _event_types(text)
+        case "/v1/responses":
+            return "response.completed" in tuple(string_value(frame.get("type") or "") for frame in data_frames(text))
+
+
+def _stream_outcome(gateway: Gateway, model: str, route: Route, ending: Ending) -> tuple[bool, str]:
+    text, call_id = _post(gateway, route, _route_body(route, model, ending))
+    return _finished(route, text), call_id
+
+
+_BRIDGED_FAMILY: Final[Mapping[Route, Family]] = {
+    "/v1/chat/completions": "openai",
+    "/v1/messages": "hosted_vllm",
+    "/v1/responses": "anthropic",
+}
+
+
+def test_concurrent_burst_ends_each_stream_by_whether_its_provider_finished_it(gateway: Gateway) -> None:
+    endings: Final[tuple[Ending, ...]] = ("ending-complete", "ending-clean-eof")
+    cases: Final = tuple(itertools.product(_BRIDGED_FAMILY, endings, range(5)))
+    with ExitStack() as wires, gateway.scenario() as scenario:
+        models: Final = {
+            route: _deploy(scenario, family, wires.enter_context(wire_server(_upstream(family))))
+            for route, family in _BRIDGED_FAMILY.items()
+        }
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            outcomes: Final = tuple(
+                pool.map(lambda case: _stream_outcome(gateway, models[case[0]], case[0], case[1]), cases)
+            )
+        assert tuple(finished for finished, _ in outcomes) == tuple(
+            ending == "ending-complete" for _, ending, _ in cases
+        ), outcomes
+        assert tuple(spend_row(call_id)["status"] for _, call_id in outcomes) == tuple(
+            "success" if ending == "ending-complete" else "failure" for _, ending, _ in cases
+        )
