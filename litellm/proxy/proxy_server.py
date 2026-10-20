@@ -13788,7 +13788,7 @@ async def _loaded_tokenizer(
     model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, threads: anyio.CapacityLimiter
 ) -> SelectTokenizerResponse | BaseException:
     try:
-        return await asyncify(litellm.utils._select_tokenizer, limiter=threads)(
+        return await asyncify(litellm.utils.select_count_route_tokenizer, limiter=threads)(
             model=model, custom_tokenizer=custom_tokenizer
         )
     except asyncio.CancelledError:
@@ -13912,7 +13912,7 @@ async def _local_token_estimate(
     provider_failure: ProviderCountFailure | None,
 ) -> _LocalTokenEstimate:
     tokenizer: Final = (
-        await asyncify(litellm.utils._select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
+        await asyncify(litellm.utils.select_count_route_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
         if provider_failure is None
         else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
     )

@@ -10,12 +10,12 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
-from concurrent.futures import Future, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from copy import deepcopy
 from functools import partial
 from itertools import accumulate, chain
 from pathlib import Path
-from typing import Final
+from typing import Final, NoReturn
 from unittest.mock import MagicMock
 
 import anyio.to_thread
@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.token_counter import (
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.types.utils import CustomHuggingfaceTokenizer
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -519,10 +520,14 @@ def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
     [
         ("DeepSeek-V4-Pro", "DeepSeek-V4-Flash-0731"),
         ("accounts/fireworks/models/deepseek-v4-flash", "DeepSeek-V4-Flash-0731"),
+        ("deepseek/deepseek-chat", "DeepSeek-V4-Flash-0731"),
+        ("deepseek/deepseek-chat:free", "DeepSeek-V4-Flash-0731"),
+        ("deepseek-reasoner", "DeepSeek-V4-Flash-0731"),
+        ("deepseek/deepseek-flash", "DeepSeek-V4-Flash-0731"),
         ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
         ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
         ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
-        ("qwen3-235b-a22b", "deepseek-v3.2"),
+        ("qwen3-235b-a22b", "mistral-large-latest"),
     ],
 )
 def test_token_counter_counts_tools_by_the_models_chat_template_family(model: str, counted_like: str):
@@ -878,7 +883,14 @@ def test_token_counter():
 
 import unittest
 
-from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper, claude_json_str, encoding
+from litellm.utils import (
+    _load_huggingface_tokenizer,
+    _select_custom_tokenizer_helper,
+    _select_tokenizer_helper,
+    claude_json_str,
+    encoding,
+    select_count_route_tokenizer,
+)
 
 # Clear the cache at module load to ensure clean state
 _load_huggingface_tokenizer.cache_clear()
@@ -975,6 +987,129 @@ class TestTokenizerSelection(unittest.TestCase):
             assert result["tokenizer"] == encoding
         finally:
             monkeypatch.undo()
+
+
+_CODE_SAMPLE: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
+
+
+def _deepseek_token_ids(text: str) -> list[int]:
+    deepseek_tokenizer: Final = Tokenizer.from_str(
+        importlib.resources.files("litellm.litellm_core_utils.tokenizers")
+        .joinpath("deepseek_tokenizer.json")
+        .read_text(encoding="utf-8")
+    )
+    return deepseek_tokenizer.encode(text).ids
+
+
+def _deepseek_token_count(text: str) -> int:
+    return len(_deepseek_token_ids(text))
+
+
+def _count_route_count(model: str, text: str) -> int:
+    return litellm.token_counter(model=model, text=text, custom_tokenizer=select_count_route_tokenizer(model))
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "azure_ai/DeepSeek-V4-Flash-0731",
+        "deepseek/deepseek-v4-pro",
+        "fireworks_ai/deepseek-v4p1-flash",
+        "bedrock/us-east-1/deepseek.v3.2",
+        "together_ai/deepseek-ai/DeepSeek-V3.1",
+        "databricks/databricks-deepseek-v4-flash-0731",
+        "replicate/deepseek-ai/deepseek-v3",
+        "deepseek-chat",
+        "deepseek/deepseek-reasoner",
+        "openrouter/deepseek/deepseek-chat-v3-0324",
+        "openrouter/deepseek/deepseek-chat:free",
+    ],
+)
+def test_count_routes_count_deepseek_v3_and_v4_with_the_packaged_deepseek_tokenizer(model: str):
+    expected: Final = _deepseek_token_count(_CODE_SAMPLE)
+
+    assert expected != len(tiktoken.get_encoding("cl100k_base").encode(_CODE_SAMPLE))
+    assert _count_route_count(model, _CODE_SAMPLE) == expected
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "azure_ai/DeepSeek-V4-Flash-0731",
+        "deepseek/deepseek-v4-pro",
+        "fireworks_ai/deepseek-v4p1-flash",
+        "bedrock/us-east-1/deepseek.v3.2",
+        "together_ai/deepseek-ai/DeepSeek-V3.1",
+        "databricks/databricks-deepseek-v4-flash-0731",
+        "deepseek-chat",
+        "deepseek/deepseek-reasoner",
+        "openrouter/deepseek/deepseek-chat-v3-0324",
+        "openrouter/deepseek/deepseek-chat:free",
+    ],
+)
+def test_token_counter_keeps_its_tokenizer_for_deepseek_v3_and_v4(model: str):
+    assert litellm.token_counter(model=model, text=_CODE_SAMPLE) == litellm.token_counter(model="", text=_CODE_SAMPLE)
+
+
+def test_count_routes_use_a_deployments_custom_tokenizer_over_the_packaged_deepseek_one():
+    whitespace_tokenizer: Final = Tokenizer.from_str(_word_level_tokenizer_json(pre_tokenizers.WhitespaceSplit()))
+    configured: Final = CustomHuggingfaceTokenizer(
+        identifier="my-org/deepseek-v4-tokenizer", revision="v2", auth_token="private-repo-read-token"
+    )
+    _select_custom_tokenizer_helper.cache_clear()
+
+    with patch.object(litellm.utils.tokenizer_dispatch, "from_pretrained", return_value=whitespace_tokenizer) as load:
+        selected: Final = select_count_route_tokenizer("deepseek/deepseek-v4-flash", configured)
+
+    load.assert_called_once_with("my-org/deepseek-v4-tokenizer", revision="v2", token="private-repo-read-token")
+    counted: Final = litellm.token_counter(model="deepseek-chat", text=_CODE_SAMPLE, custom_tokenizer=selected)
+    assert counted == len(_CODE_SAMPLE.split())
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
+)
+def test_count_routes_skip_the_deepseek_tokenizer_for_deepseek_models_built_on_other_vocabularies(model: str):
+    assert _count_route_count(model, _CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
+
+
+def test_encode_and_decode_keep_their_tokenizer_for_deepseek_v4():
+    token_ids: Final = encode(model="deepseek/deepseek-v4-flash", text=_CODE_SAMPLE)
+
+    assert token_ids == encode(model="", text=_CODE_SAMPLE)
+    assert decode(model="deepseek/deepseek-v4-flash", tokens=token_ids) == _CODE_SAMPLE
+
+
+def test_disable_hf_tokenizer_download_keeps_deepseek_v4_count_routes_on_cl100k(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True)
+
+    assert _count_route_count("deepseek/deepseek-v4-flash", _CODE_SAMPLE) == litellm.token_counter(
+        model="", text=_CODE_SAMPLE
+    )
+
+
+def test_count_routes_fall_back_to_cl100k_when_the_deepseek_tokenizer_fails_to_load(monkeypatch: pytest.MonkeyPatch):
+    def fail_to_load(kind: str, backend: object) -> NoReturn:
+        raise RuntimeError(f"{kind} tokenizer failed to load on {backend}")
+
+    monkeypatch.setattr(litellm.utils, "_load_huggingface_tokenizer", fail_to_load)
+
+    assert _count_route_count("deepseek/deepseek-v4-flash", _CODE_SAMPLE) == _count_route_count("", _CODE_SAMPLE)
+
+
+def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
+    _load_huggingface_tokenizer.cache_clear()
+    start: Final = threading.Barrier(8)
+
+    def first_tokenizer(_: int) -> object:
+        start.wait()
+        return select_count_route_tokenizer("deepseek/deepseek-v4-flash")["tokenizer"]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        tokenizers: Final = tuple(pool.map(first_tokenizer, range(8)))
+
+    assert len({id(tokenizer) for tokenizer in tokenizers}) == 1
 
 
 def test_token_counter_with_anthropic_tool_use():
