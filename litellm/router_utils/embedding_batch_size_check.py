@@ -150,6 +150,13 @@ def flag_rejected_before_provider_call(logging_obj: "LiteLLMLoggingObj") -> None
         litellm_params[PROXY_REJECTED_BEFORE_ROUTING_KEY] = True
 
 
+def clear_rejected_before_provider_call(logging_obj: "LiteLLMLoggingObj") -> None:
+    """Drop the mark an earlier rejected attempt left, since a fallback or retry shares the logging object"""
+    litellm_params: Final = logging_obj.model_call_details.get("litellm_params")
+    if isinstance(litellm_params, dict) and PROXY_REJECTED_BEFORE_ROUTING_KEY in litellm_params:
+        del litellm_params[PROXY_REJECTED_BEFORE_ROUTING_KEY]
+
+
 def embedding_batch_too_large_error(
     deployment: object,
     input: object,

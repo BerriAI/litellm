@@ -239,6 +239,7 @@ from litellm.router_utils.cooldown_handlers import (
     set_cooldown_deployments,
 )
 from litellm.router_utils.embedding_batch_size_check import (
+    clear_rejected_before_provider_call,
     deployments_admitting_embedding_batch,
     deployments_when_none_admits_embedding_batch,
     embedding_batch_too_large_error,
@@ -6884,12 +6885,14 @@ class Router:
                 request_kwargs=_OPAQUE_VALUE_ADAPTER.validate_python(kwargs),
                 model=model,
             )
+            logging_obj: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
             if batch_error is not None:
-                logging_obj: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
                 if isinstance(logging_obj, LiteLLMLogging):
                     flag_rejected_before_provider_call(logging_obj)
                     logging_obj.failure_handler(batch_error, "".join(traceback.format_exception(batch_error)))
                 raise batch_error
+            if isinstance(logging_obj, LiteLLMLogging):
+                clear_rejected_before_provider_call(logging_obj)
 
             potential_model_client: Final = self._get_client(deployment=deployment, kwargs=kwargs, client_type="sync")
             # check if provided keys == client keys #
@@ -6973,8 +6976,8 @@ class Router:
                 request_kwargs=_OPAQUE_VALUE_ADAPTER.validate_python(kwargs),
                 model=model,
             )
+            logging_obj: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
             if batch_error is not None:
-                logging_obj: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
                 if isinstance(logging_obj, LiteLLMLogging):
                     flag_rejected_before_provider_call(logging_obj)
                     await logging_obj.dispatch_failure_handlers(
@@ -6983,6 +6986,8 @@ class Router:
                         prefer_async_handlers=True,
                     )
                 raise batch_error
+            if isinstance(logging_obj, LiteLLMLogging):
+                clear_rejected_before_provider_call(logging_obj)
             model_client: Final = self._get_async_openai_model_client(
                 deployment=deployment,
                 kwargs=kwargs,

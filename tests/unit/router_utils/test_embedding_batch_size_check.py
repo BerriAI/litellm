@@ -1,5 +1,5 @@
+import datetime
 import json
-import time
 from collections.abc import Iterator
 from types import MappingProxyType
 from typing import Final
@@ -29,6 +29,7 @@ from litellm.router_utils.embedding_batch_size_check import (
 _MODEL: Final = "embed-group"
 _PROVIDER: Final = "openai"
 _OPENAI_EMBED_BASE: Final = "https://batch-limit-embed.local/v1"
+_LOGGING_START: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 _VLLM_EMBED_BASE: Final = "https://batch-limit-vllm.local/v1"
 _UNCAPPED_EMBED_BASE: Final = "https://batch-limit-uncapped.local/v1"
 
@@ -364,7 +365,7 @@ class TestRouterEmbeddingBatchLimit:
             messages=[],
             stream=False,
             call_type="embedding" if sync else "aembedding",
-            start_time=time.time(),
+            start_time=_LOGGING_START,
             litellm_call_id="embed-batch-rejected",
             function_id="embed-batch-rejected",
             dynamic_failure_callbacks=[recorder] if sync else None,
@@ -393,6 +394,56 @@ class TestRouterEmbeddingBatchLimit:
             assert route.call_count == 0
         assert failures == [(excinfo.value, True)]
 
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_fallback_after_a_rejection_logs_its_provider_call_as_reached(self, sync: bool) -> None:
+        litellm_params: Final[dict[str, object]] = {"model": "openai/text-embedding-3-small", "api_key": "sk-fake"}
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed-capped",
+                    "litellm_params": {**litellm_params, "api_base": _OPENAI_EMBED_BASE},
+                    "model_info": {"id": "capped-box", "max_embedding_batch_size": 2},
+                },
+                {
+                    "model_name": "embed-fallback",
+                    "litellm_params": {**litellm_params, "api_base": _VLLM_EMBED_BASE},
+                    "model_info": {"id": "fallback-box"},
+                },
+            ],
+            fallbacks=[{"embed-capped": ["embed-fallback"]}],
+            num_retries=0,
+        )
+        logging_obj: Final = LitellmLogging(
+            model="embed-capped",
+            messages=[],
+            stream=False,
+            call_type="embedding" if sync else "aembedding",
+            start_time=_LOGGING_START,
+            litellm_call_id="embed-batch-fallback",
+            function_id="embed-batch-fallback",
+        )
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {}, "proxy_server_request": {}}, optional_params={}
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            capped_route: Final = respx_mock.post(f"{_OPENAI_EMBED_BASE}/embeddings").mock(
+                return_value=_vllm_embedding_response(3)
+            )
+            fallback_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
+                return_value=_vllm_embedding_response(3)
+            )
+            await _call_embedding(
+                router,
+                sync=sync,
+                model="embed-capped",
+                input=["one", "two", "three"],
+                litellm_logging_obj=logging_obj,
+            )
+            assert (capped_route.call_count, fallback_route.call_count) == (0, 1)
+        assert PROXY_REJECTED_BEFORE_ROUTING_KEY not in logging_obj.model_call_details["litellm_params"]
+
     @pytest.fixture
     def _isolated_prometheus_registry(self) -> Iterator[None]:
         def unregister_all() -> None:
@@ -413,7 +464,7 @@ class TestRouterEmbeddingBatchLimit:
             messages=[],
             stream=False,
             call_type="aembedding",
-            start_time=time.time(),
+            start_time=_LOGGING_START,
             litellm_call_id="embed-batch-prometheus",
             function_id="embed-batch-prometheus",
             dynamic_async_failure_callbacks=[prometheus],
