@@ -8616,6 +8616,9 @@ def test_wildcard_route_deployments_is_the_one_pattern_routing_serves_from(
 
     assert tuple(Deployment.model_validate(d).model_info.id for d in served) == expected_ids
     assert tuple(Deployment.model_validate(d).model_info.id for d in early_deployments) == expected_ids
+    assert router.wildcard_routed_models(requested, team_id) == frozenset(
+        Deployment.model_validate(d).litellm_params.model for d in served
+    )
 
 
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():

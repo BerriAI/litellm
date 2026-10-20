@@ -1307,6 +1307,20 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
             id="alias-repeating-the-deployment-partial-word",
         ),
         pytest.param(
+            "team/gpt-partial-route-9-prod*",
+            "openai/gpt-partial-route-9*",
+            None,
+            {f"openai/{_ROUTE_OPENAI_ID}"},
+            id="alias-extending-the-deployment-partial-word",
+        ),
+        pytest.param(
+            "partial-route-g/*",
+            "gemini/gemini-partial-route-*",
+            None,
+            {_ROUTE_GEMINI_ID},
+            id="alias-over-deployment-cut-at-a-word-boundary",
+        ),
+        pytest.param(
             "cloudflare/*", "cloudflare/*", "cloudflare/@cf/*", _ROUTE_CF_IDS, id="key-filter-over-provider-wildcard"
         ),
         pytest.param("gemini/gemini-*", "gemini/*", None, {_ROUTE_GEMINI_ID}, id="alias-over-bare-id"),
@@ -1451,6 +1465,39 @@ def test_catch_all_lists_no_id_a_more_specific_sibling_wildcard_routes_elsewhere
 
     assert routed_models(v1_models) == {"unshadowed-route-org/model-d": unshadowed_id}
     assert routed_models(model_info_names) == {"unshadowed-route-org/model-d": unshadowed_id}
+
+
+def test_wildcard_lists_an_id_a_more_specific_sibling_serves_with_the_same_model() -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/gpt-partial-route-9*", "litellm_params": {"model": "openai/gpt-partial-route-9*"}},
+            {
+                "model_name": "openai/gpt-partial-route-9-mini*",
+                "litellm_params": {"model": "openai/gpt-partial-route-9-mini*"},
+            },
+        ]
+    )
+    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
+        v1_models: Final = get_complete_model_list(
+            key_models=["openai/gpt-partial-route-9*"],
+            team_models=[],
+            proxy_model_list=["openai/gpt-partial-route-9*", "openai/gpt-partial-route-9-mini*"],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        model_info_names: Final = [
+            str(row["model_name"])
+            for row in expand_wildcard_deployments_for_model_info(
+                [dict(deployment) for deployment in router.get_model_list() or []], router
+            )
+        ]
+
+    assert v1_models == [f"openai/{_ROUTE_OPENAI_ID}"]
+    assert "openai/gpt-partial-route-9*" not in model_info_names
 
 
 def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(monkeypatch: pytest.MonkeyPatch) -> None:

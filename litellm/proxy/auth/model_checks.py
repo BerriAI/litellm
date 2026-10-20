@@ -1,6 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
+import functools
 import itertools
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -299,24 +300,40 @@ def _without_routing_segments(
 
 def _lists_name_fragments(name_pattern: str, deployment_pattern: str) -> bool:
     deployment_partial_word: Final = deployment_pattern.partition("*")[0].rpartition("/")[2]
-    return bool(deployment_partial_word) and not name_pattern.partition("*")[0].endswith(deployment_partial_word)
+    name_partial_word: Final = name_pattern.partition("*")[0].rpartition("/")[2]
+    return deployment_partial_word[-1:].isalnum() and not name_partial_word
 
 
 def _routes_back_to(
-    listed_id: str, name_regex: re.Pattern[str], deployment_model_pattern: str, catalog_id: str
+    listed_id: str,
+    name_regex: re.Pattern[str],
+    catalog_route: tuple[str, str],
+    deployment_pattern: str,
+    routes_to_model: Callable[[str, str], bool],
 ) -> bool:
     name_match: Final = name_regex.match(listed_id)
+    catalog_pattern, catalog_id = catalog_route
     return (
         name_match is not None
         and PatternMatchRouter.set_deployment_model_name(
-            matched_pattern=name_match, litellm_deployment_litellm_model=deployment_model_pattern
+            matched_pattern=name_match, litellm_deployment_litellm_model=catalog_pattern
         )
         == catalog_id
+        and routes_to_model(
+            listed_id,
+            PatternMatchRouter.set_deployment_model_name(
+                matched_pattern=name_match, litellm_deployment_litellm_model=deployment_pattern
+            ),
+        )
     )
 
 
 def _ids_routing_to_catalog_models(
-    name_pattern: str, deployment_pattern: str, provider: str, catalog_ids: Sequence[str]
+    name_pattern: str,
+    deployment_pattern: str,
+    provider: str,
+    catalog_ids: Sequence[str],
+    routes_to_model: Callable[[str, str], bool],
 ) -> tuple[str, ...]:
     if name_pattern.count("*") != deployment_pattern.count("*") or _lists_name_fragments(
         name_pattern, deployment_pattern
@@ -347,7 +364,10 @@ def _ids_routing_to_catalog_models(
         dict.fromkeys(
             listed_id
             for listed_id, catalog_id in listed_ids
-            if listed_id and _routes_back_to(listed_id, name_regex, deployment_model_pattern, catalog_id)
+            if listed_id
+            and _routes_back_to(
+                listed_id, name_regex, (deployment_model_pattern, catalog_id), deployment_pattern, routes_to_model
+            )
         )
     )
 
@@ -362,17 +382,14 @@ def _deployment_team_id(deployment: Mapping[str, object]) -> str | None:
     return team_id if isinstance(team_id, str) else None
 
 
-def _routes_to_deployment(
-    llm_router: Router | None, deployment: Mapping[str, object], team_id: str | None
-) -> Callable[[str], bool]:
-    deployment_id: Final = _model_info_field(deployment, "id")
-    return lambda listed_id: (
-        llm_router is None
-        or any(
-            _model_info_field(routed, "id") == deployment_id
-            for routed in llm_router.wildcard_route_deployments(listed_id, team_id)
-        )
-    )
+def _cached_wildcard_routing(llm_router: Router | None) -> Callable[[str, str | None], frozenset[str]] | None:
+    return None if llm_router is None else functools.cache(llm_router.wildcard_routed_models)
+
+
+def _routes_to_model(
+    routed_models: Callable[[str, str | None], frozenset[str]] | None, team_id: str | None
+) -> Callable[[str, str], bool]:
+    return lambda listed_id, model: routed_models is None or model in routed_models(listed_id, team_id)
 
 
 def _deployment_pattern_naming_listed_ids(wildcard_suffix: str, litellm_params: LiteLLM_Params | None) -> str | None:
@@ -385,7 +402,7 @@ def _deployment_pattern_naming_listed_ids(wildcard_suffix: str, litellm_params: 
 def get_known_models_from_wildcard(
     wildcard_model: str,
     litellm_params: LiteLLM_Params | None = None,
-    routes_to_this_deployment: Callable[[str], bool] = lambda _listed_id: True,
+    routes_to_model: Callable[[str, str], bool] = lambda _listed_id, _model: True,
 ) -> list[str]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
@@ -418,16 +435,15 @@ def get_known_models_from_wildcard(
     if wildcard_models is None:
         return []
     if deployment_pattern_naming_listed_ids is not None:
-        return [
-            listed_id
-            for listed_id in _ids_routing_to_catalog_models(
+        return list(
+            _ids_routing_to_catalog_models(
                 name_pattern=wildcard_model,
                 deployment_pattern=deployment_pattern_naming_listed_ids,
                 provider=provider,
                 catalog_ids=wildcard_models,
+                routes_to_model=routes_to_model,
             )
-            if routes_to_this_deployment(listed_id)
-        ]
+        )
     if wildcard_suffix != "*":
         model_prefix: Final = wildcard_suffix.replace("*", "")
         provider_id_prefix: Final = f"{provider}/"
@@ -473,6 +489,7 @@ def expand_wildcard_deployments_for_model_info(
     becomes one entry per known openai model, matching /v1/models behaviour.
     """
     expanded: Final[list[dict[str, object]]] = []
+    routed_models: Final = _cached_wildcard_routing(llm_router)
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
@@ -500,7 +517,7 @@ def expand_wildcard_deployments_for_model_info(
         expanded_names = get_known_models_from_wildcard(
             wildcard_model=wildcard_pattern,
             litellm_params=litellm_params,
-            routes_to_this_deployment=_routes_to_deployment(llm_router, deployment, _deployment_team_id(deployment)),
+            routes_to_model=_routes_to_model(routed_models, _deployment_team_id(deployment)),
         )
         if not expanded_names:
             expanded.append(deployment)
@@ -524,6 +541,7 @@ def _get_wildcard_models(
     team_id: str | None = None,
 ) -> list[str]:
     models_to_remove: Final = set()
+    routes_to_model: Final = _routes_to_model(_cached_wildcard_routing(llm_router), team_id)
     all_wildcard_models: Final = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
@@ -539,7 +557,7 @@ def _get_wildcard_models(
                         get_known_models_from_wildcard(
                             wildcard_model=model,
                             litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
-                            routes_to_this_deployment=_routes_to_deployment(llm_router, router_model, team_id),
+                            routes_to_model=routes_to_model,
                         )
                     )
             else:

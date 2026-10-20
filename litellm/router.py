@@ -13119,6 +13119,14 @@ class Router:
             return proxy_wide
         return team_router.get_deployments_by_pattern(model=model)
 
+    def wildcard_routed_models(self, model: str, team_id: str | None) -> frozenset[str]:
+        """The models wildcard_route_deployments would route ``model`` to, without copying the deployments."""
+        proxy_wide: Final = self.pattern_router.get_models_by_pattern(model=model)
+        team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
+        if proxy_wide or team_router is None:
+            return proxy_wide
+        return team_router.get_models_by_pattern(model=model)
+
     def team_ptu_ceiling(self, team_id: str, model_group: str) -> PTUTeamCeiling | None:
         """The per-minute ceiling ``team_id``'s PTU shares set on the group serving ``model_group``,
         else None, kept until the model list next changes."""

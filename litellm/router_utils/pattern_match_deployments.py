@@ -3,6 +3,7 @@ Class to handle llm wildcard routing and regex pattern matching
 """
 
 import copy
+import itertools
 import re
 from re import Match
 from typing import Final
@@ -258,6 +259,28 @@ class PatternMatchRouter:
         if pattern_match:
             return pattern_match
         return []
+
+    def get_models_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> frozenset[str]:
+        """The models get_deployments_by_pattern would route ``model`` to, without copying the deployments."""
+        provider: Final = custom_llm_provider or inferred_provider(model)
+        requests_by_pattern: Final = itertools.product((model, f"{provider}/{model}"), self.patterns)
+        matched: Final = next(
+            (
+                (pattern_match, pattern)
+                for request, pattern in requests_by_pattern
+                if (pattern_match := re.match(pattern, request)) is not None
+            ),
+            None,
+        )
+        if matched is None:
+            return frozenset()
+        pattern_match, pattern = matched
+        return frozenset(
+            PatternMatchRouter.set_deployment_model_name(
+                matched_pattern=pattern_match, litellm_deployment_litellm_model=deployment["litellm_params"]["model"]
+            )
+            for deployment in self.patterns[pattern]
+        )
 
 
 # Example usage:
