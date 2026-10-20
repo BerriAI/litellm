@@ -1,13 +1,25 @@
+import asyncio
 import json
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 
+import anthropic
+import httpx
+import openai
 import pytest
 import yaml
-from integration._support.client import Gateway, Scenario, gateway_from_environment, object_value, string_value
-from integration._support.process import owned_proxy
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
+from integration._support.process import graceful_stop_seconds, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -27,8 +39,11 @@ TEAM_DEPLOYMENTS: Final = frozenset({"collision-team-1", "collision-team-2"})
 ALIAS: Final = "collision-alias"
 POOLED_CALLS: Final = 48
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+CATCH_ALL_FALLBACK: Final[dict[str, JsonValue]] = {"fallbacks": [{"*": ["collision-solo"]}]}
 
 Build = Callable[[str, str], tuple[str, dict[str, JsonValue]]]
+SdkCall = Callable[[Gateway, str], None]
+BURST: Final = 30
 
 
 def _json_reply(body: dict[str, JsonValue]) -> Reply:
@@ -114,7 +129,7 @@ def peer() -> Iterator[Wire]:
 @pytest.fixture(scope="module")
 def guarded(peer: Wire, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
     directory: Final = tmp_path_factory.mktemp("raw-model-collision-guarded")
-    path: Final = _config(peer, directory, {"enable_cross_model_group_collision_check": True})
+    path: Final = _config(peer, directory, {"enable_cross_model_group_collision_check": True, **CATCH_ALL_FALLBACK})
     with gateway_from_environment() as base, owned_proxy(base, directory, {}, config=path) as proxy:
         yield proxy
 
@@ -133,7 +148,11 @@ def guarded_without_specific_deployment(peer: Wire, tmp_path_factory: pytest.Tem
     path: Final = _config(
         peer,
         directory,
-        {"enable_cross_model_group_collision_check": True, "model_group_alias": {ALIAS: SHARED_MODEL}},
+        {
+            "enable_cross_model_group_collision_check": True,
+            "model_group_alias": {ALIAS: SHARED_MODEL},
+            **CATCH_ALL_FALLBACK,
+        },
         (("collision-wild/*", "collision-wild-1", "openai/*"),),
     )
     with gateway_from_environment() as base, owned_proxy(base, directory, {}, config=path) as proxy:
@@ -209,6 +228,128 @@ def test_the_check_also_refuses_when_a_wildcard_route_sends_the_request_down_the
         assert SHARED_MODEL in refused.text
         assert control.status_code == 200, control.text
         assert _served_by(received) == ("collision-b-1",)
+
+
+def _streaming(build: Build) -> Build:
+    def streamed(model: str, marker: str) -> tuple[str, dict[str, JsonValue]]:
+        path, body = build(model, marker)
+        return path, {**body, "stream": True}
+
+    return streamed
+
+
+@pytest.mark.parametrize(
+    "build",
+    (
+        pytest.param(_streaming(_chat), id="chat-completions-stream"),
+        pytest.param(_streaming(_messages), id="anthropic-messages-stream"),
+        pytest.param(_streaming(_responses), id="responses-stream"),
+    ),
+)
+def test_a_streaming_request_for_a_shared_raw_model_string_is_refused_before_any_upstream_call(
+    guarded: Gateway, peer: Wire, build: Build
+) -> None:
+    with guarded.scenario() as scenario:
+        peer.drain()
+        refused: Final = guarded.request("POST", *build(SHARED_MODEL, uuid.uuid4().hex), key=scenario.key())
+
+        assert refused.status_code == 400, refused.text
+        assert SHARED_MODEL in refused.text
+        assert peer.drain() == ()
+
+
+def _v1(gateway: Gateway) -> str:
+    return f"{str(gateway.client.base_url).rstrip('/')}/v1"
+
+
+def _origin(gateway: Gateway) -> str:
+    return str(gateway.client.base_url).rstrip("/")
+
+
+def _openai_chat(gateway: Gateway, key: str) -> None:
+    with (
+        httpx.Client(timeout=15, trust_env=False) as transport,
+        openai.OpenAI(api_key=key, base_url=_v1(gateway), max_retries=0, http_client=transport) as client,
+    ):
+        client.chat.completions.create(model=SHARED_MODEL, messages=[{"role": "user", "content": "sdk"}])
+
+
+def _openai_responses(gateway: Gateway, key: str) -> None:
+    with (
+        httpx.Client(timeout=15, trust_env=False) as transport,
+        openai.OpenAI(api_key=key, base_url=_v1(gateway), max_retries=0, http_client=transport) as client,
+    ):
+        client.responses.create(model=SHARED_MODEL, input="sdk")
+
+
+def _openai_embeddings(gateway: Gateway, key: str) -> None:
+    with (
+        httpx.Client(timeout=15, trust_env=False) as transport,
+        openai.OpenAI(api_key=key, base_url=_v1(gateway), max_retries=0, http_client=transport) as client,
+    ):
+        client.embeddings.create(model=SHARED_MODEL, input=["sdk"])
+
+
+def _run(call: Callable[[], Awaitable[object]]) -> None:
+    asyncio.run(call())
+
+
+def _async_openai_chat(gateway: Gateway, key: str) -> None:
+    async def call() -> object:
+        async with (
+            httpx.AsyncClient(timeout=15, trust_env=False) as transport,
+            openai.AsyncOpenAI(api_key=key, base_url=_v1(gateway), max_retries=0, http_client=transport) as client,
+        ):
+            return await client.chat.completions.create(
+                model=SHARED_MODEL, messages=[{"role": "user", "content": "sdk"}]
+            )
+
+    _run(call)
+
+
+def _anthropic_messages(gateway: Gateway, key: str) -> None:
+    with (
+        httpx.Client(timeout=15, trust_env=False) as transport,
+        anthropic.Anthropic(api_key=key, base_url=_origin(gateway), max_retries=0, http_client=transport) as client,
+    ):
+        client.messages.create(model=SHARED_MODEL, max_tokens=16, messages=[{"role": "user", "content": "sdk"}])
+
+
+def _async_anthropic_messages(gateway: Gateway, key: str) -> None:
+    async def call() -> object:
+        async with (
+            httpx.AsyncClient(timeout=15, trust_env=False) as transport,
+            anthropic.AsyncAnthropic(
+                api_key=key, base_url=_origin(gateway), max_retries=0, http_client=transport
+            ) as client,
+        ):
+            return await client.messages.create(
+                model=SHARED_MODEL, max_tokens=16, messages=[{"role": "user", "content": "sdk"}]
+            )
+
+    _run(call)
+
+
+@pytest.mark.parametrize(
+    ("call", "error"),
+    (
+        pytest.param(_openai_chat, openai.BadRequestError, id="openai-sync-chat"),
+        pytest.param(_async_openai_chat, openai.BadRequestError, id="openai-async-chat"),
+        pytest.param(_openai_responses, openai.BadRequestError, id="openai-sync-responses"),
+        pytest.param(_openai_embeddings, openai.BadRequestError, id="openai-sync-embeddings"),
+        pytest.param(_anthropic_messages, anthropic.BadRequestError, id="anthropic-sync-messages"),
+        pytest.param(_async_anthropic_messages, anthropic.BadRequestError, id="anthropic-async-messages"),
+    ),
+)
+def test_sdk_clients_get_a_bad_request_error_for_a_shared_raw_model_string(
+    guarded: Gateway, peer: Wire, call: SdkCall, error: type[Exception]
+) -> None:
+    with guarded.scenario() as scenario:
+        peer.drain()
+
+        with pytest.raises(error, match="is the litellm_params.model of more than one model group"):
+            call(guarded, scenario.key())
+        assert peer.drain() == ()
 
 
 def test_a_model_group_name_still_routes_inside_its_own_group_when_the_check_is_on(
@@ -357,3 +498,71 @@ def test_the_admin_ui_config_update_turns_the_check_on_and_off_without_a_restart
         assert refused.status_code == 400, refused.text
         assert after.status_code == 200, after.text
         assert len(served) == 2
+
+
+@pytest.mark.parametrize(
+    ("value", "enabled"),
+    (
+        pytest.param("TRUE", True, id="upper-case-true"),
+        pytest.param("yes", False, id="yes"),
+        pytest.param(1, False, id="integer-one"),
+        pytest.param("", False, id="empty-string"),
+    ),
+)
+def test_only_a_true_value_from_the_admin_ui_turns_the_check_on(
+    toggled: Gateway, peer: Wire, value: JsonValue, enabled: bool
+) -> None:
+    with toggled.scenario() as scenario:
+        key: Final = scenario.key()
+        scenario.cleanups.callback(
+            toggled.post, "/config/update", {"router_settings": {"enable_cross_model_group_collision_check": False}}
+        )
+        toggled.post("/config/update", {"router_settings": {"enable_cross_model_group_collision_check": value}})
+        peer.drain()
+        response: Final = toggled.request("POST", *_chat(SHARED_MODEL, uuid.uuid4().hex), key=key)
+        served: Final = _served_by(peer.drain())
+
+        assert response.status_code == (400 if enabled else 200), response.text
+        assert len(served) == (0 if enabled else 1)
+
+
+def _burst_call(gateway: Gateway, key: str, index: int) -> tuple[bool, int | None, str]:
+    raw: Final = index % 2 == 0
+    build: Final = (_chat, _messages, _responses)[index // 2 % 3]
+    marker: Final = f"collision-burst-{index}-{uuid.uuid4().hex}"
+    path, body = build(SHARED_MODEL if raw else "collision-chain-b", marker)
+    try:
+        response: Final = gateway.request("POST", path, {**body, "stream": raw and index % 4 == 0}, key=key)
+    except httpx.HTTPError:
+        return raw, None, marker
+    return raw, response.status_code, marker
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 180)
+def test_the_refusal_holds_on_both_workers_through_a_worker_kill_mid_burst(peer: Wire, tmp_path: Path) -> None:
+    path: Final = _config(peer, tmp_path, {"enable_cross_model_group_collision_check": True})
+    with (
+        gateway_from_environment() as base,
+        owned_proxy_process(base, tmp_path, {}, config=path, workers=2) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        key: Final = scenario.key()
+        workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=30)
+        peer.drain()
+        with ThreadPoolExecutor(max_workers=BURST) as pool:
+            futures: Final = [pool.submit(_burst_call, owned.gateway, key, index) for index in range(BURST)]
+            with owned.replacing_worker(min(workers)) as kill:
+                kill()
+                outcomes: Final = [future.result() for future in futures]
+        upstream_bodies: Final = tuple(request.body.decode() for request in peer.drain())
+        probes: Final = tuple(
+            owned.gateway.request("POST", *_chat(SHARED_MODEL, uuid.uuid4().hex), key=key) for _ in range(8)
+        )
+        control: Final = owned.gateway.request("POST", *_chat("collision-chain-b", uuid.uuid4().hex), key=key)
+
+        assert all(status in (400, None) for raw, status, _ in outcomes if raw), outcomes
+        assert any(status == 400 for raw, status, _ in outcomes if raw), outcomes
+        assert all(status in (200, None) for raw, status, _ in outcomes if not raw), outcomes
+        assert not any(marker in body for raw, _, marker in outcomes if raw for body in upstream_bodies)
+        assert [probe.status_code for probe in probes] == [400] * 8, [probe.text for probe in probes]
+        assert control.status_code == 200, control.text

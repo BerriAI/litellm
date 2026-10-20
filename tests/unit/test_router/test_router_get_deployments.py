@@ -589,6 +589,45 @@ def test_collision_check_refuses_a_team_whose_model_shares_the_litellm_model_wit
     assert _pick_for_team(router, "team-2", specific_deployment) == "chain-b-1"
 
 
+def _served_model_list() -> list[dict[str, object]]:
+    return [
+        {
+            **deployment,
+            "litellm_params": {
+                **deployment["litellm_params"],
+                "mock_response": f"served by {deployment['model_info']['id']}",
+            },
+        }
+        for deployment in _COLLIDING_MODEL_LIST
+    ]
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    (
+        pytest.param([{"*": ["solo"]}], id="wildcard-fallback"),
+        pytest.param([{"alias": ["solo"]}, {_SHARED_LITELLM_MODEL: ["solo"]}], id="keyed-fallback"),
+    ),
+)
+@pytest.mark.parametrize("model", ("alias", _SHARED_LITELLM_MODEL))
+def test_collision_check_refusal_is_not_rescued_by_a_fallback(
+    fallbacks: list[dict[str, list[str]]], model: str
+) -> None:
+    router: Final = Router(
+        model_list=_served_model_list(),
+        model_group_alias={"alias": _SHARED_LITELLM_MODEL},
+        fallbacks=fallbacks,
+        enable_cross_model_group_collision_check=True,
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    with pytest.raises(litellm.BadRequestError, match=f"model={_SHARED_LITELLM_MODEL} is the litellm_params.model"):
+        router.completion(model=model, messages=messages)
+    with pytest.raises(litellm.BadRequestError, match=f"model={_SHARED_LITELLM_MODEL} is the litellm_params.model"):
+        asyncio.run(router.acompletion(model=model, messages=messages))
+    assert router.completion(model="chain-b", messages=messages).choices[0].message.content == "served by chain-b-1"  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # completion returns an untyped response union
+
+
 @pytest.mark.parametrize(
     ("setting", "enabled"),
     ((True, True), ("true", True), (False, False), ("false", False)),

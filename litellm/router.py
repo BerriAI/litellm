@@ -205,6 +205,7 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
+    RawModelGroupCollisionError,
     deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
@@ -8294,6 +8295,7 @@ class Router:
             or original_model_group is None
             or is_guardrail_intervention(e)
             or unsupported_params_without_fallback
+            or isinstance(e, RawModelGroupCollisionError)
         ):
             raise e
 

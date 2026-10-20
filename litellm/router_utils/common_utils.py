@@ -339,11 +339,15 @@ def _model_group_of(deployment: Mapping[str, object]) -> tuple[object, object]:
     return None, deployment["model_name"]
 
 
+class RawModelGroupCollisionError(BadRequestError):
+    """The 400 for a raw `litellm_params.model` that several model groups share; router fallbacks never serve it."""
+
+
 def refuse_litellm_model_spanning_model_groups(model: str, deployments: Sequence[Mapping[str, object]]) -> None:
     """Raise a 400 when the deployments matched by a raw `litellm_params.model` belong to more than one model group."""
     if len(frozenset(_model_group_of(deployment) for deployment in deployments)) < 2:
         return
-    raise BadRequestError(
+    raise RawModelGroupCollisionError(
         message=f"LiteLLM Router: model={model} is the litellm_params.model of more than one model group. "
         "Send one of the model group names instead",
         model=model,
