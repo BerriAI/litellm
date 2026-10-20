@@ -9,8 +9,11 @@ Flow:
 from __future__ import annotations
 
 import gzip
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final, Protocol
 from urllib.parse import urlparse
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -26,6 +29,34 @@ _MAVVRIK_ALLOWED_SUFFIXES: Final = (".mavvrik.dev", ".mavvrik.ai", ".mavvrik.app
 # GCS requires intermediate chunks to be a multiple of 256 KB.
 # 8 MB gives a good balance between round-trips and memory pressure.
 _GCS_CHUNK_SIZE: Final = 8 * 1024 * 1024  # 8 MB
+
+
+class MavvrikRegisterBody(TypedDict):
+    metricsMarker: ReadOnly[NotRequired[int | str]]
+
+
+class MavvrikUploadUrlBody(TypedDict):
+    url: ReadOnly[NotRequired[str]]
+
+
+class _RegisterResponse(Protocol):
+    def json(self) -> MavvrikRegisterBody: ...
+
+
+class _UploadUrlResponse(Protocol):
+    def json(self) -> MavvrikUploadUrlBody: ...
+
+
+def _register_body(response: _RegisterResponse) -> MavvrikRegisterBody:
+    return response.json()
+
+
+def _upload_url_body(response: _UploadUrlResponse) -> MavvrikUploadUrlBody:
+    return response.json()
+
+
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    return headers.get(name)
 
 
 def _validate_api_endpoint(api_endpoint: str) -> None:
@@ -56,12 +87,12 @@ class FocusMavvrikDestination(FocusDestination):
         self,
         *,
         prefix: str,
-        config: dict[str, Any] | None = None,
+        config: Mapping[str, str] | None = None,
     ) -> None:
-        config = config or {}
-        api_key: Final = config.get("api_key")
-        api_endpoint: Final = config.get("api_endpoint")
-        connection_id: Final = config.get("connection_id")
+        resolved_config: Final[Mapping[str, str]] = config or {}
+        api_key: Final = resolved_config.get("api_key")
+        api_endpoint: Final = resolved_config.get("api_endpoint")
+        connection_id: Final = resolved_config.get("connection_id")
 
         if not api_key:
             raise ValueError(
@@ -100,7 +131,7 @@ class FocusMavvrikDestination(FocusDestination):
     def _auth_headers(self) -> dict[str, str]:
         return {"Content-Type": "application/json", "x-api-key": self.api_key}
 
-    async def _ensure_registered(self) -> int | None:
+    async def _ensure_registered(self) -> int | str | None:
         """POST agent endpoint to register/initialize the connector (once per instance).
 
         Returns metricsMarker from the Mavvrik response — the last date index
@@ -127,7 +158,7 @@ class FocusMavvrikDestination(FocusDestination):
         if resp.status_code >= 400:
             raise RuntimeError(f"Mavvrik FOCUS destination: register failed ({resp.status_code}): {resp.text[:200]}")
         self._registered = True
-        metrics_marker: Final = resp.json().get("metricsMarker", 0)
+        metrics_marker: Final = _register_body(resp).get("metricsMarker", 0)
         verbose_logger.debug(
             "Mavvrik FOCUS destination: connector registered (metricsMarker=%s)",
             metrics_marker,
@@ -148,7 +179,7 @@ class FocusMavvrikDestination(FocusDestination):
             raise RuntimeError(
                 f"Mavvrik FOCUS destination: failed to get signed URL ({resp.status_code}): {resp.text[:200]}"
             )
-        signed_url: Final = resp.json().get("url")
+        signed_url: Final = _upload_url_body(resp).get("url")
         if not signed_url:
             raise RuntimeError(f"Mavvrik FOCUS destination: response missing 'url' field: {resp.json()}")
         _validate_gcs_url(signed_url, "signed URL")
@@ -190,7 +221,7 @@ class FocusMavvrikDestination(FocusDestination):
                 f"Mavvrik FOCUS destination: GCS session init failed ({init_resp.status_code}): {init_resp.text[:400]}"
             )
 
-        session_uri: Final = init_resp.headers.get("Location")
+        session_uri: Final = _header_value(init_resp.headers, "Location")
         if not session_uri:
             raise RuntimeError("Mavvrik FOCUS destination: GCS session init missing Location header")
         _validate_gcs_url(session_uri, "session URI")
@@ -264,7 +295,7 @@ class FocusMavvrikDestination(FocusDestination):
             )
         verbose_logger.debug("Mavvrik FOCUS destination: metricsMarker advanced to %s", date_epoch)
 
-    async def get_metrics_marker(self) -> int | None:
+    async def get_metrics_marker(self) -> int | str | None:
         """Register with Mavvrik and return the current metricsMarker.
 
         Always calls the Mavvrik register API — unlike deliver() which skips
@@ -287,7 +318,7 @@ class FocusMavvrikDestination(FocusDestination):
         if resp.status_code >= 400:
             raise RuntimeError(f"Mavvrik FOCUS destination: register failed ({resp.status_code}): {resp.text[:200]}")
         self._registered = True
-        metrics_marker: Final = resp.json().get("metricsMarker", 0)
+        metrics_marker: Final = _register_body(resp).get("metricsMarker", 0)
         verbose_logger.debug("Mavvrik FOCUS destination: got metricsMarker=%s", metrics_marker)
         return metrics_marker
 

@@ -33,4 +33,41 @@ describe("ResponseMetrics prompt cache chips", () => {
     expect(screen.queryByText(/Cache Read/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Cache Write/)).not.toBeInTheDocument();
   });
+
+  it("shows the response cache indicator instead of the provider cache chips on a response-cache hit", () => {
+    render(
+      <ResponseMetrics
+        usage={{ ...baseUsage, cacheReadTokens: 4695, cacheCreationTokens: 1234, servedFromResponseCache: true }}
+      />,
+    );
+
+    expect(screen.getByText("Response Cache: Hit")).toBeInTheDocument();
+    expect(screen.queryByText(/Cache Read/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cache Write/)).not.toBeInTheDocument();
+  });
+
+  it("does not show the response cache indicator when the flag is absent", () => {
+    render(<ResponseMetrics usage={baseUsage} />);
+
+    expect(screen.queryByText(/Response Cache/)).not.toBeInTheDocument();
+  });
+
+  it("does not render the Cost chip when a persisted cost is null", () => {
+    render(<ResponseMetrics usage={{ promptTokens: 1, cost: null as unknown as number }} />);
+
+    expect(screen.queryByText(/Cost:/)).not.toBeInTheDocument();
+    expect(screen.getByText("In: 1")).toBeInTheDocument();
+  });
+
+  it("does not render the Cost chip for NaN", () => {
+    render(<ResponseMetrics usage={{ ...baseUsage, cost: Number.NaN }} />);
+
+    expect(screen.queryByText(/Cost:/)).not.toBeInTheDocument();
+  });
+
+  it("renders the Cost chip for a finite cost", () => {
+    render(<ResponseMetrics usage={{ ...baseUsage, cost: 0.000063 }} />);
+
+    expect(screen.getByText("Cost: $0.000063")).toBeInTheDocument();
+  });
 });

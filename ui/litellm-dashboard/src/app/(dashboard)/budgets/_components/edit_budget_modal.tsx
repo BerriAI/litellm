@@ -5,7 +5,7 @@ import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { applyBudgetPrecision } from "./budgetPrecision";
 import { toast } from "@/lib/toast";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -15,13 +15,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 
 type EditBudgetFormValues = Pick<
   budgetItem,
-  "budget_id" | "tpm_limit" | "rpm_limit" | "max_budget" | "budget_duration"
+  "budget_id" | "tpm_limit" | "rpm_limit" | "tpd_limit" | "max_budget" | "budget_duration"
 >;
 
 const toFormValues = (budget: budgetItem): EditBudgetFormValues => ({
   budget_id: budget.budget_id,
   tpm_limit: budget.tpm_limit,
   rpm_limit: budget.rpm_limit,
+  tpd_limit: budget.tpd_limit,
   max_budget: budget.max_budget,
   budget_duration: budget.budget_duration,
 });
@@ -88,7 +89,7 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
               control={form.control}
               name="tpm_limit"
               label="Max Tokens per minute"
-              description="Default is model limit."
+              description="Leave blank for no LiteLLM limit. Provider rate limits still apply."
             >
               {({ ref, value, onChange, ...field }) => (
                 <Input
@@ -105,7 +106,24 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
               control={form.control}
               name="rpm_limit"
               label="Max Requests per minute"
-              description="Default is model limit."
+              description="Leave blank for no LiteLLM limit. Provider rate limits still apply."
+            >
+              {({ ref, value, onChange, ...field }) => (
+                <Input
+                  {...field}
+                  ref={ref}
+                  type="number"
+                  step={1}
+                  value={value ?? ""}
+                  onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                />
+              )}
+            </FormField>
+            <FormField
+              control={form.control}
+              name="tpd_limit"
+              label="Max Tokens per day (batch)"
+              description="Daily token budget for batch submissions. When set, batches are charged against this instead of TPM/RPM."
             >
               {({ ref, value, onChange, ...field }) => (
                 <Input

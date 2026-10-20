@@ -1,4 +1,4 @@
-suite: test migrations Job ServiceAccount resolution and pod hardening
+suite: test migrations Job ServiceAccount resolution, pod hardening, and scheduling
 templates:
   - migrations-job.yaml
 values:
@@ -188,3 +188,69 @@ tests:
     asserts:
       - notExists:
           path: spec.activeDeadlineSeconds
+
+  - it: renders no scheduling fields by default
+    asserts:
+      - isNull:
+          path: spec.template.spec.nodeSelector
+      - isNull:
+          path: spec.template.spec.tolerations
+      - isNull:
+          path: spec.template.spec.affinity
+
+  - it: renders nodeSelector, tolerations, and affinity from the migrationJob values
+    set:
+      migrationJob.nodeSelector:
+        intent: no-csi-nodes
+      migrationJob.tolerations:
+        - key: intent
+          operator: Equal
+          value: no-csi-nodes
+          effect: NoSchedule
+      migrationJob.affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: intent
+                    operator: In
+                    values:
+                      - no-csi-nodes
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            intent: no-csi-nodes
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: intent
+              operator: Equal
+              value: no-csi-nodes
+              effect: NoSchedule
+      - equal:
+          path: spec.template.spec.affinity
+          value:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: intent
+                        operator: In
+                        values:
+                          - no-csi-nodes
+
+  - it: does not inherit the gateway's scheduling values
+    set:
+      gateway.nodeSelector:
+        intent: no-csi-nodes
+      gateway.tolerations:
+        - key: intent
+          operator: Equal
+          value: no-csi-nodes
+          effect: NoSchedule
+    asserts:
+      - isNull:
+          path: spec.template.spec.nodeSelector
+      - isNull:
+          path: spec.template.spec.tolerations

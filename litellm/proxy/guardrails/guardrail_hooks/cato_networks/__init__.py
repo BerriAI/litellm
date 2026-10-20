@@ -20,7 +20,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        inspect_embeddings=litellm_params.inspect_embeddings,
         ssl_verify=getattr(litellm_params, "ssl_verify", None),
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_cato_callback)
 

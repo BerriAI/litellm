@@ -3,7 +3,7 @@
 import { Plus, X } from "lucide-react";
 import React from "react";
 import { useController } from "react-hook-form";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -87,8 +87,8 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
   return (
     <FieldGroup>
       <div className="rounded-md border border-success/20 bg-success/10 px-3.5 py-2.5 text-[13px] text-success">
-        After each LLM response, the <strong>Judge Model</strong> scores it 0–100 against your criteria. If the weighted
-        average falls below the threshold, the response is blocked (or logged).
+        The <strong>Judge Model</strong> scores the user request (pre_call, during_call) or the LLM response (post_call)
+        0–100 against your criteria. If the weighted average falls below the threshold, it is blocked (or logged).
       </div>
 
       <GuardrailField

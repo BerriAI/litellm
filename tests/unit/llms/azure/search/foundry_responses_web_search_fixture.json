@@ -1,0 +1,78 @@
+{
+  "id": "resp_04bcf916b629f9be006a8c7c053e9881959a4efe7118cb3a34",
+  "object": "response",
+  "status": "completed",
+  "model": "gpt-4.1",
+  "output": [
+    {
+      "type": "web_search_call",
+      "id": "ws_04bcf916b629f9be006a8c7c080e108195b3366ab048231129",
+      "response_id": "resp_04bcf916b629f9be006a8c7c053e9881959a4efe7118cb3a34",
+      "status": "completed",
+      "action": {
+        "type": "search",
+        "queries": [
+          "latest LiteLLM release GitHub LiteLLM",
+          "LiteLLM github releases",
+          "LiteLLM repo LiteLLM"
+        ],
+        "query": "latest LiteLLM release GitHub"
+      }
+    },
+    {
+      "type": "message",
+      "id": "msg_04bcf916b629f9be006a8c7c0c7b448195979bfafb3b28f1ba",
+      "response_id": "resp_04bcf916b629f9be006a8c7c053e9881959a4efe7118cb3a34",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "You asked: “What is the latest LiteLLM release on GitHub? Answer with the version number.”\n\nI verified the most recent release information from the official GitHub repository for LiteLLM (BerriAI/litellm) using multiple sources, including GitHub itself and secondary trackers:\n\n- On the GitHub **Releases** page for BerriAI/litellm, the topmost entry is **v1.99.0‑rc.1**, marked as a pre‑release, published “yesterday” (relative to today, August 24, 2026) ([github.com](https://github.com/BerriAI/litellm/releases)). This indicates that version **v1.99.0‑rc.1** is the most recent tag available.\n- An external release‑tracking site (ReleaseAlert) confirms: **Latest version: v1.99.0‑rc.1**, last published August 22, 2026 ([releasealert.dev](https://releasealert.dev/github/BerriAI/litellm)).\n- The GitHub API (via `releases/latest`) currently points to **v1.98.0** as the latest **stable** release, with published date August 23, 2026 ([api.github.com](https://api.github.com/repos/BerriAI/litellm/releases/latest)).\n\nTo summarize:\n\n- The absolute **latest** release tag on GitHub is **v1.99.0‑rc.1** (release candidate), published recently (August 22, 2026) ([github.com](https://github.com/BerriAI/litellm/releases)).\n- The most recent **stable** release is **v1.98.0**, published August 23, 2026 ([api.github.com](https://api.github.com/repos/BerriAI/litellm/releases/latest)).\n\nSince you asked for the “latest LiteLLM release on GitHub,” without specifying stable vs. pre‑release, the correct answer is:\n\n**v1.99.0‑rc.1**\n\nLet me know if you'd like details on what's new in that release, or if you'd prefer the latest stable version.",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "url": "https://github.com/BerriAI/litellm/releases",
+              "start_index": 456,
+              "end_index": 515,
+              "title": "Releases · BerriAI/litellm - GitHub"
+            },
+            {
+              "type": "url_citation",
+              "url": "https://releasealert.dev/github/BerriAI/litellm",
+              "start_index": 722,
+              "end_index": 791,
+              "title": "BerriAI/litellm on GitHub | Release Alert"
+            },
+            {
+              "type": "url_citation",
+              "url": "https://api.github.com/repos/BerriAI/litellm/releases/latest",
+              "start_index": 936,
+              "end_index": 1016,
+              "title": "api.github.com"
+            },
+            {
+              "type": "url_citation",
+              "url": "https://github.com/BerriAI/litellm/releases",
+              "start_index": 1160,
+              "end_index": 1219,
+              "title": "Releases · BerriAI/litellm - GitHub"
+            },
+            {
+              "type": "url_citation",
+              "url": "https://api.github.com/repos/BerriAI/litellm/releases/latest",
+              "start_index": 1300,
+              "end_index": 1380,
+              "title": "api.github.com"
+            }
+          ],
+          "logprobs": []
+        }
+      ],
+      "status": "completed"
+    }
+  ],
+  "usage": {
+    "input_tokens": 15195,
+    "output_tokens": 467
+  }
+}

@@ -14,7 +14,7 @@ import {
   VectorStoreFieldConfig,
 } from "@/components/vector_store_providers";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -175,6 +175,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     setIsCreating(true);
     const results: RAGIngestResponse[] = [];
     let vectorStoreId: string | undefined;
+    let failure: { name: string; error: unknown } | undefined;
 
     try {
       // Ingest each document
@@ -208,17 +209,33 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
           console.error(`Error ingesting ${doc.name}:`, error);
           // Update document status to error
           setDocuments((prev) => prev.map((d) => (d.uid === doc.uid ? { ...d, status: "error" as const } : d)));
-          throw error; // Stop processing on first error
+          failure = { name: doc.name, error };
+          break;
         }
       }
 
+      if (failure && !vectorStoreId) {
+        throw failure.error;
+      }
+
       setIngestResults(results);
-      toast.success(
-        `Successfully created vector store with ${results.length} document(s). Vector Store ID: ${vectorStoreId}`,
-      );
+      if (failure) {
+        toast.warning(
+          `Vector store ${vectorStoreId} was created with ${results.length} document(s), but ${failure.name} failed to ingest`,
+          { description: failure.error instanceof Error ? failure.error.message : String(failure.error) },
+        );
+      } else {
+        toast.success(
+          `Successfully created vector store with ${results.length} document(s). Vector Store ID: ${vectorStoreId}`,
+        );
+      }
 
       if (onSuccess && vectorStoreId) {
         onSuccess(vectorStoreId);
+      }
+
+      if (failure) {
+        return;
       }
 
       // Clear documents after successful creation
@@ -342,7 +359,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                   <SelectTrigger id="vector-store-provider" className="w-full">
                     <SelectValue placeholder="Select a provider" />
                   </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
+                  <SelectContent>
                     {providerItems.map((item) => (
                       <SelectItem key={item.value} value={item.value}>
                         <Logo src={vectorStoreProviderLogoMap[item.label]} label={item.label} className="w-5 h-5" />

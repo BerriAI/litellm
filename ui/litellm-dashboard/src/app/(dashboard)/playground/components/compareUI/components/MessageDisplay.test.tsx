@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { MessageType } from "@/components/chat_ui/types";
 import { MessageDisplay } from "./MessageDisplay";
@@ -39,9 +39,9 @@ describe("MessageDisplay", () => {
         model: "gpt-4",
       },
     ];
-    const { getByText } = render(<MessageDisplay messages={messages} isLoading={false} />);
-    expect(getByText("Hello")).toBeInTheDocument();
-    expect(getByText("Hi there!")).toBeInTheDocument();
+    render(<MessageDisplay messages={messages} isLoading={false} />);
+    expect(screen.getByText("Hello")).toBeInTheDocument();
+    expect(screen.getByText("Hi there!")).toBeInTheDocument();
   });
 
   it("displays user and assistant messages with proper grouping and shows loading state", () => {
@@ -64,13 +64,13 @@ describe("MessageDisplay", () => {
         },
       },
     ];
-    const { getByText, getByTestId } = render(<MessageDisplay messages={messages} isLoading={false} />);
-    expect(getByText("You")).toBeInTheDocument();
-    expect(getByText("What is 2+2?")).toBeInTheDocument();
-    expect(getByText("gpt-4")).toBeInTheDocument();
-    expect(getByText("calculator")).toBeInTheDocument();
-    expect(getByText("2+2 equals 4")).toBeInTheDocument();
-    expect(getByTestId("response-metrics")).toBeInTheDocument();
+    render(<MessageDisplay messages={messages} isLoading={false} />);
+    expect(screen.getByText("You")).toBeInTheDocument();
+    expect(screen.getByText("What is 2+2?")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4")).toBeInTheDocument();
+    expect(screen.getByText("calculator")).toBeInTheDocument();
+    expect(screen.getByText("2+2 equals 4")).toBeInTheDocument();
+    expect(screen.getByTestId("response-metrics")).toBeInTheDocument();
   });
 
   it("should display image attachment in user message", () => {
@@ -86,10 +86,10 @@ describe("MessageDisplay", () => {
         model: "gpt-4",
       },
     ];
-    const { getByTestId, getByText } = render(<MessageDisplay messages={messages} isLoading={false} />);
-    expect(getByText("What is in this image? [Image attached]")).toBeInTheDocument();
-    expect(getByTestId("chat-image-renderer")).toBeInTheDocument();
-    const image = getByTestId("chat-image-renderer").querySelector("img");
+    render(<MessageDisplay messages={messages} isLoading={false} />);
+    expect(screen.getByText("What is in this image? [Image attached]")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-image-renderer")).toBeInTheDocument();
+    const image = screen.getByTestId("chat-image-renderer").querySelector("img");
     expect(image).toHaveAttribute("src", "blob:test-image-url");
   });
 });

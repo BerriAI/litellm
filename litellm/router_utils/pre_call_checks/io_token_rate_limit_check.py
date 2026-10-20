@@ -19,8 +19,12 @@ import httpx
 
 import litellm
 from litellm import token_counter
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
+from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.router import RouterCacheEnum, RouterErrors
 from litellm.utils import get_utc_datetime
 
@@ -91,6 +95,24 @@ def get_deployment_io_token_limits(
 def deployment_has_io_token_limits(deployment: dict) -> bool:
     itpm, otpm = get_deployment_io_token_limits(deployment)
     return itpm is not None or otpm is not None
+
+
+_IO_TOKEN_LIMIT_KEYS: Final = frozenset({"itpm", "otpm"})
+_IO_TOKEN_LIMIT_SECTIONS: Final = frozenset({"litellm_params", "model_info"})
+
+
+def without_io_token_limits(deployment: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        key: _without_io_token_limit_keys(value) if key in _IO_TOKEN_LIMIT_SECTIONS else value
+        for key, value in deployment.items()
+        if key not in _IO_TOKEN_LIMIT_KEYS
+    }
+
+
+def _without_io_token_limit_keys(section: object) -> object:
+    if not is_str_keyed_mapping(section):
+        return section
+    return {key: value for key, value in section.items() if key not in _IO_TOKEN_LIMIT_KEYS}
 
 
 def _get_cache_keys(deployment: dict, current_minute: str) -> tuple[str, str] | None:
@@ -342,6 +364,7 @@ def _rate_limit_error(limit_label: str, limit: int, current: float) -> litellm.R
     )
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 def _sync_increment_with_rollback(
     dual_cache: DualCache,
     key: str,
@@ -366,6 +389,7 @@ def _sync_increment_with_rollback(
         raise _rate_limit_error(limit_label, limit, current)
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 async def _increment_with_rollback(
     dual_cache: DualCache,
     key: str,
@@ -393,6 +417,7 @@ async def _increment_with_rollback(
         raise _rate_limit_error(limit_label, limit, current)
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 def io_token_pre_call_check(
     dual_cache: DualCache,
     deployment: dict,
@@ -455,6 +480,7 @@ def io_token_pre_call_check(
     return deployment
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_pre_call_check(
     dual_cache: DualCache,
     deployment: dict,
@@ -466,7 +492,7 @@ async def async_io_token_pre_call_check(
 
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
     _model: Final = (deployment.get("litellm_params") or {}).get("model") or ""
-    estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
+    estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
     max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
 
     dt: Final = get_utc_datetime()
@@ -524,10 +550,11 @@ async def async_io_token_pre_call_check(
     return deployment
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 def io_token_reconcile_success(
     dual_cache: DualCache,
-    kwargs: Any,
-    response_obj: Any,
+    kwargs: Mapping[str, object] | None,
+    response_obj: object,
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     response: Final[object] = response_obj
@@ -575,10 +602,11 @@ def io_token_reconcile_success(
     )
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_reconcile_success(
     dual_cache: DualCache,
-    kwargs: Any,
-    response_obj: Any,
+    kwargs: Mapping[str, object] | None,
+    response_obj: object,
     *,
     parent_otel_span: Span | None = None,
 ) -> None:
@@ -636,9 +664,10 @@ async def async_io_token_reconcile_success(
     )
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 def io_token_refund_failure(
     dual_cache: DualCache,
-    kwargs: Any,
+    kwargs: Mapping[str, object] | None,
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
@@ -687,9 +716,10 @@ def refund_stale_reservation_before_retry(dual_cache: DualCache, kwargs: Mapping
     io_token_refund_failure(dual_cache, kwargs)
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_refund_failure(
     dual_cache: DualCache,
-    kwargs: Any,
+    kwargs: Mapping[str, object] | None,
     *,
     parent_otel_span: Span | None = None,
 ) -> None:

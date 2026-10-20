@@ -48,11 +48,17 @@ const parseJson = (raw: unknown): ParsedJson => {
 
 const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
 
+const isUnsetArgument = (prop: InputSchemaProperty, value: unknown): boolean =>
+  prop.type === "string" && prop.enum ? value == null : isBlank(typeof value === "string" ? value.trim() : value);
+
 export const validateToolArgument = (field: ToolArgumentField, value: unknown): string | undefined => {
   const prop = resolveSchemaProperty(field.prop);
-  const normalized = typeof value === "string" ? value.trim() : value;
-  if (field.required && isBlank(normalized)) {
+  if (field.required && isUnsetArgument(prop, value)) {
     return `Please enter ${field.key}`;
+  }
+  if (prop.type === "string" && prop.enum) {
+    if (!isUnsetArgument(prop, value) && !prop.enum.includes(String(value)))
+      return `Please select a valid ${field.key}`;
   }
   if (!isJsonField(prop) || (isBlank(value) && !field.required)) {
     return undefined;
@@ -72,7 +78,7 @@ export const validateToolArgument = (field: ToolArgumentField, value: unknown): 
 
 const coerceArgument = (declared: InputSchemaProperty, value: unknown): unknown => {
   const prop = resolveSchemaProperty(declared);
-  const normalized = typeof value === "string" ? value.trim() : value;
+  const normalized = typeof value === "string" && !prop.enum ? value.trim() : value;
   switch (prop.type) {
     case "boolean":
       return normalized === "true" || normalized === true;
@@ -104,7 +110,7 @@ export const buildToolCallArguments = (
   Object.fromEntries(
     fields
       .map((field, index) => ({ field, value: values[index] }))
-      .filter(({ value }) => !isBlank(typeof value === "string" ? value.trim() : value))
+      .filter(({ field, value }) => !isUnsetArgument(resolveSchemaProperty(field.prop), value))
       .map(({ field, value }) => [field.key, coerceArgument(field.prop, value)]),
   );
 
@@ -199,6 +205,7 @@ function buildDefaultValue(declared: InputSchemaProperty | undefined, overrideDe
 export const initialArgumentValues = (fields: readonly ToolArgumentField[]): unknown[] =>
   fields.map(({ prop }) => {
     const resolved = resolveSchemaProperty(prop);
+    if (resolved.type === "string" && resolved.enum && resolved.default === undefined) return null;
     const defaultValue = buildDefaultValue(resolved);
     if (isJsonField(resolved)) {
       return isBlank(defaultValue) ? "" : JSON.stringify(defaultValue, null, 2);

@@ -14,11 +14,14 @@ Works across multiple proxy instances via DualCache (in-memory + Redis).
 Follows the same pattern as max_iterations_limiter.py.
 """
 
+import logging
 import os
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -81,6 +84,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         else:
             self.increment_script = None
 
+    @with_service_target("session_budgets")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -125,7 +129,8 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
         return None
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("session_budgets")
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         After a successful LLM call, increment the session spend by the response cost.
         """
@@ -206,6 +211,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     def _make_cache_key(self, session_id: str) -> str:
         return f"{{session_budget:{session_id}}}:spend"
 
+    @with_service_target("session_budgets")
     async def _get_current_spend(self, cache_key: str) -> float:
         """Read current accumulated spend for a session."""
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
@@ -215,9 +221,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                     return float(result)
                 return 0.0
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "MaxBudgetPerSessionHandler: Redis GET failed, falling back to in-memory: %s",
-                    str(e),
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "MaxBudgetPerSessionHandler: Redis GET failed, falling back to in-memory",
+                    e,
                 )
 
         result = await self.internal_usage_cache.async_get_cache(
@@ -239,9 +247,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 )
                 return float(result)
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "MaxBudgetPerSessionHandler: Redis INCRBYFLOAT failed, falling back to in-memory: %s",
-                    str(e),
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "MaxBudgetPerSessionHandler: Redis INCRBYFLOAT failed, falling back to in-memory",
+                    e,
                 )
 
         return await self._in_memory_increment_spend(cache_key, amount)
@@ -261,3 +271,6 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             local_only=True,
         )
         return new_value
+
+
+PROXY_MaxBudgetPerSessionHandler: Final = _PROXY_MaxBudgetPerSessionHandler
