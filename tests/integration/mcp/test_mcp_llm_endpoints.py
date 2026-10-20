@@ -566,6 +566,61 @@ def test_server_scoped_gateway_url_exposes_only_that_servers_tools(gateway: Gate
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
 
 
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_proxy_path_url_of_a_served_server_is_listed_and_executed_by_the_gateway(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(gateway, surface) as rig:
+        server_url: Final = f"{str(gateway.client.base_url).rstrip('/')}/mcp/{rig.alias}"
+        response: Final = rig.send(_granted_key(rig), [{**AUTO, "server_url": server_url}])
+        assert response.status_code == 200, response.text
+        requests: Final = rig.upstream_tools()
+        assert len(requests) == 2 and all(rig.tool in names for names in requests), requests
+        peer_calls: Final = tuple(JSON_OBJECT.validate_python(call["body"]) for call in _peer_add_calls(rig.peer))
+        assert [object_value(call["params"])["name"] for call in peer_calls] == ["add"], peer_calls
+        assert rig.final_text(JSON_OBJECT.validate_json(response.content)) == ANSWER, response.text
+
+
+LOOKUP_PARAMETERS: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+CALLER_FUNCTION_TOOLS: Final[Mapping[Surface, Mapping[str, object]]] = {
+    "chat": {"type": "function", "function": {"name": "lookup", "parameters": LOOKUP_PARAMETERS}},
+    "responses": {"type": "function", "name": "lookup", "parameters": LOOKUP_PARAMETERS},
+    "messages": {"name": "lookup", "input_schema": LOOKUP_PARAMETERS},
+}
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_tools_that_do_not_name_the_gateway_reach_the_provider_unchanged_and_never_the_peer(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(gateway, surface) as rig:
+        remote_mcp_tools: Final = [
+            {
+                "type": "mcp",
+                "server_label": "docs",
+                "server_url": "https://mcp.example.com/sse",
+                "require_approval": "never",
+            },
+            {
+                "type": "mcp",
+                "server_label": "repos",
+                "server_url": f"https://mcp.example.com/mcp/unserved{uuid.uuid4().hex[:8]}",
+                "require_approval": "never",
+            },
+        ]
+        response: Final = rig.send(_granted_key(rig), [CALLER_FUNCTION_TOOLS[surface], *remote_mcp_tools])
+        assert response.status_code == 200, response.text
+        bodies: Final = tuple(
+            JSON_OBJECT.validate_json(request.body) for request in rig.wire.drain() if request.method == "POST"
+        )
+        assert len(bodies) == 1, bodies
+        forwarded: Final = bodies[0].get("tools")
+        assert isinstance(forwarded, list) and len(forwarded) == 3, forwarded
+        assert [tool for tool in forwarded if isinstance(tool, dict) and tool.get("type") == "mcp"] == remote_mcp_tools
+        assert "lookup" in json.dumps([tool for tool in forwarded if tool not in remote_mcp_tools]), forwarded
+        assert tool_calls(rig.peer.drain()) == (), "a tool that does not name the gateway reached the peer"
+
+
 def test_streaming_chat_executes_the_tool_once_and_streams_the_follow_up(gateway: Gateway) -> None:
     with _rig(gateway, "chat") as rig:
         key: Final = _granted_key(rig)
