@@ -231,14 +231,14 @@ def fresh_id(old: str) -> str:
     return f"{old[:ID_ORDERED_PREFIX_LENGTH]}{suffix}"
 
 
-def with_ids_replaced(value: JsonValue, fresh: Mapping[str, str]) -> JsonValue:
+def with_id_fields_replaced(value: JsonValue, fresh: Mapping[str, str], key: str = "") -> JsonValue:
     match value:
-        case str():
+        case str() if key == "id" or key.endswith("ID"):
             return fresh.get(value, value)
         case list():
-            return [with_ids_replaced(item, fresh) for item in value]
+            return [with_id_fields_replaced(item, fresh, key) for item in value]
         case dict():
-            return {key: with_ids_replaced(item, fresh) for key, item in value.items()}
+            return {name: with_id_fields_replaced(item, fresh, name) for name, item in value.items()}
         case _:
             return value
 
@@ -264,7 +264,7 @@ def session_copy(exported: str, path: str, workdir: str) -> HarnessSessionCopy |
     return HarnessSessionCopy(
         session_id=fresh[session.info.id],
         path=path,
-        data=json.dumps(filed_under(with_ids_replaced(raw, fresh), workdir)).encode("utf-8"),
+        data=json.dumps(filed_under(with_id_fields_replaced(raw, fresh), workdir)).encode("utf-8"),
         import_command=(OPENCODE_BINARY, "--pure", "import", path),
     )
 

@@ -686,6 +686,27 @@ def test_resume_copy_keeps_the_message_order() -> None:
     assert sorted(copied_ids) == copied_ids
 
 
+def test_resume_copy_keeps_saved_text_that_reads_like_an_id() -> None:
+    tool_part: Final = {
+        "id": SAVED_PARTS[1],
+        "sessionID": SAVED,
+        "messageID": SAVED_USER_MSG,
+        "type": "tool",
+        "state": {"input": {"command": SAVED_REPLY_MSG}, "output": SAVED_USER_MSG},
+    }
+    text_part: Final = {"id": SAVED_PARTS[0], "sessionID": SAVED, "messageID": SAVED_USER_MSG, "type": "text", "text": SAVED}
+    message: Final = {"info": {"id": SAVED_USER_MSG, "sessionID": SAVED}, "parts": [text_part, tool_part]}
+    exported: Final = json.dumps({"info": {"id": SAVED, "directory": "/other"}, "messages": [message]})
+
+    copy: Final = CONFIG.transform_resume_copy(exported, PRIVATE, "/work")
+
+    assert copy is not None
+    text, tool = json.loads(copy.data)["messages"][0]["parts"]
+    assert text["text"] == SAVED != text["sessionID"] == copy.session_id
+    assert (tool["state"]["input"]["command"], tool["state"]["output"]) == (SAVED_REPLY_MSG, SAVED_USER_MSG)
+    assert tool["messageID"] != SAVED_USER_MSG
+
+
 async def test_later_turns_after_a_resume_do_not_export_again() -> None:
     handler, ctx, sandbox = await resumed("/other")
 
