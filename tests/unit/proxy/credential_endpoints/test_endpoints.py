@@ -17,6 +17,7 @@ import litellm
 from litellm.models.credentials import CredentialSource
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.credential_endpoints.endpoints import get_llm_router
 from litellm.proxy.proxy_server import app
 from litellm.types.utils import CredentialItem
@@ -659,6 +660,29 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
 
         assert response.status_code == 403, response.text
 
+    @pytest.mark.parametrize(
+        "auth, expected_status",
+        [(_as_non_admin, 403), (_as_admin, 200)],
+        ids=["non_admin", "proxy_admin"],
+    )
+    def test_only_a_proxy_admin_can_create_a_credential_with_an_oidc_api_key(
+        self, restore_credential_list, auth, expected_status: int
+    ):
+        """The call path reads an oidc/ api_key from the proxy's own filesystem, so it is a server-owned value the
+        same way a federation field is."""
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "mistral-sa",
+                    "credential_values": {"api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"},
+                    "credential_info": {"custom_llm_provider": "mistral"},
+                },
+                auth=auth,
+            )
+
+        assert response.status_code == expected_status, response.text
+        assert repository.create.await_count == (1 if expected_status == 200 else 0)
+
     def test_non_admin_can_create_a_credential_without_wif_fields(self, restore_credential_list):
         with _repository_holding(None) as repository:
             response = _post_credential(
@@ -919,6 +943,32 @@ class TestNonAdminCannotTouchAStoredWifCredential:
 
         assert response.status_code == 403, response.text
         assert "anthropic_keycloak_token_url" in response.text
+        repository.update_by_name.assert_not_awaited()
+
+    def test_non_admin_cannot_repoint_a_stored_credential_whose_encrypted_api_key_is_an_oidc_reference(
+        self, restore_credential_list, monkeypatch
+    ):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-credential-endpoints-test-salt")
+        stored = CredentialItem(
+            credential_name="mistral-sa",
+            credential_values={
+                "api_key": encrypt_value_helper("oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token")
+            },
+            credential_info={"custom_llm_provider": "mistral"},
+        )
+        with _repository_holding(stored) as repository:
+            response = _patch_credential(
+                "mistral-sa",
+                {
+                    "credential_name": "mistral-sa",
+                    "credential_values": {"api_base": "https://attacker.example"},
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "'api_key'" in response.text
         repository.update_by_name.assert_not_awaited()
 
     def test_proxy_admin_can_delete_a_wif_field_off_a_credential(self, restore_credential_list):

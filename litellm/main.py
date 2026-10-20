@@ -135,6 +135,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_model_route,
 )
 from litellm.realtime_api.main import realtime_health_check
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
     CompletionDispatchContext,
@@ -239,6 +240,7 @@ from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
+from .llms.databricks.common_utils import DatabricksBase
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha
 from .llms.gdc.chat.transformation import GDCGeminiConfig
@@ -3361,8 +3363,8 @@ def _complete_oobabooga(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
-    api_base = ctx.api_base
-    api_key = ctx.api_key
+    api_base: Final = DatabricksBase.resolve_api_base(ctx.api_base)
+    api_key: Final = DatabricksBase.resolve_api_key(ctx.api_key)
     client: Final = _dispatch_client_http(ctx)
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3373,20 +3375,6 @@ def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchR
     optional_params: Final = ctx.optional_params
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
-
-    api_base = (
-        api_base  # for databricks we check in get_llm_provider and pass in the api base from there
-        or litellm.api_base
-        or os.getenv("DATABRICKS_API_BASE")
-    )
-
-    # set API KEY
-    api_key = (
-        api_key
-        or litellm.api_key  # for databricks we check in get_llm_provider and pass in the api key from there
-        or litellm.databricks_key
-        or get_secret("DATABRICKS_API_KEY")
-    )
 
     headers = headers or litellm.headers
 
@@ -5447,63 +5435,55 @@ def completion(
 
     control_options: Final = _resolve_control_options(kwargs, model)
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
-    if not skip_mcp_handler and tools:
+    if not skip_mcp_handler and tools and may_name_litellm_mcp_gateway(tools):  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
-        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-            LiteLLM_Proxy_MCP_Handler,
-        )
-        from litellm.types.llms.openai import ToolParam
 
-        # Check if MCP tools are present (following responses pattern)
-        # Cast tools to Optional[Iterable[ToolParam]] for type checking
-        tools_for_mcp: Final = cast(Iterable[ToolParam] | None, tools)
-        if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools_for_mcp):
-            return acompletion_with_mcp(  # pyright: ignore[reportReturnType]  # MCP path returns a coroutine that acompletion() awaits; completion()'s sync return type omits it
-                model=model,
-                messages=messages,
-                functions=functions,
-                function_call=function_call,
-                timeout=timeout,
-                temperature=temperature,
-                top_p=top_p,
-                n=n,
-                stream=stream,
-                stream_options=stream_options,
-                stop=stop,
-                max_tokens=max_tokens,
-                max_completion_tokens=max_completion_tokens,
-                modalities=modalities,
-                prediction=prediction,
-                audio=audio,
-                presence_penalty=presence_penalty,
-                frequency_penalty=frequency_penalty,
-                logit_bias=logit_bias,
-                user=user,
-                response_format=response_format,
-                seed=seed,
-                tools=tools,
-                tool_choice=tool_choice,
-                parallel_tool_calls=parallel_tool_calls,
-                logprobs=logprobs,
-                top_logprobs=top_logprobs,
-                deployment_id=deployment_id,
-                reasoning_effort=reasoning_effort,
-                verbosity=verbosity,
-                safety_identifier=safety_identifier,
-                service_tier=service_tier,
-                store=store,
-                prompt_cache_key=prompt_cache_key,
-                base_url=base_url,
-                api_version=api_version,
-                api_key=api_key,
-                model_list=model_list,
-                extra_headers=extra_headers,
-                thinking=thinking,
-                web_search_options=web_search_options,
-                shared_session=shared_session,
-                enable_json_schema_validation=enable_json_schema_validation,
-                **kwargs,
-            )
+        return acompletion_with_mcp(  # pyright: ignore[reportReturnType]  # MCP path returns a coroutine that acompletion() awaits; completion()'s sync return type omits it
+            model=model,
+            messages=messages,
+            functions=functions,
+            function_call=function_call,
+            timeout=timeout,
+            temperature=temperature,
+            top_p=top_p,
+            n=n,
+            stream=stream,
+            stream_options=stream_options,
+            stop=stop,
+            max_tokens=max_tokens,
+            max_completion_tokens=max_completion_tokens,
+            modalities=modalities,
+            prediction=prediction,
+            audio=audio,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logit_bias=logit_bias,
+            user=user,
+            response_format=response_format,
+            seed=seed,
+            tools=tools,
+            tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            deployment_id=deployment_id,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
+            safety_identifier=safety_identifier,
+            service_tier=service_tier,
+            store=store,
+            prompt_cache_key=prompt_cache_key,
+            base_url=base_url,
+            api_version=api_version,
+            api_key=api_key,
+            model_list=model_list,
+            extra_headers=extra_headers,
+            thinking=thinking,
+            web_search_options=web_search_options,
+            shared_session=shared_session,
+            enable_json_schema_validation=enable_json_schema_validation,
+            **kwargs,
+        )
     api_base = kwargs.get("api_base", None)
     mock_response: Final[MOCK_RESPONSE_TYPE | None] = kwargs.get("mock_response", None)
     mock_tool_calls: Final = kwargs.get("mock_tool_calls", None)
@@ -6832,7 +6812,7 @@ def embedding(
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
 
             # set API KEY
-            api_key = api_key or litellm.api_key or litellm.databricks_key or get_secret("DATABRICKS_API_KEY")
+            api_key = DatabricksBase.resolve_api_key(api_key)
 
             ## EMBEDDING CALL
             response = databricks_embedding.embedding(
@@ -8513,14 +8493,8 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
             api_base=api_base_hint,
         )
 
-        # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
-        if asyncio.iscoroutine(init_response):
-            response = await init_response
-        else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
-        return response
+        return await init_response if asyncio.iscoroutine(init_response) else init_response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(

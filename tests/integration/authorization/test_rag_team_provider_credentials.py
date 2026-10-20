@@ -89,7 +89,7 @@ AWS_AMBIENT_CREDENTIALS: Final = (
     "AWS_WEB_IDENTITY_TOKEN_FILE",
 )
 
-pytestmark: Final = pytest.mark.timeout(OWNED_PROXY_CELL_SECONDS)
+pytestmark: Final = [pytest.mark.timeout(OWNED_PROXY_CELL_SECONDS), pytest.mark.shares_worker_state]
 
 Signature = tuple[str, str, str, str | None]
 

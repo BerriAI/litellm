@@ -9,16 +9,21 @@ ARN unified_object_id) batches with no managed unified id.
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import copy
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import TYPE_CHECKING, Final
+from queue import SimpleQueue
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 from fastapi import HTTPException
 
+from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
@@ -1664,10 +1669,9 @@ class TestCheckBatchCost:
             model_name="gpt-5-batch",
         )
         assert mock_hook.store_batch_output_file.await_count == 2
-        assert {
-            call.kwargs["model_name"]
-            for call in mock_hook.store_batch_output_file.await_args_list
-        } == {"gpt-5-batch"}
+        assert {call.kwargs["model_name"] for call in mock_hook.store_batch_output_file.await_args_list} == {
+            "gpt-5-batch"
+        }
         stored = {
             c.kwargs["provider_file_id"]: c.kwargs["unified_file_id"]
             for c in mock_hook.store_batch_output_file.call_args_list
@@ -2526,9 +2530,7 @@ class TestBatchCostAttribution:
     async def test_raw_cli_session_token_on_a_legacy_batch_row_is_not_treated_as_the_alias(self):
         instance = self._instance(key_row=None)
 
-        metadata = await instance.batch_metadata(
-            self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1"
-        )
+        metadata = await instance.batch_metadata(self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1")
 
         assert metadata.get("user_api_key_alias") is None
 
@@ -3818,9 +3820,7 @@ class TestBatchLineItemsFromThePoller:
         assert len(logger.payloads) == stored
 
     @pytest.mark.asyncio
-    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_after_it_is_retired(
-        self, monkeypatch
-    ):
+    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_after_it_is_retired(self, monkeypatch):
         import litellm
 
         journal: list = []
@@ -4315,3 +4315,166 @@ def test_a_404_without_an_output_identity_remains_retryable(output_file_id: str 
 
     error: Final = NotFoundError(message="Output file not found", model="test", llm_provider="openai")
     assert CheckBatchCost._is_output_file_gone_at_provider(error, output_file_id) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind", ["sync", "async", "custom", "overlapping", "general", "mixed", "sync_only", "executor_shutdown"]
+)
+@pytest.mark.parametrize("initialized", [False, True])
+@pytest.mark.parametrize("claimed", [False, True])
+async def test_batch_cost_reaches_configured_success_callbacks(
+    kind: Literal["sync", "async", "custom", "overlapping", "general", "mixed", "sync_only", "executor_shutdown"],
+    initialized: bool,
+    claimed: bool,
+) -> None:
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.types.utils import LiteLLMBatch
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    events: Final[SimpleQueue[tuple[str, object, int, int]]] = SimpleQueue()
+
+    def record(
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        recipient: str = "function",
+    ) -> None:
+        if kwargs.get("call_type") != "aretrieve_batch":
+            return
+        assert isinstance(response_obj, LiteLLMBatch)
+        assert response_obj.usage is not None
+        events.put(
+            (recipient, kwargs["response_cost"], response_obj.usage.prompt_tokens, response_obj.usage.completion_tokens)
+        )
+
+    async def async_record(
+        kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        record(kwargs, response_obj, start_time, end_time)
+        if kind == "executor_shutdown" and kwargs.get("call_type") == "aretrieve_batch":
+            executor.shutdown(wait=True)
+
+    class BatchRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            record(kwargs, response_obj, start_time, end_time, "custom")
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            record(kwargs, response_obj, start_time, end_time, "custom")
+
+    class SyncRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            record(kwargs, response_obj, start_time, end_time, "custom")
+
+    callback: Final = SyncRecorder() if kind == "sync_only" else BatchRecorder()
+    match kind:
+        case "sync":
+            litellm.logging_callback_manager.add_litellm_success_callback(record)
+        case "async":
+            litellm.logging_callback_manager.add_litellm_success_callback(async_record)
+        case "executor_shutdown":
+            litellm.logging_callback_manager.add_litellm_success_callback(async_record)
+            litellm.logging_callback_manager.add_litellm_success_callback(record)
+        case "custom" | "overlapping" | "sync_only":
+            litellm.logging_callback_manager.add_litellm_success_callback(callback)
+            if kind == "overlapping":
+                litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+        case "general":
+            litellm.logging_callback_manager.add_litellm_callback(callback)
+        case "mixed":
+            litellm.logging_callback_manager.add_litellm_success_callback(callback)
+            litellm.logging_callback_manager.add_litellm_success_callback(record)
+
+    model: Final = "gpt-6.1-sol"
+    credentials: Final = {
+        "api_key": "synthetic-key",
+        "api_base": "https://batch.invalid/v1",
+        "custom_llm_provider": "openai",
+    }
+    deployment: Final = SimpleNamespace(
+        litellm_params=LiteLLM_Params(model=f"openai/{model}", custom_llm_provider="openai", api_base=None),
+        model_name="batch-group",
+    )
+    prisma: Final = MagicMock()
+    prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=int(claimed))
+    checker: Final = CheckBatchCost(
+        proxy_logging_obj=SimpleNamespace(get_proxy_hook=lambda _: None),
+        prisma_client=prisma,
+        llm_router=SimpleNamespace(
+            get_deployment_credentials_with_provider=lambda _: credentials,
+            get_deployment=lambda **_: deployment,
+        ),
+    )
+    job: Final = SimpleNamespace(
+        id="job",
+        unified_object_id="batch-record",
+        status="in_progress",
+        file_object={},
+        created_by=None,
+        team_id=None,
+        api_key=None,
+        org_id=None,
+        request_tags=None,
+    )
+    response: Final = LiteLLMBatch(
+        id="batch-record",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="input",
+        object="batch",
+        status="completed",
+        output_file_id="output",
+    )
+    output: Final = json.dumps(
+        {
+            "id": "line",
+            "response": {
+                "status_code": 200,
+                "body": {
+                    "model": model,
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                },
+            },
+        }
+    ).encode()
+    with (
+        ThreadPoolExecutor(max_workers=1) as executor,
+        patch("litellm.litellm_core_utils.litellm_logging.executor", executor),
+        respx.mock(assert_all_called=True) as transport,
+    ):
+        transport.get("https://batch.invalid/v1/files/output/content").respond(200, content=output)
+        if initialized:
+            await litellm.afile_content(file_id="output", **credentials)
+            await GLOBAL_LOGGING_WORKER.flush()
+        result: Final = await checker._track_completed_batch_cost(job, response, "deployment", "batch-record", None)
+        assert result == ((model, "openai") if claimed else None)
+        if kind == "executor_shutdown" and claimed:
+            prisma.db.litellm_managedobjecttable.update_many.assert_awaited_once()
+        await GLOBAL_LOGGING_WORKER.flush()
+    recipients: Final = (
+        ("custom", "function")
+        if kind == "mixed"
+        else ("custom",)
+        if kind in ("custom", "overlapping", "general", "sync_only")
+        else ("function",)
+    )
+    expected: Final = recipients if claimed else ()
+    assert events.qsize() == len(expected)
+    received: Final = tuple(events.get_nowait() for _ in expected)
+    assert tuple(sorted(event[0] for event in received)) == expected
+    for _, cost, prompt_tokens, completion_tokens in received:
+        assert isinstance(cost, float) and cost > 0
+        assert (prompt_tokens, completion_tokens) == (10, 5)

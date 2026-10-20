@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
@@ -134,6 +134,77 @@ async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_
         metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
         assert metadata["standard_logging_guardrail_information"] == guardrail_info
         assert metadata["original_key"] == "original_value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_buckets", "expected_model_group"),
+    [
+        ({"metadata": {}, "litellm_metadata": {"model_group": "ws-budget-sock"}}, "ws-budget-sock"),
+        ({"metadata": {"model_group": "caller-group"}, "litellm_metadata": {"model_group": "routed"}}, "caller-group"),
+        ({"metadata": {}, "litellm_metadata": {}}, ""),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_routed_model_group_on_the_failure_row(
+    metadata_buckets: dict[str, dict[str, str]], expected_model_group: str
+):
+    request_data: Final = {
+        "model": "ws-budget-sock",
+        "input": "Reply with exactly the word two",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data=request_data,
+        original_exception=litellm.RateLimitError(message="crossed budget", llm_provider="", model="ws-budget-sock"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=spend_writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert row["model_group"] == expected_model_group
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_buckets", "expected_tags"),
+    [
+        ({"metadata": {}, "litellm_metadata": {"tags": ["ws-tag"]}}, ["ws-tag"]),
+        ({"metadata": {"tags": ["caller-tag"]}, "litellm_metadata": {"tags": ["routed-tag"]}}, ["caller-tag"]),
+        ({"metadata": {}, "litellm_metadata": {"tags": "not-a-list"}}, []),
+        ({"metadata": {}, "litellm_metadata": {"tags": ["ws-tag", 1, {"a": 1}]}}, []),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_routed_tags_on_the_failure_row(
+    metadata_buckets: dict[str, dict[str, object]], expected_tags: list[str]
+):
+    request_data: Final = {
+        "model": "ws-budget-sock",
+        "input": "Reply with exactly the word two",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data=request_data,
+        original_exception=litellm.RateLimitError(message="crossed budget", llm_provider="", model="ws-budget-sock"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=spend_writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert json.loads(row["request_tags"]) == expected_tags
 
 
 @pytest.mark.asyncio
@@ -1103,6 +1174,38 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 
         # failed_tracking_alert should NOT be called — this is not an error
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+class _FailedTrackingAlerts:
+    def __init__(self) -> None:
+        self.messages: tuple[str, ...] = ()
+
+    async def failed_tracking_alert(self, error_message: str, failing_model: str) -> None:
+        self.messages = (*self.messages, error_message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "alerted"), [("_aresponses_websocket", True), ("_arealtime", False)])
+async def test_track_cost_callback_alerts_on_a_websocket_turn_with_no_logging_object(call_type: str, alerted: bool):
+    kwargs: Final = {
+        "call_type": call_type,
+        "model": "gpt-5-mini",
+        "litellm_call_id": "turn-call-id",
+        "litellm_params": {},
+        "stream": False,
+    }
+    alerts: Final = _FailedTrackingAlerts()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", alerts):
+        await ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        await asyncio.sleep(0)
+
+    assert any(f"call_type: {call_type}" in message for message in alerts.messages) is alerted
 
 
 @pytest.mark.asyncio

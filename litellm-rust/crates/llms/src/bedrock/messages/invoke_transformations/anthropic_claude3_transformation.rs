@@ -16,7 +16,7 @@ use litellm_auth_aws::{
     resolve_bedrock_region,
 };
 use litellm_llms_types::formats::messages::{
-    MessagesRequest,
+    MessagesOptionalParams, MessagesRequest,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
 };
 use litellm_llms_types::providers::bedrock::{
@@ -146,6 +146,7 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
+        _optional_params: &MessagesOptionalParams,
         litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -618,6 +619,7 @@ mod tests {
                 Vec::new(),
                 None,
                 "anthropic.claude-3",
+                &MessagesOptionalParams::default(),
                 &litellm_params,
                 &|_| None,
             )
@@ -658,6 +660,7 @@ mod tests {
                 vec![("authorization".into(), "Bearer forwarded".into())],
                 api_key,
                 "anthropic.claude-3",
+                &MessagesOptionalParams::default(),
                 &LitellmParams::default(),
                 &env,
             )

@@ -13,6 +13,7 @@ from typing import (
     TypeAlias,
     get_args,
 )
+from urllib.parse import urlsplit
 
 import httpx
 from openai._models import BaseModel as OpenAIObject
@@ -39,6 +40,7 @@ from pydantic import (
     ConfigDict,
     Field,
     FieldSerializationInfo,
+    GetCoreSchemaHandler,
     JsonValue,
     PrivateAttr,
     SkipValidation,
@@ -46,6 +48,7 @@ from pydantic import (
     field_validator,
 )
 from pydantic.main import IncEx
+from pydantic_core import core_schema
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
@@ -3242,6 +3245,13 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
+class StandardLoggingKubernetesPodRouting(TypedDict):
+    service_host: ReadOnly[str]
+    pod_ip: ReadOnly[str]
+    pod_count: ReadOnly[int]
+    selection: ReadOnly[Literal["round_robin", "session_affinity", "session_affinity_retry"]]
+
+
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
 # logging off. Every other field aggregates the prompt without reproducing it and is kept,
 # so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
@@ -3308,6 +3318,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
+    kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     applied_guardrails: list[str] | None
     usage_object: dict | None
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
@@ -3378,6 +3389,11 @@ class StandardLoggingZeroCostDiagnostic(TypedDict):
     missing_pricing_keys: ReadOnly[tuple[str, ...]]
 
 
+class CooldownDeploymentInfo(TypedDict):
+    model_id: ReadOnly[str]
+    api_base: ReadOnly[str | None]
+
+
 class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_code: str | None
     error_class: str | None
@@ -3406,6 +3422,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_budget_entity_id: str | None
     error_budget_limit: float | None
     error_budget_spend: float | None
+    error_cooldown_deployments: ReadOnly[tuple[CooldownDeploymentInfo, ...] | None]
     normalized_error: ReadOnly[str | None]
 
 
@@ -4172,6 +4189,109 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_scope",
 )
 github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
+API_KEY_SECRET_REFERENCE_REJECTION: Final = (
+    "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
+    "admin configures can carry."
+)
+
+
+API_KEY_UPSTREAM_PARAMS: Final = (
+    "api_base",
+    "base_url",
+    "aws_bedrock_runtime_endpoint",
+    "s3_endpoint_url",
+    "sagemaker_base_url",
+    "deployment_url",
+)
+
+
+_DEFAULT_PORTS: Final = MappingProxyType({"http": 80, "ws": 80, "https": 443, "wss": 443})
+
+
+def _origin(url: str) -> str:
+    text: Final = url.strip()
+    try:
+        parts: Final = urlsplit(text)
+        explicit_port: Final = parts.port
+    except ValueError:
+        return text.rstrip("/").lower()
+    host: Final = (parts.hostname or "").rstrip(".")
+    if not host:
+        return text.rstrip("/").lower()
+    scheme: Final = parts.scheme.lower()
+    port: Final = explicit_port if explicit_port is not None else _DEFAULT_PORTS.get(scheme)
+    return f"{scheme}://{host}" if port is None else f"{scheme}://{host}:{port}"
+
+
+_URL_IN_MODEL: Final = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _model_url(model: object) -> str | None:
+    found: Final = _URL_IN_MODEL.search(model) if isinstance(model, str) else None
+    return None if found is None else found.group(0)
+
+
+def upstream_origins(params: Mapping[str, object]) -> frozenset[str]:
+    values: Final = (*(params.get(key) for key in API_KEY_UPSTREAM_PARAMS), _model_url(params.get("model")))
+    return frozenset(_origin(value) for value in values if isinstance(value, str) and value)
+
+
+class AdminApiKeySecretReference(str):
+    """An ``oidc/`` api_key reference read from a source only a proxy admin writes: a proxy-level deployment or a
+    stored credential. The call path swaps only this type for the secret it points to, so the same text arriving
+    in a request, a prompt template, or a row a non-admin wrote is sent as written, and the secret goes only to the
+    origins the admin configured beside the reference."""
+
+    def __new__(cls, reference: str, origins: frozenset[str]) -> "AdminApiKeySecretReference":
+        return super().__new__(cls, reference)
+
+    def __init__(self, reference: str, origins: frozenset[str]) -> None:
+        super().__init__()
+        self.origins: Final = origins
+
+    def __reduce__(self) -> tuple[type["AdminApiKeySecretReference"], tuple[str, frozenset[str]]]:
+        return type(self), (str(self), self.origins)
+
+    def may_reach(self, upstream: Mapping[str, object]) -> bool:
+        destinations: Final = upstream_origins(upstream)
+        return destinations <= self.origins if destinations else not self.origins
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.is_instance_schema(cls, serialization=core_schema.to_string_ser_schema())
+
+
+class CredentialApiKeySecretReference(AdminApiKeySecretReference):
+    """An admin ``oidc/`` api_key reference stored in a named credential, so its origins are the credential's own."""
+
+
+def _unmarked_api_key_secret_reference(params: Mapping[str, object]) -> str | None:
+    api_key: Final = params.get("api_key")
+    if (
+        not isinstance(api_key, str)
+        or isinstance(api_key, AdminApiKeySecretReference)
+        or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX)
+    ):
+        return None
+    return api_key
+
+
+def admin_api_key_secret_reference(params: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(params)
+    if api_key is None:
+        return params
+    return {**params, "api_key": AdminApiKeySecretReference(api_key, upstream_origins(params))}
+
+
+def credential_api_key_secret_reference(credential_values: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(credential_values)
+    if api_key is None:
+        return credential_values
+    reference: Final = CredentialApiKeySecretReference(api_key, upstream_origins(credential_values))
+    return {**credential_values, "api_key": reference}
+
+
 server_owned_wif_litellm_params: Final = (
     anthropic_wif_litellm_params
     + openai_wif_litellm_params
@@ -4455,6 +4575,7 @@ class SearchProviders(str, Enum):
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
+    DEEPSEEK = "deepseek"
 
 
 # Create a set of all search provider values for quick lookup
@@ -4538,6 +4659,7 @@ class HttpHandlerRequestFields(TypedDict, total=False):
 class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
     extra_headers: dict
+    native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
 
 
 class SelectTokenizerResponse(TypedDict):
