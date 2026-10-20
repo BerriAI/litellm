@@ -117,7 +117,8 @@ from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
-    redact_streaming_responses_for_custom_logger,
+    redacted_model_call_details_for_custom_logger,
+    redacted_response_obj_for_custom_logger,
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.served_output_texts import (
@@ -337,6 +338,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
@@ -995,6 +997,21 @@ class Logging(LiteLLMLoggingBaseClass):
             if model_id is not None:
                 return model_id
         return None
+
+    def get_router_pricing_provider(self) -> str | None:
+        """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""
+        litellm_params: Final = cast(  # cast-ok: callback metadata is caller-provided
+            Mapping[str, object] | None, getattr(self, "litellm_params", None)
+        )
+        if not litellm_params:
+            return None
+        candidates: Final = (
+            _METADATA_MAPPING.validate_python(
+                _METADATA_MAPPING.validate_python(litellm_params.get(key) or {}).get("model_info") or {}
+            ).get("pricing_provider")
+            for key in ("litellm_metadata", "metadata")
+        )
+        return next((provider for provider in candidates if isinstance(provider, str) and provider), None)
 
     def _routed_deployment_model(self) -> str | None:
         litellm_params: Final = self._model_call_details_view.get("litellm_params")
@@ -1940,6 +1957,8 @@ class Logging(LiteLLMLoggingBaseClass):
         used for consistent cost calculation across response headers + logging integrations.
         """
 
+        self.model_call_details.pop("response_cost_failure_debug_information", None)
+
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
 
@@ -1989,7 +2008,7 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        custom_pricing: Final = self._custom_pricing_for(priced_result)
+        custom_pricing: Final = self.custom_pricing_for(priced_result)
 
         prompt: Final = self._prompt_for_cost_calculation()
 
@@ -2019,6 +2038,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
+                "pricing_provider": self.get_router_pricing_provider(),
                 "litellm_logging_obj": self,
                 "data_residency": (
                     self.litellm_params.get("data_residency")
@@ -2100,15 +2120,17 @@ class Logging(LiteLLMLoggingBaseClass):
         previous_cost_breakdown: Final = self.cost_breakdown
         previous_billed_token_rates: Final = self.billed_token_rates
         debug_key: Final = "response_cost_failure_debug_information"
-        had_failure_debug_info: Final = debug_key in self.model_call_details
+        previous_failure_debug_info: Final = self.model_call_details.get(debug_key)
         try:
             cost: Final = self.response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
             return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
         finally:
             self.cost_breakdown = previous_cost_breakdown
             self.billed_token_rates = previous_billed_token_rates
-            if not had_failure_debug_info:
+            if previous_failure_debug_info is None:
                 self.model_call_details.pop(debug_key, None)
+            else:
+                self.model_call_details[debug_key] = previous_failure_debug_info
 
     def _record_zero_cost_diagnostic(
         self,
@@ -2161,8 +2183,8 @@ class Logging(LiteLLMLoggingBaseClass):
         pricing: Final = pricing_entry_for_cost_calc(
             model=model,
             completion_response=result,
-            custom_llm_provider=custom_llm_provider,
-            custom_pricing=self._custom_pricing_for(result),
+            custom_llm_provider=self.get_router_pricing_provider() or custom_llm_provider,
+            custom_pricing=self.custom_pricing_for(result),
             base_model=get_base_model_from_metadata(model_call_details=self.model_call_details),
             router_model_id=router_model_id or self.get_router_model_id(),
             region_name=_resolve_mantle_region_for_cost(
@@ -2187,7 +2209,7 @@ class Logging(LiteLLMLoggingBaseClass):
             usage=usage,
         )
 
-    def _custom_pricing_for(self, result: object) -> bool:
+    def custom_pricing_for(self, result: object) -> bool:
         litellm_params: Final = getattr(self, "litellm_params", None)
         result_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         additional_headers: Final = (
@@ -3492,8 +3514,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
-                                kwargs=call_details,
-                                response_obj=result,
+                                kwargs=redacted_model_call_details_for_custom_logger(
+                                    model_call_details=call_details, custom_logger=callback
+                                ),
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -3503,8 +3527,13 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = call_details_view["complete_response"]
 
                             callback.log_success_event(
-                                kwargs=callback.redact_standard_logging_payload_from_model_call_details(call_details),
-                                response_obj=result,
+                                kwargs=redacted_model_call_details_for_custom_logger(
+                                    model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                        call_details
+                                    ),
+                                    custom_logger=callback,
+                                ),
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -3847,7 +3876,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
                         model_call_details=model_call_details
                     )
-                    model_call_details = redact_streaming_responses_for_custom_logger(
+                    model_call_details = redacted_model_call_details_for_custom_logger(
                         model_call_details=model_call_details, custom_logger=callback
                     )
                     ##################################
@@ -3858,7 +3887,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             kwargs=model_call_details,
                             response_obj=model_call_details["async_complete_streaming_response"]
                             if self.stream
-                            else result,
+                            else redacted_response_obj_for_custom_logger(result, callback),
                             start_time=start_time,
                             end_time=end_time,
                             guardrail_snapshot=self.shadow_eval_request_snapshot,
@@ -3874,14 +3903,14 @@ class Logging(LiteLLMLoggingBaseClass):
                         else:
                             await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
                                 kwargs=model_call_details,
-                                response_obj=result,
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                     else:
                         await callback.async_log_success_event(
                             kwargs=model_call_details,
-                            response_obj=result,
+                            response_obj=redacted_response_obj_for_custom_logger(result, callback),
                             start_time=start_time,
                             end_time=end_time,
                         )
@@ -7204,7 +7233,7 @@ def get_standard_logging_object_payload(
         # Fall back to the actual deployment model set by the router in metadata.
         if base_model is None:
             base_model = metadata.get("deployment")
-        custom_pricing: Final = use_custom_pricing_for_model(litellm_params=litellm_params)
+        custom_pricing: Final = logging_obj.custom_pricing_for(init_response_obj)
         raw_response_cost: Final = kwargs.get("response_cost")
         llm_response_cost: Final[float] = raw_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))

@@ -1085,6 +1085,30 @@ def test_update_responses_input_with_model_file_ids_decodes_xlitellm_encoded_id(
     assert updated[0]["content"][1]["file_id"] == raw_id
 
 
+
+@pytest.mark.parametrize("unusable_file_id", [[1], {"a": 1}])
+def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_as_sent(unusable_file_id):
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_input_with_model_file_ids,
+    )
+
+    encoded_id = _xlitellm_encoded("file-ExTuCawUqxEMjVFK6xwR9B", "gpt-5.1")
+    input_items = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_file", "file_id": encoded_id},
+                {"type": "input_file", "file_id": unusable_file_id},
+            ],
+        }
+    ]
+
+    updated = update_responses_input_with_model_file_ids(
+        input_items, "model-A", {encoded_id: {"model-A": "file-on-a"}}
+    )
+
+    assert [item["file_id"] for item in updated[0]["content"]] == ["file-on-a", unusable_file_id]
+
 def test_update_messages_xlitellm_decode_does_not_override_mapping():
     """If the call-site already resolved a provider id via the mapping, that
     wins. The new decode fallback runs only when no mapping match."""

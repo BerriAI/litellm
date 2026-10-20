@@ -7,7 +7,7 @@ import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1217,8 +1217,6 @@ class TestCheckResponsesCost:
         """The poll's billing event is the one billed event of a background job, so its spend row must name
         the key, team, org, user, and tags of the create it settles, read off the managed object row,
         never the poller itself."""
-        from types import SimpleNamespace
-
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_attributed"
         mock_job.id = "job-attributed"
@@ -1495,6 +1493,122 @@ async def test_the_billing_event_carries_the_creators_end_user():
 
 
 @pytest.mark.asyncio
+async def test_the_billing_event_carries_the_creating_keys_project_and_every_creator_model_budget():
+    key_budget: Final = {"gpt-5": {"max_budget": 1.0, "budget_duration": "1d"}}
+    team_budget: Final = {"gpt-5": {"max_budget": 2.0, "budget_duration": "7d"}}
+    user_budget: Final = {"gpt-5": {"max_budget": 3.0, "budget_duration": "30d"}}
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(
+            _StoredResponse(
+                id="job-budgets",
+                unified_object_id="resp_budgets",
+                status="queued",
+                created_by="alice",
+                api_key="hash-alice",
+                team_id="team-alpha",
+            ),
+        )
+    )
+    billed_logger: Final = _RecordingBilledLogger()
+    poller: Final = _poller_over(table, billed_logger)
+    poller.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            key_alias=None,
+            organization_id=None,
+            spend=0.0,
+            max_budget=None,
+            project_id="project-1",
+            litellm_project_table=SimpleNamespace(project_alias="project-one"),
+            model_max_budget=key_budget,
+        )
+    )
+    poller.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            team_alias=None, organization_id=None, spend=0.0, max_budget=None, model_max_budget=team_budget
+        )
+    )
+    poller.prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            user_email=None, user_alias=None, spend=0.0, max_budget=None, model_max_budget=user_budget
+        )
+    )
+
+    await poller.bill_if_finished(response_id="resp_budgets", response=_terminal_response())
+
+    (billed,) = billed_logger.billed
+    assert {
+        field: billed.metadata.get(field)
+        for field in (
+            "user_api_key_project_id",
+            "user_api_key_project_alias",
+            "user_api_key_model_max_budget",
+            "user_api_key_team_model_max_budget",
+            "user_api_key_user_model_max_budget",
+        )
+    } == {
+        "user_api_key_project_id": "project-1",
+        "user_api_key_project_alias": "project-one",
+        "user_api_key_model_max_budget": key_budget,
+        "user_api_key_team_model_max_budget": team_budget,
+        "user_api_key_user_model_max_budget": user_budget,
+    }
+
+
+_TIER_MODEL_BUDGET: Final = {"gpt-5": {"max_budget": 4.0, "budget_duration": "1d"}}
+_KEY_MODEL_BUDGET: Final = {"gpt-5": {"max_budget": 1.0, "budget_duration": "1d"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_max_budget", "key_model_max_budget", "billed_max_budget", "billed_model_max_budget"),
+    [
+        (None, {}, 5.0, _TIER_MODEL_BUDGET),
+        (None, None, 5.0, _TIER_MODEL_BUDGET),
+        (2.0, _KEY_MODEL_BUDGET, 2.0, _KEY_MODEL_BUDGET),
+    ],
+    ids=["key_with_an_empty_budget_map", "key_with_no_budget_map", "key_with_its_own_budgets"],
+)
+async def test_the_billing_event_takes_the_keys_budget_tier_only_where_the_key_sets_no_budget_of_its_own(
+    key_max_budget: float | None,
+    key_model_max_budget: dict[str, object] | None,
+    billed_max_budget: float,
+    billed_model_max_budget: dict[str, object],
+):
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(
+            _StoredResponse(
+                id="job-tier",
+                unified_object_id="resp_tier",
+                status="queued",
+                created_by="key:hash-tier",
+                api_key="hash-tier",
+            ),
+        )
+    )
+    billed_logger: Final = _RecordingBilledLogger()
+    poller: Final = _poller_over(table, billed_logger)
+    poller.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            key_alias=None,
+            organization_id=None,
+            spend=0.0,
+            max_budget=key_max_budget,
+            project_id=None,
+            model_max_budget=key_model_max_budget,
+            litellm_budget_table=SimpleNamespace(max_budget=5.0, model_max_budget=_TIER_MODEL_BUDGET),
+        )
+    )
+
+    await poller.bill_if_finished(response_id="resp_tier", response=_terminal_response())
+
+    (billed,) = billed_logger.billed
+    assert (billed.metadata.get("user_api_key_max_budget"), billed.metadata.get("user_api_key_model_max_budget")) == (
+        billed_max_budget,
+        billed_model_max_budget,
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("created_by", "billed_user_id"),
     [("alice", "alice"), ("key:hashed-token", None)],
@@ -1599,6 +1713,10 @@ async def _bill_through_a_priced_deployment(
     read: ResponsesAPIResponse,
     litellm_params: Mapping[str, object] = _PRICED_LITELLM_PARAMS,
     model_info: Mapping[str, object] = MappingProxyType({}),
+    model_name: str = "priced-gpt",
+    requested_model: str = "priced-gpt",
+    model_group_alias: Mapping[str, str] = MappingProxyType({}),
+    team_id: str | None = None,
 ) -> _PricedBilling:
     import litellm
     from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
@@ -1610,7 +1728,16 @@ async def _bill_through_a_priced_deployment(
         custom_llm_provider="openai", model_id="deployment-custom", response_id="resp_upstream"
     )
     table: Final = _InMemoryManagedObjectTable(
-        rows=(_StoredResponse(id="job-priced", unified_object_id=response_id, status="queued", api_key="hash-alice"),)
+        rows=(
+            _StoredResponse(
+                id="job-priced",
+                unified_object_id=response_id,
+                status="queued",
+                api_key="hash-alice",
+                file_object={"model": requested_model},
+                team_id=team_id,
+            ),
+        )
     )
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_managedobjecttable = table
@@ -1620,11 +1747,12 @@ async def _bill_through_a_priced_deployment(
     router: Final = litellm.Router(
         model_list=[
             {
-                "model_name": "priced-gpt",
+                "model_name": model_name,
                 "litellm_params": dict(litellm_params),
                 "model_info": {"id": "deployment-custom", **model_info},
             }
-        ]
+        ],
+        model_group_alias=dict(model_group_alias),
     )
     charge: Final = await CheckResponsesCost(
         proxy_logging_obj=MagicMock(), prisma_client=prisma_client, llm_router=router
@@ -1655,6 +1783,75 @@ async def test_the_billing_event_prices_the_fetched_usage_at_the_deployment_rate
     assert payload["metadata"]["user_api_key_hash"] == "hash-alice"
     assert read.hidden_params == {"response_cost": 0.0}
     assert billing.table.statuses == {"job-priced": "completed"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model", "requested_model", "model_group_alias", "model_info", "model_group"),
+    [
+        ("openai/*", "openai/*", "openai/gpt-5.6", {}, {}, "openai/gpt-5.6"),
+        ("priced-gpt", "openai/gpt-5.6", "priced-alias", {"priced-alias": "priced-gpt"}, {}, "priced-alias"),
+        ("priced-gpt", "openai/gpt-5.6", "gpt-5.6-2026-01-01", {}, {}, "priced-gpt"),
+        (
+            "model_name_team-1_abc",
+            "openai/gpt-5.6",
+            "team-gpt",
+            {},
+            {"team_id": "team-1", "team_public_model_name": "team-gpt"},
+            "team-gpt",
+        ),
+        (
+            "model_name_team-1_wild",
+            "openai/*",
+            "openai/gpt-5.6",
+            {},
+            {"team_id": "team-1", "team_public_model_name": "openai/*"},
+            "openai/gpt-5.6",
+        ),
+        (
+            "model_name_team-2_abc",
+            "openai/gpt-5.6",
+            "team-gpt",
+            {},
+            {"team_id": "team-2", "team_public_model_name": "team-gpt"},
+            "model_name_team-2_abc",
+        ),
+    ],
+    ids=[
+        "wildcard_route",
+        "model_group_alias",
+        "fallback_kept_the_provider_model_name",
+        "team_model",
+        "team_wildcard",
+        "another_teams_model",
+    ],
+)
+async def test_the_billing_event_names_the_requested_model_as_its_model_group_only_while_it_routes_to_the_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    model_name: str,
+    deployment_model: str,
+    requested_model: str,
+    model_group_alias: Mapping[str, str],
+    model_info: Mapping[str, object],
+    model_group: str,
+):
+    import litellm
+
+    capture: Final = _spend_capture_logger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+
+    await _bill_through_a_priced_deployment(
+        _terminal_response(),
+        litellm_params={**_PRICED_LITELLM_PARAMS, "model": deployment_model},
+        model_info=model_info,
+        model_name=model_name,
+        requested_model=requested_model,
+        model_group_alias=model_group_alias,
+        team_id="team-1",
+    )
+
+    (payload,) = capture.payloads
+    assert payload["model_group"] == model_group
 
 
 @pytest.mark.asyncio

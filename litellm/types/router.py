@@ -274,6 +274,7 @@ class ModelInfo(MirroredPricingParams):
     created_by: str | None = None
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    pricing_provider: str | None = None  # provider whose cost-map rows price this deployment, else custom_llm_provider
     tier: Literal["free", "paid"] | None = None
 
     """
@@ -322,6 +323,8 @@ class ModelInfo(MirroredPricingParams):
     # (requested model group, selected model + provider, router correlation id)
     # in the spend log row's metadata. Set it on every deployment of the group.
     internal_router_model: bool | None = None
+
+    max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
@@ -411,6 +414,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     aws_external_id: str | None = None
     aws_session_tags: Sequence[AwsSessionTag] | None = None
     aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_control_plane_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
     s3_endpoint_url: str | None = None

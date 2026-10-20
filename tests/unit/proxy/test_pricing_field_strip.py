@@ -57,7 +57,7 @@ class TestStripClientPricingOverrides:
         # The strip set is built from the model so additions are picked up
         # automatically — this test guards against the model and the strip
         # set drifting apart if someone replaces the auto-derivation later.
-        assert _CLIENT_PRICING_CONTROL_FIELDS == frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+        assert _CLIENT_PRICING_CONTROL_FIELDS >= frozenset(CustomPricingLiteLLMParams.model_fields.keys())
         # Sanity: the obvious top-level pricing fields are in the set.
         for field in (
             "input_cost_per_token",
@@ -79,6 +79,22 @@ class TestStripClientPricingOverrides:
         _strip_client_pricing_overrides(data)
         assert data == {
             "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    def test_root_base_model_dropped(self):
+        # ``base_model`` picks the cost-map entry a spend row is priced with
+        # (success rows via the standard logging payload, billed failure rows
+        # via the failure lift), so a caller naming a cheaper model lowers
+        # their own recorded spend.
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "base_model": "gpt-4o-mini",
+        }
+        _strip_client_pricing_overrides(data)
+        assert data == {
+            "model": "gpt-4o",
             "messages": [{"role": "user", "content": "hi"}],
         }
 
@@ -280,6 +296,7 @@ async def test_add_litellm_data_to_request_skips_strip_with_key_opt_in():
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "hi"}],
         "input_cost_per_token": 0.0001,
+        "base_model": "gpt-4o-mini",
         "metadata": {"model_info": {"output_cost_per_token": 0.0002}},
     }
 
@@ -295,6 +312,7 @@ async def test_add_litellm_data_to_request_skips_strip_with_key_opt_in():
 
     assert updated["input_cost_per_token"] == 0.0001
     assert updated["metadata"]["model_info"] == {"output_cost_per_token": 0.0002}
+    assert updated["base_model"] == "gpt-4o-mini"
 
 
 @pytest.mark.asyncio

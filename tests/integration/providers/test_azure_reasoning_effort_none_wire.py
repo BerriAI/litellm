@@ -1,3 +1,4 @@
+import re
 from typing import Final
 
 from integration._support.client import Gateway
@@ -30,7 +31,7 @@ def test_reasoning_effort_none_is_rejected_by_litellm_before_reaching_azure(gate
         )
 
         assert response.status_code == 400, response.text
-        assert "reasoning_effort='none'" in response.text, response.text
+        assert re.search(r"reasoning_effort='?none\b", response.text), response.text
         assert wire.drain() == ()
 
 

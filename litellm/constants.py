@@ -1855,6 +1855,9 @@ SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS: Final = get_env_float(
 SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS", 300.0)
 SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS", 30.0)
 SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = get_env_int("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", 100000)
+SPEND_LOG_SIZE_CHECK_JOB_NAME: Final = "spend_log_size_check"
+SPEND_LOG_SIZE_CHECK_INTERVAL: Final = os.getenv("SPEND_LOG_SIZE_CHECK_INTERVAL", "1d")
+SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES: Final = get_env_int("SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES", 10)
 SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS: Final = get_env_float(
     "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS", 5.0
 )
@@ -1976,6 +1979,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "public_model_groups",
     "public_model_groups_links",
     "cost_discount_config",
+    "apply_search_free_tier",
     "cost_margin_config",
     "block_requests_for_models_without_pricing",
     "budget_exceeded_throttle_percentage",
@@ -2316,6 +2320,7 @@ HARNESS_STDERR_TAIL_LINES: Final = 40
 HARNESS_STREAM_READ_CHUNK_BYTES: Final = 64 * 1024
 HARNESS_EVENT_QUEUE_MAX_SIZE: Final = 1024
 HARNESS_PROCESS_KILL_GRACE_SECONDS: Final = 5.0
+HARNESS_RESUME_COMMAND_TIMEOUT_SECONDS: Final = 30.0
 HARNESS_SNAPSHOT_SKIP_DIRS: Final = frozenset(
     {
         ".git",
