@@ -6,12 +6,16 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.mappers.base import AttributeMap
 from litellm.integrations.otel.mappers.utils import drop_none_pairs
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
 from litellm.integrations.otel.plumbing.context import request_root_span
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_utils import (
+    truncate_base64_in_messages,  # pyright: ignore[reportUnknownVariableType]  # the helper types its messages as bare list and dict
+)
 from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # the helper types its argument as a bare dict
 )
@@ -88,8 +92,11 @@ class RootIOOpenTelemetryV2(OpenTelemetryV2):
 
 def _withholds_messages(logger: OpenTelemetryV2, data: Mapping[str, object]) -> bool:
     """Whether the request's messages stay off ``logger``'s LLM span, because the request is not logged to it or its
-    logged messages are redacted."""
-    if logger.message_logging is not True or logger.turn_off_message_logging:
+    logged messages are redacted, which a callback with message logging off does for every callback."""
+    if logger.turn_off_message_logging or any(
+        getattr(callback, "message_logging", True) is not True
+        for callback in (logger, *litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger))
+    ):
         return True
     logging_obj: Final = data.get("litellm_logging_obj")
     if not isinstance(logging_obj, Logging):
@@ -101,6 +108,17 @@ def _withholds_messages(logger: OpenTelemetryV2, data: Mapping[str, object]) -> 
         logger, _LITELLM_PARAMS.validate_python(details.get("litellm_params", {})), "post_call_hook"
     )
     return not runs_for_logger or should_redact_message_logging(logging_obj.model_call_details)
+
+
+def _without_base64_payloads(rendered: str | None) -> str | None:
+    """``rendered`` with each long base64 data URI cut to its size, as the logged messages carry it."""
+    if rendered is None:
+        return None
+    match truncate_base64_in_messages(rendered):
+        case str() as truncated:
+            return truncated
+        case list() | dict() | None:
+            return rendered
 
 
 class OpenInferenceRootIOOpenTelemetryV2(RootIOOpenTelemetryV2):
@@ -140,7 +158,7 @@ class OpenInferenceRootIOOpenTelemetryV2(RootIOOpenTelemetryV2):
         return drop_none_pairs(
             (
                 ("openinference.span.kind", "CHAIN"),
-                ("input.value", rendered_input),
+                ("input.value", _without_base64_payloads(rendered_input)),
                 ("input.mime_type", _JSON_MIME_TYPE if rendered_input is not None else None),
                 ("output.value", output),
                 ("output.mime_type", _JSON_MIME_TYPE),

@@ -375,6 +375,61 @@ def test_root_is_left_alone_when_the_messages_stay_off_the_llm_span(
     _assert_root_left_alone(root)
 
 
+def test_root_is_left_alone_when_another_callback_turns_off_message_logging(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "root-io-sibling-" + uuid.uuid4().hex
+    _, upstream = _plain_upstream(marker)
+    (tmp_path / "root_io_sibling.py").write_text(
+        "from litellm.integrations.custom_logger import CustomLogger\n\nhandler = CustomLogger(message_logging=False)\n"
+    )
+
+    with _rig(
+        gateway,
+        tmp_path,
+        upstream,
+        callbacks=("arize_phoenix", "root_io_sibling.handler"),
+        callback_settings=_COLLECTOR,
+    ) as rig:
+        response: Final = _chat_request(rig.proxy, rig.model, marker)
+        assert response.status_code == 200, response.text
+        root, llm = _request_trace(rig.destination, marker)
+
+    _assert_root_left_alone(root)
+    assert _json_messages(llm.attributes["input.value"]) == [{"role": "user", "content": "redacted-by-litellm"}], llm
+
+
+def test_phoenix_root_input_cuts_an_image_data_uri_to_its_size(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "root-io-image-" + uuid.uuid4().hex
+    image_payload: Final = "iVBORw0KGgo" * 1000
+    reply: Final = _chat_plain_response(marker, "a red square " + marker)
+
+    with _rig(
+        gateway, tmp_path, lambda _request: reply, callbacks=("arize_phoenix",), callback_settings=_COLLECTOR
+    ) as rig:
+        response: Final = rig.proxy.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": rig.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "what is in this image?"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + image_payload}},
+                        ],
+                    }
+                ],
+                "metadata": {"trace_marker": marker},
+                "cache": {"no-cache": True},
+            },
+        )
+        assert response.status_code == 200, response.text
+        root, _ = _request_trace(rig.destination, marker)
+
+    root_input: Final = root.attributes["input.value"]
+    assert image_payload not in root_input and "base64_data truncated" in root_input, root_input
+
+
 def test_phoenix_stream_root_carries_the_reply_a_later_masking_guardrail_served(
     gateway: Gateway, tmp_path: Path
 ) -> None:

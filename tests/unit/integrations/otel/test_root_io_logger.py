@@ -27,6 +27,7 @@ from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import set_request_root_span  # noqa: E402
 from litellm.integrations.otel.root_io_logger import OpenInferenceRootIOOpenTelemetryV2  # noqa: E402
 from litellm.litellm_core_utils.litellm_logging import Logging, _maybe_construct_otel_v2  # noqa: E402
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages  # noqa: E402
 from litellm.proxy._types import UserAPIKeyAuth  # noqa: E402
 from litellm.proxy.utils import ProxyLogging  # noqa: E402
 from litellm.types.llms.openai import ResponsesAPIResponse  # noqa: E402
@@ -312,6 +313,46 @@ def test_root_io_is_stamped_for_a_no_log_request_when_the_no_log_param_is_disabl
     _run_request(logger, _no_log_request(on_logging_object), "acompletion", PONG)
 
     assert json.loads(_root_attrs(exporter)["input.value"]) == [{"role": "user", "content": "ping"}]
+
+
+class _SkipsLoggerInit(CustomLogger):
+    def __init__(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("sibling", "stamped"),
+    [(CustomLogger(message_logging=False), False), (_SkipsLoggerInit(), True)],
+    ids=["message-logging-false", "never-set-message-logging"],
+)
+def test_root_io_follows_another_callback_with_message_logging_off(
+    sibling: CustomLogger, stamped: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [sibling])
+    logger, exporter = _logger()
+
+    _run_request(logger, CHAT_DATA, "acompletion", PONG)
+
+    assert ("input.value" in _root_attrs(exporter)) is stamped
+
+
+def test_root_input_cuts_an_image_data_uri_as_the_logged_messages_do():
+    logger, exporter = _logger()
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is in this image?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "iVBORw0KGgo" * 100}},
+            ],
+        }
+    ]
+
+    _run_request(logger, {"model": "gpt-5.4-mini", "messages": messages}, "acompletion", PONG)
+
+    root_input: Final = json.loads(_root_attrs(exporter)["input.value"])
+    assert root_input == truncate_base64_in_messages(messages)
+    assert root_input != messages
 
 
 @pytest.mark.parametrize(
