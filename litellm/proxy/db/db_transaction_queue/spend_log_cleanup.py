@@ -1080,9 +1080,7 @@ class SpendLogCleanup:
             rule.target_bytes,
         )
         latest: Final[list[SpendLogStorage]] = [before]  # mutable-ok: last measurement, rewritten per partition drop
-        baseline: Final[list[StorageProbe]] = [
-            probe
-        ]  # mutable-ok: counters after the last drop, the saved state's base
+        baseline: Final[list[StorageProbe]] = [probe]  # mutable-ok: counters after the last drop
 
         async def still_over_target() -> bool:
             measured: Final = await self._probe_storage(prisma_client, deadline)
