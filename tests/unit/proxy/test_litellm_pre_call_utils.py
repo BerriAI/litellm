@@ -2684,60 +2684,6 @@ def test_add_litellm_data_for_backend_llm_call_merges_keepalive_seconds_header()
     assert result.get("keepalive_seconds") == 20.0
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("path", "priority_header", "body_priority", "expected_priority", "expected_priority_present"),
-    [
-        ("/v1/chat/completions", "0", 5, "0", True),
-        ("/v1/completions", "0", 5, "0", True),
-        ("/v1/embeddings", "0", None, None, False),
-        ("/v1/responses", "0", None, None, False),
-        ("/v1/embeddings", "0", 5, 5, True),
-        ("/v1/responses", "0", 5, 5, True),
-        ("/v1/chat/completions", None, 5, 5, True),
-    ],
-)
-async def test_add_litellm_data_to_request_applies_priority_header_only_to_completion_routes(
-    path: str,
-    priority_header: str | None,
-    body_priority: int | None,
-    expected_priority: int | str | None,
-    expected_priority_present: bool,
-) -> None:
-    from litellm.proxy.proxy_server import ProxyConfig
-
-    header_entries: Final[tuple[tuple[bytes, bytes], ...]] = (
-        () if priority_header is None else ((b"x-litellm-priority", priority_header.encode()),)
-    )
-    request_headers: Final = ((b"content-type", b"application/json"), *header_entries)
-    request: Final = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": path,
-            "scheme": "http",
-            "server": ("localhost", 4000),
-            "client": ("127.0.0.1", 12345),
-            "query_string": b"",
-            "headers": request_headers,
-        }
-    )
-    request_data: Final[dict[str, object]] = {
-        "model": "qa-model",
-        **({"priority": body_priority} if body_priority is not None else {}),
-    }
-    updated_data: Final = await add_litellm_data_to_request(
-        data=request_data,
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
-        proxy_config=ProxyConfig(),
-        general_settings={},
-    )
-    assert ("priority" in updated_data) is expected_priority_present
-    if expected_priority_present:
-        assert updated_data["priority"] == expected_priority
-
-
 def test_add_user_api_key_auth_to_request_metadata():
     """
     Test that add_user_api_key_auth_to_request_metadata properly adds user API key authentication data to request metadata

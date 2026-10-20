@@ -114,13 +114,12 @@ _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
+SCHEDULER_PRIORITY_HEADER: Final = "x-litellm-priority"
+ROUTER_SCHEDULED_ROUTE_TYPES: Final = frozenset({"acompletion", "atext_completion"})
+
 # W3C Trace Context traceparent header: https://www.w3.org/TR/trace-context/
 # e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 _TRACEPARENT_RE: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
-
-
-def _is_scheduler_queued_route(path: str) -> bool:
-    return path.rstrip("/").endswith("/completions")
 
 
 def _trace_id_from_traceparent(traceparent: str) -> str | None:
@@ -2367,6 +2366,7 @@ async def add_litellm_data_to_request(
     proxy_config: ProxyConfig,
     general_settings: dict[str, Any] | None = None,
     version: str | None = None,
+    router_schedules_request: bool = False,
 ):
     """
     Adds LiteLLM-specific data to the request.
@@ -2501,10 +2501,9 @@ async def add_litellm_data_to_request(
         )
     )
 
-    if _is_scheduler_queued_route(request.url.path):
-        request_priority: Final = _headers.get("x-litellm-priority")
-        if request_priority is not None:
-            data["priority"] = request_priority  # rebind-ok: data is an out-param
+    header_priority: Final = _headers.get(SCHEDULER_PRIORITY_HEADER) if router_schedules_request else None
+    if header_priority is not None:
+        data["priority"] = header_priority  # rebind-ok: data is an out-param
 
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,

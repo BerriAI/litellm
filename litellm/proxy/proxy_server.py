@@ -657,7 +657,11 @@ from litellm.proxy.list_api.common import (
     problem_response,
     request_validation_problem,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    SCHEDULER_PRIORITY_HEADER,
+    LiteLLMProxyRequestSetup,
+    add_litellm_data_to_request,
+)
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
@@ -18267,6 +18271,8 @@ async def async_queue_request(
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
         router: Final = llm_router
 
+        header_priority: Final = request.headers.get(SCHEDULER_PRIORITY_HEADER)
+        data.update({} if header_priority is None else {"priority": header_priority})
         queued_priority, _ = router.split_request_priority(model=data["model"], kwargs=data)
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 

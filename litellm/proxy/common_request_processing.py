@@ -253,6 +253,7 @@ from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
 )
 from litellm.proxy.litellm_pre_call_utils import (
+    ROUTER_SCHEDULED_ROUTE_TYPES,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
     get_metadata_variable_name,
@@ -2265,6 +2266,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             version=version,
             proxy_config=proxy_config,
+            router_schedules_request=llm_router is not None and route_type in ROUTER_SCHEDULED_ROUTE_TYPES,
         )
         if logging_auth is not None:
             metadata_variable_name: Final = get_metadata_variable_name(request)

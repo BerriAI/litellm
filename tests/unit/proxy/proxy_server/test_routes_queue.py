@@ -169,6 +169,47 @@ def test_queue_chat_completions_rejects_a_request_it_cannot_queue_as_an_invalid_
     assert add_request.await_count == 0
 
 
+@pytest.mark.parametrize(
+    ("priority_fields", "expected_priority"),
+    [({"priority": 5}, 0), ({}, 0)],
+    ids=("header-beats-body", "header-only"),
+)
+def test_queue_chat_completions_queues_at_the_priority_header(
+    client,
+    auth_as,
+    monkeypatch: pytest.MonkeyPatch,
+    priority_fields: dict[str, object],
+    expected_priority: int,
+) -> None:
+    router: Final = _queue_router(monkeypatch, default_priority=5)
+    payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        with auth_as():
+            response: Final = client.post(
+                "/queue/chat/completions", json=payload, headers={"x-litellm-priority": "0"}
+            )
+    assert response.status_code == 200, response.text
+    assert [call.kwargs["request"].priority for call in add_request.await_args_list] == [expected_priority]
+    assert response.headers.get("x-litellm-priority") == str(expected_priority)
+
+
+def test_queue_chat_completions_rejects_a_malformed_priority_header_like_a_malformed_body_value(
+    client, auth_as, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router: Final = _queue_router(monkeypatch, default_priority=5)
+    payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "priority": 1}
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        with auth_as():
+            response: Final = client.post(
+                "/queue/chat/completions", json=payload, headers={"x-litellm-priority": "high"}
+            )
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", "priority")
+    assert "priority must be an integer" in error["message"]
+    assert add_request.await_count == 0
+
+
 def test_streamed_queue_responses_report_the_priority_the_router_queued_at(
     client, auth_as, monkeypatch: pytest.MonkeyPatch
 ) -> None:
