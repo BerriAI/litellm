@@ -369,12 +369,31 @@ def _stored_turn_with_calls(message: SessionMessage, call_ids: frozenset[str]) -
     )
 
 
+def _call_ids_at_turn(indexed_message: tuple[int, object]) -> tuple[tuple[str | None, int], ...]:
+    index, message = indexed_message
+    return tuple((_str_field(call, "id"), index) for call in _assistant_tool_calls(message))
+
+
+def _newest_stored_calls_the_input_answers(
+    session_history: Sequence[SessionMessage], answered: frozenset[str]
+) -> Iterator[SessionMessage | None]:
+    newest_turn_by_call_id: Final = MappingProxyType(
+        dict(chain.from_iterable(map(_call_ids_at_turn, enumerate(session_history))))
+    )
+    return (
+        _stored_turn_with_calls(
+            message, frozenset(call_id for call_id in answered if newest_turn_by_call_id.get(call_id) == index)
+        )
+        for index, message in enumerate(session_history)
+    )
+
+
 def with_stored_calls_the_input_answers(
     new_messages: Sequence[_MessageT], session_history: Sequence[SessionMessage]
 ) -> tuple[_MessageT | SessionMessage, ...]:
     answered: Final = _answered_tool_call_ids(new_messages)
     stored_calls: Final = tuple(
-        turn for turn in (_stored_turn_with_calls(message, answered) for message in session_history) if turn is not None
+        turn for turn in _newest_stored_calls_the_input_answers(session_history, answered) if turn is not None
     )
     if not stored_calls:
         return tuple(new_messages)

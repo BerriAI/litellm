@@ -1065,6 +1065,67 @@ async def test_previous_response_id_with_a_compaction_item_keeps_the_stored_call
     assert _DOCUMENT_BEFORE_COMPACTION not in anthropic.body
 
 
+_OSAKA_CALL: Final = {**_WEATHER_CALL, "function": {"name": "get_weather", "arguments": '{"city": "Osaka"}'}}
+_TOOL_TURN_REUSING_THE_CALL_ID: Final = {
+    **_TOOL_TURN_BEFORE_COMPACTION,
+    "request_id": "chatcmpl-osaka-turn",
+    "proxy_server_request": {
+        "model": _MODEL,
+        "input": [{"type": "function_call_output", "call_id": "toolu_weather", "output": "18C and sunny"}],
+    },
+    "response": {
+        "id": "chatcmpl-osaka-turn",
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {"role": "assistant", "content": None, "tool_calls": [_OSAKA_CALL]},
+            }
+        ],
+    },
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_management", [None, list(_COMPACT_AT_50K)], ids=["summary_text", "native_block"])
+async def test_previous_response_id_with_a_compaction_item_restores_only_the_newest_stored_call_for_a_reused_call_id(
+    context_management: list[Mapping[str, object]] | None,
+) -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    compaction_item: Final = {
+        "type": "compaction",
+        "id": "cmp_caller",
+        "encrypted_content": json.dumps(_COMPACTION_BLOCK),
+    }
+    tool_output: Final = {"type": "function_call_output", "call_id": "toolu_weather", "output": "12C and rain"}
+    spend_logs: Final = [_TOOL_TURN_BEFORE_COMPACTION, _TOOL_TURN_REUSING_THE_CALL_ID]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient(spend_logs)):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-osaka-turn",
+            input=[compaction_item, tool_output],
+            context_management=context_management,
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    messages: Final = json.loads(anthropic.body)["messages"]
+    blocks: Final = list(
+        chain.from_iterable(
+            ((index, block) for block in _content_blocks(message)) for index, message in enumerate(messages)
+        )
+    )
+    tool_uses: Final = [(index, block["id"], block["input"]) for index, block in blocks if block["type"] == "tool_use"]
+    tool_results: Final = [(index, block["tool_use_id"]) for index, block in blocks if block["type"] == "tool_result"]
+    assert [(tool_id, tool_input) for _, tool_id, tool_input in tool_uses] == [("toolu_weather", {"city": "Osaka"})]
+    assert tool_results == [(tool_uses[0][0] + 1, "toolu_weather")]
+    assert "12C and rain" in json.dumps(messages[tool_uses[0][0] + 1])
+
+
 def test_responses_over_anthropic_send_a_compaction_item_as_summary_text_when_the_request_does_not_compact(
     respx_mock: respx.MockRouter,
 ) -> None:
