@@ -251,16 +251,25 @@ def _poll_spend_rows(unified_id: str) -> list[dict[str, JsonValue]]:
 def test_a_completed_response_is_marked_completed_and_its_poll_is_billed(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model, _ = _scripted_deployment(scenario, "done", _routes("queued", _json(_response_body("completed"))))
-        unified_id: Final = _submit_background_response(scenario, scenario.key(), model)
+        key: Final = scenario.key()
+        unified_id: Final = _submit_background_response(scenario, key, model)
         _await_status(unified_id, "completed", ONE_POLL_SECONDS)
         spend_rows: Final = eventually(lambda: _poll_spend_rows(unified_id), lambda rows: len(rows) >= 1, seconds=70)
-        assert spend_rows[0] == {
-            "call_type": "aget_responses",
-            "status": "success",
-            "prompt_tokens": INPUT_TOKENS,
-            "completion_tokens": OUTPUT_TOKENS,
-            "spend": pytest.approx(INPUT_TOKENS * INPUT_COST_PER_TOKEN + OUTPUT_TOKENS * OUTPUT_COST_PER_TOKEN),
-        }
+        expected_spend: Final = INPUT_TOKENS * INPUT_COST_PER_TOKEN + OUTPUT_TOKENS * OUTPUT_COST_PER_TOKEN
+        assert spend_rows == [
+            {
+                "call_type": "aget_responses",
+                "status": "success",
+                "prompt_tokens": INPUT_TOKENS,
+                "completion_tokens": OUTPUT_TOKENS,
+                "spend": pytest.approx(expected_spend),
+            }
+        ]
+        eventually(
+            lambda: object_value(gateway.get("/key/info", {"key": key})["info"])["spend"],
+            lambda spend: spend == pytest.approx(expected_spend),
+            seconds=70,
+        )
 
 
 def _insert_unreadable_row(scenario: Scenario) -> str:

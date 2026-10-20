@@ -197,6 +197,15 @@ def test_missing_or_mismatched_systemone_answers_are_refusals_left_out_of_the_re
     assert tuple(ir_to_systemone_response(parsed, ir).answers) == ("damaged",)
 
 
+def test_a_systemone_response_without_answers_names_the_missing_field() -> None:
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(_SYSTEMONE_REQUEST))
+
+    with pytest.raises(ValidationError) as error:
+        parse_systemone_response({"model": "jev-latest", "usage": {"input_tokens": 10, "output_tokens": 1}}, ir)
+
+    assert [(item["loc"], item["type"]) for item in error.value.errors()] == [(("answers",), "missing")]
+
+
 def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
     audio: Final = ["data:audio/wav;base64,YQ=="]
     videos: Final = ["data:video/mp4;base64,YQ=="]

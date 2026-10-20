@@ -2539,6 +2539,62 @@ async def test_completed_success_selects_one_implemented_hook(
     assert (thread_id == loop_thread) is (kind != "sync")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registry_key", "expected_count"),
+    [pytest.param("same_key", 1, id="same_key"), pytest.param("distinct_key", 2, id="distinct_key")],
+)
+async def test_completed_success_deduplicates_custom_logger_registry_key(
+    monkeypatch: pytest.MonkeyPatch, registry_key: str, expected_count: int
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from queue import SimpleQueue
+
+    events: Final[SimpleQueue[tuple[str, str | None]]] = SimpleQueue()
+
+    class AsyncRecorder(CustomLogger):
+        def __init__(self, marker: str, destination: str | None) -> None:
+            super().__init__()
+            self._marker = marker
+            self.destination = destination
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            events.put((self._marker, self.destination))
+
+    sync_logger: Final = AsyncRecorder(
+        marker="sync",
+        destination="a" if registry_key == "distinct_key" else None,
+    )
+    async_logger: Final = AsyncRecorder(
+        marker="async",
+        destination="b" if registry_key == "distinct_key" else None,
+    )
+    monkeypatch.setattr(litellm, "success_callback", [sync_logger])
+    monkeypatch.setattr(litellm, "_async_success_callback", [async_logger])
+    logging_obj: Final = _async_request_logging_obj("completed-hook-registry-key", [])
+    response: Final = ModelResponse(id="chatcmpl-completed-hook-registry-key")
+    now: Final = datetime.datetime.now()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        monkeypatch.setattr(litellm_logging, "executor", pool)
+        await logging_obj.async_success_handler(response, now, now)
+        logging_obj.handle_sync_success_callbacks_for_async_calls(response, now, now)
+
+    recorded: Final = tuple(events.get_nowait() for _ in range(events.qsize()))
+    assert len(recorded) == expected_count
+    if registry_key == "distinct_key":
+        assert frozenset(recorded) == frozenset({("sync", "a"), ("async", "b")})
+    else:
+        assert recorded[0][0] in {"sync", "async"}
+        assert recorded[0][1] is None
+
+
 
 @pytest.mark.parametrize("for_async_request", [False, True])
 @pytest.mark.parametrize("private_first", [False, True])
