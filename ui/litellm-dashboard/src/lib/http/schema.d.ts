@@ -9472,6 +9472,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/users/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Current User */
+        get: operations["get_current_user_management_v1_users_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp": {
         parameters: {
             query?: never;
@@ -31055,6 +31072,14 @@ export interface components {
              */
             source: "db" | "config";
         };
+        /** CurrentUserResponse */
+        CurrentUserResponse: {
+            /** User Email */
+            user_email: string | null;
+            /** User Id */
+            user_id: string;
+            user_role: components["schemas"]["LitellmUserRoles"] | null;
+        };
         /** CustomDimension */
         CustomDimension: {
             /**
@@ -46797,9 +46822,17 @@ export interface components {
          * @description Response structure for token count details with modality breakdown.
          *
          *     Example:
-         *         {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+         *         {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+         *          'litellm_count_source': 'provider'}
          */
         TokenCountDetailsResponse: {
+            /** Litellm Count Model */
+            litellm_count_model?: string;
+            /**
+             * Litellm Count Source
+             * @enum {string}
+             */
+            litellm_count_source?: "provider" | "token_count_model" | "local_estimate";
             /** Prompttokensdetails */
             promptTokensDetails: components["schemas"]["PromptTokensDetails"][];
             /** Totaltokens */
@@ -46828,6 +46861,8 @@ export interface components {
         };
         /** TokenCountResponse */
         TokenCountResponse: {
+            /** Count Source */
+            count_source?: ("provider" | "token_count_model" | "local_estimate") | null;
             /**
              * Error
              * @default false
@@ -63701,6 +63736,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_current_user_management_v1_users_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
                 };
             };
         };

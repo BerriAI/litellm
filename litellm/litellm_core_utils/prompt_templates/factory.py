@@ -5506,6 +5506,11 @@ def _bedrock_tools_pt(
     return tool_block_list
 
 
+def bedrock_tool_blocks(tools: Sequence[Mapping[str, object]], model: str | None) -> tuple[BedrockToolBlock, ...]:
+    """Bedrock Converse ``toolConfig.tools`` entries for OpenAI or Anthropic tool definitions."""
+    return tuple(_bedrock_tools_pt([dict(tool) for tool in tools], model=model))
+
+
 def _is_system_message(message: Mapping[str, object]) -> bool:
     role: Final = message.get("role")
     return isinstance(role, str) and "system" in role
@@ -6055,3 +6060,25 @@ def resolve_structured_messages(
         if structured:
             return [msg if isinstance(msg, dict) else msg.model_dump() for msg in structured]
     return None
+
+
+def is_flat_responses_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return tool_type in ("function", "custom") and tool_type not in tool and "input_schema" not in tool
+
+
+def chat_completion_tools_for(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    if is_flat_responses_tool(tool):
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [dict(tool)]  # pyright: ignore[reportArgumentType]  # a JSON dict in a flat Responses tool shape
+        )
+        return tuple(chat_tools)
+    anthropic_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(
+        [dict(tool)]  # pyright: ignore[reportArgumentType]  # a JSON dict in an Anthropic or chat tool shape
+    )
+    return tuple(anthropic_tools)

@@ -24,16 +24,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from starlette.websockets import WebSocket, WebSocketDisconnect
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
     build_blocked_response,
@@ -45,18 +47,31 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, cost_headers, create_response
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    cost_headers,
+    create_response,
+    resolve_counted_tool_fields,
+)
+from litellm.proxy.common_utils.error_body_call_id import error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
+    error_status_code,
+    openai_error_type_for_status,
+)
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -64,12 +79,12 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.token_count import TokenCountSourceFields
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
-    from litellm.router import Router
 
 router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
@@ -1352,7 +1367,7 @@ class _ResponsesApiErrorBody(TypedDict):
     error: ReadOnly[_ResponsesApiErrorDetail]
 
 
-class _ResponsesInputTokensResult(TypedDict):
+class _ResponsesInputTokensResult(TokenCountSourceFields):
     object: ReadOnly[str]
     input_tokens: ReadOnly[int]
 
@@ -1376,6 +1391,15 @@ def _proxy_token_counter() -> _TokenCounter:
 _token_counter_dep: Final = Depends(_proxy_token_counter)
 
 
+def _proxy_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+_llm_router_dep: Final = Depends(_proxy_llm_router)
+
+
 def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
     body: Final[_ResponsesApiErrorBody] = {
         "error": {
@@ -1386,6 +1410,85 @@ def _responses_invalid_request_response(message: str, param: str | None, code: s
         }
     }
     return JSONResponse(status_code=400, content=body)
+
+
+class _ProviderErrorMessage(TypedDict):
+    message: ReadOnly[str]
+
+
+class _NestedProviderError(TypedDict):
+    error: ReadOnly[_ProviderErrorMessage]
+
+
+@with_config(ConfigDict(extra="ignore"))
+class _ProviderOpenAIErrorDetail(TypedDict):
+    message: ReadOnly[str]
+    type: ReadOnly[str]
+    param: NotRequired[ReadOnly[str | None]]
+    code: NotRequired[ReadOnly[str | None]]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class _ProviderOpenAIError(TypedDict):
+    error: ReadOnly[_ProviderOpenAIErrorDetail]
+
+
+_PROVIDER_COUNT_ERROR_TYPE: Final = "token_counting_error"
+_PROVIDER_OPENAI_ERROR: Final = TypeAdapter(_ProviderOpenAIError)
+_NESTED_PROVIDER_ERROR: Final = TypeAdapter(_NestedProviderError)
+
+
+def _provider_error_json(raw_message: str) -> str:
+    start: Final = raw_message.find("{")
+    return raw_message if start == -1 else raw_message[start:]
+
+
+def _provider_error_message(raw_message: str) -> str:
+    error_json: Final = _provider_error_json(raw_message)
+    try:
+        return _NESTED_PROVIDER_ERROR.validate_json(error_json)["error"]["message"]
+    except ValidationError:
+        flat_message: Final = AnthropicExceptionMapping.extract_error_message(error_json)
+        return raw_message if flat_message == error_json else flat_message
+
+
+def _provider_count_error_body(raw_message: str, status_code: int) -> _ResponsesApiErrorBody:
+    try:
+        provider_error: Final = _PROVIDER_OPENAI_ERROR.validate_json(_provider_error_json(raw_message))["error"]
+    except ValidationError:
+        return {
+            "error": {
+                "message": _provider_error_message(raw_message),
+                "type": openai_error_type_for_status(status_code),
+                "param": None,
+                "code": None,
+            }
+        }
+    return {
+        "error": {
+            "message": provider_error["message"],
+            "type": provider_error["type"],
+            "param": provider_error.get("param"),
+            "code": provider_error.get("code"),
+        }
+    }
+
+
+def _provider_count_error_response(exc: ProxyException, request: Request) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a route that answers an error itself must stamp the OTel server span like the global ProxyException handler does
+        general_settings_view,
+    )
+
+    status_code: Final = error_status_code(exc, 500)
+    _close_dangling_otel_server_span(request, status_code, exc=exc)
+    body: Final = _provider_count_error_body(exc.message, status_code)
+    call_id: Final = error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER))
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": with_call_id({**body["error"]}, call_id)},
+        headers=exc.headers,
+    )
 
 
 def _missing_responses_param_response(param: str) -> JSONResponse:
@@ -1432,6 +1535,8 @@ def _responses_input_as_token_count_messages(
 async def responses_input_tokens(
     request: Request,
     token_counter: _TokenCounter = _token_counter_dep,
+    llm_router: Router | None = _llm_router_dep,
+    user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
 ):
     """
     Count the input tokens of a Responses API request without calling the model.
@@ -1464,6 +1569,13 @@ async def responses_input_tokens(
             code="missing_required_parameter",
         )
 
+    counted_fields: Final = {
+        name: data[name] for name in ("model", "tools", "drop_params", "additional_drop_params") if name in data
+    }
+    token_fields: Final = resolve_counted_tool_fields(counted_fields, llm_router, user_api_key_dict.team_id)
+    if isinstance(token_fields, ProxyException):
+        return _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None)
+
     try:
         payload: Final[_TokenCountPayload] = {
             "model": model_name,
@@ -1471,18 +1583,28 @@ async def responses_input_tokens(
                 input_value=input_value,
                 instructions=data.get("instructions"),
             ),
-            "tools": data.get("tools"),
+            "tools": token_fields.get("tools"),
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
+    except ValidationError as e:
+        return _responses_invalid_request_response(
+            message=first_validation_error(e), param=str(e.errors(include_url=False)[0]["loc"][0]), code=None
+        )
     except Exception as e:
         return _responses_invalid_request_response(
             message=f"Invalid request for token counting: {e}", param=None, code=None
         )
 
-    token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+    try:
+        token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+    except ProxyException as e:
+        if e.type != _PROVIDER_COUNT_ERROR_TYPE:
+            raise
+        return _provider_count_error_response(e, request)
     result: Final[_ResponsesInputTokensResult] = {
         "object": "response.input_tokens",
         "input_tokens": token_response.total_tokens,
+        **count_source_fields(token_response),
     }
     return result
 
