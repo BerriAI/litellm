@@ -1,5 +1,6 @@
 import json
-from typing import Final, List, Optional
+from collections.abc import Mapping
+from typing import Final, List, Literal, Optional
 from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
@@ -2876,6 +2877,106 @@ def test_list_files_by_model_returns_an_openai_page_for_a_provider_listing(
     hook_response = proxy_logging_obj.post_call_success_hook.call_args.kwargs["response"]
     assert isinstance(hook_response, FileListPage)
     assert [listed.id for listed in hook_response.data] == ["file-1", "file-2"]
+
+
+@pytest.mark.parametrize("page_type", ["sdk", "managed"])
+@pytest.mark.parametrize("behavior", ["replace", "empty", "in_place", "unchanged", "reject"])
+@respx.mock
+def test_list_files_preserves_post_call_hook_result(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    page_type: Literal["sdk", "managed"],
+    behavior: Literal["replace", "empty", "in_place", "unchanged", "reject"],
+) -> None:
+    from fastapi import HTTPException
+    from openai.pagination import AsyncCursorPage
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class FileListHook(CustomLogger):
+        original: AsyncCursorPage[OpenAIFileObject] | None = None
+        replacement: AsyncCursorPage[OpenAIFileObject] | FileListPage | None = None
+
+        async def async_post_call_success_hook(
+            self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+        ) -> AsyncCursorPage[OpenAIFileObject] | FileListPage | None:
+            assert isinstance(response, AsyncCursorPage)
+            self.original = response
+            if behavior == "reject":
+                raise HTTPException(status_code=403, detail="File listing denied by hook")
+            if behavior == "unchanged":
+                return None
+            if behavior == "in_place":
+                self.original.data[:] = self.original.data[:1]
+                return None
+            files: Final = [] if behavior == "empty" else [OpenAIFileObject.model_validate(response.data[0].model_dump())]
+            page_class: Final = AsyncCursorPage[OpenAIFileObject] if page_type == "sdk" else FileListPage
+            self.replacement = page_class(
+                data=files,
+                object="list",
+                first_id=files[0].id if files else None,
+                last_id=files[-1].id if files else None,
+                has_more=False,
+            )
+            return self.replacement
+
+    hook: Final = FileListHook()
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(ps, "master_key", None)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "llm_router", llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    provider_files: Final = [
+        {
+            "id": file_id,
+            "object": "file",
+            "bytes": 1,
+            "created_at": 1,
+            "filename": f"{file_id}.jsonl",
+            "purpose": "batch",
+            "status": "processed",
+        }
+        for file_id in ("file-visible", "file-hidden")
+    ]
+    provider_route: Final = respx.get("https://api.openai.com/v1/files").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": provider_files,
+                "first_id": "file-visible",
+                "last_id": "file-hidden",
+                "has_more": True,
+            },
+        )
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+    )
+
+    response: Final = client.get("/v1/files?target_model_names=gpt-3.5-turbo")
+
+    assert provider_route.call_count == 1
+    assert hook.original is not None
+    if behavior == "reject":
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["message"] == "File listing denied by hook"
+        return
+    assert response.status_code == 200, response.text
+    if behavior in ("unchanged", "in_place"):
+        assert response.json() == hook.original.model_dump(mode="json")
+        assert [file.id for file in hook.original.data] == (
+            ["file-visible"] if behavior == "in_place" else ["file-visible", "file-hidden"]
+        )
+        return
+    assert hook.replacement is not None
+    assert hook.replacement is not hook.original
+    assert [file.id for file in hook.original.data] == ["file-visible", "file-hidden"]
+    assert response.json() == hook.replacement.model_dump(mode="json")
+    assert [file["id"] for file in response.json()["data"]] == ([] if behavior == "empty" else ["file-visible"])
 
 
 def test_list_files_model_routing_does_not_forward_custom_llm_provider_twice(
