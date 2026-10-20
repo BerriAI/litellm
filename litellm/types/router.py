@@ -274,6 +274,7 @@ class ModelInfo(MirroredPricingParams):
     created_by: str | None = None
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    pricing_provider: str | None = None  # provider whose cost-map rows price this deployment, else custom_llm_provider
     tier: Literal["free", "paid"] | None = None
 
     """
@@ -1183,6 +1184,8 @@ class RouterModelGroupAliasItem(TypedDict):
 class RetryAttemptRecord(TypedDict):
     model_group: ReadOnly[str | None]
     deployment_id: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    base_model: ReadOnly[str | None]
     exception_type: ReadOnly[str]
     exception_string: ReadOnly[str]
     attempted_retries: ReadOnly[int | None]

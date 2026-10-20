@@ -446,6 +446,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # the request away from the admin's pinned configuration.
     "nvcf_function_id",
     "use_ssl",
+    "riva_offline",
     # Per-deployment opt-in that hands the whole call to the Rust core. It is a
     # deployment decision, not a request one: the Rust path uses its own client
     # rather than the one the deployment configured, and reports no post_call,
@@ -462,6 +463,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # stored credential's values and the caller's connection by the proxy's own
     # secret_fields, so a body-supplied value could only spoof either.
     "github_copilot_auth_type",
+    "github_copilot_host",
     "user_provider_credentials",
     "github_copilot_user_session",
     # Observability credentials, hosts, and project identifiers: derived

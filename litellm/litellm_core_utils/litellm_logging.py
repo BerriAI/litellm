@@ -117,7 +117,8 @@ from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
-    redact_streaming_responses_for_custom_logger,
+    redacted_model_call_details_for_custom_logger,
+    redacted_response_obj_for_custom_logger,
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.served_output_texts import (
@@ -131,6 +132,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.interactions import (
     InteractionsAPIResponse,
@@ -337,6 +339,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
@@ -794,6 +797,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.defer_async_logging: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
+        self._async_success_enqueued: bool = False
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
@@ -994,6 +998,21 @@ class Logging(LiteLLMLoggingBaseClass):
             if model_id is not None:
                 return model_id
         return None
+
+    def get_router_pricing_provider(self) -> str | None:
+        """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""
+        litellm_params: Final = cast(  # cast-ok: callback metadata is caller-provided
+            Mapping[str, object] | None, getattr(self, "litellm_params", None)
+        )
+        if not litellm_params:
+            return None
+        candidates: Final = (
+            _METADATA_MAPPING.validate_python(
+                _METADATA_MAPPING.validate_python(litellm_params.get(key) or {}).get("model_info") or {}
+            ).get("pricing_provider")
+            for key in ("litellm_metadata", "metadata")
+        )
+        return next((provider for provider in candidates if isinstance(provider, str) and provider), None)
 
     def _routed_deployment_model(self) -> str | None:
         litellm_params: Final = self._model_call_details_view.get("litellm_params")
@@ -2020,6 +2039,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
+                "pricing_provider": self.get_router_pricing_provider(),
                 "litellm_logging_obj": self,
                 "data_residency": (
                     self.litellm_params.get("data_residency")
@@ -2164,7 +2184,7 @@ class Logging(LiteLLMLoggingBaseClass):
         pricing: Final = pricing_entry_for_cost_calc(
             model=model,
             completion_response=result,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=self.get_router_pricing_provider() or custom_llm_provider,
             custom_pricing=self.custom_pricing_for(result),
             base_model=get_base_model_from_metadata(model_call_details=self.model_call_details),
             router_model_id=router_model_id or self.get_router_model_id(),
@@ -2190,20 +2210,23 @@ class Logging(LiteLLMLoggingBaseClass):
             usage=usage,
         )
 
-    def custom_pricing_for(self, result: object) -> bool:
-        litellm_params: Final = getattr(self, "litellm_params", None)
+    def spilled_over_ptu_for(self, result: object) -> bool:
         result_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         additional_headers: Final = (
             result_hidden_params.get("additional_headers")
             if isinstance(result_hidden_params, dict)
             else getattr(result_hidden_params, "additional_headers", None)
         )
-        spilled_over: Final = is_spilled_over_ptu_request(
-            model_info=_deployment_model_info(litellm_params),
+        return is_spilled_over_ptu_request(
+            model_info=_deployment_model_info(getattr(self, "litellm_params", None)),
             response_headers=self.model_call_details.get("response_headers"),
             additional_headers=additional_headers,
         )
-        return False if spilled_over else use_custom_pricing_for_model(litellm_params=litellm_params)
+
+    def custom_pricing_for(self, result: object) -> bool:
+        if self.spilled_over_ptu_for(result):
+            return False
+        return use_custom_pricing_for_model(litellm_params=getattr(self, "litellm_params", None))
 
     def _prompt_for_cost_calculation(self) -> str:
         """
@@ -2447,7 +2470,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_failure_handler(exception, traceback_exception)
         finally:
             if self._should_run_sync_failure_callbacks_for_async_calls():
-                executor.submit(self.failure_handler, exception, traceback_exception)
+                executor.submit(self.failure_handler, exception, traceback_exception, for_async_request=True)
 
     def should_run_logging(
         self,
@@ -2461,6 +2484,16 @@ class Logging(LiteLLMLoggingBaseClass):
             return True
         except Exception:
             return True
+
+    @property
+    def async_success_log_enqueued(self) -> bool:
+        """True once the success log task was actually created, not merely claimed, so a later failure raised
+        around it (a disconnect cancelling a still-pending guardrail task) must not bill the prompt a second
+        time. A claimed log parked in the deferred slot never runs once a 499 interrupts, so it stays False."""
+        return self._async_success_enqueued
+
+    def mark_async_success_log_enqueued(self) -> None:
+        self._async_success_enqueued = True
 
     def claim_async_success_log(self) -> bool:
         """One async success log per request. The innermost @client wrapper always exits first,
@@ -2890,6 +2923,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, SearchResponse)  # Search API
             or isinstance(logging_result, DecisionsResponse)
             or isinstance(logging_result, OpenAIDecisionResponse)
+            or isinstance(logging_result, ExtractionResponse)
             or (
                 isinstance(logging_result, InteractionsAPIResponse)
                 and logging_result.usage is not None
@@ -3489,8 +3523,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
-                                kwargs=call_details,
-                                response_obj=result,
+                                kwargs=redacted_model_call_details_for_custom_logger(
+                                    model_call_details=call_details, custom_logger=callback
+                                ),
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -3500,8 +3536,13 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = call_details_view["complete_response"]
 
                             callback.log_success_event(
-                                kwargs=callback.redact_standard_logging_payload_from_model_call_details(call_details),
-                                response_obj=result,
+                                kwargs=redacted_model_call_details_for_custom_logger(
+                                    model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                        call_details
+                                    ),
+                                    custom_logger=callback,
+                                ),
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -3844,7 +3885,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
                         model_call_details=model_call_details
                     )
-                    model_call_details = redact_streaming_responses_for_custom_logger(
+                    model_call_details = redacted_model_call_details_for_custom_logger(
                         model_call_details=model_call_details, custom_logger=callback
                     )
                     ##################################
@@ -3855,7 +3896,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             kwargs=model_call_details,
                             response_obj=model_call_details["async_complete_streaming_response"]
                             if self.stream
-                            else result,
+                            else redacted_response_obj_for_custom_logger(result, callback),
                             start_time=start_time,
                             end_time=end_time,
                             guardrail_snapshot=self.shadow_eval_request_snapshot,
@@ -3871,14 +3912,14 @@ class Logging(LiteLLMLoggingBaseClass):
                         else:
                             await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
                                 kwargs=model_call_details,
-                                response_obj=result,
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                     else:
                         await callback.async_log_success_event(
                             kwargs=model_call_details,
-                            response_obj=result,
+                            response_obj=redacted_response_obj_for_custom_logger(result, callback),
                             start_time=start_time,
                             end_time=end_time,
                         )
@@ -4054,15 +4095,21 @@ class Logging(LiteLLMLoggingBaseClass):
         traceback_exception: str,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
+        *,
+        for_async_request: bool = False,
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own failure
-        logging (including any nested calls its callbacks trigger) is fully done."""
+        logging (including any nested calls its callbacks trigger) is fully done.
+
+        ``for_async_request`` marks the sync run of a failure whose async run also logs it, so a
+        CustomLogger that gets ``async_log_failure_event`` from that async run skips its sync hook."""
         try:
             return self._failure_handler_body(
                 exception=exception,
                 traceback_exception=traceback_exception,
                 start_time=start_time,
                 end_time=end_time,
+                for_async_request=for_async_request,
             )
         finally:
             self._restore_correlation_context()
@@ -4073,6 +4120,7 @@ class Logging(LiteLLMLoggingBaseClass):
         traceback_exception: str,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
+        for_async_request: bool = False,
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Failure Call: %s", litellm.failure_callback)
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
@@ -4165,6 +4213,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         isinstance(callback, CustomLogger)
                         and is_sync_request
                         and self.call_type != CallTypes.pass_through.value
+                        and not (for_async_request and self._async_handler_logs_to(callback))
                     ):  # custom logger class
                         callback.log_failure_event(
                             start_time=start_time,
@@ -4526,6 +4575,12 @@ class Logging(LiteLLMLoggingBaseClass):
 
         cb_name: Final = self._get_callback_name(cb)
         return any(prefix in cb_name for prefix in INTERNAL_PREFIXES)
+
+    def _async_handler_logs_to(self, logger: CustomLogger) -> bool:
+        """True when the async failure run of this call hands ``logger`` its own ``async_log_failure_event``."""
+        if type(logger).async_log_failure_event is CustomLogger.async_log_failure_event:  # pyright: ignore[reportUnknownMemberType]  # CustomLogger's hook signatures are untyped
+            return False
+        return logger in (self.dynamic_async_failure_callbacks or []) or logger in litellm._async_failure_callback  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]  # callback lists are untyped and have no public accessor
 
     def _remove_internal_custom_logger_callbacks(self, callbacks: list) -> list:
         """
@@ -7195,13 +7250,16 @@ def get_standard_logging_object_payload(
         saved_cache_cost: Final = (uncached_price.cost if uncached_price is not None else None) or 0.0
 
         ## Get model cost information ##
-        base_model = get_base_model_from_metadata(model_call_details=kwargs)
-        # The router overrides completion_response.model to the model-group alias before
-        # this payload is built, so cost-map lookup via that alias always misses.
-        # Fall back to the actual deployment model set by the router in metadata.
-        if base_model is None:
-            base_model = metadata.get("deployment")
-        custom_pricing: Final = logging_obj.custom_pricing_for(init_response_obj)
+        configured_base_model: Final = get_base_model_from_metadata(model_call_details=kwargs)
+        spilled_over: Final = logging_obj.spilled_over_ptu_for(init_response_obj)
+        # The router overrides completion_response.model to the model-group alias before this payload is
+        # built, so cost-map lookup via that alias misses and the deployment model stands in for base_model.
+        # A PTU request Azure spilled onto pay-as-you-go capacity is billed at the served model's rates,
+        # which the deployment's zeroed PTU entry would misreport, so that fallback is skipped there.
+        base_model: Final = (
+            metadata.get("deployment") if configured_base_model is None and not spilled_over else configured_base_model
+        )
+        custom_pricing: Final = False if spilled_over else logging_obj.custom_pricing_for(init_response_obj)
         raw_response_cost: Final = kwargs.get("response_cost")
         llm_response_cost: Final[float] = raw_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))

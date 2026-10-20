@@ -3,10 +3,11 @@
 ## Initial implementation - covers gemini + image gen calls
 import json
 import re
+import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
-from functools import partial
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
@@ -28,6 +29,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
@@ -194,6 +196,29 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
         ),
         status_code=400,
     )
+
+
+_SAMPLING_DEPRECATION_UNMAPPED_MODELS: Final = "models outside litellm's model map"
+_sampling_deprecation_lock: Final = threading.Lock()
+
+
+@lru_cache(maxsize=None)
+def _log_gemini_sampling_params_deprecated(model: str) -> None:
+    verbose_logger.warning(
+        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
+        model,
+    )
+
+
+def _sampling_deprecation_notice_key(model: str) -> str:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    is_cataloged: Final = any(name in catalog for name in (model, f"vertex_ai/{model}", f"gemini/{model}"))
+    return model if is_cataloged else _SAMPLING_DEPRECATION_UNMAPPED_MODELS
+
+
+def _warn_gemini_sampling_params_deprecated(model: str) -> None:
+    with _sampling_deprecation_lock:
+        _log_gemini_sampling_params_deprecated(_sampling_deprecation_notice_key(model))
 
 
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
@@ -1266,7 +1291,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         allow_integer_enums: bool = True,
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
-        gemini_sampling_params_warned: bool = False
         for param, value in non_default_params.items():
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -1275,28 +1299,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             "Warning: Setting temperature < 1.0 for Gemini 3 models (%s) can cause infinite loops, degraded reasoning performance, and failure on complex tasks. Strongly recommended to use temperature = 1.0 (default).",
                             model,
                         )
-                    if not gemini_sampling_params_warned:
-                        verbose_logger.warning(
-                            "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                            model,
-                        )
-                        gemini_sampling_params_warned = True
+                    _warn_gemini_sampling_params_deprecated(model)
                 optional_params["temperature"] = value
             elif param == "top_p":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    _warn_gemini_sampling_params_deprecated(model)
                 optional_params["top_p"] = value
             elif param == "top_k":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    _warn_gemini_sampling_params_deprecated(model)
                 optional_params["top_k"] = value
             elif (
                 param == "stream" and value is True
