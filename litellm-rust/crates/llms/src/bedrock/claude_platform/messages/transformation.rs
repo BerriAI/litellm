@@ -5,8 +5,8 @@ use litellm_auth_aws::{AwsCredentialSource, resolve_aws_region};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
-    formats::messages::MessagesRequest,
-    providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
+    formats::messages::{MessagesOptionalParams, MessagesRequest},
+    providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
@@ -15,7 +15,7 @@ use crate::{
     Error, ErrorDetail,
     anthropic::messages::{
         handler::shape_anthropic_messages_request,
-        transformation::{transform_messages_request, update_headers_with_anthropic_beta},
+        transformation::{transform_messages_request, update_headers_with_safeguards_beta},
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -60,6 +60,7 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        optional_params: &MessagesOptionalParams,
         params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -67,11 +68,8 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             .filter(|value| !value.trim().is_empty())
             .or_else(|| {
                 WORKSPACE_FIELDS.iter().find_map(|field| {
-                    params
-                        .extra
-                        .get(*field)?
-                        .as_str()
-                        .filter(|value| !value.trim().is_empty())
+                    workspace_value(optional_params.extra.get(*field))
+                        .or_else(|| workspace_value(params.extra.get(*field)))
                 })
             });
         let workspace = resolve_non_empty(workspace, env, WORKSPACE_ENVS)
@@ -174,12 +172,16 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             Some(workspace) => with_header(headers, WORKSPACE_HEADER, workspace.into()),
             None => headers,
         };
-        update_headers_with_anthropic_beta(headers, request)
+        update_headers_with_safeguards_beta(headers, request, BetaProvider::Anthropic)
     }
 
     fn wire_body(&self, body: Value) -> Value {
         filter_body(body, true)
     }
+}
+
+fn workspace_value(value: Option<&Value>) -> Option<&str> {
+    value?.as_str().filter(|value| !value.trim().is_empty())
 }
 
 fn platform_region(
@@ -260,6 +262,7 @@ mod tests {
                     vec![],
                     Some("key"),
                     "claude-test",
+                    &MessagesOptionalParams::default(),
                     &LitellmParams::default(),
                     &|_| None
                 )
@@ -280,6 +283,7 @@ mod tests {
                 ],
                 Some("explicit"),
                 "claude-test",
+                &MessagesOptionalParams::default(),
                 &LitellmParams::default(),
                 &|name| (name == "ANTHROPIC_AWS_WORKSPACE_ID").then(|| "workspace".into()),
             )
@@ -345,7 +349,14 @@ mod tests {
             .get_complete_url(None, "claude-test", &params, false, &env)
             .unwrap();
         let environment = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
-            .validate_environment(vec![], None, "claude-test", &params, &env)
+            .validate_environment(
+                vec![],
+                None,
+                "claude-test",
+                &MessagesOptionalParams::default(),
+                &params,
+                &env,
+            )
             .unwrap();
         assert_eq!(
             url,
@@ -353,6 +364,21 @@ mod tests {
         );
         assert!(
             matches!(environment.auth, AuthScheme::AwsSigV4 { region, service: SERVICE, .. } if region == expected_region)
+        );
+    }
+
+    #[rstest]
+    #[case::safeguards(json!([{"type": "dangerous_tool_use"}]), Some("dangerous-tool-use-2026-09-03"))]
+    #[case::null_safeguards(Value::Null, None)]
+    fn safeguards_need_the_dangerous_tool_use_beta(
+        #[case] safeguards: Value,
+        #[case] expected: Option<&str>,
+    ) {
+        let request = serde_json::from_value(json!({"model": "claude-test", "max_tokens": 16, "messages": [], "safeguards": safeguards})).unwrap();
+        let headers = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.request_headers(vec![], &request);
+        assert_eq!(
+            header_value(&headers, "anthropic-beta").map(|value| value.to_string()),
+            expected.map(str::to_string)
         );
     }
 

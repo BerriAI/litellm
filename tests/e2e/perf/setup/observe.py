@@ -16,6 +16,8 @@ from memory_readings import RssCapture, RssReading, WorkerKey
 from pydantic import BaseModel
 
 from setup.datastore import (
+    active_sessions,
+    slowest_statement,
     DbCounters,
     RedisCommand,
     RedisCounters,
@@ -25,6 +27,7 @@ from setup.datastore import (
 )
 from setup.mocks.reply_common import Provider
 from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase
+from setup.telemetry import GatewayTelemetry
 from setup.wire import WireRecord
 
 
@@ -115,6 +118,16 @@ class Observation:
     redis_after: RedisCounters | None = None
     redis_commands: tuple[RedisCommand, ...] | None = None
     gateway_cpu_seconds: float | None = None
+    telemetry_before: GatewayTelemetry | None = None
+    telemetry_after: GatewayTelemetry | None = None
+    peak_connections: int | None = None
+
+    @property
+    def telemetry(self) -> GatewayTelemetry | None:
+        """What the gateway's `/metrics` counted during the run."""
+        if self.telemetry_before is None or self.telemetry_after is None:
+            return None
+        return self.telemetry_after.minus(self.telemetry_before)
 
     def per_request(self, before: int | None, after: int | None) -> float | None:
         if before is None or after is None or not self.records:
@@ -182,6 +195,18 @@ class Observation:
         ]
         return non_stream + stream
 
+    def _first_attempts(self) -> list[WireRecord]:
+        return [record for record, _ in self._clean(stream=False)] + [record for record, _ in self._clean(stream=True)]
+
+    def litellm_overhead_seconds(self) -> list[float]:
+        """`x-litellm-overhead-duration-ms` per first-attempt request, the gateway's own account of what it added
+        (receive time to response end, minus the provider call), in seconds to sit next to `gateway_added_seconds`."""
+        return [r.litellm_overhead_ms / 1000 for r in self._first_attempts() if r.litellm_overhead_ms is not None]
+
+    def litellm_response_seconds(self) -> list[float]:
+        """`x-litellm-response-duration-ms` per first-attempt request, the gateway's own end-to-end time."""
+        return [r.litellm_response_ms / 1000 for r in self._first_attempts() if r.litellm_response_ms is not None]
+
     def time_to_first_token_seconds(self) -> list[float]:
         """Seconds from the client sending each first-attempt streamed request to its first token, mock delay
         included, comparable across versions because the mocks generate the same replies after the same wait."""
@@ -217,11 +242,23 @@ def observe(
     per_request: dict[str, list[float]] = {
         "gateway_added_seconds": observation.gateway_added_seconds(),
         "time_to_first_token_seconds": observation.time_to_first_token_seconds(),
+        "litellm_overhead_seconds": observation.litellm_overhead_seconds(),
+        "litellm_response_seconds": observation.litellm_response_seconds(),
     }
     if metric in per_request:
         return percentile(per_request[metric], 50 if percentile_rank is None else percentile_rank)
     if metric == "unexpected_status_count":
         return float(observation.unexpected_status_count())
+    if metric == "prometheus_redis_latency_mean_seconds":
+        counted: Final = observation.telemetry
+        return None if counted is None else counted.redis_latency.mean
+    if metric == "postgres_active_sessions":
+        return active_sessions(observation.statements, observation.wall_seconds)
+    if metric == "postgres_slowest_statement_seconds":
+        slowest: Final = slowest_statement(observation.statements)
+        return None if slowest is None else slowest.mean_exec_seconds
+    if metric == "postgres_peak_connections":
+        return None if observation.peak_connections is None else float(observation.peak_connections)
     if metric == "postgres_calls_per_request":
         return observation.count_per_request(calls_in("awaited", observation.statements))
     if metric == "postgres_background_calls_per_request":
@@ -275,6 +312,14 @@ REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("unexpected_status_count", None),
     ("gateway_added_seconds", 50),
     ("gateway_added_seconds", 99),
+    ("litellm_overhead_seconds", 50),
+    ("litellm_overhead_seconds", 99),
+    ("litellm_response_seconds", 50),
+    ("litellm_response_seconds", 99),
+    ("prometheus_redis_latency_mean_seconds", None),
+    ("postgres_active_sessions", None),
+    ("postgres_slowest_statement_seconds", None),
+    ("postgres_peak_connections", None),
     ("time_to_first_token_seconds", 50),
     ("time_to_first_token_seconds", 99),
     ("memory_growth_megabytes", None),
@@ -325,6 +370,9 @@ def _detail(metric: Metric, observation: Observation, exempt_tables: frozenset[s
     if metric == "postgres_max_background_statement_per_request":
         busiest_background: Final = observation.busiest_background_statement(exempt_tables)
         return "" if busiest_background is None else busiest_background.summary
+    if metric == "postgres_slowest_statement_seconds":
+        slowest: Final = slowest_statement(observation.statements)
+        return "" if slowest is None else slowest.summary
     return ""
 
 

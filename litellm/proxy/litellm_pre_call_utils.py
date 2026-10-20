@@ -41,6 +41,7 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
+    VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
@@ -253,8 +254,10 @@ from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
+from litellm.types.router import holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    API_KEY_SECRET_REFERENCE_REJECTION,
     CAPTURE_MESSAGE_CONTENT_VAR,
     EXCLUDED_SERVICES_VAR,
     CustomPricingLiteLLMParams,
@@ -1671,11 +1674,9 @@ class LiteLLMProxyRequestSetup:
             metadata_from_headers["agent_id"] = agent_id_from_header
             verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
-        spend_log_session_id: Final = (
+        caller_session_beside_trace: Final = (
             _caller_session_beside_trace_header(normalized_headers, request_body, _metadata_variable_name)
-            if litellm.request_correlation_in_logs
-            and chain_id is not None
-            and chain_id == normalized_headers.get("x-litellm-trace-id")
+            if chain_id is not None and chain_id == normalized_headers.get("x-litellm-trace-id")
             else None
         )
         if chain_id:
@@ -1737,8 +1738,8 @@ class LiteLLMProxyRequestSetup:
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(
-                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: spend_log_session_id}
-                if spend_log_session_id
+                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: caller_session_beside_trace}
+                if caller_session_beside_trace
                 else metadata_from_headers
             )
         return data
@@ -1780,6 +1781,14 @@ class LiteLLMProxyRequestSetup:
             user_api_key_auth_metadata=auth_metadata,
         )
         return user_api_key_logged_metadata
+
+    @staticmethod
+    def get_inherited_tags(user_api_key_dict: UserAPIKeyAuth) -> tuple[str, ...]:
+        """Every tag key, team and project policy contributes, in that order, without repeats"""
+        key_tags: Final = (user_api_key_dict.metadata or MappingProxyType({})).get("tags") or ()  # pyright: ignore[reportUnknownMemberType]  # key metadata is an untyped dict
+        team_tags: Final = (user_api_key_dict.team_metadata or {}).get("tags") or ()
+        project_tags: Final = (user_api_key_dict.project_metadata or {}).get("tags") or ()
+        return tuple(dict.fromkeys((*key_tags, *team_tags, *project_tags)))
 
     @staticmethod
     def add_user_api_key_auth_to_request_metadata(
@@ -2160,7 +2169,7 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"})
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj", VECTOR_STORE_CALLER_METADATA_KWARG})
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )
@@ -2505,7 +2514,6 @@ async def add_litellm_data_to_request(
         metadata=data[_metadata_variable_name],
     )
     team_metadata: Final = user_api_key_dict.team_metadata or {}
-    project_metadata: Final = user_api_key_dict.project_metadata or {}
 
     # inherited_tags: every tag key/team/project policy contributed, read
     # directly from those three sources rather than snapshotted off the shared
@@ -2517,12 +2525,10 @@ async def add_litellm_data_to_request(
     # allow_fail_open reads this (rather than subtracting caller_tags from the
     # final merged set) so a caller can't strip an inherited "!"/"&"
     # constraint's protection just by resubmitting its exact value alongside a
-    # conflicting one.
-    _key_tags: Final = (key_metadata or MappingProxyType({})).get("tags") or ()
-    _team_tags: Final = team_metadata.get("tags") or ()
-    _project_tags: Final = project_metadata.get("tags") or ()
-    data[_metadata_variable_name]["inherited_tags"] = tuple(  # rebind-ok: matches this file's data[...] mutation idiom
-        dict.fromkeys((*_key_tags, *_team_tags, *_project_tags))
+    # conflicting one, and its tag_routing_prefix filter keeps these tags routing
+    # when they are unprefixed.
+    data[_metadata_variable_name]["inherited_tags"] = (  # rebind-ok: matches this file's data[...] mutation idiom
+        LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict)
     )
 
     ## TEAM-LEVEL METADATA
@@ -2735,6 +2741,9 @@ async def add_litellm_data_to_request(
             else None
         ),
     )
+
+    if holds_api_key_secret_reference(data):  # pyright: ignore[reportUnknownArgumentType]  # data is an untyped dict
+        raise HTTPException(status_code=400, detail=API_KEY_SECRET_REFERENCE_REJECTION)
 
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param
@@ -3719,7 +3728,7 @@ def _add_guardrails_from_policies_in_metadata(
 
 def add_guardrails_from_auth_metadata(
     user_api_key_dict: UserAPIKeyAuth,
-    data: dict,  # mutable-ok: writes guardrails into the live request dict, same contract as the helpers it wraps
+    data: dict[str, object],  # mutable-ok: writes guardrails into the live request dict, same contract as helpers
     metadata_variable_name: str,
 ) -> None:
     """Resolve key, team, and project guardrails, direct and via policies, onto the request metadata."""
@@ -3777,7 +3786,7 @@ async def move_guardrails_to_metadata(
 
     add_guardrails_from_auth_metadata(
         user_api_key_dict=user_api_key_dict,
-        data=data,
+        data=data,  # pyright: ignore[reportUnknownArgumentType]  # request data retains a legacy dynamic shape
         metadata_variable_name=_metadata_variable_name,
     )
 
@@ -4088,13 +4097,25 @@ def add_provider_specific_headers_to_request(
     }
 
     scoped_headers: Final = [
-        ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
-        for providers, extra_headers in (
-            (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
-            (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
-            (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
+        scoped_header
+        for scoped_header in (
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.DATABRICKS.value,
+                extra_headers=anthropic_api_headers,
+                native_anthropic_messages_only=True,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
+                extra_headers=anthropic_oauth_credential_headers,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.TYPESAFE.value, extra_headers=typesafe_danger_zone_headers
+            ),
         )
-        if extra_headers
+        if scoped_header["extra_headers"]
     ]
 
     if scoped_headers:

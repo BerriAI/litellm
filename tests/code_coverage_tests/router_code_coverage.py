@@ -42,9 +42,11 @@ def get_all_functions_called_in_tests(base_dir):
         print("dir_path: ", dir_path)
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith(".py") and ("router" in file.lower() or test_dir == "unit"):
+                file_path = os.path.join(root, file)
+                if file.endswith(".py") and (
+                    "router" in os.path.relpath(file_path, dir_path).lower() or test_dir == "unit"
+                ):
                     print("file: ", file)
-                    file_path = os.path.join(root, file)
                     with open(file_path, "r", encoding="utf-8") as f:
                         try:
                             tree = ast.parse(f.read())
@@ -98,6 +100,8 @@ ignored_function_names = [
     "_embedding",
     "_aembedding",
     "_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
+    "_narrow_to_video_deployment",  # Tested through video_status and avideo_status polls in test_router_provider_endpoints.py
+    "_video_call_pin",  # Tested through the video_status pin tests and the chat video_id test in test_router_provider_endpoints.py
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
@@ -134,6 +138,19 @@ ignored_function_names = [
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
+    "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "without_deployments_that_cannot_batch",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "batch_create_routing",  # Tested through the mixed-group acreate_batch tests in test_router.py
+    "is_batch_create_routing",  # Tested through the chat-after-batch-create test in test_router.py
+    "is_batch_capable",  # Tested through the mixed-group acreate_batch and model group info tests in test_router.py
+    "deployments_the_caller_may_use",  # Tested through the usage-based-routing team batch create test in test_router.py
+    "deployment_supported_endpoints",  # Tested through the model group info batch endpoint tests in test_router.py
+    "_endpoint_paths",  # Read by deployment_supported_endpoints, tested through the malformed endpoint list group info test in test_router.py
+    "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
+    "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
+    "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
 ]
 
 

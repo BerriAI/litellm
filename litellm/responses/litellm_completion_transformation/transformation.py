@@ -45,7 +45,7 @@ from litellm.constants import (
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -324,10 +324,6 @@ def _validated_cache_control(value: object) -> ChatCompletionCachedContent | Non
 
 def _dropped_cache_control(_: object) -> None:
     return None
-
-
-def drops_unsupported_params(drop_params: object) -> bool:
-    return litellm.drop_params is True or normalize_drop_params(drop_params) is True
 
 
 def _without_cache_control_key(item: object) -> object:
@@ -762,8 +758,8 @@ class LiteLLMCompletionResponsesConfig:
         """
         Whether ``litellm.completion`` will route this model back onto the Responses API.
 
-        Delegates to the same check ``litellm.completion`` itself runs, and is asked with the
-        params this transform is about to emit, so the two cannot reach different answers.
+        Delegates to the same check ``litellm.completion`` itself runs, asked with the params this
+        transform is about to emit. A deployment's own ``model_info.mode`` pin is not passed here.
         """
         from litellm.main import responses_api_bridge_check
 
@@ -3410,6 +3406,10 @@ class LiteLLMCompletionResponsesConfig:
                 if cache_write_tokens is not None
                 else MappingProxyType({})
             )
+            cache_type: Final = getattr(prompt_details, "cache_type", None)
+            cache_type_extra: Final[Mapping[str, str]] = (
+                MappingProxyType({"cache_type": cache_type}) if cache_type is not None else MappingProxyType({})
+            )
             # The cost path reads the grounding counters off the input details, and a realtime
             # session's usage is rebuilt from its own response.done, so dropping them here bills
             # no per-query grounding fee at all.
@@ -3436,6 +3436,7 @@ class LiteLLMCompletionResponsesConfig:
                     cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
                 ),
                 **cache_write_extra,
+                **cache_type_extra,
                 **grounding_request_counts,
             )
 

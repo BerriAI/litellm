@@ -1465,7 +1465,7 @@ export const teamSpendByUserCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  teamIds: string[],
+  teamIds: readonly string[],
 ): Promise<TeamUserSpendResponse> =>
   apiClient.get<TeamUserSpendResponse>(`/team/spend/by_user`, {
     accessToken,
@@ -5786,7 +5786,7 @@ export const ragIngestCall = async (
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error?.message || error.detail || "Failed to ingest document");
+      throw new Error(deriveErrorMessage(error));
     }
 
     return await response.json();

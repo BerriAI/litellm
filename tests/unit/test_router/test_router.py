@@ -2023,7 +2023,9 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
         ]
     )
 
-    def inject_alias_into_kwargs(deployment, kwargs, function_name=None):
+    def inject_alias_into_kwargs(
+        deployment: dict, kwargs: dict, function_name: str | None = None, splits_stream_timeout: bool = False
+    ) -> None:
         # Simulate the alias leaking into kwargs (as happens when
         # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
         # calling the helper through async_function_with_fallbacks).
@@ -2371,6 +2373,140 @@ def test_model_group_info_description_from_model_info():
     result = router.get_model_group_info("gpt-4")
     assert result is not None
     assert result.description == "State-of-the-art language model."
+
+
+@pytest.mark.parametrize("chat_deployment_first", [True, False])
+def test_model_group_info_lists_batch_for_a_mixed_chat_and_batch_group(chat_deployment_first: bool):
+    chat: Final = _azure_sku_deployment(
+        "gpt-mixed", "unmapped-chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]
+    )
+    batch: Final = _azure_sku_deployment("gpt-mixed", "unmapped-batch-sku", "batch")
+    router: Final = Router(model_list=[chat, batch] if chat_deployment_first else [batch, chat])
+
+    info: Final = router.get_model_group_info("gpt-mixed")
+
+    assert info is not None
+    assert sorted(info.supported_endpoints or ()) == ["/v1/batch", "/v1/chat/completions"]
+
+
+def test_model_group_info_lists_no_batch_for_a_chat_only_group():
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment(
+                "gpt-declared", "unmapped-chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]
+            ),
+            _azure_sku_deployment("gpt-undeclared", "unmapped-undeclared-sku", "chat"),
+        ]
+    )
+
+    declared: Final = router.get_model_group_info("gpt-declared")
+    undeclared: Final = router.get_model_group_info("gpt-undeclared")
+
+    assert declared is not None and declared.supported_endpoints == ("/v1/chat/completions",)
+    assert undeclared is not None and undeclared.supported_endpoints is None
+
+
+@pytest.mark.parametrize(("provider", "lists_batch"), [("azure", False), ("azure_ai", False), ("openai", True)])
+def test_model_group_info_lists_cost_map_batch_only_for_providers_that_batch_on_any_deployment(
+    provider: str, lists_batch: bool
+):
+    """Azure runs batches only on a separate batch deployment, though the cost map lists /v1/batch for its chat
+    models, so an Azure chat group must not advertise it. OpenAI batches through the deployment that serves chat,
+    so its cost map listing stands."""
+    cost_map_name, cost_map_endpoints = next(
+        (name, tuple(info["supported_endpoints"]))
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == provider
+        and info.get("mode") == "chat"
+        and "/v1/batch" in (info.get("supported_endpoints") or ())
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-chat",
+                "litellm_params": {"model": f"{provider}/{cost_map_name.removeprefix(f'{provider}/')}"},
+            }
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-chat")
+
+    assert info is not None
+    assert info.supported_endpoints == tuple(
+        endpoint for endpoint in cost_map_endpoints if lists_batch or endpoint != "/v1/batch"
+    )
+
+
+@pytest.mark.parametrize(
+    "malformed_endpoints",
+    ["/v1/chat/completions", [{"path": "/v1/chat/completions"}], [1], {"/v1/batch": True}],
+)
+def test_model_group_info_skips_a_malformed_endpoint_list_instead_of_failing(malformed_endpoints: object):
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]),
+            _azure_sku_deployment("gpt-mixed", "odd-sku", "chat", supported_endpoints=malformed_endpoints),
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-mixed")
+
+    assert info is not None and info.supported_endpoints == ("/v1/chat/completions",)
+
+
+def test_model_group_info_ignores_a_stored_batch_endpoint_on_an_azure_chat_deployment():
+    """Admin UI saves before v1.104.0 stored the cost map's endpoint list, /v1/batch included, on Azure chat rows,
+    so a stored list cannot mark a deployment as one that runs batches."""
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment(
+                "gpt-stored-endpoints",
+                "unmapped-chat-sku",
+                "chat",
+                supported_endpoints=["/v1/chat/completions", "/v1/batch"],
+            )
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-stored-endpoints")
+
+    assert info is not None and info.supported_endpoints == ("/v1/chat/completions",)
+
+
+@pytest.mark.parametrize(("team_id", "lists_batch"), [(None, False), ("team-b", False), ("team-a", True)])
+def test_model_group_info_lists_batch_only_to_callers_that_may_use_the_batch_deployment(
+    team_id: str | None, lists_batch: bool
+):
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", team_id="team-a"),
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-mixed", team_id=team_id)
+
+    assert info is not None
+    assert ("/v1/batch" in (info.supported_endpoints or ())) is lists_batch
+
+
+def test_model_group_info_lists_only_batch_for_an_azure_batch_deployment():
+    """An Azure batch deployment answers chat, Responses, and Messages calls with 400 "The current operation is not
+    allowed in this deployment", so a group of them must advertise only /v1/batch whatever the endpoint list says."""
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment(
+                "gpt-batch-only",
+                "batch-sku",
+                "batch",
+                supported_endpoints=["/v1/chat/completions", "/v1/responses", "/v1/batch"],
+            )
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-batch-only")
+
+    assert info is not None and info.supported_endpoints == ("/v1/batch",)
 
 
 def _alias_cost_router() -> Router:
@@ -8616,6 +8752,9 @@ def test_wildcard_route_deployments_is_the_one_pattern_routing_serves_from(
 
     assert tuple(Deployment.model_validate(d).model_info.id for d in served) == expected_ids
     assert tuple(Deployment.model_validate(d).model_info.id for d in early_deployments) == expected_ids
+    assert router.wildcard_routed_models(requested, team_id) == frozenset(
+        Deployment.model_validate(d).litellm_params.model for d in served
+    )
 
 
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
@@ -9974,6 +10113,94 @@ def test_update_kwargs_with_deployment_model_info_in_metadata():
     assert model_info["id"] == "custom-pricing-id"
     assert model_info["input_cost_per_token"] == 0.0003
     assert model_info["output_cost_per_token"] == 0.0015
+
+
+def test_update_kwargs_with_deployment_clears_pod_routing_on_non_discovery_fallback() -> None:
+    from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+
+    routing_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.1",
+        "pod_count": 3,
+        "selection": "session_affinity",
+    }
+    discovery_deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "discovery-id"},
+        KUBERNETES_POD_ROUTING_KEY: routing_record,
+    }
+    fallback_deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "fallback-id"},
+    }
+    router: Final = litellm.Router(model_list=[discovery_deployment])
+    kwargs: Final = {"metadata": {}}
+
+    router._update_kwargs_with_deployment(deployment=discovery_deployment, kwargs=kwargs)
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] == routing_record
+
+    router._update_kwargs_with_deployment(deployment=fallback_deployment, kwargs=kwargs)
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] is None
+
+
+def test_update_kwargs_with_deployment_synchronizes_existing_litellm_metadata_pod_routing() -> None:
+    from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+
+    routing_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.1",
+        "pod_count": 3,
+        "selection": "session_affinity",
+    }
+    spoofed_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.9",
+        "pod_count": 3,
+        "selection": "round_robin",
+    }
+    deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "discovery-id"},
+        KUBERNETES_POD_ROUTING_KEY: routing_record,
+    }
+    original_litellm_metadata: Final = {KUBERNETES_POD_ROUTING_KEY: spoofed_record}
+    kwargs: Final = {"metadata": {}, "litellm_metadata": original_litellm_metadata}
+    router: Final = litellm.Router(model_list=[deployment])
+
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="completion")
+
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] == routing_record
+    assert kwargs["litellm_metadata"][KUBERNETES_POD_ROUTING_KEY] == routing_record
+    assert kwargs["litellm_metadata"] is not original_litellm_metadata
+    assert original_litellm_metadata[KUBERNETES_POD_ROUTING_KEY] == spoofed_record
+
+
+def test_update_kwargs_with_non_discovery_deployment_clears_other_pod_routing_bucket() -> None:
+    from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+
+    previous_record: Final = {
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "pod_ip": "10.0.0.1",
+        "pod_count": 3,
+        "selection": "session_affinity",
+    }
+    deployment: Final = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"id": "fallback-id"},
+    }
+    original_litellm_metadata: Final = {KUBERNETES_POD_ROUTING_KEY: previous_record}
+    kwargs: Final = {"metadata": {}, "litellm_metadata": original_litellm_metadata}
+    router: Final = litellm.Router(model_list=[deployment])
+
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="completion")
+
+    assert kwargs["metadata"][KUBERNETES_POD_ROUTING_KEY] is None
+    assert kwargs["litellm_metadata"][KUBERNETES_POD_ROUTING_KEY] is None
+    assert original_litellm_metadata[KUBERNETES_POD_ROUTING_KEY] == previous_record
 
 
 def test_combine_fallback_usage():
@@ -12819,6 +13046,389 @@ async def test_acreate_batch_still_falls_back_within_the_owning_model_group():
     assert "24h" in str(raised.value)
     assert "quotaExceeded" not in str(raised.value)
     assert attempted_models == ["openai/gpt-4o-mini", "openai/gpt-4o-mini-backup"]
+
+
+def _azure_sku_deployment(model_group: str, sku_host: str, mode: str, **model_info: object) -> dict[str, object]:
+    return {
+        "model_name": model_group,
+        "litellm_params": {
+            "model": f"azure/{sku_host}",
+            "api_base": f"https://{sku_host}.openai.azure.com",
+            "api_key": "dummy-key",
+            "api_version": "2025-04-01-preview",
+        },
+        "model_info": {"mode": mode, **model_info},
+    }
+
+
+_AZURE_BATCH_CREATED: Final = {
+    "id": "batch_created",
+    "object": "batch",
+    "endpoint": "/v1/chat/completions",
+    "input_file_id": "file-batch-input",
+    "completion_window": "24h",
+    "status": "validating",
+    "created_at": 0,
+}
+
+
+async def _create_batches(router: Router, model_group: str, attempts: int) -> None:
+    for _ in range(attempts):
+        await router.acreate_batch(
+            model=model_group,
+            input_file_id="file-batch-input",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
+
+
+def _azure_chat_row_with_provider_param() -> dict[str, object]:
+    row: Final = _azure_sku_deployment("gpt-mixed", "chat-sku", "chat")
+    return {**row, "litellm_params": {**row["litellm_params"], "model": "chat-sku", "custom_llm_provider": "azure"}}
+
+
+_AZURE_CHAT_ROWS: Final = {
+    "no-stored-list": lambda: _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+    "stored-cost-map-list": lambda: _azure_sku_deployment(
+        "gpt-mixed", "chat-sku", "chat", supported_endpoints=["/v1/chat/completions", "/v1/batch"]
+    ),
+    "custom-llm-provider-param": _azure_chat_row_with_provider_param,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("build_chat_row", _AZURE_CHAT_ROWS.values(), ids=_AZURE_CHAT_ROWS.keys())
+@pytest.mark.parametrize("routing_strategy", ["simple-shuffle", "latency-based-routing", "usage-based-routing"])
+async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
+    monkeypatch: pytest.MonkeyPatch, routing_strategy: str, build_chat_row: Callable[[], dict[str, object]]
+):
+    """Azure answers 400 invalid_deployment_type when a batch is created on a GlobalStandard
+    (chat) deployment, so a group mixing chat and batch deployments must send every batch
+    create to the deployment that /model_group/info names as the one listing /v1/batch."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            build_chat_row(),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
+        ],
+        routing_strategy=routing_strategy,
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(
+                400,
+                json={"error": {"code": "invalid_deployment_type", "message": "SKU 'GlobalStandard' is not supported"}},
+            )
+        )
+        batch_route: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        await _create_batches(router, "gpt-mixed", attempts=20)
+
+    assert chat_route.call_count == 0
+    assert batch_route.call_count == 20
+
+
+def _azure_wildcard_deployment(sku_host: str, mode: str) -> dict[str, object]:
+    return {
+        "model_name": "mixed-wild/*",
+        "litellm_params": {
+            "model": "azure/*",
+            "api_base": f"https://{sku_host}.openai.azure.com",
+            "api_key": "dummy-key",
+            "api_version": "2025-04-01-preview",
+        },
+        "model_info": {"mode": mode},
+    }
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_on_a_mixed_wildcard_group_only_reaches_batch_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A wildcard group resolves its deployments before the named-group path does, and its batch
+    creates must still only reach the deployments declared with model_info.mode batch."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[_azure_wildcard_deployment("chat-sku", "chat"), _azure_wildcard_deployment("batch-sku", "batch")],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(
+                400,
+                json={"error": {"code": "invalid_deployment_type", "message": "SKU 'GlobalStandard' is not supported"}},
+            )
+        )
+        batch_route: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        await _create_batches(router, "mixed-wild/gpt-5.4-mini", attempts=20)
+
+    assert chat_route.call_count == 0
+    assert batch_route.call_count == 20
+
+
+@pytest.mark.asyncio
+async def test_chat_calls_after_a_batch_create_still_use_every_deployment_in_the_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Only the batch create itself is narrowed to mode batch deployments. Chat calls the same task makes
+    afterwards keep load balancing across the whole group."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"),
+        ],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        await _create_batches(router, "gpt-mixed", attempts=2)
+
+    chat_deployments: Final = {
+        (
+            await router.acompletion(
+                model="gpt-mixed", messages=[{"role": "user", "content": "hi"}], mock_response="ok"
+            )
+        )._hidden_params["model_id"]
+        for _ in range(40)
+    }
+
+    assert chat_deployments == {"chat-deployment", "batch-deployment"}
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_on_a_group_without_batch_deployments_still_uses_every_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Bedrock and OpenAI batch through the same deployment that serves chat, so a group with
+    no mode batch deployment keeps load balancing batch creates across all of them."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-chat-only", "first-chat-sku", "chat"),
+            _azure_sku_deployment("gpt-chat-only", "second-chat-sku", "chat"),
+        ],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        first_route: Final = respx_mock.post(host="first-chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        second_route: Final = respx_mock.post(host="second-chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        await _create_batches(router, "gpt-chat-only", attempts=40)
+
+    assert first_route.call_count > 0
+    assert second_route.call_count > 0
+    assert first_route.call_count + second_route.call_count == 40
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_id", "reached_host"), [(None, "chat-sku"), ("team-a", "batch-sku")])
+async def test_acreate_batch_prefers_only_the_batch_deployments_the_caller_may_use(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, reached_host: str
+):
+    """A batch deployment owned by one team must not take a mixed group's batch creates away from callers
+    outside that team, who still reach the group's shared deployments."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", team_id="team-a"),
+        ],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        routes: Final = {
+            host: respx_mock.post(host=f"{host}.openai.azure.com").mock(
+                return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            )
+            for host in ("chat-sku", "batch-sku")
+        }
+        await router.acreate_batch(
+            model="gpt-mixed",
+            input_file_id="file-batch-input",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+            metadata={"user_api_key_team_id": team_id},
+        )
+
+    assert {host: route.call_count for host, route in routes.items()} == {
+        host: int(host == reached_host) for host in routes
+    }
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_on_a_legacy_routing_strategy_keeps_shared_deployments_for_callers_outside_the_batch_team(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """usage-based-routing picks through the sync path, which keeps every team's deployments, so a batch deployment
+    owned by one team must not pull the creates of callers outside that team onto its credentials."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", team_id="team-a"),
+        ],
+        routing_strategy="usage-based-routing",
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        for _ in range(30):
+            await router.acreate_batch(
+                model="gpt-mixed",
+                input_file_id="file-batch-input",
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+                metadata={"user_api_key_team_id": None},
+            )
+
+    assert chat_route.call_count > 0
+
+
+@pytest.mark.parametrize(
+    ("build_deployment", "model_name"),
+    [
+        (functools.partial(_azure_sku_deployment, "gpt-mixed"), "gpt-mixed"),
+        (_azure_wildcard_deployment, "mixed-wild/gpt-5.4-mini"),
+    ],
+    ids=["named-group", "wildcard-group"],
+)
+def test_credentials_for_a_mixed_group_name_keep_resolving_to_its_first_deployment(
+    build_deployment: Callable[[str, str], dict[str, object]], model_name: str
+):
+    """Model-encoded file, batch, and vector store ids name only the group, and every read resolves their
+    credentials by that name, so adding a batch deployment to a group must not move ids created earlier
+    onto it."""
+    router: Final = Router(model_list=[build_deployment("chat-sku", "chat"), build_deployment("batch-sku", "batch")])
+
+    credentials: Final = router.get_deployment_credentials_with_provider(model_id=model_name)
+
+    assert credentials is not None and credentials["api_base"] == "https://chat-sku.openai.azure.com"
+
+
+_AZURE_CHAT_SKU_REJECTS_BATCH: Final = httpx.Response(
+    400,
+    json={"error": {"code": "invalid_deployment_type", "message": "The current deployment is not supported for batch jobs"}},
+)
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_on_a_mixed_group_reaches_chat_as_on_main_while_its_batch_deployment_cools_down(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """While the batch deployment cools down, a create goes where main sends it, so the caller keeps getting
+    Azure's 400 instead of a router 429 that main never returned for this request."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
+        ],
+        num_retries=0,
+    )
+    _cool_down(router, *(d["model_info"]["id"] for d in router.model_list if d["model_info"]["mode"] == "batch"))
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(return_value=_AZURE_CHAT_SKU_REJECTS_BATCH)
+        with pytest.raises(openai.BadRequestError):
+            await _create_batches(router, "gpt-mixed", attempts=1)
+
+    assert chat_route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_with_tags_that_match_only_the_chat_deployment_reaches_it_as_on_main(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Tag routing runs before the batch filter, so tags that leave only the chat deployment get Azure's 400 as
+    on main instead of a router error saying no deployment matches the tags."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    chat: Final = _azure_sku_deployment("gpt-mixed", "chat-sku", "chat")
+    batch: Final = _azure_sku_deployment("gpt-mixed", "batch-sku", "batch")
+    router: Final = litellm.Router(
+        model_list=[
+            {**chat, "litellm_params": {**chat["litellm_params"], "tags": ["chat-pin"]}},
+            {**batch, "litellm_params": {**batch["litellm_params"], "tags": ["batch-pin"]}},
+        ],
+        enable_tag_filtering=True,
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(return_value=_AZURE_CHAT_SKU_REJECTS_BATCH)
+        batch_route: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        with pytest.raises(openai.BadRequestError):
+            await router.acreate_batch(
+                model="gpt-mixed",
+                input_file_id="file-batch-input",
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+                litellm_metadata={"tags": ["chat-pin"]},
+            )
+        await router.acreate_batch(
+            model="gpt-mixed",
+            input_file_id="file-batch-input",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+            litellm_metadata={"tags": ["batch-pin"]},
+        )
+
+    assert (chat_route.call_count, batch_route.call_count) == (1, 1)
+
+
+def _openai_deployment(model_group: str, host: str, mode: str, **model_info: object) -> dict[str, object]:
+    return {
+        "model_name": model_group,
+        "litellm_params": {"model": "openai/gpt-5.4-mini", "api_base": f"https://{host}/v1", "api_key": "dummy-key"},
+        "model_info": {"mode": mode, **model_info},
+    }
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_on_an_openai_group_falls_back_to_chat_while_its_batch_deployment_cools_down(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """OpenAI runs batches on the deployment that serves chat, so only Azure groups skip chat deployments for
+    batch creates and an OpenAI group keeps serving them while its batch deployment cools down."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _openai_deployment("gpt-mixed", "chat.openai.test", "chat"),
+            _openai_deployment("gpt-mixed", "batch.openai.test", "batch"),
+        ],
+        num_retries=0,
+    )
+    _cool_down(router, *(d["model_info"]["id"] for d in router.model_list if d["model_info"]["mode"] == "batch"))
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(host="chat.openai.test").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        await _create_batches(router, "gpt-mixed", attempts=5)
+
+    assert chat_route.call_count == 5
 
 
 @pytest.mark.asyncio
@@ -23911,6 +24521,105 @@ def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name
     # so the router can find all sibling deployments via team_id filtering
     result = router.map_team_model(team_model_name="team-model", team_id="team-1")
     assert result == "team-model", f"Expected public name 'team-model', got {result}"
+
+
+def _team_deployment(
+    public_name: str,
+    litellm_model: str,
+    team_id: str = "team-a",
+    deployment_id: str | None = None,
+) -> DeploymentTypedDict:
+    return {
+        "model_name": f"internal-{team_id}-{public_name}",
+        "litellm_params": {"model": litellm_model},
+        "model_info": {
+            "id": deployment_id or f"{team_id}-{public_name}",
+            "team_id": team_id,
+            "team_public_model_name": public_name,
+        },
+    }
+
+
+_LANGGRAPH_AGENT: Final[DeploymentTypedDict] = _team_deployment("a-langgraph-agent", "langgraph/repro-agent")
+_BEDROCK_CLAUDE: Final[DeploymentTypedDict] = _team_deployment(
+    "a-bedrock-claude", "bedrock/anthropic.claude-sonnet-4-6"
+)
+_OPENAI_GPT: Final[DeploymentTypedDict] = _team_deployment("a-gpt", "openai/gpt-4o-mini")
+
+
+@pytest.mark.parametrize(
+    "team_models, custom_llm_provider, expected",
+    [
+        pytest.param([_LANGGRAPH_AGENT, _BEDROCK_CLAUDE], "bedrock", "a-bedrock-claude", id="match-is-second"),
+        pytest.param([_BEDROCK_CLAUDE, _LANGGRAPH_AGENT], "bedrock", "a-bedrock-claude", id="match-is-first"),
+        pytest.param([_LANGGRAPH_AGENT, _OPENAI_GPT], "bedrock", None, id="no-match-returns-none"),
+        pytest.param([_LANGGRAPH_AGENT, _BEDROCK_CLAUDE], None, "a-langgraph-agent", id="no-provider-keeps-first"),
+        pytest.param(
+            [_team_deployment("b-bedrock-claude", "bedrock/anthropic.claude-sonnet-4-6", team_id="team-b")],
+            "bedrock",
+            None,
+            id="other-teams-match-ignored",
+        ),
+        pytest.param(
+            [
+                _team_deployment("shared", "langgraph/repro-agent", deployment_id="shared-langgraph"),
+                _team_deployment(
+                    "shared",
+                    "bedrock/anthropic.claude-sonnet-4-6",
+                    deployment_id="shared-bedrock",
+                ),
+            ],
+            "bedrock",
+            "shared-bedrock",
+            id="mixed-public-name-langgraph-first",
+        ),
+        pytest.param(
+            [
+                _team_deployment(
+                    "shared",
+                    "bedrock/anthropic.claude-sonnet-4-6",
+                    deployment_id="shared-bedrock",
+                ),
+                _team_deployment("shared", "langgraph/repro-agent", deployment_id="shared-langgraph"),
+            ],
+            "bedrock",
+            "shared-bedrock",
+            id="mixed-public-name-bedrock-first",
+        ),
+        pytest.param(
+            [
+                _team_deployment("shared", "bedrock/anthropic.claude-sonnet-4-6", deployment_id="bedrock-one"),
+                _team_deployment("shared", "bedrock/anthropic.claude-sonnet-4-6", deployment_id="bedrock-two"),
+            ],
+            "bedrock",
+            "shared",
+            id="same-provider-public-name-keeps-load-balancing",
+        ),
+    ],
+)
+def test_map_team_model_without_model_picks_deployment_serving_the_requested_provider(
+    team_models: list[DeploymentTypedDict], custom_llm_provider: str | None, expected: str | None
+) -> None:
+    """A model-less vector store call routed through the team's first deployment, so a langgraph
+    team model made a Bedrock vector store search fail with "not supported for langgraph"."""
+    router = Router(model_list=team_models)
+
+    result = router.map_team_model(None, "team-a", custom_llm_provider=custom_llm_provider)
+
+    assert result == expected, (
+        f"team models {[m['litellm_params']['model'] for m in team_models]}, provider {custom_llm_provider}"
+    )
+
+
+def test_map_team_model_with_explicit_model_ignores_requested_provider() -> None:
+    router = Router(model_list=[_LANGGRAPH_AGENT, _BEDROCK_CLAUDE])
+
+    result = router.map_team_model("a-langgraph-agent", "team-a", custom_llm_provider="bedrock")
+
+    assert result == "a-langgraph-agent", (
+        "an explicit model is the caller's choice and must not be re-picked by provider"
+    )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 class TestPreCallChecksOptimization:

@@ -25,6 +25,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _OPENAI_BACKEND: Final = "gpt-4o-mini"
 _CLAUDE_BACKEND: Final = "claude-haiku-4-5"
 _GEMINI_BACKEND: Final = "gemini-2.5-flash"

@@ -3939,6 +3939,126 @@ async def test_mcp_per_team_rate_limit_is_enforced_from_team_metadata_v3() -> No
 
 
 @pytest.mark.asyncio
+async def test_inherited_mcp_team_rate_limit_deduplicates_team_and_source_descriptors_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="math-a",
+        name="math_a",
+        server_name="math_a",
+        transport=MCPTransport.http,
+    )
+    inherited_auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-inherited"),
+        team_id="team-a",
+        team_metadata={"mcp_rpm_limit": {"math_a": 1}},
+    ).model_copy(update={"mcp_source_team_rpm_limits": {"team-a": {"math_a": 1}}})
+    descriptors: Final[list[RateLimitDescriptor]] = []
+    handler._add_mcp_per_key_rate_limit_descriptor(inherited_auth, "math_a", descriptors)
+
+    assert descriptors == []
+    team_descriptors: Final[list[RateLimitDescriptor]] = []
+    handler._add_mcp_per_team_rate_limit_descriptor(inherited_auth, "math_a", team_descriptors)
+    assert [(descriptor["key"], descriptor["value"]) for descriptor in team_descriptors] == [
+        ("mcp_per_team", "team-a:math_a")
+    ]
+    await handler.enforce_mcp_server_rate_limits(inherited_auth, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_team"):
+        await handler.enforce_mcp_server_rate_limits(inherited_auth, server)
+
+
+def test_inherited_mcp_team_rate_limit_uses_source_limit_when_primary_metadata_is_missing() -> None:
+    handler, _ = _make_mcp_handler()
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-inherited-source-limit"),
+        team_id="team-a",
+    ).model_copy(update={"mcp_source_team_rpm_limits": {"team-a": {"math_a": 1}}})
+    descriptors: Final[list[RateLimitDescriptor]] = []
+
+    handler._add_mcp_per_team_rate_limit_descriptor(auth, "math_a", descriptors)
+
+    assert descriptors == [
+        {
+            "key": "mcp_per_team",
+            "value": "team-a:math_a",
+            "rate_limit": {
+                "requests_per_unit": 1,
+                "tokens_per_unit": None,
+                "window_size": handler.window_size,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_billed_personal_key_auth_produces_team_rpm_descriptors(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
+
+    server: Final = MCPServer(
+        server_id="math_a",
+        name="math_a",
+        server_name="math_a",
+        transport=MCPTransport.http,
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="team-a",
+        organization_id="org-team-a",
+        rpm_limit=7,
+        object_permission_id="perm-team-a",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-team-a",
+            mcp_servers=["math_a"],
+            mcp_tool_permissions={"math_a": ["add"]},
+        ),
+    )
+    membership: Final = LiteLLM_TeamMembership(
+        user_id="owner",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=3),
+    )
+    user_api_key_auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-billed-personal"),
+        user_id="owner",
+    )
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(auth_checks, "personal_key_owner_teams", AsyncMock(return_value=(team,)))
+    monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=team))
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=membership))
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+
+    billed_auth: Final = await MCPRequestHandler.billing_auth_for_tool_call(user_api_key_auth, "math_a-add")
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+    descriptors: Final = handler.create_rate_limit_descriptors(
+        user_api_key_dict=billed_auth,
+        data={},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+
+    assert [
+        (descriptor["key"], descriptor["value"], descriptor["rate_limit"]["requests_per_unit"])
+        for descriptor in descriptors
+        if descriptor["key"] in ("team", "team_member")
+    ] == [("team", "team-a", 7), ("team_member", "team-a:owner", 3)]
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_rpm_is_shared_across_keys_v3() -> None:
     handler, _ = _make_mcp_handler()
     server: Final = MCPServer(
