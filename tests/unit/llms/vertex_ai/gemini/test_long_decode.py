@@ -1659,6 +1659,54 @@ async def test_env_budget_caps_each_deployment_at_its_own_model_info_limit_and_n
     ]
 
 
+@pytest.mark.asyncio
+async def test_env_budget_on_a_direct_call_never_goes_above_the_cost_map_limit_after_a_router_raised_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model: Final = "gemini/gemini-2.5-flash"
+    model_limit: Final = _cost_map_max_output_tokens(model)
+    monkeypatch.setenv(BUDGET_ENV, str(2 * model_limit))
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "raised",
+                "litellm_params": {"model": model, "api_key": "fake-gemini-key"},
+                "model_info": {"max_output_tokens": 4 * model_limit},
+            }
+        ]
+    )
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=model,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {"max_output_tokens": model_limit}
+
+
+@pytest.mark.asyncio
+async def test_env_budget_on_a_direct_call_follows_a_lower_limit_set_with_register_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model: Final = "gemini/gemini-2.5-flash"
+    lowered_limit: Final = _cost_map_max_output_tokens(model) // 4
+    monkeypatch.setenv(BUDGET_ENV, str(2 * lowered_limit))
+    litellm.register_model({model: {"litellm_provider": "gemini", "max_output_tokens": lowered_limit}})
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=model,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {"max_output_tokens": lowered_limit}
+
+
 @pytest.mark.parametrize(
     "generation_config",
     [None, {"responseModalities": None}, {"responseModalities": {"TEXT": 1}}],

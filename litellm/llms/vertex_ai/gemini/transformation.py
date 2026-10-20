@@ -1340,10 +1340,10 @@ def _output_limit(fields: object) -> int | None:
         return None
 
 
-def _deployment_output_limit(cost_map_key: str, deployment_model_info: object) -> int | None:
+def _catalog_capped_output_limit(cost_map_key: str, override: object) -> int | None:
     limits: Final = (
         _output_limit(GetModelCostMap.loaded_model_cost_map().get(cost_map_key)),
-        _output_limit(deployment_model_info),
+        _output_limit(override),
     )
     return min((limit for limit in limits if limit is not None), default=None)
 
@@ -1356,9 +1356,7 @@ def _text_chat_model_max_output_tokens(
         return None
     if not _answers_text(info["key"]):
         return None
-    if deployment_model_info:
-        return _deployment_output_limit(info["key"], deployment_model_info)
-    return info.get("max_output_tokens")
+    return _catalog_capped_output_limit(info["key"], deployment_model_info or info)
 
 
 def _with_default_output_budget(
