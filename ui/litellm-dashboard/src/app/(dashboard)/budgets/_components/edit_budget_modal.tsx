@@ -25,6 +25,7 @@ interface EditBudgetModalProps {
 const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIsModalVisible, existingBudget }) => {
   const formId = useId();
   const form = useBudgetForm(toFormValues(existingBudget));
+  const { dirtyFields } = form.formState;
   const updateBudget = useUpdateBudget();
 
   useEffect(() => {
@@ -39,7 +40,7 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
   const handleUpdate = async (formValues: BudgetFormValues) => {
     try {
       toast.info("Making API Call");
-      const changedValues = pickDirty(formValues, form.formState.dirtyFields);
+      const changedValues = pickDirty(formValues, dirtyFields);
       await updateBudget.mutateAsync(applyBudgetPrecision({ budget_id: formValues.budget_id, ...changedValues }));
       toast.success("Budget Updated");
       form.reset();

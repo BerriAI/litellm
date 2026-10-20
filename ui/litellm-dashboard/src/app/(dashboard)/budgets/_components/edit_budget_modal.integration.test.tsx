@@ -64,6 +64,19 @@ describe("EditBudgetModal", () => {
     expect(updateMock.mock.calls[0][0]).toEqual({ budget_id: "budget-alpha", tpm_limit: 500 });
   });
 
+  it("sends a later change after another field was changed and reverted", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "500" } });
+    fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "1000" } });
+    fireEvent.change(screen.getByLabelText("Requests per minute"), { target: { value: "20" } });
+    await save(user);
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(updateMock.mock.calls[0][0]).toEqual({ budget_id: "budget-alpha", rpm_limit: 20 });
+  });
+
   it("submits a changed spend limit and reset period", async () => {
     const user = userEvent.setup();
     renderModal();
