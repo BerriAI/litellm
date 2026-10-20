@@ -363,10 +363,12 @@ async def _seed_shared_a2a_client(
     it. The injected client is a real httpx.AsyncClient, so the merge of per-request
     headers over client defaults, which is what these tests are about, stays real.
     """
-    recorder = recorder or _RequestRecorder(card=card, rpc_reply=rpc_reply, rpc_stream_events=rpc_stream_events)
+    active_recorder: Final = recorder or _RequestRecorder(
+        card=card, rpc_reply=rpc_reply, rpc_stream_events=rpc_stream_events
+    )
     handler = AsyncHTTPHandler(timeout=DEFAULT_A2A_AGENT_TIMEOUT)
     owned_client = handler.client
-    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(active_recorder))
     await owned_client.aclose()
 
     litellm.in_memory_llm_clients_cache.set_cache(
@@ -378,8 +380,8 @@ async def _seed_shared_a2a_client(
     )
     assert seeded is handler, "cache key drifted from get_async_httpx_client; these tests would test nothing"
 
-    recorder.client = handler.client
-    return recorder
+    active_recorder.client = handler.client
+    return active_recorder
 
 
 @pytest.fixture
@@ -695,7 +697,9 @@ class _CardServedAtRecorder(_RequestRecorder):
 
 
 @pytest.mark.asyncio
-async def test_streamed_send_is_timed_from_before_the_agent_card_fetch(isolated_client_cache, monkeypatch):
+async def test_streamed_send_is_timed_from_before_the_agent_card_fetch(
+    isolated_client_cache: LLMClientCache, monkeypatch: pytest.MonkeyPatch
+):
     from litellm.a2a_protocol import main as a2a_main
 
     card_recorder: Final = _CardServedAtRecorder()
