@@ -83,9 +83,16 @@ async def _send(router: Router, request_options: Mapping[str, object], backend: 
         ({"drop_params": True}, {}, {}, False),
         ({}, {"drop_params": True}, {}, False),
         ({}, {}, {"drop_params": True}, False),
+        ({}, {}, {"drop_params": "true"}, False),
         ({}, {}, {}, True),
     ),
-    ids=("deployment-drop-params", "router-default-drop-params", "request-drop-params", "litellm-drop-params"),
+    ids=(
+        "deployment-drop-params",
+        "router-default-drop-params",
+        "request-drop-params",
+        "request-drop-params-string",
+        "litellm-drop-params",
+    ),
 )
 async def test_messages_sends_the_unedited_body_when_drop_params_drops_an_invalid_edit(
     deployment_params: Mapping[str, object],
@@ -113,7 +120,8 @@ async def test_messages_rejects_an_invalid_edit_without_drop_params() -> None:
     assert backend.calls == []
 
 
-def test_sync_messages_sends_the_unedited_body_when_drop_params_drops_an_invalid_edit() -> None:
+@pytest.mark.parametrize("drop_params", (True, "true"), ids=("drop-params", "drop-params-string"))
+def test_sync_messages_sends_the_unedited_body_when_drop_params_drops_an_invalid_edit(drop_params: bool | str) -> None:
     backend: Final = _SyncBackend()
     with patch.object(litellm, "drop_params", False), patch("litellm.completion", new=backend):
         response: Final = LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
@@ -122,7 +130,7 @@ def test_sync_messages_sends_the_unedited_body_when_drop_params_drops_an_invalid
             model="gemini/gemini-2.5-flash",
             api_key="test-key",
             context_management=_INVALID_COMPACT_EDIT,
-            drop_params=True,
+            drop_params=drop_params,
         )
 
     assert isinstance(response, dict)

@@ -2406,7 +2406,13 @@ def _tool_use_messages() -> List[Dict[str, Any]]:
         },
         {
             "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny in SF"}],
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": "sunny in SF, 18 C, light wind from the west, no rain today",
+                }
+            ],
         },
         {
             "role": "assistant",
@@ -2414,7 +2420,13 @@ def _tool_use_messages() -> List[Dict[str, Any]]:
         },
         {
             "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "toolu_02", "content": "rainy in NY"}],
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_02",
+                    "content": "rainy in NY, 11 C, strong wind from the east, rain all day",
+                }
+            ],
         },
         {"role": "user", "content": "now summarize both"},
     ]
