@@ -302,10 +302,12 @@ async def test_cached_stream_replay_logs_once_when_polled_after_exhaustion():
         await asyncio.sleep(0)
 
     mock_route.assert_called_once()
+
+
 class _ReplayRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.logged: list[tuple[object, datetime.datetime]] = []
+        self.logged: list[object] = []
 
     async def async_log_success_event(
         self,
@@ -314,7 +316,7 @@ class _ReplayRecorder(CustomLogger):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None:
-        self.logged.append((kwargs.get("completion_start_time"), end_time))
+        self.logged.append(kwargs.get("completion_start_time"))
 
 
 @pytest.mark.asyncio
@@ -325,7 +327,7 @@ async def test_cached_stream_replay_logs_when_its_first_event_was_replayed():
         messages=[{"role": "user", "content": "which greek letter?"}],
         stream=True,
         call_type="anthropic_messages",
-        start_time=datetime.datetime.now(),
+        start_time=datetime.datetime(2026, 10, 20, 12, 0, 0),
         litellm_call_id="cached-replay",
         function_id="cached-replay",
         dynamic_async_success_callbacks=[recorder],
@@ -343,16 +345,13 @@ async def test_cached_stream_replay_logs_when_its_first_event_was_replayed():
         request_body={"model": "claude-sonnet-4-5", "stream": True},
     )
 
-    before_first_event: Final = datetime.datetime.now()
     _ = await iterator.__anext__()
-    after_first_event: Final = datetime.datetime.now()
-    await asyncio.sleep(0.01)
+    first_event_at: Final = iterator.completion_start_time
     _ = await _collect(iterator)
     await GLOBAL_LOGGING_WORKER.flush()
 
-    ((completion_start, end_time),) = recorder.logged
-    assert isinstance(completion_start, datetime.datetime)
-    assert before_first_event <= completion_start <= after_first_event < end_time
+    assert first_event_at is not None
+    assert recorder.logged == [first_event_at]
 
 
 class _HeldBackStream:
