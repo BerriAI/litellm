@@ -201,13 +201,13 @@ describe("UserInfoView add-to-team form", () => {
 
       await openEditor(user);
       await user.click(screen.getByRole("combobox", { name: "Reset Budget" }));
-      await user.click(await screen.findByRole("option", { name: "n/a" }));
+      await user.click(await screen.findByRole("option", { name: "Never resets" }));
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalled());
       expect(mockUserUpdateUserCall.mock.calls[0][1]).toMatchObject({ budget_duration: null });
       await openEditor(user);
-      expect(screen.getByRole("combobox", { name: "Reset Budget" })).toHaveTextContent("n/a");
+      expect(screen.getByRole("combobox", { name: "Reset Budget" })).toHaveTextContent("Never resets");
     });
   });
 
