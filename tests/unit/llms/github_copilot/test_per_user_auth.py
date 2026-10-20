@@ -889,7 +889,7 @@ def test_completion_sends_each_copilot_client_header_once_with_its_configured_va
 
     _shared_login(tmp_path, monkeypatch)
     monkeypatch.setenv("GITHUB_COPILOT_USER_AGENT", "opencode/1.18.7")
-    sent: list[httpx.Request] = []
+    sent: Final[list[httpx.Request]] = []
 
     def capture(request: httpx.Request) -> httpx.Response:
         sent.append(request)
