@@ -2621,7 +2621,10 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     if kind is None:
         return None
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
-        tokenizer: Final = _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend())
+        tokenizer_or_error: Final = _huggingface_tokenizer_or_load_error(kind, _huggingface_tokenizer_backend())
+        if isinstance(tokenizer_or_error, Exception):
+            raise tokenizer_or_error
+    tokenizer: Final = tokenizer_or_error
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -2645,6 +2648,18 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
             return tokenizer_dispatch.from_pretrained("Xenova/llama-3-tokenizer")
         case _:
             assert_never(kind)
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _huggingface_tokenizer_or_load_error(kind: HuggingFaceTokenizerKind, backend: Decision) -> HuggingFace | Exception:
+    try:
+        return _load_huggingface_tokenizer(kind, backend)
+    except Exception as error:
+        from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+        if isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
+            raise
+        return error
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):

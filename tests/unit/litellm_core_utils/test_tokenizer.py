@@ -406,10 +406,11 @@ def test_huggingface_encoding_exposes_the_tokenizers_lookup_and_mutation_surface
 @pytest.mark.parametrize("log_level", ["WARNING", "ERROR"])
 def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeypatch, log_level):
     from unittest.mock import patch
-    from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper
+    from litellm.utils import _huggingface_tokenizer_or_load_error, _load_huggingface_tokenizer, _select_tokenizer_helper
 
     monkeypatch.setenv("LITELLM_RUST", "false")
     _load_huggingface_tokenizer.cache_clear()
+    _huggingface_tokenizer_or_load_error.cache_clear()
     with caplog.at_level(log_level, logger="LiteLLM"), patch.dict(sys.modules, {"tokenizers": None}):
         result = _select_tokenizer_helper("llama-2")
     assert result["type"] == "openai_tokenizer"
@@ -471,10 +472,11 @@ def test_added_token_return_annotation_resolves_without_optional_import(python_i
 def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import patch
-    from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper
+    from litellm.utils import _huggingface_tokenizer_or_load_error, _load_huggingface_tokenizer, _select_tokenizer_helper
 
     monkeypatch.setenv("LITELLM_RUST", "false")
     _load_huggingface_tokenizer.cache_clear()
+    _huggingface_tokenizer_or_load_error.cache_clear()
     model = "llama-2\r\nforged-model\x1b[31m\u2028\u2029"
     secret = "sk-" + "x" * 48
     failure = OSError("download failed\r\nforged-error\x1b[31m api_key=" + secret)

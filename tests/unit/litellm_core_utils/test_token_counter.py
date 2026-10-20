@@ -940,10 +940,17 @@ def test_token_counter():
 
 import unittest
 
-from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper, claude_json_str, encoding
+from litellm.utils import (
+    _huggingface_tokenizer_or_load_error,
+    _load_huggingface_tokenizer,
+    _select_tokenizer_helper,
+    claude_json_str,
+    encoding,
+)
 
 # Clear the cache at module load to ensure clean state
 _load_huggingface_tokenizer.cache_clear()
+_huggingface_tokenizer_or_load_error.cache_clear()
 
 
 class TestTokenizerSelection(unittest.TestCase):
@@ -955,6 +962,7 @@ class TestTokenizerSelection(unittest.TestCase):
         --dist=loadscope (tests from same file run on same worker).
         """
         _load_huggingface_tokenizer.cache_clear()
+        _huggingface_tokenizer_or_load_error.cache_clear()
 
     @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
@@ -1038,6 +1046,28 @@ class TestTokenizerSelection(unittest.TestCase):
         finally:
             monkeypatch.undo()
 
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
+    def test_failed_huggingface_tokenizer_download_is_not_retried_on_every_count(self, mock_from_pretrained):
+        _load_huggingface_tokenizer.cache_clear()
+        _huggingface_tokenizer_or_load_error.cache_clear()
+        try:
+            mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
+            model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+            text: Final = "Count the tokens for this message."
+            expected: Final = len(encoding.encode(text, disallowed_special=()))
+
+            first_count: Final = litellm.token_counter(model=model, text=text)
+            first_attempts: Final = mock_from_pretrained.call_count
+            second_count: Final = litellm.token_counter(model=model, text=text)
+
+            assert first_attempts > 0
+            assert mock_from_pretrained.call_count == first_attempts
+            assert first_count == expected
+            assert second_count == expected
+        finally:
+            _load_huggingface_tokenizer.cache_clear()
+            _huggingface_tokenizer_or_load_error.cache_clear()
+
 
 _CODE_SAMPLE: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
 
@@ -1104,6 +1134,7 @@ def test_disable_hf_tokenizer_download_keeps_deepseek_v4_on_cl100k(monkeypatch: 
 
 def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
     _load_huggingface_tokenizer.cache_clear()
+    _huggingface_tokenizer_or_load_error.cache_clear()
     start: Final = threading.Barrier(8)
 
     def first_tokenizer(_: int) -> object:
