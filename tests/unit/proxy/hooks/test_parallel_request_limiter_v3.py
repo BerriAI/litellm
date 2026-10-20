@@ -6,7 +6,7 @@ import asyncio
 import logging
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Final, List, Optional
@@ -8686,3 +8686,184 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
         await _rpm_request(limiter, cache, auth, "a2a/cheap")
     assert denied.value.status_code == 429
     assert "expensive" in str(denied.value.detail)
+
+
+_SCOPE_TOKEN_KEYS: Final = frozenset(
+    {
+        "{api_key:key-hash}:tokens",
+        "{user:u}:tokens",
+        "{team:t}:tokens",
+        "{team_member:t:u}:tokens",
+        "{model_per_key:key-hash:gpt-4o-mini}:tokens",
+        "{model_per_team:t:gpt-4o-mini}:tokens",
+    }
+)
+
+
+def _scoped_success_kwargs(
+    model_group: str, key_metadata: Dict[str, object] | None = None, call_id: str | None = None
+) -> Dict[str, object]:
+    return {
+        **({} if call_id is None else {"litellm_call_id": call_id}),
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": "key-hash", "user_api_key_user_id": "u", "user_api_key_team_id": "t"}
+        },
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "user_api_key_metadata": key_metadata or {},
+                "user_api_key_team_metadata": {},
+            }
+        },
+        "model": model_group,
+    }
+
+
+async def _admit_scoped_request(
+    handler: _PROXY_MaxParallelRequestsHandler, auth: UserAPIKeyAuth, model: str, call_id: str | None = None
+) -> None:
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=handler.internal_usage_cache.dual_cache,
+        data={
+            "model": model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 20,
+            **({} if call_id is None else {"litellm_call_id": call_id}),
+        },
+        call_type="acompletion",
+    )
+
+
+def _charged_token_keys(handler: _PROXY_MaxParallelRequestsHandler, kwargs: Dict[str, object]) -> frozenset[str]:
+    operations: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs,
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=2, completion_tokens=1, total_tokens=3)),
+        rate_limit_type="total",
+    )
+    return frozenset(operation["key"] for operation in operations)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limits, charged",
+    [
+        ({}, frozenset()),
+        ({"rpm_limit": 100}, frozenset({"{api_key:key-hash}:tokens"})),
+        ({"max_parallel_requests": 10}, frozenset({"{api_key:key-hash}:tokens"})),
+        ({"tpm_limit": 1000}, frozenset({"{api_key:key-hash}:tokens"})),
+        ({"tpm_limit": 1000, "metadata": {"tpm_limit_type": "dynamic"}}, frozenset({"{api_key:key-hash}:tokens"})),
+        ({"user_rpm_limit": 100}, frozenset({"{user:u}:tokens"})),
+        ({"team_tpm_limit": 1000}, frozenset({"{team:t}:tokens"})),
+        ({"team_member_rpm_limit": 100}, frozenset({"{team_member:t:u}:tokens"})),
+        (
+            {"metadata": {"model_rpm_limit": {"gpt-4o-mini": 100}}},
+            frozenset({"{model_per_key:key-hash:gpt-4o-mini}:tokens"}),
+        ),
+    ],
+    ids=[
+        "no_limits",
+        "key_rpm",
+        "key_max_parallel",
+        "key_tpm_reserved",
+        "key_dynamic_tpm",
+        "user_rpm",
+        "team_tpm_reserved",
+        "team_member_rpm",
+        "key_model_rpm",
+    ],
+)
+async def test_success_charges_tokens_only_to_scopes_admission_rate_limited(
+    limits: Dict[str, object], charged: frozenset[str]
+) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    await _admit_scoped_request(
+        handler, UserAPIKeyAuth(api_key="key-hash", user_id="u", team_id="t", **limits), "gpt-4o-mini"
+    )
+
+    assert _charged_token_keys(handler, _scoped_success_kwargs("gpt-4o-mini")) == charged
+
+
+@pytest.mark.asyncio
+async def test_fallback_success_charges_the_model_scopes_of_the_group_that_served_it() -> None:
+    key_metadata: Final = {"model_tpm_limit": {"fallback-model": 1000}}
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    await _admit_scoped_request(
+        handler, UserAPIKeyAuth(api_key="key-hash", user_id="u", team_id="t", metadata=key_metadata), "primary-model"
+    )
+
+    assert _charged_token_keys(handler, _scoped_success_kwargs("fallback-model", key_metadata)) == {
+        "{model_per_key:key-hash:fallback-model}:tokens"
+    }
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "success_end_user, charged",
+    [
+        (None, frozenset({"{end_user:admitted-customer}:tokens"})),
+        ("admitted-customer", frozenset({"{end_user:admitted-customer}:tokens"})),
+        ("other-customer", frozenset()),
+    ],
+    ids=["metadata_end_user", "same_body_user", "different_body_user"],
+)
+async def test_success_charges_the_end_user_admission_checked_and_no_other(
+    success_end_user: str | None, charged: frozenset[str]
+) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    await _admit_scoped_request(
+        handler,
+        UserAPIKeyAuth(api_key="key-hash", end_user_id="admitted-customer", end_user_rpm_limit=100),
+        "gpt-4o-mini",
+    )
+    kwargs: Final = _scoped_success_kwargs("gpt-4o-mini")
+    kwargs["standard_logging_object"] = {
+        "metadata": {"user_api_key_hash": "key-hash", "user_api_key_end_user_id": "admitted-customer"}
+    }
+    if success_end_user is not None:
+        kwargs["user"] = success_end_user
+
+    assert _charged_token_keys(handler, kwargs) == charged
+
+
+@pytest.mark.asyncio
+async def test_success_on_an_aliased_model_charges_the_model_limit_of_the_resolved_group() -> None:
+    key_metadata: Final = {"model_rpm_limit": {"target": 100}}
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), model_group_resolver=_resolve_alias_to_target
+    )
+    await _admit_scoped_request(
+        handler, UserAPIKeyAuth(api_key="key-hash", user_id="u", team_id="t", metadata=key_metadata), "alias"
+    )
+
+    assert _charged_token_keys(handler, _scoped_success_kwargs("target", key_metadata)) == {
+        "{model_per_key:key-hash:target}:tokens"
+    }
+
+async def _no_stash(handler: _PROXY_MaxParallelRequestsHandler) -> str | None:
+    _request_stash.set(None)
+    return None
+
+
+async def _nested_call(handler: _PROXY_MaxParallelRequestsHandler) -> str | None:
+    await _admit_scoped_request(
+        handler, UserAPIKeyAuth(api_key="key-hash", user_id="u", team_id="t"), "gpt-4o-mini", "proxy-request"
+    )
+    return "nested-call"
+
+
+async def _stash_without_admission(handler: _PROXY_MaxParallelRequestsHandler) -> str | None:
+    _request_stash.set(RequestRateLimiterStash())
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arrange", [_no_stash, _nested_call, _stash_without_admission])
+async def test_success_charges_every_scope_when_the_call_was_not_admitted(
+    arrange: Callable[[_PROXY_MaxParallelRequestsHandler], Awaitable[str | None]],
+) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    call_id: Final = await arrange(handler)
+
+    assert _charged_token_keys(handler, _scoped_success_kwargs("gpt-4o-mini", call_id=call_id)) == _SCOPE_TOKEN_KEYS

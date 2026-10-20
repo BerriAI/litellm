@@ -515,6 +515,9 @@ _AUDIO_BYTES_PER_TOKEN: Final = 1600
 PROJECT_ITPM_DESCRIPTOR_KEY: Final = "model_per_project_itpm"
 PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
 PTU_TEAM_DESCRIPTOR_KEY: Final = "model_per_team_ptu"
+_MODEL_SCOPED_TPM_TARGETS: Final = frozenset(
+    {"model_per_key", "model_per_team", "model_per_organization", "model_per_project"}
+)
 # How long an acquired slot counts toward the in-flight total before it is
 # considered leaked (worker crashed without any release callback firing) and
 # pruned. Also the longest request duration the gauge can track: a request
@@ -665,6 +668,14 @@ class CallTypeRateLimiter(Protocol):
     ) -> Exception | str | dict[str, object] | None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class AdmittedRateLimitScopes:
+    """Every ``(scope, value)`` the pre-call hook built a rate limit descriptor for, and the model group it checked."""
+
+    scopes: frozenset[tuple[str, str]]
+    model_group: str | None
+
+
 @dataclass(slots=True)
 class RequestRateLimiterStash:
     """
@@ -712,6 +723,7 @@ class RequestRateLimiterStash:
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
+    admitted_scopes: AdmittedRateLimitScopes | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -4197,6 +4209,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             for d in descriptors
             if d["key"] == "tag" and d["rate_limit"] is not None and d["rate_limit"].get("tokens_per_unit") is not None
         )
+        stash.admitted_scopes = self._admitted_scopes(descriptors, requested_model)
 
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
@@ -5017,6 +5030,36 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         targets.extend(("tag", tag) for tag in sorted(tpm_limited_tags))
         return targets
 
+    def _admitted_scopes(
+        self, descriptors: Sequence[RateLimitDescriptor], requested_model: str | None
+    ) -> AdmittedRateLimitScopes:
+        model: Final = self._rate_limited_model(requested_model)
+        return AdmittedRateLimitScopes(
+            scopes=frozenset((d["key"], d["value"]) for d in descriptors),
+            model_group=model.group if model is not None else None,
+        )
+
+    @staticmethod
+    def _rate_limited_targets(
+        targets: Sequence[tuple[str, str]],
+        admitted: AdmittedRateLimitScopes | None,
+        model_group: str | None,
+    ) -> Sequence[tuple[str, str]]:
+        """
+        Keep the TPM targets admission built a rate limit descriptor for, plus
+        the per-model targets when tokens are settled against a model group
+        admission did not check. Every target stays when no admission was
+        recorded for the call.
+        """
+        if admitted is None:
+            return targets
+        served_admitted_group: Final = model_group == admitted.model_group
+        return tuple(
+            target
+            for target in targets
+            if target in admitted.scopes or (not served_admitted_group and target[0] in _MODEL_SCOPED_TPM_TARGETS)
+        )
+
     def _build_reservation_aware_tpm_ops(
         self,
         targets: Sequence[tuple[str, str]],
@@ -5197,10 +5240,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             for scope in sorted(reserved_scopes)
             if scope[0] in ("agent", "agent_session") and scope not in targets
         )
+        limited_targets: Final = self._rate_limited_targets(
+            targets=targets,
+            admitted=stash.admitted_scopes if stash is not None else None,
+            model_group=reconcile_model.group if reconcile_model is not None else None,
+        )
         charged_targets: Final = (
-            [target for target in targets if target[0] != "model_per_team"]
+            [target for target in limited_targets if target[0] != "model_per_team"]
             if self._key_owns_model_tpm_limit_from_request_metadata(request_metadata, reconcile_model)
-            else targets
+            else limited_targets
         )
         if reserved_tokens > 0 and total_tokens < reserved_tokens:
             verbose_proxy_logger.debug(
