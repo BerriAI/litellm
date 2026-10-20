@@ -171,7 +171,9 @@ class ContextCachingEndpoints(VertexBase):
             vertex_auth_header=vertex_auth_header,
             model=model,
         )
-        scope: Final = KnownCachedContents.scope(base_url, custom_llm_provider, headers)
+        scope: Final = KnownCachedContents.scope(
+            base_url, custom_llm_provider, headers, vertex_project=vertex_project, vertex_location=vertex_location
+        )
         known_name: Final = self._known_caches.get(scope, cache_key)
         if known_name is not None:
             return known_name
@@ -268,7 +270,9 @@ class ContextCachingEndpoints(VertexBase):
             vertex_auth_header=vertex_auth_header,
             model=model,
         )
-        scope: Final = KnownCachedContents.scope(base_url, custom_llm_provider, headers)
+        scope: Final = KnownCachedContents.scope(
+            base_url, custom_llm_provider, headers, vertex_project=vertex_project, vertex_location=vertex_location
+        )
         known_name: Final = self._known_caches.get(scope, cache_key)
         if known_name is not None:
             return known_name
@@ -484,7 +488,9 @@ class ContextCachingEndpoints(VertexBase):
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
         self._known_caches.remember(
-            KnownCachedContents.scope(url, custom_llm_provider, headers),
+            KnownCachedContents.scope(
+                url, custom_llm_provider, headers, vertex_project=vertex_project, vertex_location=vertex_location
+            ),
             generated_cache_key,
             raw_response_cached.get("name"),
             raw_response_cached.get("expireTime"),
@@ -586,7 +592,9 @@ class ContextCachingEndpoints(VertexBase):
         generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        scope: Final = KnownCachedContents.scope(url, custom_llm_provider, headers)
+        scope: Final = KnownCachedContents.scope(
+            url, custom_llm_provider, headers, vertex_project=vertex_project, vertex_location=vertex_location
+        )
 
         async def lookup_or_create() -> str | None:
             google_cache_name: Final = await self.async_check_cache(

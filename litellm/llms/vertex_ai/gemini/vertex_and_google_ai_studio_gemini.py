@@ -2866,14 +2866,18 @@ async def make_call(
         )
 
     async def open_hop(body: RequestBody) -> httpx.Response:
-        return await client.post(
-            url_for(api_base, body),
-            headers=dict(await hop_headers()),
-            data=json.dumps(body),
-            stream=True,
-            logging_obj=logging_obj,
-            timeout=timeout,
-        )
+        try:
+            return await client.post(
+                url_for(api_base, body),
+                headers=dict(await hop_headers()),
+                data=json.dumps(body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            )
+        except httpx.HTTPStatusError as e:
+            known_cached_contents.forget_rejected(body.get("cachedContent"), e.response.status_code)
+            raise
 
     completion_stream: Final = ModelResponseIterator(
         streaming_response=response.aiter_lines(),
@@ -2933,14 +2937,18 @@ def make_sync_call(
         )
 
     def open_hop(body: RequestBody) -> httpx.Response:
-        return client.post(
-            url_for(api_base, body),
-            headers=dict(hop_headers()),
-            data=json.dumps(body),
-            stream=True,
-            logging_obj=logging_obj,
-            timeout=timeout,
-        )
+        try:
+            return client.post(
+                url_for(api_base, body),
+                headers=dict(hop_headers()),
+                data=json.dumps(body),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            )
+        except httpx.HTTPStatusError as e:
+            known_cached_contents.forget_rejected(body.get("cachedContent"), e.response.status_code)
+            raise
 
     completion_stream: Final = ModelResponseIterator(
         streaming_response=response.iter_lines(),

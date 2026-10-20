@@ -22,6 +22,7 @@ _REGISTRY_MODULE: Final = "litellm.llms.vertex_ai.context_caching.known_cached_c
 _SCOPE: Final = ("https://vertex.test/v1/projects/p/locations/us/cachedContents", "")
 _NOW: Final = datetime(2026, 10, 14, 18, 0, tzinfo=timezone.utc).timestamp()
 _FAR_FUTURE: Final = "2100-01-01T00:00:00.123456789Z"
+_GATEWAY: Final = "https://gateway.test/vertex"
 _PREFIX_REPEATS: Final = max(
     get_prompt_cache_min_tokens(model=f"{provider}/gemini-3.1-pro") for provider in ("vertex_ai", "gemini")
 )
@@ -66,38 +67,44 @@ def _sync_call(
     custom_llm_provider: str = "vertex_ai",
     messages=None,
     extra_headers: dict | None = None,
+    api_base: str | None = None,
+    vertex_project: str = "p",
 ):
     return endpoints.check_and_create_cache(
         extra_headers=extra_headers,
         messages=messages or _messages(),
         optional_params={},
         api_key=api_key,
-        api_base=None,
+        api_base=api_base,
         model="gemini-3.1-pro",
         client=client,
         timeout=30.0,
         logging_obj=MagicMock(model_call_details={}),
         custom_llm_provider=custom_llm_provider,
-        vertex_project="p",
+        vertex_project=vertex_project,
         vertex_location="us",
         vertex_auth_header="token",
     )
 
 
 async def _async_call(
-    endpoints: ContextCachingEndpoints, client: AsyncHTTPHandler, timeout: float | httpx.Timeout = 30.0
+    endpoints: ContextCachingEndpoints,
+    client: AsyncHTTPHandler,
+    timeout: float | httpx.Timeout = 30.0,
+    api_base: str | None = None,
+    vertex_project: str = "p",
 ):
     return await endpoints.async_check_and_create_cache(
         messages=_messages(),
         optional_params={},
         api_key="k",
-        api_base=None,
+        api_base=api_base,
         model="gemini-3.1-pro",
         client=client,
         timeout=timeout,
         logging_obj=MagicMock(model_call_details={}),
         custom_llm_provider="vertex_ai",
-        vertex_project="p",
+        vertex_project=vertex_project,
         vertex_location="us",
         vertex_auth_header="token",
     )
@@ -226,6 +233,43 @@ def test_gemini_cache_created_with_an_overridden_api_key_is_not_reused_with_the_
     configured: Final = _sync_call(endpoints, client, api_key="deployment-key", custom_llm_provider="gemini")
 
     assert (caller[2], configured[2]) == ("cachedContents/caller-project", "cachedContents/deployment-project")
+
+
+def test_vertex_caches_behind_one_custom_api_base_are_not_shared_across_projects(endpoints: ContextCachingEndpoints):
+    client: Final = MagicMock(spec=HTTPHandler)
+    client.get.return_value = _response({})
+    client.post.side_effect = [
+        _response(_created("cachedContents/project-a", _expire_time(60))),
+        _response(_created("cachedContents/project-b", _expire_time(60))),
+    ]
+
+    sent: Final = [
+        _sync_call(endpoints, client, api_base=_GATEWAY, vertex_project=project)[2]
+        for project in ("project-a", "project-b", "project-a")
+    ]
+
+    assert sent == ["cachedContents/project-a", "cachedContents/project-b", "cachedContents/project-a"]
+
+
+@pytest.mark.asyncio
+async def test_async_vertex_caches_behind_one_custom_api_base_are_not_shared_across_projects(
+    endpoints: ContextCachingEndpoints,
+):
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(return_value=_response({}))
+    client.post = AsyncMock(
+        side_effect=[
+            _response(_created("cachedContents/project-a", _expire_time(60))),
+            _response(_created("cachedContents/project-b", _expire_time(60))),
+        ]
+    )
+
+    sent: Final = [
+        (await _async_call(endpoints, client, api_base=_GATEWAY, vertex_project=project))[2]
+        for project in ("project-a", "project-b", "project-a")
+    ]
+
+    assert sent == ["cachedContents/project-a", "cachedContents/project-b", "cachedContents/project-a"]
 
 
 def test_different_prefixes_do_not_share_a_cache(endpoints: ContextCachingEndpoints):
@@ -542,3 +586,47 @@ async def test_rejected_caller_supplied_cached_content_is_not_sent_again(
         "cachedContents/callers"
     ]
     assert list_route.call_count == 0
+
+
+def _cut_off_stream() -> httpx.Response:
+    body: Final = {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "ok"}]},
+                "finishReason": "CONTINUATION",
+                "continuationToken": "dG9rLTE=",
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1, "totalTokenCount": 11},
+    }
+    return httpx.Response(200, text=f"data: {json.dumps(body)}\n\n", headers={"content-type": "text/event-stream"})
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_cache_rejected_on_a_resume_hop_is_not_sent_again(
+    respx_mock: respx.MockRouter,
+    fake_provider_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    respx_mock.post(url__regex=r".*/cachedContents$").mock(
+        side_effect=[
+            httpx.Response(200, json=_created("cachedContents/deleted", _FAR_FUTURE)),
+            httpx.Response(200, json=_created("cachedContents/fresh", _FAR_FUTURE)),
+        ]
+    )
+    generate_route: Final = respx_mock.post(url__regex=r".*:streamGenerateContent.*").mock(
+        side_effect=[_cut_off_stream(), _rejected(404, "CachedContent not found"), _generated(True)]
+    )
+
+    await _complete(sync_mode, True, max_tokens=100_000)
+    await _complete(sync_mode, True, max_tokens=100_000)
+
+    sent: Final = [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls]
+    assert sent == ["cachedContents/deleted", "cachedContents/deleted", "cachedContents/fresh"]
+    assert list_route.call_count == 2

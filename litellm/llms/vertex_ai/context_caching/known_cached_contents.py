@@ -61,14 +61,17 @@ class KnownCachedContents:
         base_url: str,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         headers: Mapping[str, str],
+        vertex_project: str | None,
+        vertex_location: str | None,
     ) -> tuple[str, str]:
-        """Where a cache name is valid: the Vertex URL names project and location, a Gemini key names the project.
+        """Where a cache name is valid: a Vertex project and location, or the project a Gemini key belongs to.
 
+        A custom ``api_base`` can replace the whole Vertex path, so the project and location are kept beside the URL.
         The Gemini key is read from the headers actually sent, so an ``extra_headers`` override scopes the
         cache to the caller's project. It is kept as-is in this in-memory scope and never logged or persisted.
         """
         if custom_llm_provider != "gemini":
-            return (base_url, "")
+            return (base_url, f"{vertex_project}/{vertex_location}")
         sent_keys: Final = [value for name, value in headers.items() if name.lower() == "x-goog-api-key"]
         return (base_url, sent_keys[-1] if sent_keys else "")
 
