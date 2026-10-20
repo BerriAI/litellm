@@ -3551,7 +3551,7 @@ def openai_proxy_gate(
     decoded path."""
     if is_proxy_admin(user_api_key_dict):
         return
-    normalized: Final = posixpath.normpath(_iteratively_undecoded(endpoint_path))
+    normalized: Final = posixpath.normpath(f"/{_iteratively_undecoded(endpoint_path).strip('/')}")
     canonical: Final = _strip_openai_version_prefix(normalized)
     if canonical.lower().startswith(_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES):
         raise HTTPException(

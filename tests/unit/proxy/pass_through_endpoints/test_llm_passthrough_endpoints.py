@@ -444,7 +444,6 @@ def test_vertex_pass_through_drops_the_configured_anthropic_beta_before_calling_
     assert json.loads(outbound.content) == _VERTEX_CLAUDE_BODY
 
 
-
 @pytest.mark.parametrize(
     "configured",
     [[f" {_VERTEX_REJECTED_BETA} "], [f"{_VERTEX_REJECTED_BETA},afk-mode-2026-01-31"]],
@@ -472,6 +471,7 @@ def test_vertex_pass_through_matches_a_configured_beta_written_the_way_the_heade
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     assert upstream.calls.last.request.headers["anthropic-beta"] == "claude-code-20250219,effort-2025-11-24"
+
 
 def test_vertex_pass_through_refuses_a_malformed_drop_setting_without_calling_vertex(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
@@ -517,6 +517,8 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     assert "anthropic-beta" not in upstream.calls.last.request.headers
+
+
 def _openai_proxy_gate_module():
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         openai_proxy_gate,
@@ -676,5 +678,33 @@ def test_openai_proxy_gate_decodes_absolute_endpoint_strings():
             openai_proxy_gate(
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
                 endpoint_path=decoded,
+            )
+        assert int(getattr(exc.value, "status_code", 0)) == 403
+
+
+def test_openai_proxy_gate_blocks_double_slash_and_multi_decode_shapes():
+    """The reviewer's follow-up corpus: `posixpath.normpath` preserves exactly
+    two leading slashes, and a multi-decoded path (`/openai/%25252Fv1/files/v1/
+    %25252e%25252e`) resolves upstream through a slash-merged, dot-normalized
+    URI. The gate's iterative decode + single-slash normalization must block
+    every one of these spellings for non-admin callers."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        openai_proxy_gate,
+    )
+
+    for raw in (
+        "//v1/files",
+        "//v1/assistants",
+        "/openai/%25252Fv1/files/v1/%25252e%25252e",
+        "/%25252Fv1/files/v1/%25252e%25252e",
+    ):
+        endpoint = raw.removeprefix("/openai/")
+        with pytest.raises(HTTPException) as exc:
+            openai_proxy_gate(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+                endpoint_path=endpoint,
             )
         assert int(getattr(exc.value, "status_code", 0)) == 403
