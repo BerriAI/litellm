@@ -570,6 +570,17 @@ class UncachedPrice:
     cost_breakdown: CostBreakdown | None
 
 
+@dataclass(frozen=True, slots=True)
+class EarlierRoundsSpend:
+    usage: Usage
+    cost: float
+    cost_breakdown: CostBreakdown | None
+
+
+def _fixed_margin(cost_breakdown: CostBreakdown | None) -> float:
+    return 0.0 if cost_breakdown is None else cost_breakdown.get("margin_fixed_amount", 0.0)
+
+
 def _timestamp_seconds(moment: object) -> float | None:
     if isinstance(moment, datetime.datetime):
         return moment.timestamp()
@@ -2354,6 +2365,27 @@ class Logging(LiteLLMLoggingBaseClass):
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
+
+    def record_failure_after_earlier_rounds(
+        self, earlier: EarlierRoundsSpend, failed_usage: Usage, failed_cost: float
+    ) -> None:
+        """Bill a failed round together with the rounds of its request already paid for, on the one failure log.
+
+        The fixed margin is a per-request fee, so it is charged once: the failed round's margin is dropped when the
+        earlier rounds already paid one. The failed round's own cost breakdown would disagree with the summed cost, so
+        the failure log carries none."""
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+
+        repeated_fixed_margin: Final = (
+            0.0
+            if self.cost_breakdown is earlier.cost_breakdown
+            else min(_fixed_margin(earlier.cost_breakdown), _fixed_margin(self.cost_breakdown), earlier.cost)
+        )
+        self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
+            usage_objects=[earlier.usage, failed_usage]
+        )
+        self.model_call_details["response_cost"] = earlier.cost + failed_cost - repeated_fixed_margin
+        self.cost_breakdown = None
 
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves

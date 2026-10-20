@@ -1,7 +1,9 @@
 import asyncio
+import gc
 import json
 import logging
 import sys
+import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
@@ -1417,7 +1419,9 @@ def _openai_answer_round() -> bytes:
     )
 
 
-def _anthropic_message_start(message_id: str, model: str, input_tokens: int) -> dict[str, object]:
+def _anthropic_message_start(
+    message_id: str, model: str, input_tokens: int, cache_usage: Mapping[str, object] = MappingProxyType({})
+) -> dict[str, object]:
     return {
         "type": "message_start",
         "message": {
@@ -1427,7 +1431,7 @@ def _anthropic_message_start(message_id: str, model: str, input_tokens: int) -> 
             "model": model,
             "content": [],
             "stop_reason": None,
-            "usage": {"input_tokens": input_tokens, "output_tokens": 1},
+            "usage": {"input_tokens": input_tokens, "output_tokens": 1, **cache_usage},
         },
     }
 
@@ -1439,10 +1443,11 @@ def _anthropic_round(
     stop: str,
     model: str = "claude-haiku-4-5",
     usage: tuple[int, int] = (5, 5),
+    cache_usage: Mapping[str, object] = MappingProxyType({}),
 ) -> bytes:
     return _sse(
         (
-            _anthropic_message_start(message_id, model, usage[0]),
+            _anthropic_message_start(message_id, model, usage[0], cache_usage),
             {"type": "content_block_start", "index": 0, "content_block": dict(block)},
             {"type": "content_block_delta", "index": 0, "delta": dict(delta)},
             {"type": "content_block_stop", "index": 0},
@@ -2407,6 +2412,7 @@ def _assert_one_stream_row_bills_both_rounds_once(
     assert "message" in _output_types(client.output)
     assert "function_call" not in _output_types(client.output)
     assert (row["prompt_tokens"], row["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert row["cache_hit"] is None
     assert row["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 32 + 64
     assert row["hidden_params"]["additional_headers"]["llm_provider-content-type"] == SSE_HEADERS["content-type"]
     assert row["response_cost"] == pytest.approx(charged_once)
@@ -2414,6 +2420,11 @@ def _assert_one_stream_row_bills_both_rounds_once(
     assert client.usage is not None
     assert (client.usage.input_tokens, client.usage.output_tokens) == (71 + 149, 19 + 5)
     assert client.usage.cost == pytest.approx(charged_once)
+
+
+def _assert_breakdown_agrees_with_the_billed_cost(row: StandardLoggingPayload) -> None:
+    breakdown: Final = row.get("cost_breakdown")
+    assert breakdown is None or breakdown["total_cost"] == pytest.approx(row["response_cost"])
 
 
 def _assert_one_row_bills(logged: tuple[StandardLoggingPayload, ...], body: Mapping[str, object]) -> None:
@@ -2604,9 +2615,10 @@ async def test_stream_auto_execute_bills_both_rounds_with_one_fixed_margin_when_
 
 
 @pytest.mark.asyncio
-async def test_stream_auto_execute_bills_both_rounds_on_the_failure_row_when_the_follow_up_response_fails(
+async def test_stream_auto_execute_bills_both_rounds_with_one_fixed_margin_on_the_failure_row_when_the_follow_up_fails(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
     server_error: Final = {"code": "server_error", "message": "The server had an error processing your request."}
     _serve_responses(
         respx_mock,
@@ -2623,8 +2635,9 @@ async def test_stream_auto_execute_bills_both_rounds_on_the_failure_row_when_the
     assert len(recorder.failed) == 1
     assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71 + 149, 19 + 5)
     assert recorder.failed[0]["response_cost"] == pytest.approx(
-        _round_cost(_ROUND_ONE_BODY) + _round_cost(_ROUND_TWO_BODY)
+        _round_cost(_ROUND_ONE_BODY) + _round_cost(_ROUND_TWO_BODY) - _FIXED_MARGIN
     )
+    _assert_breakdown_agrees_with_the_billed_cost(recorder.failed[0])
 
 
 async def _stop_reading_once_the_follow_up_answers(logging_obj: Logging) -> None:
@@ -2648,6 +2661,48 @@ async def test_stream_auto_execute_bills_the_finished_first_round_when_the_calle
     _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)
 
 
+async def _stream_read_until_the_follow_up_answers(logging_obj: Logging) -> object:
+    stream: Final = await _open_stream_auto_execute(logging_obj)
+    async for event in cast(Any, stream):
+        if _event_type(event) == "response.output_item.added" and _output_types((event.item,)) == ("message",):
+            return stream
+    pytest.fail("the follow-up round never answered")
+
+
+_STREAM_BILLING_NAMES: Final = ("StreamedRoundBilling", "dispatch_success_handlers", "StreamingIterator")
+
+
+def _names_stream_billing(text: str) -> bool:
+    return any(name in text for name in _STREAM_BILLING_NAMES)
+
+
+class _UnraisableRecorder:
+    def __init__(self) -> None:
+        self.raised: tuple[str, ...] = ()
+
+    def __call__(self, unraisable: "sys.UnraisableHookArgs") -> None:
+        self.raised = (*self.raised, f"{unraisable.object!r}: {unraisable.exc_value!r}")
+
+
+def test_stream_auto_execute_dropped_after_its_event_loop_closed_discards_its_parked_log_cleanly(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_responses(respx_mock, monkeypatch, (_streamed(_ROUND_ONE_BODY), _streamed(_ROUND_TWO_BODY)))
+    recorder: Final = _RoundRecorder()
+    unraisable: Final = _UnraisableRecorder()
+    gc.collect()
+    monkeypatch.setattr(sys, "unraisablehook", unraisable)
+
+    with _echo_tool_served("PING"), warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        asyncio.run(_stream_read_until_the_follow_up_answers(_rounds_logging_obj(recorder, "mcp-stream-loop-closed")))
+        gc.collect()
+
+    assert recorder.logged == ()
+    assert [raised for raised in unraisable.raised if _names_stream_billing(raised)] == []
+    assert [str(warning.message) for warning in caught if _names_stream_billing(str(warning.message))] == []
+
+
 _BRIDGED_MODEL: Final = "anthropic/claude-haiku-5-5"
 _ANTHROPIC_MESSAGES_URL: Final = r"https://api\.anthropic\.com/v1/messages"
 
@@ -2656,7 +2711,7 @@ def _bridged_round(content: bytes) -> httpx.Response:
     return httpx.Response(200, content=content, headers=SSE_HEADERS)
 
 
-def _bridged_echo_call_round() -> httpx.Response:
+def _bridged_echo_call_round(cache_usage: Mapping[str, object] = MappingProxyType({})) -> httpx.Response:
     return _bridged_round(
         _anthropic_round(
             "msg_echo_call",
@@ -2665,11 +2720,14 @@ def _bridged_echo_call_round() -> httpx.Response:
             "tool_use",
             model="claude-haiku-5-5",
             usage=(533, 40),
+            cache_usage=cache_usage,
         )
     )
 
 
-def _bridged_echo_answer_round(stop: str = "end_turn") -> httpx.Response:
+def _bridged_echo_answer_round(
+    stop: str = "end_turn", cache_usage: Mapping[str, object] = MappingProxyType({})
+) -> httpx.Response:
     return _bridged_round(
         _anthropic_round(
             "msg_echo_answer",
@@ -2678,7 +2736,20 @@ def _bridged_echo_answer_round(stop: str = "end_turn") -> httpx.Response:
             stop,
             model="claude-haiku-5-5",
             usage=(470, 4),
+            cache_usage=cache_usage,
         )
+    )
+
+
+def _anthropic_prompt_cache_usage(written: int, read: int) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "cache_creation_input_tokens": written,
+            "cache_read_input_tokens": read,
+            "cache_creation": {"ephemeral_5m_input_tokens": written, "ephemeral_1h_input_tokens": 0},
+            "inference_geo": "us",
+            "speed": "standard",
+        }
     )
 
 
@@ -2722,6 +2793,7 @@ def _assert_one_bridged_row_bills_both_rounds_once(
     assert _output_types(row["response"]["output"]) == _output_types(client.output)
     assert "message" in _output_types(client.output)
     assert (row["prompt_tokens"], row["completion_tokens"]) == (533 + 470, 40 + 4)
+    assert row["cache_hit"] is False
     assert row["response_cost"] == pytest.approx(charged_once)
     assert row["cost_breakdown"]["total_cost"] == pytest.approx(charged_once)
     assert client.usage is not None
@@ -2747,6 +2819,39 @@ async def test_bridged_stream_auto_execute_logs_the_final_response_billed_for_bo
 
     assert _output_types(_final_response(events).output) == ("mcp_call", "message")
     _assert_one_bridged_row_bills_both_rounds_once(recorder.logged, _final_response(events))
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_auto_execute_logs_the_provider_usage_of_both_rounds_summed(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"anthropic": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (
+            _bridged_echo_call_round(_anthropic_prompt_cache_usage(written=10, read=5)),
+            _bridged_echo_answer_round(cache_usage=_anthropic_prompt_cache_usage(written=3, read=7)),
+        ),
+        _ANTHROPIC_MESSAGES_URL,
+    )
+    recorder: Final = _RoundRecorder()
+
+    with _echo_tool_served("PING"):
+        await _drain(
+            await _open_bridged_stream_auto_execute(_rounds_logging_obj(recorder, "mcp-bridged-provider-usage"))
+        )
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    assert len(recorder.logged) == 1
+    row: Final = recorder.logged[0]
+    usage: Final = row["metadata"]["usage_object"]
+    assert "output" in row["response"]
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (533 + 10 + 5 + 470 + 3 + 7, 40 + 4)
+    assert (usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"]) == (10 + 3, 5 + 7)
+    assert usage["prompt_tokens_details"]["cache_creation_token_details"]["ephemeral_5m_input_tokens"] == 10 + 3
+    assert (usage["inference_geo"], usage["speed"]) == ("us", "standard")
+    assert usage["cost"] == pytest.approx(row["response_cost"])
 
 
 @pytest.mark.asyncio
@@ -2835,9 +2940,10 @@ async def test_bridged_stream_auto_execute_bills_both_rounds_when_the_caller_sto
 
 
 @pytest.mark.asyncio
-async def test_bridged_stream_auto_execute_bills_the_paid_rounds_on_the_failure_row_when_the_follow_up_stream_breaks(
+async def test_bridged_stream_auto_execute_bills_the_paid_rounds_with_one_fixed_margin_when_the_follow_up_stream_breaks(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"anthropic": {"fixed_amount": _FIXED_MARGIN}})
     _serve_responses(
         respx_mock,
         monkeypatch,
@@ -2856,8 +2962,44 @@ async def test_bridged_stream_auto_execute_bills_the_paid_rounds_on_the_failure_
     assert len(recorder.failed) == 1
     assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (533 + 470, 40)
     assert recorder.failed[0]["response_cost"] == pytest.approx(
-        _bridged_round_cost(533, 40) + _bridged_round_cost(470, 0)
+        _bridged_round_cost(533, 40) + _bridged_round_cost(470, 0) - _FIXED_MARGIN
     )
+    _assert_breakdown_agrees_with_the_billed_cost(recorder.failed[0])
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_auto_execute_bills_a_broken_follow_up_its_own_fixed_margin_after_a_cached_first_round(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"anthropic": {"fixed_amount": _FIXED_MARGIN}})
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (
+            _bridged_echo_call_round(),
+            _bridged_echo_answer_round(),
+            httpx.Response(200, stream=_CutAfterTheMessageStart(), headers=SSE_HEADERS),
+        ),
+        _ANTHROPIC_MESSAGES_URL,
+    )
+    warm: Final = _RoundRecorder()
+    with _echo_tool_served("PING"):
+        await _drain(
+            await _open_bridged_stream_auto_execute(_rounds_logging_obj(warm, "mcp-bridged-cache-then-break-warm"))
+        )
+    await _settle(lambda: len(warm.logged) > 0)
+
+    recorder: Final = _RoundRecorder()
+    with _echo_tool_served("PONG"), pytest.raises(MidStreamFallbackError):
+        await _drain(
+            await _open_bridged_stream_auto_execute(_rounds_logging_obj(recorder, "mcp-bridged-cache-then-break"))
+        )
+    await _settle(lambda: len(recorder.failed) > 0)
+
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    assert recorder.failed[0]["response_cost"] == pytest.approx(_bridged_round_cost(470, 0))
 
 
 @pytest.mark.asyncio

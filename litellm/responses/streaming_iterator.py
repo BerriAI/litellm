@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
+from litellm.litellm_core_utils.litellm_logging import EarlierRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -62,7 +63,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
-from litellm.types.utils import CallTypes, Usage
+from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
@@ -361,7 +362,7 @@ class BaseResponsesAPIStreamingIterator:
     """
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
-    _earlier_rounds_spend: tuple[Usage, float] | None = None
+    _earlier_rounds_spend: EarlierRoundsSpend | None = None
 
     def __init__(
         self,
@@ -709,16 +710,10 @@ class BaseResponsesAPIStreamingIterator:
             self.logging_obj.model_call_details["combined_usage_object"] = failed_usage
             self.logging_obj.model_call_details["response_cost"] = failed_cost
             return
-        from litellm.cost_calculator import BaseTokenUsageProcessor
+        self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, failed_usage, failed_cost)
 
-        earlier_usage, earlier_cost = self._earlier_rounds_spend
-        self.logging_obj.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
-            usage_objects=[earlier_usage, failed_usage]
-        )
-        self.logging_obj.model_call_details["response_cost"] = earlier_cost + failed_cost
-
-    def bill_failure_after_earlier_rounds(self, usage: Usage, response_cost: float) -> None:
-        self._earlier_rounds_spend = (usage, response_cost)
+    def bill_failure_after_earlier_rounds(self, earlier: EarlierRoundsSpend) -> None:
+        self._earlier_rounds_spend = earlier
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
         return _map_stream_error_to_exception(

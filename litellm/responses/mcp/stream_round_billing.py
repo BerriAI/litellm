@@ -5,12 +5,13 @@ from datetime import datetime
 from typing import Final, Protocol, TypeAlias
 
 from litellm.litellm_core_utils.hidden_params import served_from_cache
+from litellm.litellm_core_utils.litellm_logging import EarlierRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.responses.mcp.round_billing import billed_for_every_round, summed_cost_breakdown
+from litellm.responses.mcp.round_billing import billed_for_every_round, merged_chat_usage, summed_cost_breakdown
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator, spawn_logging_task
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamingResponse
-from litellm.types.utils import CostBreakdown
+from litellm.types.utils import CostBreakdown, ModelResponse, Usage
 
 Dispatch: TypeAlias = Coroutine[object, object, object]
 Parked: TypeAlias = tuple[object, ...]
@@ -51,10 +52,32 @@ def _priced(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
     return priced
 
 
+def _bridged_round_usage(parked: Parked | None) -> Usage | None:
+    match parked:
+        case (ModelResponse() as assembled, bool()):
+            usage: Final[object] = getattr(assembled, "usage", None)
+            return usage if isinstance(usage, Usage) else None
+        case _:
+            return None
+
+
+def _usage_of_bridged_rounds(billed: Usage | None, round_usage: Usage | None, cost: object) -> Usage | None:
+    if billed is None or round_usage is None:
+        return None
+    return merged_chat_usage(billed, round_usage).model_copy(update={"cost": cost})
+
+
+def _logged_cache_hit(response: ResponsesAPIResponse, chat_usage: Usage | None) -> bool | None:
+    if chat_usage is not None:
+        return served_from_cache(response)
+    return served_from_cache(response) or None
+
+
 @dataclass(frozen=True, slots=True)
 class _BilledRounds:
     response: ResponsesAPIResponse
     breakdown: CostBreakdown | None
+    chat_usage: Usage | None
     rounds: int = 1
 
     @property
@@ -62,7 +85,9 @@ class _BilledRounds:
         cost: Final = self.response.hidden_params.get("response_cost")
         return float(cost) if isinstance(cost, (int, float)) else 0.0
 
-    def with_round(self, priced: ResponsesAPIResponse, breakdown: CostBreakdown | None) -> "_BilledRounds":
+    def with_round(
+        self, priced: ResponsesAPIResponse, breakdown: CostBreakdown | None, chat_usage: Usage | None
+    ) -> "_BilledRounds":
         merged: Final = billed_for_every_round(self.response, self.breakdown, priced, breakdown)
         total: Final = merged.hidden_params.get("response_cost")
         charged: Final = merged.model_copy(
@@ -73,7 +98,10 @@ class _BilledRounds:
             "cache_hit": served_from_cache(self.response) and served_from_cache(priced),
         }
         return _BilledRounds(
-            charged, summed_cost_breakdown(self.response, self.breakdown, priced, breakdown), self.rounds + 1
+            charged,
+            summed_cost_breakdown(self.response, self.breakdown, priced, breakdown),
+            _usage_of_bridged_rounds(self.chat_usage, chat_usage, total),
+            self.rounds + 1,
         )
 
 
@@ -104,11 +132,12 @@ class StreamedRoundBilling:
         round_parked: Final = self._take_parked()
         priced: Final = _priced(response)
         breakdown: Final = self._logging_obj.cost_breakdown
+        chat_usage: Final = _bridged_round_usage(round_parked)
         if self._billed is None:
-            self._billed = _BilledRounds(priced, breakdown)
+            self._billed = _BilledRounds(priced, breakdown, chat_usage)
             self._bank(round_parked)
             return
-        billed: Final = self._billed.with_round(priced, breakdown)
+        billed: Final = self._billed.with_round(priced, breakdown, chat_usage)
         self._close(round_parked)
         self._close(self._banked)
         self._logging_obj.model_call_details.pop("combined_usage_object", None)
@@ -120,7 +149,10 @@ class StreamedRoundBilling:
             if round_parked is None
             else (
                 self._dispatch(
-                    completed, billed.response.model_copy(update={"output": list(client_output)}), restore_headers
+                    completed,
+                    billed.response.model_copy(update={"output": list(client_output)}),
+                    billed.chat_usage,
+                    restore_headers,
                 ),
             )
         )
@@ -133,7 +165,9 @@ class StreamedRoundBilling:
         )
         self._logging_obj.record_partial_usage_for_failure(billed_usage, self._billed.cost)
         if isinstance(follow_up, BaseResponsesAPIStreamingIterator):
-            follow_up.bill_failure_after_earlier_rounds(billed_usage, self._billed.cost)
+            follow_up.bill_failure_after_earlier_rounds(
+                EarlierRoundsSpend(billed_usage, self._billed.cost, self._billed.breakdown)
+            )
 
     def charge_final_round(
         self, completed: ResponsesAPIStreamingResponse, response: ResponsesAPIResponse, restore_headers: RestoresHeaders
@@ -148,7 +182,7 @@ class StreamedRoundBilling:
         charged: Final = response.model_copy(update={"usage": self._billed.response.usage})
         charged.hidden_params = {**self._billed.response.hidden_params}
         if parked is not None:
-            self._release((self._dispatch(completed, charged, restore_headers),))
+            self._release((self._dispatch(completed, charged, self._billed.chat_usage, restore_headers),))
         return charged
 
     def finish(self) -> None:
@@ -179,17 +213,37 @@ class StreamedRoundBilling:
             setattr(self._logging_obj, _PARKED_DISPATCH, parked)
 
     def _dispatch(
-        self, completed: ResponsesAPIStreamingResponse, response: ResponsesAPIResponse, restore_headers: RestoresHeaders
+        self,
+        completed: ResponsesAPIStreamingResponse,
+        response: ResponsesAPIResponse,
+        chat_usage: Usage | None,
+        restore_headers: RestoresHeaders,
     ) -> Dispatch:
         logged_response: Final = response.model_copy()
         logged_response.hidden_params = {**response.hidden_params}
         logged: Final = completed.model_copy(update={"response": logged_response})
         restore_headers(logged)
-        return self._dispatcher.dispatch_success_handlers(
+        return self._log_success(
+            logged,
+            datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline start_time
+            _logged_cache_hit(response, chat_usage),
+            chat_usage,
+        )
+
+    async def _log_success(
+        self,
+        logged: ResponsesAPIStreamingResponse,
+        end_time: datetime,
+        cache_hit: bool | None,
+        chat_usage: Usage | None,
+    ) -> None:
+        if chat_usage is not None:
+            self._logging_obj.model_call_details["combined_usage_object"] = chat_usage
+        await self._dispatcher.dispatch_success_handlers(
             logged,
             start_time=self._logging_obj.start_time,
-            end_time=datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline start_time
-            cache_hit=served_from_cache(response) or None,
+            end_time=end_time,
+            cache_hit=cache_hit,
             prefer_async_handlers=True,
         )
 

@@ -6,6 +6,7 @@ from typing import Any, Final, cast
 
 import litellm
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
+from litellm.litellm_core_utils.litellm_logging import EarlierRoundsSpend
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
@@ -59,7 +60,6 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     TextCompletionResponse,
-    Usage,
 )
 
 
@@ -1372,8 +1372,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             finished.response.hidden_params = {**finished.response.hidden_params, "cache_hit": True}
         return finished
 
-    def bill_failure_after_earlier_rounds(self, usage: Usage, response_cost: float) -> None:
-        self.litellm_custom_stream_wrapper.bill_failure_after_earlier_rounds(usage, response_cost)
+    def bill_failure_after_earlier_rounds(self, earlier: EarlierRoundsSpend) -> None:
+        self.litellm_custom_stream_wrapper.bill_failure_after_earlier_rounds(earlier)
 
     def _emit_terminal_response_event(
         self, litellm_model_response: ModelResponse

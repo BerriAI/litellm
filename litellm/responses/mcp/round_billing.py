@@ -5,12 +5,13 @@ from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
+from pydantic_core import to_jsonable_python
 
 from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-from litellm.types.utils import CostBreakdown
+from litellm.types.utils import CostBreakdown, Usage
 
 _PER_REQUEST_KEYS: Final = frozenset({"discount_percent", "margin_percent", "margin_fixed_amount"})
 _TOTALS_WITH_FIXED_MARGIN: Final = ("total_cost", "margin_total_amount")
@@ -47,6 +48,11 @@ def merged_round_usage(first: ResponseAPIUsage | None, final: ResponseAPIUsage |
     if first is None or final is None:
         return final if first is None else first
     return ResponseAPIUsage.model_validate(_summed_mapping(first.model_dump(), final.model_dump()))
+
+
+def merged_chat_usage(first: Usage, final: Usage) -> Usage:
+    summed: Final = _summed_mapping(first.model_dump(), final.model_dump())
+    return Usage.model_validate(to_jsonable_python(summed, fallback=dict))
 
 
 def _repeated_fixed_margin(
