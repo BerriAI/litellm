@@ -1,41 +1,32 @@
-from litellm.proxy._experimental.mcp_server.upstream import resolve_upstream_auth
-import importlib
 import asyncio
+
+# Add the parent directory to the path so we can import litellm
+import contextlib
 import functools
+import importlib
 import json
 import logging
 import os
 import sys
 import time
-import anyio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Final, Literal, Optional, TypeVar, cast
+from typing import Any, Final, Literal, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-from fastapi import HTTPException
-from respx import MockRouter
-
-from litellm.proxy._experimental.mcp_server.exceptions import (
-    MCPServerListError,
-    MCPUpstreamAuthError,
-)
-from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListFault
-
-# Add the parent directory to the path so we can import litellm
-
-
-import contextlib
-
+import anyio
 import httpx
 import httpx2
+import pytest
+from fastapi import HTTPException
 from mcp import ClientSession, ReadResourceResult, Resource
 from mcp.server.context import ServerRequestContext
 from mcp.types import (
     CallToolRequestParams as MCPCallToolRequestParams,
+)
+from mcp.types import (
     CallToolResult,
     GetPromptResult,
     ListToolsResult,
@@ -46,30 +37,42 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, TypeAdapter
+from respx import MockRouter
 
+import litellm
+import litellm.llms as litellm_llms
+from litellm.caching.caching import DualCache
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import MCP_METADATA_TIMEOUT, MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES
+from litellm.experimental_mcp_client.client import MCPClient, PersistentMCPSession
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy import proxy_server
 from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListFault
 from litellm.proxy._experimental.mcp_server.legacy_callbacks import ElicitationCallback
 from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
-from litellm.proxy._experimental.mcp_server.tool_outcome import TextResult
-from litellm.experimental_mcp_client.client import MCPClient, PersistentMCPSession
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
     MCPServerManager,
-    global_mcp_server_manager,
     _deserialize_json_dict,
+    _deserialize_json_list,
     _flow_endpoints_missing,
     _mcp_oauth_discovery_on_startup_enabled,
-    oauth_endpoints_unresolved,
-    _deserialize_json_list,
     _normalize_mcp_server_cost_info,
     _obo_retry_applies,
+    global_mcp_server_manager,
+    listed_tools_caller_for,
+    oauth_endpoints_unresolved,
     resolve_openapi_tool_auth,
     should_strip_caller_authorization,
-    listed_tools_caller_for,
 )
-from litellm.proxy import proxy_server
-from litellm.proxy.auth import auth_checks
+from litellm.proxy._experimental.mcp_server.tool_outcome import TextResult
+from litellm.proxy._experimental.mcp_server.upstream import resolve_upstream_auth
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -82,18 +85,13 @@ from litellm.proxy._types import (
     MCPTransport,
     UserAPIKeyAuth,
 )
-from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
-from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, PinnedMCPTool
-from litellm.caching.caching import DualCache
-from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-import litellm
-from litellm.integrations.custom_guardrail import CustomGuardrail
-import litellm.llms as litellm_llms
+from litellm.proxy.auth import auth_checks
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
+from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, PinnedMCPTool
 
 _TSessionResult = TypeVar("_TSessionResult")
 
@@ -168,18 +166,19 @@ async def test_sampling_callback_keeps_creation_context_after_caller_switch():
 
 @pytest.mark.asyncio
 async def test_elicitation_callback_keeps_initiating_session():
-    from litellm.proxy._experimental.mcp_server import server as legacy_server
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_elicitation_callback
-
     from types import SimpleNamespace
+
     from mcp.types import (
         ClientCapabilities,
         ElicitationCapability,
-        FormElicitationCapability,
         ElicitRequestFormParams,
         ElicitResult,
+        FormElicitationCapability,
     )
+
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_elicitation_callback
 
     capabilities = ClientCapabilities(elicitation=ElicitationCapability(form=FormElicitationCapability()))
     accepted = ElicitResult(action="accept")
@@ -2264,7 +2263,7 @@ class TestMCPServerManager:
         assert exc_info.value.fault == ServerListFault(tag="internal", status_code=412)
         assert exc_info.value.server_name == "te-412-server"
 
-    def _upstream_status_error(self, status_code: int, www_authenticate: Optional[str] = None) -> httpx.HTTPStatusError:
+    def _upstream_status_error(self, status_code: int, www_authenticate: str | None = None) -> httpx.HTTPStatusError:
         """Build an httpx.HTTPStatusError shaped like the one the MCP SDK surfaces for an upstream
         HTTP failure, so _extract_upstream_auth_failure can read status_code and WWW-Authenticate."""
         request = httpx.Request("POST", "https://up.example.com/mcp")
@@ -2967,11 +2966,11 @@ class TestMCPServerManager:
         assert built.token_url == "https://idp.example.com/manual-token"
         assert built.scopes == ["calendar.read"]
 
-    async def _capture_subject_token(self, call) -> Optional[str]:
+    async def _capture_subject_token(self, call) -> str | None:
         """Run a manager method (via ``call(manager)``) and return the subject_token it threaded
         into ``_create_mcp_client``."""
         manager = MCPServerManager()
-        captured: Dict[str, Any] = {}
+        captured: dict[str, Any] = {}
 
         async def capture_create_mcp_client(
             server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
@@ -9336,7 +9335,7 @@ class TestMCPServerTimestamps:
             carry_forward_resolved_oauth_endpoints,
         )
 
-        def make_server(url: str, auth_type: MCPAuth, authorization_url: Optional[str]) -> MCPServer:
+        def make_server(url: str, auth_type: MCPAuth, authorization_url: str | None) -> MCPServer:
             return MCPServer(
                 server_id="s1",
                 name="s1",
@@ -10744,7 +10743,7 @@ class TestOAuthDiscoverySSRFGuard:
         }
         mock_response.raise_for_status = MagicMock()
 
-        captured_kwargs: Dict[str, Any] = {}
+        captured_kwargs: dict[str, Any] = {}
 
         async def fake_get(url, **kwargs):
             captured_kwargs.update(kwargs)
@@ -10775,7 +10774,7 @@ class TestOAuthDiscoverySSRFGuard:
         }
         mock_response.raise_for_status = MagicMock()
 
-        captured_kwargs: Dict[str, Any] = {}
+        captured_kwargs: dict[str, Any] = {}
 
         async def fake_get(url, **kwargs):
             captured_kwargs.update(kwargs)
@@ -11016,8 +11015,8 @@ class TestHealthCheckInterpolatesGlobalEnvVars:
         )
 
     @staticmethod
-    def _capture_headers(manager: MCPServerManager) -> Dict[str, Any]:
-        captured: Dict[str, Any] = {}
+    def _capture_headers(manager: MCPServerManager) -> dict[str, Any]:
+        captured: dict[str, Any] = {}
         mock_client = AsyncMock()
         mock_client.run_with_session = AsyncMock(return_value="ok")
 
@@ -11064,7 +11063,7 @@ class TestUserEnvVarsCacheEviction:
     def _patch_cache(monkeypatch, max_size):
         from litellm.proxy._experimental.mcp_server import mcp_server_manager as m
 
-        cache: Dict[Any, Any] = {}
+        cache: dict[Any, Any] = {}
         monkeypatch.setattr(m, "_user_env_vars_cache", cache)
         monkeypatch.setattr(m, "_USER_ENV_VARS_CACHE_MAX_SIZE", max_size)
         return m, cache
@@ -11290,7 +11289,7 @@ class TestCreateMcpClientV2Graft:
     """
 
     def _http_server(self, **overrides: Any) -> MCPServer:
-        base: Dict[str, Any] = dict(
+        base: dict[str, Any] = dict(
             server_id="http-graft",
             name="graft_server",
             url="https://upstream.example.com/mcp",
@@ -14396,7 +14395,7 @@ class TestConfigServerIdPinning:
     @pytest.mark.asyncio
     async def test_two_servers_pinning_the_same_id_are_rejected(self, config_only_mcp_manager_factory):
         manager = config_only_mcp_manager_factory()
-        config: Dict[str, Any] = {
+        config: dict[str, Any] = {
             "docs_server": {"url": "https://a.example.com/mcp", "server_id": "shared-id"},
             "wiki_server": {"url": "https://b.example.com/mcp", "server_id": "shared-id"},
         }
@@ -14415,7 +14414,7 @@ class TestConfigServerIdPinning:
             auth_type=None,
             alias=None,
         )
-        config: Dict[str, Any] = {
+        config: dict[str, Any] = {
             "docs_server": {"url": "https://a.example.com/mcp", "transport": MCPTransport.http},
             "wiki_server": {"url": "https://b.example.com/mcp", "server_id": derived},
         }
@@ -15251,7 +15250,6 @@ async def test_pre_call_tool_check_honors_guardrail_attached_to_key(monkeypatch,
 @pytest.mark.asyncio
 async def test_pre_call_tool_check_stamps_personal_key_team_rpm_limits(monkeypatch: pytest.MonkeyPatch) -> None:
     import litellm
-
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
     manager: Final = MCPServerManager()
@@ -15357,7 +15355,6 @@ async def test_pre_call_tool_check_uses_inherited_team_auth_for_guardrails(monke
 
 @pytest.mark.asyncio
 async def test_pre_call_tool_check_keeps_native_name_for_team_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
     server: Final = MCPServer(
         server_id="math-a",
@@ -15460,8 +15457,8 @@ async def test_call_tool_passes_attributed_auth_to_guardrail_hooks(monkeypatch: 
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.proxy._experimental.mcp_server.operations import _run_post_mcp_call_guardrails
-    from litellm.proxy.auth import auth_checks
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, LiteLLM_UserTable
+    from litellm.proxy.auth import auth_checks
 
     original_auth: Final = UserAPIKeyAuth(api_key="sk-personal", user_id="alice")
     team: Final = LiteLLM_TeamTable(
@@ -15573,13 +15570,12 @@ async def test_call_tool_passes_attributed_auth_to_guardrail_hooks(monkeypatch: 
 async def test_virtual_mcp_calls_use_attributed_auth_for_logging_and_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
     from mcp.types import CallToolResult, Tool
 
+    from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import operations, tool_search
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
-    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, LiteLLM_UserTable
     from litellm.proxy.auth import auth_checks
-    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-    from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable
     from litellm.types.mcp_server.tool_registry import MCPTool
 
     original_auth: Final = UserAPIKeyAuth(
@@ -15718,11 +15714,11 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
     expected_source: str,
     expected_authorization: str | None,
 ) -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
-    from starlette.requests import Request
     from pydantic import SecretStr
+    from starlette.requests import Request
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import MCPAuthenticatedUser
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from litellm.proxy._experimental.mcp_server.mcp_debug import MCP_AUTH_DIAGNOSTICS_SCOPE_KEY, MCPAuthDiagnostics
     from litellm.proxy._experimental.mcp_server.outbound_credentials import (
         ApiKeyConfig,
@@ -15788,9 +15784,9 @@ async def test_debug_reports_legacy_signing_and_non_http_transport(
     _mcp_request_ctx, monkeypatch, transport: Literal["http", "stdio"]
 ) -> None:
     monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
-    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from starlette.requests import Request
 
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from litellm.proxy._experimental.mcp_server.mcp_debug import MCP_AUTH_DIAGNOSTICS_SCOPE_KEY, MCPAuthDiagnostics
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -16097,7 +16093,6 @@ class _DiscoveryClock:
         return self.now
 
 
-from pydantic import TypeAdapter
 from mcp.types import JSONRPCMessage, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
 
 _JSONRPC_ADAPTER = TypeAdapter(JSONRPCMessage)
@@ -16294,7 +16289,6 @@ def _discovery_server() -> MCPServer:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None:
-    import respx
 
     clock: Final = _DiscoveryClock()
     manager: Final = MCPServerManager(discovery_clock=clock)
@@ -16326,7 +16320,6 @@ async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 @pytest.mark.parametrize("outcome", ("unsupported", "rejected", "failure"))
 async def test_discovery_cache_empty_results_and_failures(kind: str, outcome: str) -> None:
-    import respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -16371,7 +16364,6 @@ async def test_discovery_cache_retries_failed_pagination_before_caching_complete
 
 @pytest.mark.asyncio
 async def test_discovery_cache_isolates_forwarded_credentials_and_static_auth_callers() -> None:
-    import respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -16421,7 +16413,6 @@ async def test_discovery_cache_isolates_keyless_admission_credentials(kind: str,
 
 @pytest.mark.asyncio
 async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> None:
-    import respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -16445,7 +16436,6 @@ async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> N
 
 @pytest.mark.asyncio
 async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old_results() -> None:
-    import respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -16465,7 +16455,6 @@ async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old
 
 @pytest.mark.asyncio
 async def test_discovery_cache_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    import respx
 
     monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0")
     manager: Final = MCPServerManager()
@@ -16631,7 +16620,6 @@ async def test_discovery_cache_bounds_detached_fetches_without_dropping_results(
 
 @pytest.mark.asyncio
 async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> None:
-    import respx
     from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
     from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import UpstreamCredentialProvider
     from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
@@ -16707,7 +16695,6 @@ async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> N
 
 @pytest.mark.asyncio
 async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None:
-    import respx
     from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 
     class TokenStore:
@@ -17153,6 +17140,7 @@ class TestProtectedCredentialPreparation:
     @pytest.mark.asyncio
     async def test_static_resolution_cancellation_closes_flow(self) -> None:
         from collections.abc import AsyncGenerator
+
         from litellm.experimental_mcp_client.client import MCPClient
         from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import prepare_mcp_client
 
@@ -17418,8 +17406,8 @@ class TestProtectedCredentialPreparation:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("selected", [False, True])
 async def test_request_selected_during_guardrail_runs_concurrently_with_tool(monkeypatch, selected):
-    from litellm.responses.mcp.request_context import MCPRequestContext
     from litellm.proxy._experimental.mcp_server import tool_registry
+    from litellm.responses.mcp.request_context import MCPRequestContext
 
     tool_started = asyncio.Event()
     guardrail_started = asyncio.Event()
@@ -17497,6 +17485,7 @@ async def test_server_response_identifies_read_only_config(in_config, in_db, exp
 @pytest.mark.parametrize("with_caller,legacy_factory", [(True, False), (False, False), (True, True)])
 async def test_client_sampling_does_not_fill_explicit_context_from_another_ambient_caller(with_caller, legacy_factory):
     from mcp.server.auth.middleware.auth_context import auth_context_var
+
     from litellm.proxy._experimental.mcp_server import server as legacy_server
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_sampling_callback
 
@@ -17794,6 +17783,7 @@ async def test_catalog_delete_drops_derived_tool_mapping(monkeypatch):
 @pytest.mark.parametrize("rediscover", [False, True])
 async def test_catalog_publishes_rediscovered_routes_despite_concurrent_owner_change(monkeypatch, rediscover):
     from mcp.types import Tool
+
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "prisma_client", None)
@@ -18065,6 +18055,7 @@ async def test_catalog_reload_retains_routes_discovered_for_a_late_server(change
     from datetime import timedelta
 
     from mcp.types import Tool
+
     from litellm.proxy._experimental.mcp_server import tool_registry
 
     row: Final = LiteLLM_MCPServerTable(
@@ -18297,6 +18288,7 @@ async def test_catalog_background_lookup_after_operation_exit_observes_deletion(
 @pytest.mark.asyncio
 async def test_catalog_cancelled_openapi_refresh_retains_tools_and_discovery(monkeypatch):
     from datetime import timedelta
+
     from litellm.proxy._experimental.mcp_server import tool_registry
 
     manager: Final = MCPServerManager()
@@ -21125,7 +21117,9 @@ def test_openapi_extra_headers_exclude_gateway_admission_key(header_name: str) -
 @pytest.mark.asyncio
 async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_consent() -> None:
     from types import SimpleNamespace
+
     from mcp.types import ElicitRequestFormParams, ErrorData
+
     from litellm.proxy._experimental.mcp_server import server as legacy_server
     from litellm.proxy._experimental.mcp_server.legacy_callbacks import create_elicitation_callback
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
@@ -21223,9 +21217,7 @@ class TestMCPUpstreamRateLimitRetry:
     async def test_fetch_tools_with_timeout_reports_429_when_backoff_would_pass_listing_timeout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.5
-        )
+        monkeypatch.setattr("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.5)
         manager: Final = MCPServerManager()
         client: Final = MagicMock()
         client.list_tools = AsyncMock(side_effect=_upstream_http_status_error(429, {"Retry-After": "5"}))
@@ -21266,9 +21258,7 @@ class TestMCPUpstreamRateLimitRetry:
     async def test_get_tools_page_retry_attempt_is_bounded_by_listing_timeout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.05
-        )
+        monkeypatch.setattr("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.05)
         manager: Final = MCPServerManager()
         server: Final = MCPServer(server_id="notes", name="notes", transport=MCPTransport.http)
         manager.registry = {server.server_id: server}
@@ -21294,3 +21284,18 @@ class TestMCPUpstreamRateLimitRetry:
 
         assert exc_info.value.fault == ServerListFault(tag="upstream_error", status_code=429)
         assert list_tools_page.await_count == 2
+
+
+def test_should_strip_caller_authorization_never_forwards_a_relay_claim() -> None:
+    """A relay claim is redeemed by the gateway alone, so every egress path that copies the caller's
+    Authorization (tool calls included) drops it, whatever the server's own forwarding mode."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import should_strip_caller_authorization
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server: Final = MCPServer(server_id="plain", name="plain", url="https://up.example/mcp", transport="http")
+    assert should_strip_caller_authorization(
+        mcp_server=server, raw_headers={"authorization": "Bearer llm_claim_sealed"}, user_api_key_auth=None
+    )
+    assert not should_strip_caller_authorization(
+        mcp_server=server, raw_headers={"authorization": "Bearer ghu_token"}, user_api_key_auth=None
+    )

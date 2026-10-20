@@ -118,6 +118,7 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401  # legacy module exports
     _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     canonicalize_url_identity,
+    carries_relay_claim,
     get_byok_www_authenticate,
     needs_cimd_discovery,
     redact_mcp_resource_url,
@@ -1198,6 +1199,8 @@ def should_strip_caller_authorization(
       session token whose ``api_key`` is ``None`` — and must never reach
       the upstream, so it is stripped regardless of the ``api_key`` value.
     """
+    if carries_relay_claim(raw_headers):
+        return True
     if _authorization_is_admission_jwt(raw_headers, user_api_key_auth):
         return True
     if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:

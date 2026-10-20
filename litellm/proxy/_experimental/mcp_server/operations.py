@@ -113,6 +113,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa:
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401  # legacy module exports
     _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    carries_relay_claim,
     get_byok_www_authenticate,
     redact_mcp_resource_url,
 )
@@ -1013,6 +1014,16 @@ def _prepare_mcp_server_headers(
     explicitly-addressed operations leave it None. Per-server ``x-mcp-{alias}-authorization``
     headers are unaffected — they bind one token to one server and are the multi-server shape.
     """
+    caller_oauth2_headers: Final = (
+        without_header(oauth2_headers, DEFAULT_CREDENTIAL_HEADER)
+        if oauth2_headers and carries_relay_claim(oauth2_headers)
+        else oauth2_headers
+    )
+    caller_raw_headers: Final = (
+        without_header(raw_headers, DEFAULT_CREDENTIAL_HEADER)
+        if raw_headers and carries_relay_claim(raw_headers)
+        else raw_headers
+    )
     server_auth_header: dict[str, str] | str | None = None
     if mcp_server_auth_headers:
         from litellm.proxy._experimental.mcp_server.utils import (
@@ -1033,7 +1044,7 @@ def _prepare_mcp_server_headers(
     # it (RFC 9700 cross-resource replay); such scopes must bind per-server via
     # x-mcp-{alias}-authorization. The decision is computed once so BOTH the forwarding branch and
     # the extra_headers copy loop below honor it — otherwise a server that lists Authorization in
-    # extra_headers would re-copy the withheld bearer from raw_headers and replay it anyway.
+    # extra_headers would re-copy the withheld bearer from caller_raw_headers and replay it anyway.
     withhold_forwarded_authorization: Final = is_client_forwarded_mode and caller_authorization_fans_out(
         server, scope_servers
     )
@@ -1044,14 +1055,14 @@ def _prepare_mcp_server_headers(
             extra_headers = None
         else:
             # Copy to avoid mutating the original dict (important for parallel fetching)
-            extra_headers = oauth2_headers.copy() if oauth2_headers else None
+            extra_headers = caller_oauth2_headers.copy() if caller_oauth2_headers else None
             # Migrated authorization_code: the v2 resolver injects the stored per-user
             # token, so drop the caller-forwarded Authorization (apply-if-absent would
             # otherwise let it shadow the resolved token). Delegate keeps it. Centralized
             # via _should_strip_caller_authorization to match _call_regular_mcp_tool.
             if extra_headers and should_strip_caller_authorization(
                 mcp_server=server,
-                raw_headers=raw_headers,
+                raw_headers=caller_raw_headers,
                 user_api_key_auth=user_api_key_auth,
             ):
                 extra_headers = without_header(extra_headers, DEFAULT_CREDENTIAL_HEADER)
@@ -1060,17 +1071,19 @@ def _prepare_mcp_server_headers(
             extra_headers = (  # rebind-ok: pre-existing rebinding on a rename-only line
                 client_forwarded_authorization_headers(
                     mcp_server=server,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
+                    oauth2_headers=caller_oauth2_headers,
+                    raw_headers=caller_raw_headers,
                     user_api_key_auth=user_api_key_auth,
                 )
             )
 
-    if server.extra_headers and raw_headers:
+    if server.extra_headers and caller_raw_headers:
         if extra_headers is None:
             extra_headers = {}
 
-        normalized_raw_headers: Final = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
+        normalized_caller_raw_headers: Final = {
+            str(k).lower(): v for k, v in caller_raw_headers.items() if isinstance(k, str)
+        }
 
         # Centralized strip decision shared with
         # ``MCPServerManager._call_regular_mcp_tool`` so the two
@@ -1078,7 +1091,7 @@ def _prepare_mcp_server_headers(
         # See ``_should_strip_caller_authorization`` for the rules.
         strip_caller_authorization: Final = should_strip_caller_authorization(
             mcp_server=server,
-            raw_headers=raw_headers,
+            raw_headers=caller_raw_headers,
             user_api_key_auth=user_api_key_auth,
         )
 
@@ -1087,7 +1100,7 @@ def _prepare_mcp_server_headers(
                 continue
             if header.lower() == "authorization" and (strip_caller_authorization or withhold_forwarded_authorization):
                 continue
-            header_value = normalized_raw_headers.get(header.lower())
+            header_value = normalized_caller_raw_headers.get(header.lower())
             if header_value is None:
                 continue
             extra_headers[header] = header_value
