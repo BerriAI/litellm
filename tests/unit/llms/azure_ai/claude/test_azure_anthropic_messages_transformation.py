@@ -209,6 +209,25 @@ class TestAzureAnthropicMessagesConfig:
 
         assert url == "https://anthropic-res.services.ai.azure.com/anthropic/v1/messages"
 
+    @pytest.mark.parametrize(
+        "api_base, expected_url",
+        [
+            ("https://gw.example.com/anthropic-proxy", "https://gw.example.com/anthropic-proxy/anthropic/v1/messages"),
+            ("https://gw.example.com/foundry/anthropic/v1", "https://gw.example.com/foundry/anthropic/v1/messages"),
+            ("https://gw.example.com/foundry/anthropic?x=1", "https://gw.example.com/foundry/anthropic/v1/messages"),
+        ],
+    )
+    def test_get_complete_url_treats_anthropic_as_a_whole_path_segment(self, api_base, expected_url):
+        url = AzureAnthropicMessagesConfig().get_complete_url(
+            api_base=api_base,
+            api_key="test-api-key",
+            model="claude-sonnet-4-5",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == expected_url
+
     def test_get_complete_url_raises_error_when_api_base_missing(self):
         """Test get_complete_url raises error when api_base is None"""
         config = AzureAnthropicMessagesConfig()

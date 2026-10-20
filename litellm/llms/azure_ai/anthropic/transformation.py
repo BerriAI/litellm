@@ -3,6 +3,7 @@ Azure Anthropic transformation config - extends AnthropicConfig with Azure authe
 """
 
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -15,10 +16,12 @@ def azure_anthropic_messages_url(api_base: str) -> str:
     base: Final = api_base.rstrip("/")
     if base.endswith("/v1/messages"):
         return base
-    path_start: Final = base.find("/", base.find("://") + len("://")) if "://" in base else 0
-    anthropic_start: Final = base.find("/anthropic", path_start) if path_start >= 0 else -1
-    anthropic_root: Final = base[:anthropic_start] if anthropic_start >= 0 else base
-    return join_api_base(anthropic_root, "anthropic/v1/messages")
+    parts: Final = urlsplit(base)
+    segments: Final = parts.path.split("/")
+    if "anthropic" not in segments:
+        return join_api_base(base, "anthropic/v1/messages")
+    root_path: Final = "/".join(segments[: segments.index("anthropic")])
+    return join_api_base(urlunsplit((parts.scheme, parts.netloc, root_path, "", "")), "anthropic/v1/messages")
 
 
 def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
