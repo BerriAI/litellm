@@ -1576,6 +1576,24 @@ class TestUsageAiChatTeamModelRouting:
         assert b'"type": "error"' not in body
 
     @pytest.mark.asyncio
+    async def test_key_alias_wins_over_a_global_alias_of_the_same_name(self):
+        import litellm
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        key_limited_to_its_alias_target: Final = UserAPIKeyAuth(
+            user_id="admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-test",
+            models=["prod-model"],
+            aliases={"prod-alias": "prod-model"},
+        )
+        with patch.dict(litellm.model_alias_map, {"prod-alias": "other-model"}):
+            body: Final = await self._endpoint_body(key_limited_to_its_alias_target)
+
+        assert b'"content": "from the aliased deployment"' in body
+        assert b'"type": "error"' not in body
+
+    @pytest.mark.asyncio
     async def test_group_alias_to_a_model_the_key_cannot_call_is_denied_before_streaming(self):
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 

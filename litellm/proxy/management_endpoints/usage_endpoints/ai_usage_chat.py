@@ -564,20 +564,19 @@ async def resolve_usage_ai_chat_model(
     from litellm.proxy.proxy_server import llm_router
 
     team_aliased_model: Final = resolve_team_model_alias(_requested_model(model, router_settings), user_api_key_dict)
-    global_aliased_model: Final = litellm.model_alias_map.get(team_aliased_model, team_aliased_model)
-    key_aliases: Final = key_model_aliases_for_auth_check(user_api_key_dict)
-    key_aliased_model: Final = (
-        key_aliases.get(global_aliased_model, global_aliased_model) if key_aliases is not None else global_aliased_model
-    )
+    key_aliases: Final = key_model_aliases_for_auth_check(user_api_key_dict) or {}
+    key_aliased_model: Final = key_aliases.get(team_aliased_model, team_aliased_model)
+    global_aliased_model: Final = litellm.model_alias_map.get(key_aliased_model, key_aliased_model)
+    authorized_model: Final = key_aliases.get(global_aliased_model, global_aliased_model)
     if llm_router is None or router_settings is None:
-        return key_aliased_model
+        return authorized_model
     group_alias_target: Final = await _resolve_per_request_model_group_alias(
-        requested_model=key_aliased_model,
+        requested_model=authorized_model,
         router_settings=router_settings,
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
     )
-    return group_alias_target or key_aliased_model
+    return group_alias_target or authorized_model
 
 
 async def _acompletion(
