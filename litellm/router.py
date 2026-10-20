@@ -15551,6 +15551,9 @@ class Router:
             model=registered_model_name, strategy_tags=selected_strategy.tags, request_kwargs=request_kwargs
         )
         definition: Final = selected_strategy.deployment
+        strategy_source: Final = marker if marker is not None else definition.model_dump() if definition else None
+        if strategy_source is not None:
+            _ = require_granted_deployment(strategy_source, model, request_kwargs)
         config_id: Final = definition.model_info.id if definition else None
         updated_at: Final = definition.model_info.updated_at if definition else None
         router_kind: Final = classify_strategy_router_model(definition.litellm_params.model) if definition else None

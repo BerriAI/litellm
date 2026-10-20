@@ -152,3 +152,32 @@ def test_resolution_finds_a_tagged_deployment_by_id_for_any_caller() -> None:
     )
     assert isinstance(deployment, dict)
     assert (name, deployment["model_info"]["id"]) == ("openai/private-id-upstream", "private-id")
+
+
+def _router_with_tagged_complexity_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            _deployment("public-model", "public", "public-id"),
+            {
+                "model_name": "private-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": "public-model", "MEDIUM": "public-model", "COMPLEX": "public-model"}
+                    },
+                    "complexity_router_default_model": "public-model",
+                },
+                "model_info": {"id": "private-router-id", "access_groups": ["group-x"]},
+            },
+        ],
+    )
+
+
+async def test_a_tagged_auto_router_refuses_ungranted_callers_even_when_it_picks_a_public_target() -> None:
+    with pytest.raises(litellm.PermissionDeniedError) as denied:
+        await _reply(_router_with_tagged_complexity_router(), "private-router", frozenset({"public-model"}))
+    assert denied.value.status_code == 403
+
+
+async def test_a_tagged_auto_router_serves_callers_granted_its_group() -> None:
+    assert await _reply(_router_with_tagged_complexity_router(), "private-router", frozenset({"group-x"})) == "public"
