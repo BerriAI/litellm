@@ -1383,33 +1383,25 @@ async def async_transform_request_body(
         messages, should_inline=should_inline_remote_media(custom_llm_provider)
     )
 
-    if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages):
-        # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
-        # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
-        # whole sync transformation on a worker thread so it does not block the
-        # async event loop.
-        offloaded_request_body: Final[RequestBody] = await asyncify(transform_request_body)(
-            messages=inlined_messages,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            cached_content=cached_content,
-            optional_params=optional_params,
-        )
-        return _with_default_output_budget(offloaded_request_body, model, custom_llm_provider)
-
-    return _with_default_output_budget(
-        transform_request_body(
-            messages=inlined_messages,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            cached_content=cached_content,
-            optional_params=optional_params,
-        ),
-        model,
-        custom_llm_provider,
+    transform: Final = partial(
+        transform_request_body,
+        messages=inlined_messages,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        cached_content=cached_content,
+        optional_params=optional_params,
     )
+    # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
+    # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
+    # whole sync transformation on a worker thread so it does not block the
+    # async event loop.
+    request_body: Final[RequestBody] = (
+        await asyncify(transform)()
+        if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages)
+        else transform()
+    )
+    return _with_default_output_budget(request_body, model, custom_llm_provider)
 
 
 def _default_user_message_when_system_message_passed() -> ChatCompletionUserMessage:
