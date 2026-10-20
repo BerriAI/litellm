@@ -152,6 +152,11 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
 
 def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
 
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gemini-3.5-flash",
+        {**litellm.model_cost["gemini-3.5-flash"], "input_cost_per_image_token": None},
+    )
     usage = Usage(
         prompt_tokens=120,
         completion_tokens=100,
@@ -161,7 +166,7 @@ def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
             image_tokens=20,
         ),
     )
-    mr = ModelResponse(usage=usage, model="gemini-2.0-flash-001")
+    mr = ModelResponse(usage=usage, model="gemini-3.5-flash")
 
     result = response_cost_calculator(
         response_object=mr,
@@ -173,7 +178,7 @@ def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
         base_model=None,
     )
 
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
+    model_info = litellm.model_cost["gemini-3.5-flash"]
 
     # Step 1: Test a model where input_cost_per_image_token is not set.
     # In this case the calculation should use input_cost_per_token as fallback.
@@ -198,7 +203,7 @@ def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
     monkeypatch.setattr(
         litellm,
         "model_cost",
-        {"gemini-2.0-flash-001": temp_model_info_object},
+        {"gemini-3.5-flash": temp_model_info_object},
     )
 
     # Invalidate caches after modifying litellm.model_cost
@@ -235,7 +240,7 @@ def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     results: OpenAIRealtimeStreamList = [
-        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
+        {"type": "session.created", "session": {"model": "gpt-realtime-2.1"}},
         {
             "type": "response.done",
             "response": {
@@ -252,7 +257,7 @@ def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
     )
 
     logging_obj = Logging(
-        model="gpt-4o-realtime-preview",
+        model="gpt-realtime-2.1",
         messages=[],
         stream=False,
         call_type="_arealtime",
@@ -265,7 +270,7 @@ def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
         results=results,
         combined_usage_object=combined_usage_object,
         custom_llm_provider="openai",
-        litellm_model_name="gpt-4o-realtime-preview",
+        litellm_model_name="gpt-realtime-2.1",
         litellm_logging_obj=logging_obj,
     )
 
@@ -748,9 +753,9 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     router: Final = Router(
         model_list=[
             {
-                "model_name": "semantic-ranker-default-004",
+                "model_name": "semantic-ranker-custom-test",
                 "litellm_params": {
-                    "model": "vertex_ai/semantic-ranker-default-004",
+                    "model": "vertex_ai/semantic-ranker-custom-test",
                     "vertex_project": "test-project",
                     "vertex_location": "us-east5",
                 },
@@ -759,7 +764,7 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
         ]
     )
     router_model_id: Final = router.model_list[0]["model_info"]["id"]
-    assert litellm.model_cost["vertex_ai/semantic-ranker-default-004"].get("input_cost_per_query") is None
+    assert litellm.model_cost["vertex_ai/semantic-ranker-custom-test"].get("input_cost_per_query") is None
 
     response: Final = RerankResponse(
         id="vertex_ai_rerank_test",
@@ -769,7 +774,7 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
 
     cost: Final = completion_cost(
         completion_response=response,
-        model="vertex_ai/semantic-ranker-default-004",
+        model="vertex_ai/semantic-ranker-custom-test",
         custom_llm_provider="vertex_ai",
         call_type="arerank",
         custom_pricing=True,
@@ -1031,7 +1036,7 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     print(f"Cost with cache: {cost_with_cache}")
 
 
-def test_log_context_cost_calculation():
+def test_log_context_cost_calculation(monkeypatch: pytest.MonkeyPatch):
     """
     Test that log context cost calculation works correctly with tiered pricing.
 
@@ -1048,10 +1053,20 @@ def test_log_context_cost_calculation():
     )
 
     # Create a mock response with extended context usage
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "claude-sonnet-5",
+        {
+            **litellm.model_cost["claude-sonnet-5"],
+            "input_cost_per_token_above_200k_tokens": 8e-6,
+            "output_cost_per_token_above_200k_tokens": 3e-5,
+            "cache_creation_input_token_cost_above_200k_tokens": 9e-6,
+        },
+    )
     extended_context_response = ModelResponse(
         id="test-extended-context-response",
         created=1750733889,
-        model="claude-4-sonnet-20250514",
+        model="claude-sonnet-5",
         object="chat.completion",
         system_fingerprint=None,
         choices=[
@@ -1087,7 +1102,7 @@ def test_log_context_cost_calculation():
     # Calculate the cost using the extended context model
     result = completion_cost(
         completion_response=extended_context_response,
-        model="claude-4-sonnet-20250514",
+        model="claude-sonnet-5",
         custom_llm_provider="anthropic",
     )
 
@@ -1097,7 +1112,7 @@ def test_log_context_cost_calculation():
     # Get model info to understand the pricing
     from litellm import get_model_info
 
-    model_info = get_model_info(model="claude-4-sonnet-20250514", custom_llm_provider="anthropic")
+    model_info = get_model_info(model="claude-sonnet-5", custom_llm_provider="anthropic")
 
     # Calculate expected cost based on actual model pricing
     input_cost_per_token = model_info.get("input_cost_per_token", 0)
@@ -1721,7 +1736,7 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Expected: ${expected_cost:.6f}")
 
 
-def test_azure_image_generation_cost_calculator():
+def test_azure_image_generation_cost_calculator(monkeypatch: pytest.MonkeyPatch):
     from unittest.mock import MagicMock
 
     from litellm.types.utils import (
@@ -1731,6 +1746,11 @@ def test_azure_image_generation_cost_calculator():
         ImageUsageInputTokensDetails,
     )
 
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "hd/1024-x-1024/test-pixel-image",
+        {"input_cost_per_pixel": 1e-7, "litellm_provider": "azure", "mode": "image_generation"},
+    )
     response_cost_calculator_kwargs = {
         "response_object": ImageResponse(
             created=1761785270,
@@ -1752,10 +1772,10 @@ def test_azure_image_generation_cost_calculator():
                 total_tokens=0,
             ),
         ),
-        "model": "azure/dall-e-3",
+        "model": "azure/test-pixel-image",
         "cache_hit": False,
         "custom_llm_provider": "azure",
-        "base_model": "azure/dall-e-3",
+        "base_model": "azure/test-pixel-image",
         "call_type": "aimage_generation",
         "optional_params": {},
         "custom_pricing": False,
@@ -1770,7 +1790,7 @@ def test_azure_image_generation_cost_calculator():
     }
 
     cost = response_cost_calculator(**response_cost_calculator_kwargs)
-    assert cost > 0.079
+    assert cost == pytest.approx(1024 * 1024 * 1e-7)
 
 
 def test_completion_cost_extracts_service_tier_from_response(_local_model_cost_map):
@@ -2570,7 +2590,7 @@ def test_gemini_implicit_caching_cost_calculation():
     # Verify cost calculation uses cached token pricing
     response = ModelResponse(
         id="mock-id",
-        model="gemini-2.0-flash",
+        model="gemini-3.5-flash",
         choices=[
             Choices(
                 index=0,
@@ -2583,14 +2603,14 @@ def test_gemini_implicit_caching_cost_calculation():
 
     cost = completion_cost(
         completion_response=response,
-        model="gemini-2.0-flash",
+        model="gemini-3.5-flash",
         custom_llm_provider="gemini",
     )
 
     # Get model pricing for verification
     import litellm
 
-    model_info = litellm.get_model_info("gemini/gemini-2.0-flash")
+    model_info = litellm.get_model_info("gemini/gemini-3.5-flash")
     input_cost = model_info.get("input_cost_per_token", 0)
     cache_read_cost = model_info.get("cache_read_input_token_cost", input_cost)
     output_cost = model_info.get("output_cost_per_token", 0)
