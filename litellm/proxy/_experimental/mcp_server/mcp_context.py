@@ -28,6 +28,9 @@ def get_active_mcp_request_ctx() -> "ServerRequestContext | None":
 # /toolset/{name}/mcp or the toolset fallback in dynamic_mcp_route.
 # Never populated from client-supplied headers.
 mcp_active_toolset_id: Final[ContextVar[str | None]] = ContextVar("_mcp_active_toolset_id", default=None)
+mcp_active_toolset_tools_ttl_ms: Final[ContextVar[int | None]] = ContextVar(
+    "_mcp_active_toolset_tools_ttl_ms", default=None
+)
 
 _mcp_active_toolset_id: Final = mcp_active_toolset_id
 

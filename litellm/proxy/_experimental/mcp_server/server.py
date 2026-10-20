@@ -59,6 +59,7 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (  # noqa: F401  
     active_mcp_request_ctx_var,
     get_active_mcp_request_ctx,
     mcp_active_toolset_id,
+    mcp_active_toolset_tools_ttl_ms,
     mcp_gateway_initialize_instructions,
     mcp_gateway_server_name,
 )
@@ -889,6 +890,7 @@ if MCP_AVAILABLE:
                     if isinstance(request, StarletteRequest)
                     else None
                 ),
+                toolset_tools_ttl_ms=mcp_active_toolset_tools_ttl_ms.get(),
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:

@@ -4288,7 +4288,9 @@ class TestPreviewOpenAPITools:
         )
 
         class _StubRegistry:
-            def register_tool(self, name, description, input_schema, handler):  # noqa: ANN001
+            def register_tool(
+                self, name, description, input_schema, handler, output_schema=None, title=None
+            ):  # noqa: ANN001
                 registered_summary_to_name[description] = name
 
         monkeypatch.setattr(

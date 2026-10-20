@@ -345,6 +345,7 @@ async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
         server_id="other-server-id",
         short_prefix=None,
         mcp_info=None,
+        spec_path=None,
         tool_name_to_display_name={"search": "search_docs"},
     )
     fake_server = types.SimpleNamespace(
@@ -353,6 +354,7 @@ async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
         server_id="test-server-id",
         short_prefix=None,
         mcp_info=None,
+        spec_path=None,
         tool_name_to_display_name={"read_wiki_structure": "browse_repo_docs"},
     )
     from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm

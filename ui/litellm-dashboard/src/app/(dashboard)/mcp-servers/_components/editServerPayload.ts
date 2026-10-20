@@ -42,6 +42,7 @@ export interface EditServerFormValues {
   readonly extra_headers?: readonly string[];
   readonly disallowed_tools?: readonly string[];
   readonly oauth_flow_type?: string;
+  readonly tools_ttl_ms?: number | string | null;
   readonly [key: string]: unknown;
 }
 
@@ -296,6 +297,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     oauth_passthrough: oauthPassthroughRaw,
     dcr_bridge: dcrBridgeRaw,
     token_validation_json: rawTokenValidationJson,
+    tools_ttl_ms: rawToolsTtlMs,
     ...rawRestValues
   } = values;
 
@@ -318,6 +320,10 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
   // position, which the payload's serialised key order depends on.
   const restValues =
     rawRestValues.transport === TRANSPORT.OPENAPI ? { ...rawRestValues, transport: "http" } : rawRestValues;
+  const toolsTtlPayload =
+    mcpServer.spec_path && rawToolsTtlMs !== mcpServer.tools_ttl_ms
+      ? { tools_ttl_ms: rawToolsTtlMs == null || rawToolsTtlMs === "" ? null : Number(rawToolsTtlMs) }
+      : {};
 
   const tokenValidation = ((): TokenValidationResult => {
     if (!rawTokenValidationJson || rawTokenValidationJson.trim() === "") return { kind: "ok", value: null };
@@ -365,6 +371,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
 
   const payload: EditServerPayload = {
     ...restValues,
+    ...toolsTtlPayload,
     ...stdio.fields,
     // Remove UI-only fields
     stdio_config: undefined,

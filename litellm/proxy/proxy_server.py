@@ -21685,12 +21685,15 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
     will be rejected with a 403.
     """
     try:
+        from litellm.proxy._experimental.mcp_server.mcp_context import (
+            mcp_active_toolset_id,
+            mcp_active_toolset_tools_ttl_ms,
+        )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
-            mcp_active_toolset_id,
         )
 
         if prisma_client is None:
@@ -21707,9 +21710,11 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
         scope["path"] = "/mcp"
 
         token: Final = mcp_active_toolset_id.set(toolset.toolset_id)
+        ttl_token: Final = mcp_active_toolset_tools_ttl_ms.set(toolset.tools_ttl_ms)
         try:
             return await _stream_mcp_asgi_response(handle_streamable_http_mcp, scope, request.receive)
         finally:
+            mcp_active_toolset_tools_ttl_ms.reset(ttl_token)
             mcp_active_toolset_id.reset(token)
 
     except HTTPException as e:
@@ -21851,9 +21856,12 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 
         # 3. Toolset name (cached)
         if prisma_client is not None:
+            from litellm.proxy._experimental.mcp_server.mcp_context import (
+                mcp_active_toolset_id,
+                mcp_active_toolset_tools_ttl_ms,
+            )
             from litellm.proxy._experimental.mcp_server.server import (
                 handle_streamable_http_mcp,
-                mcp_active_toolset_id,
             )
 
             toolset: Final = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, mcp_server_name)
@@ -21862,9 +21870,11 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
                 scope["_original_path"] = scope.get("path", "")
                 scope["path"] = "/mcp"
                 token: Final = mcp_active_toolset_id.set(toolset.toolset_id)
+                ttl_token: Final = mcp_active_toolset_tools_ttl_ms.set(toolset.tools_ttl_ms)
                 try:
                     return await _stream_mcp_asgi_response(handle_streamable_http_mcp, scope, request.receive)
                 finally:
+                    mcp_active_toolset_tools_ttl_ms.reset(ttl_token)
                     mcp_active_toolset_id.reset(token)
 
         # 4. MCP access group tag (cached)

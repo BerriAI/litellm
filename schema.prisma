@@ -367,6 +367,7 @@ model LiteLLM_MCPServerTable {
   instructions String?
   url          String?
   spec_path    String?
+  tools_ttl_ms Int?
   transport    String         @default("sse")
   auth_type    String?        
   credentials  Json?          @default("{}")
@@ -434,6 +435,7 @@ model LiteLLM_MCPToolsetTable {
   toolset_id   String   @id @default(uuid())
   toolset_name String   @unique
   description  String?
+  tools_ttl_ms Int?
   tools        Json     @default("[]") // [{server_id: string, tool_name: string}]
   created_at   DateTime @default(now())
   created_by   String?

@@ -409,8 +409,10 @@ class MCPServerConfig(TypedDict, total=False):
     mcp_info: MCPInfo
     url: str
     spec_path: str
+    tools_ttl_ms: ReadOnly[int | None]
     transport: MCPTransportType
     auth_type: MCPAuthType
+    tool_name_to_display_name: ReadOnly[_StringMap]
     authentication_token: str
     auth_value: str
     instructions: str
@@ -2723,6 +2725,8 @@ class MCPServerManager:
                 alias=alias,
                 server_name=server_name,
                 spec_path=server_config.get("spec_path", None),
+                tools_ttl_ms=server_config.get("tools_ttl_ms", None),
+                tool_name_to_display_name=server_config.get("tool_name_to_display_name", None),
                 url=server_url,
                 command=server_config.get("command", None) or "",
                 args=server_config.get("args", None) or [],
@@ -2876,6 +2880,7 @@ class MCPServerManager:
         """
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             build_input_schema,
+            build_output_schema,
             create_tool_function,
             load_openapi_spec_async,
             resolve_operation_params,
@@ -2987,6 +2992,8 @@ class MCPServerManager:
                         description=description,
                         input_schema=input_schema,
                         handler=tool_func,
+                        output_schema=build_output_schema(operation, spec),
+                        title=operation.get("summary"),
                         server_id=server.server_id,
                     )
 
@@ -3306,6 +3313,7 @@ class MCPServerManager:
             server_name=getattr(mcp_server, "server_name", None),
             url=mcp_server.url,
             spec_path=getattr(mcp_server, "spec_path", None),
+            tools_ttl_ms=getattr(mcp_server, "tools_ttl_ms", None),
             transport=cast(MCPTransportType, mcp_server.transport),
             auth_type=auth_type,
             authentication_token=auth_value,
@@ -4373,6 +4381,7 @@ class MCPServerManager:
         *,
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
         record_listing: bool = False,
+        wire_compat: WireCompat = WireCompat.LEGACY,
     ) -> list[MCPTool]:
         result: Final = await self.get_tools_page(
             server=server,
@@ -4386,6 +4395,7 @@ class MCPServerManager:
             proxy_logging_obj=proxy_logging_obj,
             catalog_auth_header=catalog_auth_header,
             record_listing=record_listing,
+            wire_compat=wire_compat,
         )
         return result.tools
 
@@ -4407,6 +4417,7 @@ class MCPServerManager:
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
         record_listing: bool = False,
         listing_updates: ExitStack | None = None,
+        wire_compat: WireCompat = WireCompat.LEGACY,
     ) -> ListToolsResult:
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
@@ -4509,7 +4520,8 @@ class MCPServerManager:
                 # active at registration time — fetch by that same prefix.
                 registry_prefix: Final = normalize_server_name(get_server_prefix(server)) + MCP_TOOL_PREFIX_SEPARATOR
                 registered: Final = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
-                    global_mcp_tool_registry.list_tools(tool_prefix=registry_prefix)
+                    global_mcp_tool_registry.list_tools(tool_prefix=registry_prefix),
+                    wire_compat=wire_compat,
                 )
                 registered_names: Final = MappingProxyType(
                     {t.name.removeprefix(registry_prefix): t.name for t in registered}
@@ -4529,9 +4541,13 @@ class MCPServerManager:
                     server, guarded_openapi, listed_caller, listed_generation, record_listing=record_listing
                 )
                 if not add_prefix:
-                    return ListToolsResult(tools=list(guarded_openapi))
+                    return ListToolsResult(
+                        tools=list(guarded_openapi),
+                        ttl_ms=server.tools_ttl_ms if server.tools_ttl_ms is not None else 0,
+                    )
                 return ListToolsResult(
-                    tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
+                    tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi],
+                    ttl_ms=server.tools_ttl_ms if server.tools_ttl_ms is not None else 0,
                 )
             else:
                 page: Final = (
@@ -7550,6 +7566,8 @@ class MCPServerManager:
             alias=server.alias,
             description=(server.mcp_info.get("description") if server.mcp_info else None),
             url=server.url,
+            spec_path=server.spec_path,
+            tools_ttl_ms=server.tools_ttl_ms,
             transport=server.transport,
             auth_type=server.auth_type,
             created_at=server.created_at,
@@ -7663,6 +7681,7 @@ class MCPServerManager:
             description=(server.mcp_info.get("description") if server.mcp_info else None),
             url=server.url,
             spec_path=server.spec_path,
+            tools_ttl_ms=server.tools_ttl_ms,
             transport=server.transport,
             auth_type=server.auth_type,
             credentials=({"scopes": list(server.configured_scopes)} if server.configured_scopes else None),

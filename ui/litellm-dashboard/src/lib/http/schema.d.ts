@@ -34625,6 +34625,8 @@ export interface components {
             tool_name_to_display_name?: {
                 [key: string]: string;
             } | null;
+            /** Tools Ttl Ms */
+            tools_ttl_ms?: number | null;
             /**
              * Transport
              * @enum {string}
@@ -38762,6 +38764,8 @@ export interface components {
             tool_name_to_display_name?: {
                 [key: string]: string;
             } | null;
+            /** Tools Ttl Ms */
+            tools_ttl_ms?: number | null;
             /**
              * Transport
              * @default sse
@@ -38780,6 +38784,8 @@ export interface components {
              * @default []
              */
             tools: components["schemas"]["MCPToolsetTool"][];
+            /** Tools Ttl Ms */
+            tools_ttl_ms?: number | null;
             /** Toolset Name */
             toolset_name: string;
         };
@@ -48261,6 +48267,8 @@ export interface components {
             tool_name_to_display_name?: {
                 [key: string]: string;
             } | null;
+            /** Tools Ttl Ms */
+            tools_ttl_ms?: number | null;
             /**
              * Transport
              * @default sse
@@ -48276,6 +48284,8 @@ export interface components {
             description?: string | null;
             /** Tools */
             tools?: components["schemas"]["MCPToolsetTool"][] | null;
+            /** Tools Ttl Ms */
+            tools_ttl_ms?: number | null;
             /** Toolset Id */
             toolset_id: string;
             /** Toolset Name */

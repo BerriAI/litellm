@@ -368,24 +368,32 @@ async def test_legacy_adapter_cleans_context_after_cancelled_operation():
     from types import SimpleNamespace
 
     from litellm.proxy._experimental.mcp_server import server
-    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from litellm.proxy._experimental.mcp_server.mcp_context import (
+        active_mcp_request_ctx_var,
+        mcp_active_toolset_tools_ttl_ms,
+    )
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
+    ttl_token = mcp_active_toolset_tools_ttl_ms.set(1200)
     request = SimpleNamespace(session=object(), protocol_version="2025-06-18", method="tools/call")
     auth = (None, None, None, None, None, None, None)
 
     async def cancelled_operation():
-        async with server._legacy_operation_context(request, trace=False):
+        async with server._legacy_operation_context(request, trace=False) as context:
             assert server.active_mcp_session_var.get() is request.session
             assert active_mcp_request_ctx_var.get() is request
+            assert context.toolset_tools_ttl_ms == 1200
             raise asyncio.CancelledError
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context", AsyncMock(return_value=auth)
-    ):
-        with pytest.raises(asyncio.CancelledError):
-            await cancelled_operation()
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context", AsyncMock(return_value=auth)
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_operation()
+    finally:
+        mcp_active_toolset_tools_ttl_ms.reset(ttl_token)
     assert server.active_mcp_session_var.get() is previous_session
     assert active_mcp_request_ctx_var.get() is previous_request
 
@@ -703,6 +711,68 @@ async def test_tools_call_warmup_does_not_consume_mcp_server_rpm() -> None:
         )
 
     assert [tool.name for tool in listing.tools] == ["echo"]
+
+
+@pytest.mark.asyncio
+async def test_modern_protocol_metadata_survives_tool_listing_context_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp.types import ListToolsResult
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
+
+    server: Final = MCPServer(
+        server_id="wire-compat-openapi",
+        name="petstore",
+        server_name="petstore",
+        transport=MCPTransport.http,
+        url="http://petstore.test",
+        spec_path="petstore.json",
+        tool_name_to_display_name={"getPetById": "Get Pet"},
+    )
+    output_schema: Final[dict[str, object]] = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+    }
+    manager: Final = MCPServerManager()
+    manager.config_mcp_servers = {server.server_id: server}
+    get_tools_page: Final = AsyncMock(
+        return_value=ListToolsResult(
+            tools=[
+                MCPTool(
+                    name="petstore-getpetbyid",
+                    description="Find pet by ID",
+                    inputSchema={"type": "object"},
+                    outputSchema=output_schema,
+                    title="Find pet by ID",
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(
+        operations,
+        "_get_allowed_mcp_servers",
+        AsyncMock(return_value=[server]),
+    )
+    monkeypatch.setattr(manager, "get_tools_page", get_tools_page)
+
+    listing: Final = await operations._get_tools_from_mcp_servers(
+        user_api_key_auth=None,
+        mcp_auth_header=None,
+        mcp_servers=[server.server_id],
+        protocol_version="2026-07-28",
+        enforce_rate_limits=False,
+    )
+
+    listed_tool: Final = listing.tools[0].model_dump(by_alias=True, exclude_none=True)
+    assert get_tools_page.await_args.kwargs["wire_compat"] is WireCompat.MODERN
+    assert listed_tool["name"] == "petstore-getpetbyid"
+    assert listed_tool["title"] == "Get Pet"
+    assert listed_tool["outputSchema"] == output_schema
 
 
 def _scoped_rig(

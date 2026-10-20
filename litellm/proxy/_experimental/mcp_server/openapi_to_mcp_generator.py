@@ -8,13 +8,17 @@ import json
 import os
 import re
 from collections.abc import Mapping, Sequence
+from functools import reduce
+from itertools import chain
 from pathlib import PurePosixPath
 from typing import Final, Literal, Protocol, TypeAlias, TypedDict, overload
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
 
+from litellm import constants
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPOpenApiUpstreamError,
@@ -30,6 +34,8 @@ _OPENAPI_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
 
 _OPENAPI_TOOL_NAME_MAX_LEN: Final = OPENAPI_TOOL_NAME_MAX_LEN
+
+_OPENAPI_SCHEMA_RESOLUTION_CHUNK_SIZE: Final = 32
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -74,7 +80,11 @@ class _OpenAPIParameter(TypedDict, total=False):
 
 
 class _OpenAPIMediaType(TypedDict, total=False):
-    schema: _OpenAPIJSONSchema
+    schema: ReadOnly[Mapping[str, object]]
+
+
+class _OpenAPIResponse(TypedDict, total=False):
+    content: ReadOnly[Mapping[str, _OpenAPIMediaType]]
 
 
 class _OpenAPIRequestBody(TypedDict, total=False):
@@ -89,6 +99,7 @@ class _OpenAPIOperation(TypedDict, total=False):
     description: str
     parameters: Sequence[_OpenAPIParameter]
     requestBody: _OpenAPIRequestBody
+    responses: ReadOnly[Mapping[str, _OpenAPIResponse]]
 
 
 _OpenAPIMethod: TypeAlias = Literal["get", "post", "put", "delete", "patch"]
@@ -110,6 +121,7 @@ class _OpenAPIPathItem(Protocol):
 
 class _OpenAPIComponents(TypedDict, total=False):
     parameters: Mapping[str, _OpenAPIParameter]
+    schemas: ReadOnly[Mapping[str, Mapping[str, object]]]
 
 
 class _OpenAPIServer(TypedDict):
@@ -123,6 +135,10 @@ class _OpenAPISpec(TypedDict, total=False):
     host: ReadOnly[str]
     schemes: ReadOnly[Sequence[str]]
     basePath: ReadOnly[str]
+
+
+_OPENAPI_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_OPENAPI_ARRAY_ADAPTER: Final = TypeAdapter(list[object])
 
 
 # Store the base URL and headers globally
@@ -379,7 +395,7 @@ def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
 
         # Try to get JSON schema
         if "application/json" in content:
-            schema: Final[_OpenAPIJSONSchema] = content["application/json"].get("schema", {})
+            schema: Final = content["application/json"].get("schema", {})
             properties["body"] = {
                 "type": "object",
                 "description": request_body.get("description", "Request body"),
@@ -393,6 +409,246 @@ def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
         "properties": properties,
         "required": required if required else [],
     }
+
+
+def _resolve_openapi_schema_value(
+    value: object, spec: _OpenAPISpec, seen: frozenset[str], budget: int
+) -> tuple[bool, object, int]:
+    remaining: Final = budget - 1
+    if remaining < 0:
+        return False, None, remaining
+    if isinstance(value, Mapping):
+        try:
+            mapping_value: Final = _OPENAPI_OBJECT_ADAPTER.validate_python(value)
+        except ValidationError:
+            return False, None, remaining
+        return _resolve_openapi_schema_mapping(mapping_value, spec, seen, remaining)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        try:
+            sequence_value: Final = _OPENAPI_ARRAY_ADAPTER.validate_python(value)
+        except ValidationError:
+            return False, None, remaining
+        return _resolve_openapi_schema_sequence(sequence_value, spec, seen, remaining)
+    return True, value, remaining
+
+
+def _resolve_openapi_schema_mapping(
+    value: Mapping[str, object], spec: _OpenAPISpec, seen: frozenset[str], budget: int
+) -> tuple[bool, object, int]:
+    ref: Final = value.get("$ref")
+    if ref is not None:
+        ref_result: Final = _resolve_openapi_schema_value(ref, spec, seen, budget)
+        if not ref_result[0]:
+            return False, None, ref_result[2]
+        return _resolve_openapi_schema_reference(ref_result[1], spec, seen, ref_result[2])
+    mapping_items: Final = tuple(value.items())
+    child_values: Final = tuple(item for _, item in mapping_items)
+    resolved_items: Final = _resolve_openapi_schema_children(child_values, spec, seen, budget)
+    if not resolved_items[0] or resolved_items[1] is None:
+        return False, None, resolved_items[2]
+    resolved_values: Final = resolved_items[1]
+    return (
+        True,
+        {key: item for (key, _), item in zip(mapping_items, resolved_values)},
+        resolved_items[2],
+    )
+
+
+def _resolve_openapi_schema_reference(
+    ref: object, spec: _OpenAPISpec, seen: frozenset[str], budget: int
+) -> tuple[bool, object, int]:
+    if not isinstance(ref, str) or not ref.startswith("#/components/schemas/") or ref in seen:
+        return False, None, budget
+    schema_name: Final = ref.rsplit("/", 1)[-1]
+    components: Final = spec.get("components")
+    if components is None:
+        return False, None, budget
+    schemas: Final = components.get("schemas")
+    if schemas is None:
+        return False, None, budget
+    target: Final = schemas.get(schema_name)
+    if target is None:
+        return False, None, budget
+    return _resolve_openapi_schema_value(target, spec, seen | {ref}, budget)
+
+
+def _resolve_openapi_schema_sequence(
+    value: Sequence[object], spec: _OpenAPISpec, seen: frozenset[str], budget: int
+) -> tuple[bool, object, int]:
+    resolved_items: Final = _resolve_openapi_schema_children(value, spec, seen, budget)
+    if not resolved_items[0] or resolved_items[1] is None:
+        return False, None, resolved_items[2]
+    resolved_values: Final = resolved_items[1]
+    return True, list(resolved_values), resolved_items[2]
+
+
+def _resolve_openapi_schema_children(
+    values: Sequence[object],
+    spec: _OpenAPISpec,
+    seen: frozenset[str],
+    budget: int,
+) -> tuple[bool, tuple[object, ...] | None, int]:
+    def resolve_child(
+        accumulator: tuple[bool, tuple[tuple[object, ...], ...], tuple[object, ...], int],
+        value: object,
+    ) -> tuple[bool, tuple[tuple[object, ...], ...], tuple[object, ...], int]:
+        if not accumulator[0]:
+            return accumulator
+        child_result: Final = _resolve_openapi_schema_value(value, spec, seen, accumulator[3])
+        if not child_result[0]:
+            return False, accumulator[1], accumulator[2], child_result[2]
+        current_chunk: Final = (*accumulator[2], child_result[1])
+        if len(current_chunk) < _OPENAPI_SCHEMA_RESOLUTION_CHUNK_SIZE:
+            return True, accumulator[1], current_chunk, child_result[2]
+        return True, (*accumulator[1], current_chunk), (), child_result[2]
+
+    resolved: Final = reduce(resolve_child, values, (True, (), (), budget))
+    if not resolved[0]:
+        return False, None, resolved[3]
+    chunks: Final = (*resolved[1], resolved[2]) if resolved[2] else resolved[1]
+    return True, tuple(chain.from_iterable(chunks)), resolved[3]
+
+
+def _get_openapi_output_schema(operation: _OpenAPIOperation) -> Mapping[str, object] | None:
+    responses: Final = operation.get("responses")
+    if responses is None:
+        return None
+    response_codes: Final = tuple(
+        sorted((code for code in responses if code.isdigit() and 200 <= int(code) < 300), key=int)
+    )
+    selected_code: Final = response_codes[0] if response_codes else ("2XX" if "2XX" in responses else None)
+    if selected_code is None:
+        return None
+    response: Final = responses.get(selected_code)
+    if response is None:
+        return None
+    content: Final = response.get("content")
+    if content is None:
+        return None
+    media_type: Final = next(
+        (
+            value
+            for key, value in content.items()
+            if key == "application/json" or (key.startswith("application/") and key.endswith("+json"))
+        ),
+        None,
+    )
+    if media_type is None:
+        return None
+    return media_type.get("schema")
+
+
+_OPENAPI_SCHEMA_CHILD_KEYS: Final = frozenset(
+    {
+        "additionalItems",
+        "additionalProperties",
+        "contains",
+        "contentSchema",
+        "else",
+        "if",
+        "items",
+        "not",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+)
+_OPENAPI_SCHEMA_MAP_KEYS: Final = frozenset(
+    {"$defs", "definitions", "dependentSchemas", "patternProperties", "properties"}
+)
+_OPENAPI_SCHEMA_SEQUENCE_KEYS: Final = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
+_OPENAPI_SCHEMA_KEYS: Final = _OPENAPI_SCHEMA_CHILD_KEYS | _OPENAPI_SCHEMA_MAP_KEYS | _OPENAPI_SCHEMA_SEQUENCE_KEYS
+
+
+def _normalize_openapi_exclusive_bound(
+    value: Mapping[str, object], bound_key: str, exclusive_key: str
+) -> dict[str, object]:
+    bound: Final = value.get(bound_key)
+    exclusive: Final = value.get(exclusive_key)
+    bound_fields: Final = {bound_key: bound} if bound_key in value else {}
+    if isinstance(exclusive, bool):
+        if exclusive and isinstance(bound, (int, float)) and not isinstance(bound, bool):
+            return {exclusive_key: bound}
+        return bound_fields
+    if exclusive_key in value:
+        return {**bound_fields, exclusive_key: exclusive}
+    return bound_fields
+
+
+def _normalize_openapi_nullable_schema(value: object) -> object:
+    if isinstance(value, Mapping):
+        schema_mapping: Final = _OPENAPI_OBJECT_ADAPTER.validate_python(value)
+        nullable: Final = schema_mapping.get("nullable") is True
+        schema_type: Final = schema_mapping.get("type")
+        schema_children: Final = {
+            key: _normalize_openapi_nullable_schema_children(item)
+            if key in _OPENAPI_SCHEMA_MAP_KEYS
+            else _normalize_openapi_nullable_schema(item)
+            for key, item in schema_mapping.items()
+            if key in _OPENAPI_SCHEMA_KEYS
+        }
+        schema_fields: Final = {
+            key: item
+            for key, item in schema_mapping.items()
+            if key not in _OPENAPI_SCHEMA_KEYS
+            and key not in ("nullable", "type", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum")
+        }
+        normalized_fields: Final = {
+            **schema_fields,
+            **schema_children,
+            **_normalize_openapi_exclusive_bound(schema_mapping, "minimum", "exclusiveMinimum"),
+            **_normalize_openapi_exclusive_bound(schema_mapping, "maximum", "exclusiveMaximum"),
+        }
+        if nullable and isinstance(schema_type, str):
+            return {**normalized_fields, "type": [schema_type, "null"]}
+        if nullable and isinstance(schema_type, Sequence) and not isinstance(schema_type, (str, bytes, bytearray)):
+            type_values: Final = _OPENAPI_ARRAY_ADAPTER.validate_python(schema_type)
+            normalized_types: Final = tuple(_normalize_openapi_nullable_schema(item) for item in type_values)
+            nullable_types: Final = (
+                list(normalized_types) if "null" in normalized_types else [*normalized_types, "null"]
+            )
+            return {**normalized_fields, "type": nullable_types}
+        if nullable:
+            return {"anyOf": [normalized_fields, {"type": "null"}]}
+        if "type" in schema_mapping:
+            return {
+                **normalized_fields,
+                "type": _normalize_openapi_nullable_schema(schema_type),
+            }
+        return normalized_fields
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        schema_sequence: Final = _OPENAPI_ARRAY_ADAPTER.validate_python(value)
+        return [_normalize_openapi_nullable_schema(item) for item in schema_sequence]
+    return value
+
+
+def _normalize_openapi_nullable_schema_children(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    schema_children: Final = _OPENAPI_OBJECT_ADAPTER.validate_python(value)
+    return {key: _normalize_openapi_nullable_schema(item) for key, item in schema_children.items()}
+
+
+def build_output_schema(
+    operation: _OpenAPIOperation, spec: _OpenAPISpec
+) -> dict[str, object] | None:  # mutable-ok: MCP SDK output schemas require a copied dict
+    schema: Final = _get_openapi_output_schema(operation)
+    if schema is None:
+        return None
+    resolved: Final = _resolve_openapi_schema_value(
+        schema, spec, frozenset(), constants.MCP_OPENAPI_OUTPUT_SCHEMA_MAX_NODES
+    )
+    if not resolved[0]:
+        return None
+    try:
+        normalized_schema: Final = _normalize_openapi_nullable_schema(resolved[1])
+        resolved_schema: Final = _OPENAPI_OBJECT_ADAPTER.validate_python(normalized_schema)
+    except ValidationError:
+        return None
+    if resolved_schema.get("type") != "object":
+        return None
+    return resolved_schema
 
 
 async def _drop_credential_across_origin(request: httpx.Request) -> None:
@@ -677,5 +933,7 @@ def register_tools_from_openapi(spec: _OpenAPISpec, base_url: str) -> None:
                     description=description,
                     input_schema=input_schema,
                     handler=tool_func,
+                    output_schema=build_output_schema(operation, spec),
+                    title=operation.get("summary"),
                 )
                 verbose_logger.debug("Registered tool: %s", tool_name)

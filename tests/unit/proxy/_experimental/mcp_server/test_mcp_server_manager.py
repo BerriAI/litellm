@@ -879,6 +879,42 @@ class TestMCPServerManager:
         assert server.alias == "friendly_alias"
         assert server.server_name == "validserver"
 
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_preserves_openapi_display_name_overrides(
+        self, config_only_mcp_manager_factory, tmp_path
+    ):
+        manager = config_only_mcp_manager_factory()
+        spec_path = tmp_path / "petstore.json"
+        spec_path.write_text(
+            json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "paths": {
+                        "/pets/{petId}": {
+                            "get": {
+                                "operationId": "getPetById",
+                                "summary": "Find pet by ID",
+                                "responses": {"200": {"description": "Success"}},
+                            }
+                        }
+                    },
+                }
+            )
+        )
+
+        await manager.load_servers_from_config(
+            {
+                "petstore": {
+                    "url": "https://petstore.test",
+                    "spec_path": str(spec_path),
+                    "tool_name_to_display_name": {"getPetById": "Get Pet"},
+                }
+            }
+        )
+
+        server: Final = next(iter(manager.config_mcp_servers.values()))
+        assert server.tool_name_to_display_name == {"getPetById": "Get Pet"}
+
     def _oauth2_config(self, **overrides):
         base = {
             "url": "https://example.com/mcp",
@@ -16550,6 +16586,174 @@ async def test_openapi_listing_finds_tools_registered_under_the_normalized_prefi
         global_mcp_tool_registry.unregister_tools_with_prefix("pet_store-")
 
     assert [t.name for t in listed] == ["list"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("configured_ttl", "expected_ttl"), ((0, 0), (2500, 2500), (None, 0)))
+async def test_openapi_listing_uses_configured_tools_ttl(configured_ttl: int | None, expected_ttl: int) -> None:
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    manager: Final = MCPServerManager()
+    manager.create_mcp_client = AsyncMock(return_value=AsyncMock())
+    global_mcp_tool_registry.unregister_tools_with_prefix("pet-")
+    _register_local_tool("pet-list", "Pet tool")
+    server: Final = _openapi_server("pet").model_copy(update={"tools_ttl_ms": configured_ttl})
+    try:
+        listed: Final = await manager.get_tools_page(server=server, add_prefix=False)
+    finally:
+        global_mcp_tool_registry.unregister_tools_with_prefix("pet-")
+
+    assert listed.ttl_ms == expected_ttl
+    assert listed.model_dump(mode="json", by_alias=True, exclude_none=True)["ttlMs"] == expected_ttl
+
+
+@pytest.mark.asyncio
+async def test_openapi_listing_serializes_metadata_only_for_modern_revision() -> None:
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+    from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
+
+    manager: Final = MCPServerManager()
+    manager.create_mcp_client = AsyncMock(return_value=AsyncMock())
+    global_mcp_tool_registry.unregister_tools_with_prefix("pet-")
+
+    async def handler(**kwargs: object) -> None:
+        return None
+
+    global_mcp_tool_registry.register_tool(
+        name="pet-list",
+        description="Pet tool",
+        input_schema={"type": "object"},
+        handler=handler,
+        output_schema={"type": "object", "properties": {"count": {"type": "integer"}}},
+        title="List pets",
+    )
+    try:
+        modern: Final = await manager.get_tools_page(
+            server=_openapi_server("pet"), add_prefix=False, wire_compat=WireCompat.MODERN
+        )
+        legacy: Final = await manager.get_tools_page(
+            server=_openapi_server("pet"), add_prefix=False, wire_compat=WireCompat.LEGACY
+        )
+    finally:
+        global_mcp_tool_registry.unregister_tools_with_prefix("pet-")
+
+    modern_wire: Final = modern.model_dump(mode="json", by_alias=True, exclude_none=True)
+    legacy_wire: Final = legacy.model_dump(mode="json", by_alias=True, exclude_none=True)
+    assert modern_wire["tools"][0]["title"] == "List pets"
+    assert modern_wire["tools"][0]["outputSchema"] == {
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+    }
+    assert "title" not in legacy_wire["tools"][0]
+    assert "outputSchema" not in legacy_wire["tools"][0]
+
+
+@pytest.mark.asyncio
+async def test_manager_openapi_registration_lists_response_metadata_for_modern_revision(tmp_path: Path) -> None:
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+    from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
+
+    spec_path: Final = tmp_path / "openapi.json"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "openapi": "3.0.0",
+                "info": {"title": "Demo", "version": "1.0.0"},
+                "components": {
+                    "schemas": {
+                        "Pet": {
+                            "type": "object",
+                            "properties": {"owner": {"$ref": "#/components/schemas/Owner"}},
+                        },
+                        "Owner": {"type": "object", "properties": {"name": {"type": "string"}}},
+                    }
+                },
+                "paths": {
+                    "/pets": {
+                        "get": {
+                            "operationId": "list_pets",
+                            "summary": "List pets",
+                            "responses": {
+                                "200": {
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {"$ref": "#/components/schemas/Pet"},
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    }
+                },
+            }
+        )
+    )
+    server: Final = _openapi_server("pet").model_copy(update={"spec_path": str(spec_path)})
+    manager: Final = MCPServerManager()
+    manager.create_mcp_client = AsyncMock(return_value=AsyncMock())
+    global_mcp_tool_registry.unregister_tools_with_prefix("pet-")
+
+    try:
+        await manager._register_openapi_tools(str(spec_path), server, "https://example.com")
+        modern: Final = await manager.get_tools_page(server=server, add_prefix=False, wire_compat=WireCompat.MODERN)
+        legacy: Final = await manager.get_tools_page(server=server, add_prefix=False, wire_compat=WireCompat.LEGACY)
+    finally:
+        global_mcp_tool_registry.unregister_tools_with_prefix("pet-")
+
+    modern_wire: Final = modern.model_dump(mode="json", by_alias=True, exclude_none=True)
+    legacy_wire: Final = legacy.model_dump(mode="json", by_alias=True, exclude_none=True)
+    assert modern_wire["tools"][0]["outputSchema"] == {
+        "type": "object",
+        "properties": {"owner": {"type": "object", "properties": {"name": {"type": "string"}}}},
+    }
+    assert modern_wire["tools"][0]["title"] == "List pets"
+    assert "outputSchema" not in legacy_wire["tools"][0]
+    assert "title" not in legacy_wire["tools"][0]
+
+
+@pytest.mark.asyncio
+async def test_toolset_name_cache_round_trips_configured_tools_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import toolset_db
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset
+
+    cache: Final = DualCache()
+    toolset: Final = MCPToolset(toolset_id="ttl-toolset", toolset_name="ttl-toolset", tools_ttl_ms=0)
+    fetch: Final = AsyncMock(return_value=toolset)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(toolset_db, "get_mcp_toolset_by_name", fetch)
+    manager: Final = MCPServerManager()
+
+    first: Final = await manager.get_toolset_by_name_cached(None, "ttl-toolset")
+    second: Final = await manager.get_toolset_by_name_cached(None, "ttl-toolset")
+
+    assert first is not None and first.tools_ttl_ms == 0
+    assert second is not None and second.tools_ttl_ms == 0
+    fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_toolset_name_cache_returns_updated_ttl_after_invalidation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import toolset_db
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset
+
+    cache: Final = DualCache()
+    old_toolset: Final = MCPToolset(toolset_id="ttl-toolset", toolset_name="ttl-toolset", tools_ttl_ms=0)
+    updated_toolset: Final = MCPToolset(toolset_id="ttl-toolset", toolset_name="ttl-toolset", tools_ttl_ms=2400)
+    await cache.async_set_cache(
+        key="toolset_name:ttl-toolset",
+        value=old_toolset.model_dump(mode="json"),
+        ttl=60,
+    )
+    fetch: Final = AsyncMock(return_value=updated_toolset)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(toolset_db, "get_mcp_toolset_by_name", fetch)
+    manager: Final = MCPServerManager()
+
+    manager.invalidate_toolset_cache("ttl-toolset")
+    result: Final = await manager.get_toolset_by_name_cached(None, "ttl-toolset")
+
+    assert result is not None and result.tools_ttl_ms == 2400
+    fetch.assert_awaited_once()
 
 
 @pytest.mark.asyncio

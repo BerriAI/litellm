@@ -1,11 +1,14 @@
 import asyncio
 import json
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.mcp_server.tool_registry import MCPTool
 
@@ -60,6 +63,8 @@ class MCPToolRegistry:
         handler: Callable,
         *,
         server_id: str | None = None,
+        output_schema: Mapping[str, object] | None = None,
+        title: str | None = None,
     ) -> None:
         """
         Register a new tool in the registry
@@ -70,6 +75,8 @@ class MCPToolRegistry:
             input_schema=input_schema,
             handler=handler,
             server_id=server_id,
+            output_schema=dict(output_schema) if output_schema is not None else None,
+            title=title,
         )
         verbose_logger.debug("Registered tool: %s", name)
 
@@ -103,14 +110,20 @@ class MCPToolRegistry:
                 verbose_logger.debug("Unregistered MCP tool %s", name)
         return removed
 
-    def convert_tools_to_mcp_sdk_tool_type(self, tools: list[MCPTool]) -> list["MCPToolSDKTool"]:
+    def convert_tools_to_mcp_sdk_tool_type(
+        self, tools: Sequence[MCPTool], *, wire_compat: WireCompat = WireCompat.LEGACY
+    ) -> Sequence["MCPToolSDKTool"]:
         if MCPToolSDKTool is None:
             raise ImportError("MCP SDK is not installed. Please install it with: pip install 'litellm[proxy]'")
         return [
-            MCPToolSDKTool(
-                name=tool.name,
-                description=tool.description,
-                inputSchema=tool.input_schema,
+            MCPToolSDKTool.model_validate(
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "inputSchema": tool.input_schema,
+                    "outputSchema": tool.output_schema if wire_compat is WireCompat.MODERN else None,
+                    "title": tool.title if wire_compat is WireCompat.MODERN else None,
+                }
             )
             for tool in tools
         ]
@@ -140,16 +153,23 @@ class MCPToolRegistry:
 
             name = tool_config.get("name")
             description = tool_config.get("description")
-            input_schema = tool_config.get("input_schema", {})
+            raw_input_schema = tool_config.get("input_schema", {})
             handler_name = tool_config.get("handler")
 
-            if not all([name, description, handler_name]):
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(description, str)
+                or not description
+                or not isinstance(handler_name, str)
+                or not handler_name
+            ):
                 continue
+
+            input_schema = TypeAdapter(dict[str, object]).validate_python(raw_input_schema)
 
             # Try to resolve the handler
             # First check if it's a module path (e.g., "module.submodule.function")
-            if handler_name is None:
-                raise ValueError(f"handler is required for tool {name}")
             handler = get_instance_fn(handler_name, config_file_path)
 
             if handler is None:
@@ -157,11 +177,6 @@ class MCPToolRegistry:
                 continue
 
             # Register the tool
-            if name is None:
-                raise ValueError(f"name is required for tool {name}")
-            if description is None:
-                raise ValueError(f"description is required for tool {name}")
-
             self.register_tool(
                 name=name,
                 description=description,

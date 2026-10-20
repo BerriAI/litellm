@@ -56,6 +56,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     description: str | None = None
     url: str | None = None
     spec_path: str | None = None
+    tools_ttl_ms: int | None = Field(default=None, ge=0)
     transport: MCPTransportType
     auth_type: MCPAuthType | None = None
     credentials: MCPCredentials | None = None

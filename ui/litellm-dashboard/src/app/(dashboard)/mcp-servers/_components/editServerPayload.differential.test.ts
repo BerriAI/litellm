@@ -333,6 +333,28 @@ const EDIT_FORM_VALUES: EditServerFormValues = {
 };
 
 describe("buildEditServerPayload wire contract", () => {
+  it("omits an unchanged OpenAPI tools list TTL", () => {
+    const ui: EditServerUiState = {
+      ...baseUi,
+      mcpServer: { ...baseUi.mcpServer, spec_path: "https://example.com/openapi.json", tools_ttl_ms: 2000 },
+    };
+    const result = buildEditServerPayload({ ...EDIT_FORM_VALUES, tools_ttl_ms: 2000 }, ui);
+
+    expect(result).toMatchObject({ kind: "ok" });
+    if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+    expect(result.payload).not.toHaveProperty("tools_ttl_ms");
+  });
+
+  it("clears an OpenAPI tools list TTL with an explicit null", () => {
+    const ui: EditServerUiState = {
+      ...baseUi,
+      mcpServer: { ...baseUi.mcpServer, spec_path: "https://example.com/openapi.json", tools_ttl_ms: 2000 },
+    };
+    const result = buildEditServerPayload({ ...EDIT_FORM_VALUES, tools_ttl_ms: null }, ui);
+
+    expect(result).toMatchObject({ kind: "ok", payload: { tools_ttl_ms: null } });
+  });
+
   it("carries an edited alias and the server identifier onto the wire", () => {
     const result = buildEditServerPayload({ ...EDIT_FORM_VALUES, alias: "renamed" }, baseUi);
 

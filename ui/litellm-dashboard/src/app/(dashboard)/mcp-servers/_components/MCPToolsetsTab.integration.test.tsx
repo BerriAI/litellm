@@ -73,14 +73,17 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
       target: { value: "github-linear-tools" },
     });
     fireEvent.change(dialog.getByPlaceholderText("Optional description"), { target: { value: "tools for triage" } });
+    fireEvent.change(screen.getByLabelText("Tools list TTL (ms)"), { target: { value: "0" } });
     await user.click(dialog.getByRole("button", { name: "Create Toolset" }));
 
+    const expectedCreate = {
+      toolset_name: "github-linear-tools",
+      description: "tools for triage",
+      tools_ttl_ms: 0,
+      tools: [],
+    };
     await waitFor(() => {
-      expect(networking.createMCPToolset).toHaveBeenCalledWith("sk-test", {
-        toolset_name: "github-linear-tools",
-        description: "tools for triage",
-        tools: [],
-      });
+      expect(networking.createMCPToolset).toHaveBeenCalledWith("sk-test", expectedCreate);
     });
     expect(networking.createMCPToolset).toHaveBeenCalledTimes(1);
   });
@@ -146,6 +149,7 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
       toolset_id: "ts-1",
       toolset_name: "existing",
       description: "old description",
+      tools_ttl_ms: 2000,
       tools: [{ server_id: "srv-1", tool_name: "search" }],
     } as MCPToolset;
     renderTab([toolset]);
@@ -155,6 +159,7 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
     expect(name).toBe(dialog.getByPlaceholderText("e.g. github-linear-tools"));
     expect(dialog.getByText("Toolset Name")).toBeInTheDocument();
     expect(dialog.getByPlaceholderText("Optional description")).toHaveValue("old description");
+    expect(dialog.getByLabelText("Tools list TTL (ms)")).toHaveValue(2000);
 
     await user.clear(name);
     fireEvent.change(name, { target: { value: "renamed" } });
@@ -171,6 +176,90 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
     });
   });
 
+  it("sends null when the toolset tools list TTL is cleared", async () => {
+    const user = setup();
+    vi.mocked(networking.updateMCPToolset).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof networking.updateMCPToolset>>,
+    );
+    renderTab([
+      {
+        toolset_id: "ts-1",
+        toolset_name: "existing",
+        tools_ttl_ms: 2000,
+        tools: [],
+      } as MCPToolset,
+    ]);
+
+    await openEditFor(user);
+    fireEvent.change(screen.getByLabelText("Tools list TTL (ms)"), { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(networking.updateMCPToolset).toHaveBeenCalledWith(
+        "sk-test",
+        expect.objectContaining({ toolset_id: "ts-1", tools_ttl_ms: null }),
+      );
+    });
+  });
+
+  it("updates a changed toolset tools list TTL", async () => {
+    const user = setup();
+    vi.mocked(networking.updateMCPToolset).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof networking.updateMCPToolset>>,
+    );
+    renderTab([
+      {
+        toolset_id: "ts-1",
+        toolset_name: "existing",
+        tools_ttl_ms: 2000,
+        tools: [],
+      } as MCPToolset,
+    ]);
+
+    await openEditFor(user);
+    fireEvent.change(screen.getByLabelText("Tools list TTL (ms)"), { target: { value: "3500" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(networking.updateMCPToolset).toHaveBeenCalledWith(
+        "sk-test",
+        expect.objectContaining({ toolset_id: "ts-1", tools_ttl_ms: 3500 }),
+      );
+    });
+  });
+
+  it("saves the full toolset TTL typed into the edit form", async () => {
+    const user = setup();
+    vi.mocked(networking.updateMCPToolset).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof networking.updateMCPToolset>>,
+    );
+    renderTab([
+      {
+        toolset_id: "ts-1",
+        toolset_name: "existing",
+        tools_ttl_ms: 120000,
+        tools: [],
+      } as MCPToolset,
+    ]);
+
+    const dialog = await openEditFor(user);
+    const ttlInput = dialog.getByLabelText("Tools list TTL (ms)");
+    await user.clear(ttlInput);
+    await user.type(ttlInput, "45000");
+    expect(ttlInput).toHaveValue(45000);
+    await user.click(dialog.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(networking.updateMCPToolset).toHaveBeenCalledWith("sk-test", {
+        toolset_id: "ts-1",
+        toolset_name: "existing",
+        description: "",
+        tools: [],
+        tools_ttl_ms: 45000,
+      });
+    });
+  });
+
   it("seeds an absent description as an empty string rather than failing", async () => {
     const user = setup();
     vi.mocked(networking.updateMCPToolset).mockResolvedValue(
@@ -184,11 +273,11 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
     } as unknown as MCPToolset;
     renderTab([toolset]);
 
-    const dialog = await openEditFor(user);
-    await dialog.findByDisplayValue("no-desc");
-    expect(dialog.getByPlaceholderText("Optional description")).toHaveValue("");
+    await openEditFor(user);
+    await screen.findByDisplayValue("no-desc");
+    expect(screen.getByPlaceholderText("Optional description")).toHaveValue("");
 
-    await user.click(dialog.getByRole("button", { name: "Save Changes" }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     const expectedUpdate = { toolset_id: "ts-2", toolset_name: "no-desc", description: "", tools: [] };
     await waitFor(() => {

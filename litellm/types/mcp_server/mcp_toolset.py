@@ -15,6 +15,7 @@ class MCPToolset(LiteLLMBaseModel):
     toolset_id: str
     toolset_name: str
     description: str | None = None
+    tools_ttl_ms: int | None = Field(default=None, ge=0)
     tools: list[MCPToolsetTool] = Field(default=[])
     created_at: datetime | None = None
     created_by: str | None = None
@@ -25,6 +26,7 @@ class MCPToolset(LiteLLMBaseModel):
 class NewMCPToolsetRequest(LiteLLMBaseModel):
     toolset_name: str
     description: str | None = None
+    tools_ttl_ms: int | None = Field(default=None, ge=0)
     tools: list[MCPToolsetTool] = Field(default=[])
 
 
@@ -32,4 +34,5 @@ class UpdateMCPToolsetRequest(LiteLLMBaseModel):
     toolset_id: str
     toolset_name: str | None = None
     description: str | None = None
+    tools_ttl_ms: int | None = Field(default=None, ge=0)
     tools: list[MCPToolsetTool] | None = None

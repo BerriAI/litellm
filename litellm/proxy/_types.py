@@ -1377,6 +1377,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     credentials: MCPCredentials | None = None
     url: str | None = None
     spec_path: str | None = None
+    tools_ttl_ms: int | None = Field(default=None, ge=0)
     mcp_info: MCPInfo | None = None
     mcp_access_groups: list[str] = Field(default_factory=list)
     allowed_tools: list[str] | None = None
@@ -1485,6 +1486,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     credentials: MCPCredentials | None = None
     url: str | None = None
     spec_path: str | None = None
+    tools_ttl_ms: int | None = Field(default=None, ge=0)
     mcp_info: MCPInfo | None = None
     mcp_access_groups: list[str] = Field(default_factory=list)
     allowed_tools: list[str] | None = None

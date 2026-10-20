@@ -100,6 +100,7 @@ class MCPServer(LiteLLMBaseModel):
     transport: MCPTransportType
     protocol_version: MCPUpstreamProtocol = "auto"
     spec_path: str | None = None
+    tools_ttl_ms: int | None = Field(default=None, ge=0)
     auth_type: MCPAuthType | None = None
     authentication_token: str | None = None
     instructions: str | None = None

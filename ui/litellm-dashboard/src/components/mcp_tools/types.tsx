@@ -434,6 +434,7 @@ export interface MCPServer {
    */
   url?: string | null;
   spec_path?: string | null;
+  tools_ttl_ms?: number | null;
   transport?: string | null;
   auth_type?: string | null;
   oauth2_flow?: string | null;
@@ -548,6 +549,7 @@ export interface MCPToolset {
   toolset_id: string;
   toolset_name: string;
   description?: string;
+  tools_ttl_ms?: number | null;
   tools: MCPToolsetTool[];
   created_at?: string;
   created_by?: string;

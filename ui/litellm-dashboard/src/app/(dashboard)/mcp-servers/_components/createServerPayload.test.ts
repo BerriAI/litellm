@@ -125,6 +125,17 @@ describe("buildCreateServerPayload transport and naming", () => {
     expect(payload.transport).toBe("http");
   });
 
+  it("includes a configured OpenAPI tools list TTL, including zero", () => {
+    const payload = payloadOf(
+      build({
+        transport: "openapi",
+        spec_path: "https://api.example.com/openapi.json",
+        tools_ttl_ms: 0,
+      }),
+    );
+    expect(payload.tools_ttl_ms).toBe(0);
+  });
+
   it("leaves http and sse transports untouched", () => {
     expect(payloadOf(build({ transport: "sse" })).transport).toBe("sse");
   });

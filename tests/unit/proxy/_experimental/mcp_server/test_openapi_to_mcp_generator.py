@@ -9,6 +9,8 @@ This test suite ensures that:
 5. Path parameters are properly URL encoded
 """
 
+from copy import deepcopy
+from time import perf_counter
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
@@ -17,27 +19,346 @@ import pytest
 from fastapi import HTTPException
 from respx import MockRouter
 
-from litellm.types.mcp import MCPAuth, MCPAuthType
-
+from litellm import constants
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-    request_auth_header,
-    request_extra_headers,
-    request_resolved_auth_headers,
+    _OpenAPISpec,
     _request_upstream_url,
     _resolve_param_list,
     _resolve_ref,
     build_input_schema,
+    build_output_schema,
     create_tool_function,
     extract_parameters,
     get_base_url,
+    request_auth_header,
+    request_extra_headers,
+    request_resolved_auth_headers,
     resolve_operation_params,
 )
-from litellm.proxy._experimental.mcp_server.tool_outcome import JsonResult, TextResult
+from litellm.types.mcp import MCPAuth, MCPAuthType
+
+
+def _doubling_openapi_spec(levels: int) -> _OpenAPISpec:
+    schemas: Final = {
+        **{
+            f"Level{index}": {
+                "type": "object",
+                "properties": {
+                    "left": {"$ref": f"#/components/schemas/Level{index + 1}"},
+                    "right": {"$ref": f"#/components/schemas/Level{index + 1}"},
+                },
+            }
+            for index in range(levels)
+        },
+        f"Level{levels}": {"type": "object", "properties": {"leaf": {"type": "string"}}},
+    }
+    return {
+        "components": {"schemas": schemas},
+        "paths": {
+            "/doubling": {
+                "get": {
+                    "operationId": "openapi-budget-doubling",
+                    "summary": "Budgeted doubling",
+                    "responses": {
+                        "200": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/Level0"},
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        },
+    }
+
+
+def test_build_output_schema_resolves_nested_json_refs_without_mutating_spec() -> None:
+    spec = {
+        "components": {
+            "schemas": {
+                "Pet": {
+                    "type": "object",
+                    "properties": {"owner": {"$ref": "#/components/schemas/Owner"}},
+                },
+                "Owner": {"type": "object", "properties": {"name": {"type": "string"}}},
+            }
+        }
+    }
+    operation = {
+        "responses": {
+            "201": {"content": {"application/vnd.api+json": {"schema": {"$ref": "#/components/schemas/Pet"}}}},
+            "204": {"content": {"application/json": {"schema": {"type": "string"}}}},
+        }
+    }
+    original = deepcopy(spec)
+
+    result = build_output_schema(operation, spec)
+
+    assert result == {
+        "type": "object",
+        "properties": {
+            "owner": {"type": "object", "properties": {"name": {"type": "string"}}},
+        },
+    }
+    assert spec == original
+
+
+@pytest.mark.asyncio
+async def test_build_output_schema_normalizes_nullable_values_for_sdk_validation() -> None:
+    import anyio
+    from mcp import ClientSession
+    from mcp.shared.message import SessionMessage
+    from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
+
+    spec = {
+        "components": {
+            "schemas": {
+                "Pet": {
+                    "type": "object",
+                    "properties": {"tag": {"type": "string", "nullable": True}},
+                },
+            }
+        }
+    }
+    operation = {
+        "responses": {
+            "200": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Pet"},
+                    }
+                }
+            }
+        }
+    }
+
+    result = build_output_schema(operation, spec)
+
+    assert result is not None
+    send, receive = anyio.create_memory_object_stream[SessionMessage](1)
+    async with send, receive:
+        client = ClientSession(receive, send)
+        client._absorb_tool_listing(
+            ListToolsResult(
+                tools=[
+                    Tool(
+                        name="get-pet",
+                        inputSchema={"type": "object"},
+                        outputSchema=result,
+                    )
+                ]
+            ),
+            complete=True,
+        )
+        await client.validate_tool_result(
+            "get-pet",
+            CallToolResult(
+                content=[TextContent(type="text", text="{}")],
+                structuredContent={"tag": None},
+                isError=False,
+            ),
+        )
+    assert result == {
+        "type": "object",
+        "properties": {"tag": {"type": ["string", "null"]}},
+    }
+
+
+async def _validate_output_schema_result(
+    output_schema: dict[str, object], structured_content: dict[str, object]
+) -> None:
+    import anyio
+    from mcp import ClientSession
+    from mcp.shared.message import SessionMessage
+    from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
+
+    send, receive = anyio.create_memory_object_stream[SessionMessage](1)
+    async with send, receive:
+        client = ClientSession(receive, send)
+        client._absorb_tool_listing(
+            ListToolsResult(
+                tools=[
+                    Tool(
+                        name="get-pet",
+                        inputSchema={"type": "object"},
+                        outputSchema=output_schema,
+                    )
+                ]
+            ),
+            complete=True,
+        )
+        await client.validate_tool_result(
+            "get-pet",
+            CallToolResult(
+                content=[TextContent(type="text", text="{}")],
+                structuredContent=structured_content,
+                isError=False,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_output_schema_normalizes_nullable_allof_ref_for_sdk_validation() -> None:
+    spec = {
+        "components": {
+            "schemas": {
+                "Owner": {"type": "object", "properties": {"name": {"type": "string"}}},
+                "Pet": {
+                    "type": "object",
+                    "properties": {
+                        "owner": {
+                            "allOf": [{"$ref": "#/components/schemas/Owner"}],
+                            "nullable": True,
+                        }
+                    },
+                },
+            }
+        }
+    }
+    operation = {
+        "responses": {
+            "200": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Pet"},
+                    }
+                }
+            }
+        }
+    }
+
+    result = build_output_schema(operation, spec)
+
+    assert result == {
+        "type": "object",
+        "properties": {
+            "owner": {
+                "anyOf": [
+                    {
+                        "allOf": [
+                            {"type": "object", "properties": {"name": {"type": "string"}}},
+                        ]
+                    },
+                    {"type": "null"},
+                ]
+            }
+        },
+    }
+    await _validate_output_schema_result(result, {"owner": None})
+
+
+@pytest.mark.asyncio
+async def test_build_output_schema_normalizes_boolean_exclusive_minimum_for_sdk_validation() -> None:
+    spec = {
+        "components": {
+            "schemas": {
+                "Pet": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": True,
+                        }
+                    },
+                },
+            }
+        }
+    }
+    operation = {
+        "responses": {
+            "200": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Pet"},
+                    }
+                }
+            }
+        }
+    }
+
+    result = build_output_schema(operation, spec)
+
+    assert result == {
+        "type": "object",
+        "properties": {"id": {"type": "integer", "exclusiveMinimum": 0}},
+    }
+    await _validate_output_schema_result(result, {"id": 1})
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"200": {"content": {"application/json": {"schema": {"type": "array"}}}}}, None),
+        ({"200": {"content": {"text/plain": {"schema": {"type": "object"}}}}}, None),
+        ({"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Missing"}}}}}, None),
+        (
+            {"2XX": {"content": {"application/json": {"schema": {"type": "object", "properties": {}}}}}},
+            {"type": "object", "properties": {}},
+        ),
+    ],
+)
+def test_build_output_schema_rejects_invalid_or_uses_range_response(
+    response: dict[str, object], expected: dict[str, object] | None
+) -> None:
+    assert build_output_schema({"responses": response}, {}) == expected
+
+
+def test_build_output_schema_rejects_cyclic_refs_and_selects_lowest_numeric_2xx() -> None:
+    spec = {
+        "components": {
+            "schemas": {
+                "Cycle": {"type": "object", "properties": {"next": {"$ref": "#/components/schemas/Cycle"}}},
+            }
+        }
+    }
+    operation = {
+        "responses": {
+            "201": {"content": {"application/json": {"schema": {"type": "object", "properties": {}}}}},
+            "204": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Cycle"}}}},
+        }
+    }
+
+    assert build_output_schema(operation, spec) == {"type": "object", "properties": {}}
+    assert (
+        build_output_schema(
+            {"responses": {"200": operation["responses"]["204"]}},
+            spec,
+        )
+        is None
+    )
+
+
+def test_build_output_schema_stops_doubling_chain_within_default_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(constants, "MCP_OPENAPI_OUTPUT_SCHEMA_MAX_NODES", 10000)
+    spec: Final = _doubling_openapi_spec(20)
+    operation: Final = {
+        "responses": {
+            "200": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Level0"},
+                    }
+                }
+            }
+        }
+    }
+
+    start: Final = perf_counter()
+    result: Final = build_output_schema(operation, spec)
+    elapsed: Final = perf_counter() - start
+
+    assert result is None
+    assert elapsed < 2.0
+
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPOpenApiUpstreamError,
     MCPUpstreamAuthError,
 )
+from litellm.proxy._experimental.mcp_server.tool_outcome import JsonResult, TextResult
 
 GET_ASYNC_CLIENT_TARGET = "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client"
 
@@ -1114,6 +1435,80 @@ class TestSanitizeOpenAPIToolName:
 class TestRegisterToolsFromOpenAPI:
     """Verify register_tools_from_openapi emits provider-safe tool names."""
 
+    def test_registration_passes_openapi_response_schema_and_summary(self) -> None:
+        from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
+        from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
+
+        registry: Final = openapi_to_mcp_generator.global_mcp_tool_registry
+        tool_prefix: Final = "litellm9923-"
+        registry.unregister_tools_with_prefix(tool_prefix)
+
+        output_schema: Final = {"type": "object", "properties": {"pets": {"type": "array"}}}
+        spec: Final = {
+            "paths": {
+                "/pets": {
+                    "get": {
+                        "operationId": f"{tool_prefix}list-pets",
+                        "summary": "List pets",
+                        "responses": {
+                            "200": {
+                                "content": {
+                                    "application/json": {"schema": output_schema},
+                                }
+                            }
+                        },
+                    }
+                }
+            }
+        }
+        try:
+            openapi_to_mcp_generator.register_tools_from_openapi(spec, base_url="https://api.example.com")
+            registered: Final = registry.list_tools(tool_prefix=tool_prefix)
+            sdk_tools: Final = registry.convert_tools_to_mcp_sdk_tool_type(registered, wire_compat=WireCompat.MODERN)
+            wire_tool: Final = sdk_tools[0].model_dump(mode="json", by_alias=True, exclude_none=True)
+        finally:
+            registry.unregister_tools_with_prefix(tool_prefix)
+
+        assert wire_tool["name"] == "litellm9923-list-pets"
+        assert wire_tool["outputSchema"] == output_schema
+        assert wire_tool["title"] == "List pets"
+
+    def test_schema_budget_keeps_registered_tool_name_and_title(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
+        from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
+
+        monkeypatch.setattr(constants, "MCP_OPENAPI_OUTPUT_SCHEMA_MAX_NODES", 50)
+        spec: Final = _doubling_openapi_spec(7)
+        operation: Final = {
+            "responses": {
+                "200": {
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/Level0"},
+                        }
+                    }
+                }
+            }
+        }
+        assert build_output_schema(operation, spec) is None
+
+        registry: Final = openapi_to_mcp_generator.global_mcp_tool_registry
+        tool_prefix: Final = "openapi-budget-"
+        registry.unregister_tools_with_prefix(tool_prefix)
+        try:
+            openapi_to_mcp_generator.register_tools_from_openapi(spec, base_url="https://api.example.com")
+            registered: Final = registry.list_tools(tool_prefix=tool_prefix)
+            sdk_tools: Final = registry.convert_tools_to_mcp_sdk_tool_type(registered, wire_compat=WireCompat.MODERN)
+            wire_tool: Final = sdk_tools[0].model_dump(mode="json", by_alias=True, exclude_none=True)
+            registered_tool: Final = registered[0]
+        finally:
+            registry.unregister_tools_with_prefix(tool_prefix)
+
+        assert registered_tool.output_schema is None
+        assert wire_tool["name"] == "openapi-budget-doubling"
+        assert wire_tool["title"] == "Budgeted doubling"
+        assert "outputSchema" not in wire_tool
+
     def test_github_style_operation_ids_are_sanitized(self, monkeypatch):
         import re
 
@@ -1121,7 +1516,7 @@ class TestRegisterToolsFromOpenAPI:
 
         registered: list = []
 
-        def _capture(name, description, input_schema, handler):  # noqa: ANN001
+        def _capture(name, description, input_schema, handler, **kwargs):  # noqa: ANN001
             registered.append(name)
 
         monkeypatch.setattr(
@@ -1169,7 +1564,7 @@ class TestRegisterToolsFromOpenAPI:
 
         registered: list = []
 
-        def _capture(name, description, input_schema, handler):  # noqa: ANN001
+        def _capture(name, description, input_schema, handler, **kwargs):  # noqa: ANN001
             registered.append(name)
 
         monkeypatch.setattr(
@@ -1572,6 +1967,7 @@ class TestBoundedOpenAPISpecLoading:
     @pytest.mark.parametrize("headers", [{"content-length": "1000000"}, {"content-encoding": "gzip"}])
     async def test_unsafe_response_headers_reject_before_reading(self, respx_mock, monkeypatch, headers):
         import httpx
+
         from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             load_openapi_spec_async,
@@ -1596,6 +1992,7 @@ class TestBoundedOpenAPISpecLoading:
     @pytest.mark.asyncio
     async def test_chunked_response_is_bounded_and_closed(self, respx_mock, monkeypatch):
         import httpx
+
         from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             load_openapi_spec_async,
