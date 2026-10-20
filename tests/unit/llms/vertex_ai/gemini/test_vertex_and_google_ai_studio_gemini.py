@@ -17,6 +17,7 @@ import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
@@ -6501,7 +6502,7 @@ def fresh_sampling_deprecation_cache() -> Iterator[None]:
 
 
 def _mapped_gemini_3_models() -> tuple[str, ...]:
-    return tuple(sorted(name for name in litellm.model_cost if name.startswith("gemini-3")))
+    return tuple(sorted(name for name in GetModelCostMap.loaded_model_cost_map() if name.startswith("gemini-3")))
 
 
 def _deprecation_messages(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
@@ -6577,6 +6578,53 @@ def test_gemini_3_sampling_deprecation_for_unmapped_names_does_not_hide_mapped_m
     assert len(deprecations) == 2
     assert all(name not in deprecations[0] for name in unmapped)
     assert f"({mapped})" in deprecations[1]
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_names_models_cataloged_only_under_vertex_ai(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    vertex_only: Final = next(
+        name.removeprefix("vertex_ai/")
+        for name in catalog
+        if name.startswith("vertex_ai/gemini-3")
+        and name.removeprefix("vertex_ai/") not in catalog
+        and f"gemini/{name.removeprefix('vertex_ai/')}" not in catalog
+    )
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"temperature": 0.2}, optional_params={}, model=vertex_only, drop_params=True
+        )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 1
+    assert f"({vertex_only})" in deprecations[0]
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_for_names_priced_at_runtime_shares_one_notice(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    priced: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(20))
+    for name in priced:
+        monkeypatch.setitem(
+            litellm.model_cost,  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+            f"gemini/{name}",
+            {"input_cost_per_token": 1e-7, "output_cost_per_token": 1e-7, "litellm_provider": "gemini"},
+        )
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        for model in priced * 2:
+            config.map_openai_params(
+                non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+            )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 1
+    assert all(name not in deprecations[0] for name in priced)
 
 
 @pytest.mark.parametrize(("param", "value"), (("temperature", 0.5), ("top_p", 0.9), ("top_k", 5)))

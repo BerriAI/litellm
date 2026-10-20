@@ -29,6 +29,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
@@ -209,8 +210,9 @@ def _log_gemini_sampling_params_deprecated(model: str) -> None:
 
 
 def _sampling_deprecation_notice_key(model: str) -> str:
-    is_mapped: Final = any(name in litellm.model_cost for name in (model, f"vertex_ai/{model}", f"gemini/{model}"))  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
-    return model if is_mapped else _SAMPLING_DEPRECATION_UNMAPPED_MODELS
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    is_cataloged: Final = any(name in catalog for name in (model, f"vertex_ai/{model}", f"gemini/{model}"))
+    return model if is_cataloged else _SAMPLING_DEPRECATION_UNMAPPED_MODELS
 
 
 def _warn_gemini_sampling_params_deprecated(model: str) -> None:
