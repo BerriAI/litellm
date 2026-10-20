@@ -1267,6 +1267,89 @@ def test_team_scope_applies_membership_and_user_key_filter(
     assert repository.aggregated.call_args.kwargs["include_entity_breakdown"] is True
 
 
+def test_team_group_by_tag_reads_one_teams_tag_rows_with_the_members_key_filter(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    """group_by=tag keeps every team-route permission (membership, the member's own keys) and
+    only swaps the source to the tag table, scoped to that one team and bucketed by tag."""
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/team/daily/activity/aggregated",
+        params={**_entity_params("team_ids", "team-a"), "group_by": "tag"},
+        headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+    )
+    assert response.status_code == 200, response.text
+    scope: Final = repository.aggregated.call_args.args[0]
+    assert (scope.table, scope.entity_id_field, scope.entity_ids, scope.team_id, scope.api_keys) == (
+        DailyActivityTable.TAG,
+        "tag",
+        None,
+        "team-a",
+        ("key-alpha",),
+    ), scope
+
+
+@pytest.mark.parametrize(
+    ("team_ids", "expected_count"),
+    [(None, 0), ("team-a,team-b", 2), ("team-a,,team-b", 2)],
+)
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER])
+def test_team_group_by_tag_needs_exactly_one_named_team_for_every_caller(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    team_ids: str | None,
+    expected_count: int,
+    role: LitellmUserRoles,
+) -> None:
+    """Answered before any permission lookup, which would otherwise fill in every team a
+    non-admin belongs to and quietly turn "no team" into "all of my teams"."""
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/team/daily/activity/aggregated",
+        params={**_DATE_PARAMS, "group_by": "tag", **({"team_ids": team_ids} if team_ids else {})},
+        headers={"x-user-role": role.value, "x-user-id": "user-a"},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "detail": {"error": f"group_by=tag needs exactly one team in team_ids, got {expected_count}"}
+    }
+    repository.aggregated.assert_not_called()
+
+
+def test_team_group_by_tag_carries_no_ptu_hours(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PTU hours are a whole-team figure; the same sized team that reports them by team reports
+    none per tag."""
+    client, _ = daily_activity_client
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    _inject_llm_router(client, _ptu_sized_router("rare-group"))
+
+    by_team: Final = client.get("/team/daily/activity/aggregated", params=_entity_params("team_ids", "team-a"))
+    by_tag: Final = client.get(
+        "/team/daily/activity/aggregated", params={**_entity_params("team_ids", "team-a"), "group_by": "tag"}
+    )
+
+    assert by_team.status_code == 200 and by_tag.status_code == 200, (by_team.text, by_tag.text)
+    ptu_hours: Final = (by_team.json()["metadata"]["total_ptu_hours"], by_tag.json()["metadata"]["total_ptu_hours"])
+    assert ptu_hours[0] > 0 and ptu_hours[1] == 0, f"(by team, by tag) total_ptu_hours = {ptu_hours}"
+
+
+def test_team_route_without_group_by_reads_the_team_table_as_before(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get("/team/daily/activity/aggregated", params=_entity_params("team_ids", "team-a"))
+    assert response.status_code == 200, response.text
+    scope: Final = repository.aggregated.call_args.args[0]
+    assert (scope.table, scope.entity_id_field, scope.entity_ids, scope.team_id) == (
+        DailyActivityTable.TEAM,
+        "team_id",
+        ("team-a",),
+        None,
+    ), scope
+
+
 def test_team_scope_does_not_allow_an_unowned_api_key(
     daily_activity_client: tuple[TestClient, _FakeRepository],
 ) -> None:

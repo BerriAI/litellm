@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -109,6 +110,30 @@ def test_where_clause_distinguishes_no_filter_from_empty_membership(
 
     assert sql == expected_sql
     assert params == expected_params
+
+
+def test_where_clause_scopes_tag_rows_to_one_team_without_user_agent_tags() -> None:
+    """The team filter binds after every existing filter, so it never renumbers them, and the
+    User-Agent tags the proxy stamps on every request are left out of a team's tag breakdown."""
+    scope = replace(
+        _scope(table=DailyActivityTable.TAG, entity_ids=None, api_keys=("key-1",), model="gpt-test"),
+        team_id="team-a",
+    )
+
+    sql, params = build_where_clause(scope)
+
+    assert sql == (
+        "date >= $1 AND date <= $2 AND model = $3 AND api_key = ANY($4::text[]) AND team_id = $5 "
+        "AND NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')"
+    )
+    assert params == ("2026-01-01", "2026-01-31", "gpt-test", ["key-1"], "team-a")
+
+
+@pytest.mark.parametrize("table", [table for table in DailyActivityTable if table is not DailyActivityTable.TAG])
+def test_scope_rejects_a_team_id_on_any_table_but_the_tag_table(table: DailyActivityTable) -> None:
+    """Only LiteLLM_DailyTagSpend records the sending team in a team_id column next to its own entity."""
+    with pytest.raises(ValueError, match="team_id applies only to litellm_dailytagspend"):
+        replace(_scope(table=table), team_id="team-a")
 
 
 def test_key_page_sql_orders_exact_spend_and_binds_scope_before_page() -> None:

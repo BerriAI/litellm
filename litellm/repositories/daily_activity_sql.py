@@ -68,6 +68,8 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     exclusion_index: Final = entity_index + int(has_entity_array)
     model_index: Final = exclusion_index + int(bool(scope.exclude_entity_ids))
     api_keys_index: Final = model_index + int(bool(scope.model))
+    # Appended after every existing filter so a scope without a team binds exactly as before.
+    team_index: Final = api_keys_index + int(bool(scope.api_keys))
     conditions: Final = (
         f"date >= ${start_index}",
         f"date <= ${start_index + 1}",
@@ -94,6 +96,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             if scope.api_keys
             else ()
         ),
+        *((f"team_id = ${team_index}", _NOT_USER_AGENT_TAG) if scope.team_id is not None else ()),
     )
     params: Final = (
         adjusted_start,
@@ -102,8 +105,16 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((list(scope.exclude_entity_ids),) if scope.exclude_entity_ids else ()),
         *((scope.model,) if scope.model else ()),
         *((list(scope.api_keys),) if scope.api_keys else ()),
+        *((scope.team_id,) if scope.team_id is not None else ()),
     )
     return " AND ".join(conditions), params
+
+
+# The proxy stamps a User-Agent tag on every request, so in a team's tag breakdown these would
+# outnumber its real tags. Same rule as common_daily_activity._is_user_agent_tag.
+_NOT_USER_AGENT_TAG: Final = (
+    "NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')"
+)
 
 
 def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) -> str:

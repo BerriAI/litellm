@@ -33,6 +33,7 @@ from litellm.proxy.management_endpoints.daily_activity_scopes import (
     EntityQuery,
     EntityScopeResolver,
     ResolvedScope,
+    group_by_tag_error,
 )
 from litellm.proxy.management_endpoints.ptu_consumption import single_team_id, with_ptu_consumption
 from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
@@ -55,6 +56,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     UserActivityRow,
 )
 from litellm.types.repositories.daily_activity import (
+    DailyActivityTable,
     ExportRow,
     ExportType,
     KeyMetadataRow,
@@ -100,6 +102,10 @@ async def _resolved_scope(
     date_error: Final[InvalidDateRange | None] = _date_range_error(query, user_aggregated=user_aggregated)
     if date_error is not None:
         raise_public(date_error)
+    # A malformed request is a 400 before any permission lookup, the same as a bad date range.
+    group_by_error: Final[str | None] = group_by_tag_error(query)
+    if group_by_error is not None:
+        raise_public(InvalidDateRange(reason=group_by_error))
     result: ResolvedScope | ScopeDenied = await resolver.resolve(user_api_key_dict, query, prisma_client)
     if isinstance(result, ScopeDenied):
         raise_public(result)
@@ -302,7 +308,8 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 include_entity_breakdown=resolver.include_entity_breakdown,
                 api_key_limit=api_key_limit,
             )
-            if resolver.entity != "team":
+            # PTU hours are a whole-team figure, so a team's per-tag breakdown carries none.
+            if resolver.entity != "team" or resolved.scope.table is not DailyActivityTable.TEAM:
                 return activity
             return with_ptu_consumption(activity, llm_router, single_team_id(resolved.scope.entity_ids))
         except HTTPException:

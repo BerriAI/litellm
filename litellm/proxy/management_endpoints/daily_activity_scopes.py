@@ -1,7 +1,7 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from fastapi import Query
 
@@ -30,6 +30,7 @@ class EntityQuery:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool
+    group_by: "TeamGroupBy" = "team"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,8 @@ class ResolvedScope:
 
 
 Entity = Literal["user", "team", "tag", "organization", "customer", "agent"]
+# How the Team view buckets its breakdown: by team (default), or by tag for one team's spend.
+TeamGroupBy: TypeAlias = Literal["team", "tag"]
 EntityScopeResolution = ResolvedScope | ScopeDenied
 EntityScopeQuery = Callable[..., EntityQuery]
 EntityScopeResolve = Callable[[UserAPIKeyAuth, EntityQuery, PrismaClient], Awaitable[EntityScopeResolution]]
@@ -133,13 +136,32 @@ async def _resolve_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
-    return _build_scope(
+    team: Final = _build_scope(
         TEAM_RESOLVER,
         query,
         team_scope.team_ids,
         team_scope.exclude_team_ids or (),
         team_scope.api_key_filter,
         team_scope.team_alias_metadata,
+    )
+    if query.group_by == "team":
+        return team
+    # group_by=tag: the same permitted team and key filter, read from the tag table and bucketed
+    # by tag. group_by_tag_error already held the request to exactly one named team, and the
+    # resolver returns a named team list as given (or 404s it), so this is that one team.
+    permitted: Final = tuple(team_scope.team_ids or ())
+    if len(permitted) != 1:
+        raise ValueError(f"group_by=tag resolved to {len(permitted)} teams, expected exactly one")
+    return ResolvedScope(
+        scope=replace(
+            team.scope,
+            table=DailyActivityTable.TAG,
+            entity_id_field="tag",
+            entity_ids=None,
+            exclude_entity_ids=(),
+            team_id=permitted[0],
+        ),
+        entity_metadata=None,
     )
 
 
@@ -259,6 +281,7 @@ def _team_query(
     api_key: str | None = None,
     exclude_team_ids: str | None = None,
     timezone: int | None = None,
+    group_by: TeamGroupBy = "team",
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(team_ids),
@@ -269,7 +292,20 @@ def _team_query(
         model=model,
         timezone_offset_minutes=timezone,
         include_current_utc_day=False,
+        group_by=group_by,
     )
+
+
+def group_by_tag_error(query: EntityQuery) -> str | None:
+    """Why a group_by=tag request is malformed, else None. A team's tag breakdown is one team's
+    spend, so it needs exactly one team named in team_ids, whoever is asking: checked before any
+    permission lookup, since that lookup fills in every team a non-admin belongs to."""
+    if query.group_by != "tag":
+        return None
+    named: Final = tuple(team_id for team_id in query.entity_ids or () if team_id)
+    if len(named) == 1:
+        return None
+    return f"group_by=tag needs exactly one team in team_ids, got {len(named)}"
 
 
 def _tag_query(
