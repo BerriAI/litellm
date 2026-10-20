@@ -305,9 +305,9 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         Returns:
             Final response with completed task
         """
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
         start_time: Final = time.time()
 
         # Build task status URL
@@ -506,9 +506,9 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             raise ValueError(f"RunwayML TTS audio URL is not a string: {audio_url}")
 
         # Download the audio file
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
         audio_response: Final = client.get(url=audio_url)
         audio_response.raise_for_status()
 

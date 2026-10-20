@@ -6,10 +6,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-schema = ["dep:schemars", "litellm-types/schema"]
+schema = ["dep:schemars", "litellm-llms-types/schema"]
 
 [dependencies]
-litellm-types.workspace = true
+litellm-llms-types.workspace = true
 
 indexmap = { version = "2.14.0", features = ["serde"] }
 schemars = { workspace = true, optional = true }

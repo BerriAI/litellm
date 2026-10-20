@@ -1,22 +1,38 @@
 import copy
+import itertools
 import json
+import logging
 import os
+import pathlib
 import subprocess
 import sys
 import textwrap
-from typing import Final, List, Optional, Tuple
+from collections.abc import Mapping
+from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
+    CARRY_UNMATCHED_MESSAGE_POINTS,
+    EXTERNAL_BREAKPOINTS_STAMP,
     AnthropicCacheControlHook,
+    configured_injection_points,
     supports_openai_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _convert_to_bedrock_tool_call_invoke,
+    convert_to_anthropic_tool_invoke,
+)
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
+from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders, Message
+from litellm.utils import ProviderConfigManager
 
 
 @pytest.fixture(autouse=True)
@@ -1045,6 +1061,36 @@ def _count_cache_control(messages: List[AllMessageValues]) -> int:
     return count
 
 
+def _count_tool_call_cache_controls(message: AllMessageValues) -> int:
+    message_mapping: Final = cast(Mapping[str, object], message)
+    tool_calls: Final = message_mapping.get("tool_calls")
+    tool_call_values: Final = cast(list[object], tool_calls) if isinstance(tool_calls, list) else None
+    return (
+        sum(
+            1
+            for tool_call in tool_call_values
+            if isinstance(tool_call, dict) and isinstance(tool_call.get("cache_control"), dict)
+        )
+        if tool_call_values is not None
+        else 0
+    )
+
+
+def _marked_function_tool_calls() -> list[ChatCompletionAssistantToolCall]:
+    return cast(
+        list[ChatCompletionAssistantToolCall],
+        [
+            {
+                "id": f"call_{index}",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+                "cache_control": {"type": "ephemeral"},
+            }
+            for index in range(3)
+        ],
+    )
+
+
 def _build_injection_points():
     return [
         {
@@ -1058,6 +1104,485 @@ def _build_injection_points():
             "control": {"type": "ephemeral", "ttl": "5m"},
         },
     ]
+
+
+def test_cache_control_hook_counts_tool_call_cache_controls():
+    message: Final[AllMessageValues] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": _marked_function_tool_calls(),
+    }
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
+
+
+def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_calls():
+    message: Final[AllMessageValues] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": cast(
+            list[ChatCompletionAssistantToolCall],
+            [
+                {
+                    "id": "nested",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": "{}",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                },
+                {
+                    "id": "non_function",
+                    "type": "custom",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "id": "prompt_breakpoint",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "prompt_cache_breakpoint": {"type": "ephemeral"},
+                },
+                {
+                    "id": "srvtoolu_web_search",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "id": "srvtoolu_tool_result",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "id": "srvtoolu_unmatched",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        ),
+        "provider_specific_fields": {
+            "web_search_results": [{"tool_use_id": "srvtoolu_web_search"}],
+            "tool_results": [{"tool_use_id": "srvtoolu_tool_result"}],
+        },
+    }
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
+
+
+_SEARCH_ANSWER: Final = {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"}
+_GO_ON: Final = {"role": "user", "content": "Go on"}
+_SYSTEM_NOTE: Final = {"role": "system", "content": "Answer in one sentence."}
+_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01Search",
+    "type": "function",
+    "function": {"name": "tool_search_tool_bm25", "arguments": "{}"},
+    "cache_control": {"type": "ephemeral"},
+}
+_WEATHER_CALL: Final = {
+    "id": "toolu_01Weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    "cache_control": {"type": "ephemeral"},
+}
+
+
+def _wire_cache_marks(messages: list[AllMessageValues], model: str = "claude-opus-5-5") -> int:
+    request: Final = AnthropicConfig().transform_request(
+        model=model,
+        messages=copy.deepcopy(messages),
+        optional_params={"max_tokens": 64},
+        litellm_params={},
+        headers={},
+    )
+    message_blocks: Final = itertools.chain.from_iterable(
+        message["content"] for message in request["messages"] if isinstance(message["content"], list)
+    )
+    blocks: Final = itertools.chain(request.get("system") or (), message_blocks)
+    return sum(1 for block in blocks if isinstance(block, dict) and "cache_control" in block)
+
+
+def _replayed_search_call(*tool_calls: dict[str, object]) -> AllMessageValues:
+    return cast(
+        AllMessageValues,
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": list(tool_calls),
+            "provider_specific_fields": {
+                "tool_results": [
+                    {
+                        "type": "tool_search_tool_result",
+                        "tool_use_id": "srvtoolu_01Search",
+                        "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                    }
+                ]
+            },
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_calls", "follow_ups", "modify_params", "expected_breakpoints"),
+    [
+        pytest.param((_SEARCH_CALL,), (), False, 0, id="trailing_call_rebuilt_from_its_kept_result"),
+        pytest.param((_SEARCH_CALL,), (), True, 1, id="trailing_call_replayed_with_the_modify_params_placeholder"),
+        pytest.param((_SEARCH_CALL,), (_SEARCH_ANSWER,), False, 1, id="replayed_with_the_client_answer"),
+        pytest.param(
+            (_SEARCH_CALL,), (_SEARCH_ANSWER,), True, 1, id="replayed_with_the_client_answer_under_modify_params"
+        ),
+        pytest.param(
+            (_SEARCH_CALL,), (_SEARCH_ANSWER, _GO_ON), False, 0, id="client_answer_replaced_by_the_kept_result"
+        ),
+        pytest.param((_SEARCH_CALL,), (_GO_ON,), True, 0, id="placeholder_replaced_by_the_kept_result"),
+        pytest.param(
+            (_SEARCH_CALL, _WEATHER_CALL),
+            (_SEARCH_ANSWER,),
+            True,
+            1,
+            id="client_answer_replaced_when_modify_params_answers_the_other_call",
+        ),
+        pytest.param(
+            (_SEARCH_CALL,), (_SYSTEM_NOTE,), True, 0, id="placeholder_replaced_when_a_later_system_message_is_sent"
+        ),
+        pytest.param((_SEARCH_CALL,), (_SYSTEM_NOTE,), False, 0, id="trailing_call_rebuilt_before_a_system_message"),
+    ],
+)
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-4-6"])
+def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_anthropic_receives_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_calls: tuple[dict[str, object], ...],
+    follow_ups: tuple[AllMessageValues, ...],
+    modify_params: bool,
+    expected_breakpoints: int,
+    model: str,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        _replayed_search_call(*tool_calls),
+        *follow_ups,
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+
+    assert (census, _wire_cache_marks(messages, model)) == (expected_breakpoints, expected_breakpoints)
+
+
+@pytest.mark.parametrize(
+    "after_the_call",
+    [(_SEARCH_ANSWER, _SYSTEM_NOTE), (_SYSTEM_NOTE, _SEARCH_ANSWER)],
+    ids=["system_message_after_the_answer", "system_message_before_the_answer"],
+)
+@pytest.mark.parametrize("modify_params", [False, True])
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-4-6"])
+def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_after_a_system_message(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool, model: str, after_the_call: tuple[dict[str, object], ...]
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = [
+        cast(AllMessageValues, {"role": "system", "content": "You are a weather assistant."}),
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        _replayed_search_call(_SEARCH_CALL),
+        *(cast(AllMessageValues, message) for message in after_the_call),
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+
+    assert census >= _wire_cache_marks(messages, model)
+
+
+@pytest.mark.parametrize(
+    ("hook_model", "wire_model"),
+    [
+        ("anthropic/claude-opus-5-5", "claude-opus-5-5"),
+        ("anthropic/claude-sonnet-4-6", "claude-sonnet-4-6"),
+        pytest.param("invoke/us.anthropic.claude-opus-5-5", "claude-opus-5-5", id="provider-left-out-of-the-params"),
+        pytest.param("anthropic/my-claude-alias", "my-claude-alias", id="model-the-cost-map-does-not-know"),
+        pytest.param(
+            "anthropic/my-unreadable-claude-alias", "my-unreadable-claude-alias", id="cost-map-entry-the-lookup-cannot-read"
+        ),
+    ],
+)
+def test_cache_control_hook_fills_the_mark_budget_when_the_client_answers_one_of_two_marked_search_calls(
+    monkeypatch: pytest.MonkeyPatch, hook_model: str, wire_model: str
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setitem(litellm.model_cost, "my-unreadable-claude-alias", [])
+    marked_text: Final = {"type": "text", "text": "Context: a trip.", "cache_control": {"type": "ephemeral"}}
+    two_kept_searches: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [_SEARCH_CALL, {**_SEARCH_CALL, "id": "srvtoolu_02Search"}],
+        "provider_specific_fields": {
+            "tool_results": [
+                {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                }
+                for tool_use_id in ("srvtoolu_01Search", "srvtoolu_02Search")
+            ]
+        },
+    }
+    messages: Final = [
+        {"role": "system", "content": "You are a weather assistant."},
+        {"role": "user", "content": [marked_text, {**marked_text, "text": "Find a weather tool."}]},
+        two_kept_searches,
+        _SEARCH_ANSWER,
+        _SYSTEM_NOTE,
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model=hook_model,
+        messages=cast(list[AllMessageValues], messages),
+        non_default_params={
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1},
+            ]
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _wire_cache_marks(processed, wire_model) == 4
+
+
+def _marks_in(value: object) -> int:
+    if isinstance(value, Mapping):
+        mapping: Final = cast(Mapping[str, object], value)
+        own_mark: Final = int("cache_control" in mapping or "cachePoint" in mapping)
+        return own_mark + sum(_marks_in(item) for item in mapping.values())
+    if isinstance(value, list):
+        return sum(_marks_in(item) for item in cast(list[object], value))
+    return 0
+
+
+def _marks_the_route_sends(model: str, custom_llm_provider: str | None, messages: list[AllMessageValues]) -> int:
+    served_model, provider, _, _ = (
+        (model, custom_llm_provider, None, None) if custom_llm_provider else litellm.get_llm_provider(model=model)
+    )
+    route_config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=served_model, provider=LlmProviders(provider)
+    )
+    assert route_config is not None
+    weather_tool: Final = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+    return _marks_in(
+        route_config.transform_request(
+            model=served_model,
+            messages=copy.deepcopy(messages),
+            optional_params={"max_tokens": 64, "tools": [weather_tool]},
+            litellm_params={},
+            headers={},
+        )
+    )
+
+
+_SECOND_SEARCH_CALL: Final = {**_SEARCH_CALL, "id": "srvtoolu_02Search"}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("anthropic/claude-sonnet-4-6", None),
+        ("bedrock/invoke/us.anthropic.claude-opus-5-5", None),
+        ("vertex_ai/claude-opus-5-5@default", None),
+        ("databricks/databricks-claude-sonnet-4-6", None),
+        pytest.param("databricks-claude-sonnet-4-6", "databricks", id="provider-passed-beside-a-bare-model"),
+        ("openrouter/anthropic/claude-sonnet-4.6", None),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", None),
+        pytest.param("claude-sonnet-4.6", "github_copilot", id="copilot-with-no-stored-login"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("tool_calls", "follow_ups"),
+    [
+        pytest.param(
+            (_SEARCH_CALL, _SECOND_SEARCH_CALL),
+            (_SEARCH_ANSWER, {**_SEARCH_ANSWER, "tool_call_id": "srvtoolu_02Search"}, _SYSTEM_NOTE),
+            id="both-search-calls-answered-before-a-system-message",
+        ),
+        pytest.param(
+            (_SEARCH_CALL, _WEATHER_CALL), (_SEARCH_ANSWER,), id="function-call-left-for-modify-params-to-answer"
+        ),
+    ],
+)
+def test_cache_control_hook_fills_the_mark_budget_every_claude_route_sends_after_marked_search_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    model: str,
+    custom_llm_provider: str | None,
+    tool_calls: tuple[dict[str, object], ...],
+    follow_ups: tuple[dict[str, object], ...],
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_DEVICE_CODE_URL", "http://127.0.0.1:9/login/device/code")
+    marked_text: Final = {"type": "text", "text": "Context: a trip.", "cache_control": {"type": "ephemeral"}}
+    kept_searches: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": list(tool_calls),
+        "provider_specific_fields": {
+            "tool_results": [
+                {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": tool_call["id"],
+                    "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                }
+                for tool_call in tool_calls
+                if str(tool_call["id"]).startswith("srvtoolu_")
+            ]
+        },
+    }
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {"role": "system", "content": "You are a weather assistant."},
+            {"role": "user", "content": [marked_text, {**marked_text, "text": "Find a weather tool."}]},
+            kept_searches,
+            *follow_ups,
+        ],
+    )
+    params: Final[dict[str, object]] = {
+        "cache_control_injection_points": [
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ]
+    }
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(params, messages, model, custom_llm_provider)
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model=model,
+        messages=messages,
+        non_default_params=params,
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _marks_the_route_sends(model, custom_llm_provider, processed) == 4
+
+
+@pytest.mark.parametrize("tool_call_type", ["function", "custom", None])
+@pytest.mark.parametrize(
+    "mark",
+    [{"type": "ephemeral"}, {}, "ephemeral", "", 7, ["ephemeral"], "x" * 5000, None],
+    ids=["dict", "empty_dict", "string", "empty_string", "int", "list", "5kb_string", "none"],
+)
+def test_tool_call_census_matches_the_breakpoints_providers_send(mark: object, tool_call_type: str | None):
+    tool_call: Final[dict[str, object]] = {
+        "id": "call_0",
+        "function": {"name": "lookup", "arguments": "{}"},
+        "cache_control": mark,
+        **({"type": tool_call_type} if tool_call_type is not None else {}),
+    }
+    message: Final = cast(AllMessageValues, {"role": "assistant", "content": None, "tool_calls": [tool_call]})
+    bedrock_cache_points: Final = sum(
+        1
+        for block in _convert_to_bedrock_tool_call_invoke(
+            [tool_call], model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+        )
+        if "cachePoint" in block
+    )
+    anthropic_marks: Final = sum(
+        1 for block in convert_to_anthropic_tool_invoke([tool_call]) if block.get("cache_control") is not None
+    )
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints([message])
+
+    assert census == bedrock_cache_points
+    assert census >= anthropic_marks
+    assert census == (0 if mark is None else 1)
+
+
+def test_cache_control_hook_caps_customer_tool_call_marks_before_injection():
+    hook = AnthropicCacheControlHook()
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": "Follow the tool instructions."},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Look up three values.", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "assistant", "content": None, "tool_calls": _marked_function_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_0", "content": "first"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "second"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "third"},
+        {"role": "user", "content": "Summarize the values."},
+    ]
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="bedrock/us.anthropic.claude-opus-4-6-v1:0",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": _build_injection_points()},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    forwarded_mark_count: Final = _count_cache_control(processed) + sum(
+        _count_tool_call_cache_controls(message) for message in processed
+    )
+    assert forwarded_mark_count <= 4
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(processed) == forwarded_mark_count
+
+
+def test_cache_control_hook_counts_pydantic_message_tool_call_marks():
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1",
+        type="function",
+        function={"name": "lookup", "arguments": "{}"},
+        cache_control={"type": "ephemeral"},
+    )
+    message: Final = Message(role="assistant", content=None, tool_calls=[tool_call])
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(cast(list[AllMessageValues], [message])) == 1
+
+
+def test_injection_skips_assistant_whose_tool_call_carries_a_longer_ttl_mark():
+    hook: Final = AnthropicCacheControlHook()
+    tool_call_ttl: Final = {"type": "ephemeral", "ttl": "1h"}
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": "Let me look that up.",
+            "tool_calls": [
+                {
+                    "id": "toolu_01A",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    "cache_control": tool_call_ttl,
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01A", "content": "18C and sunny"},
+    ]
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "assistant"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assistant_message: Final = processed[1]
+    assistant_tool_calls: Final = assistant_message.get("tool_calls")
+    assert assistant_message.get("cache_control") is None
+    assert assistant_message.get("content") == "Let me look that up."
+    assert isinstance(assistant_tool_calls, list)
+    assert assistant_tool_calls[0].get("cache_control") == tool_call_ttl
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(processed) == 1
 
 
 def test_cache_control_hook_caps_at_four_blocks_with_client_cache_control():
@@ -1680,7 +2205,9 @@ class TestEnableAnthropicPromptCaching:
     )
     @pytest.mark.parametrize("infer_provider", [False, True])
     @pytest.mark.parametrize("supported", [False, True])
-    def test_claude_transport_defaults(self, monkeypatch, local_model_cost_map, family, provider, template, infer_provider, supported):
+    def test_claude_transport_defaults(
+        self, monkeypatch, local_model_cost_map, family, provider, template, infer_provider, supported
+    ):
         from litellm.utils import supports_prompt_caching
 
         model = template.format(f"claude-{family}")
@@ -1693,14 +2220,21 @@ class TestEnableAnthropicPromptCaching:
         resolved_provider = None if infer_provider else provider
         assert supports_prompt_caching(model=target, custom_llm_provider=resolved_provider) is supported
         points = AnthropicCacheControlHook.get_default_injection_points(
-            messages=copy.deepcopy(self.MESSAGES), system=None, model=target,
-            custom_llm_provider=resolved_provider, enable_prompt_caching=True,
+            messages=copy.deepcopy(self.MESSAGES),
+            system=None,
+            model=target,
+            custom_llm_provider=resolved_provider,
+            enable_prompt_caching=True,
         )
         assert [point["index"] for point in points] == ([None, -1] if supported else [])
         affinity_messages = AnthropicCacheControlHook.messages_with_default_injections(
-            copy.deepcopy(self.MESSAGES), models=[qualified], enable_prompt_caching=True,
+            copy.deepcopy(self.MESSAGES),
+            models=[qualified],
+            enable_prompt_caching=True,
         )
-        assert sum(AnthropicCacheControlHook._count_cache_control_blocks(m) for m in affinity_messages) == (2 if supported else 0)
+        assert sum(AnthropicCacheControlHook._count_cache_control_blocks(m) for m in affinity_messages) == (
+            2 if supported else 0
+        )
 
     @pytest.mark.parametrize(
         "provider, model",
@@ -1714,7 +2248,9 @@ class TestEnableAnthropicPromptCaching:
             ("anthropic", "unknown-model"),
         ],
     )
-    def test_non_claude_caching_capability_does_not_enable_defaults(self, monkeypatch, local_model_cost_map, provider, model):
+    def test_non_claude_caching_capability_does_not_enable_defaults(
+        self, monkeypatch, local_model_cost_map, provider, model
+    ):
         from litellm.utils import supports_prompt_caching
 
         qualified = f"{provider}/{model}"
@@ -1731,21 +2267,56 @@ class TestEnableAnthropicPromptCaching:
     @pytest.mark.parametrize("client_control", ["none", "message", "system", "tool", "function", "top_level"])
     @pytest.mark.parametrize("envelope", ["request", "extra_body"])
     @pytest.mark.parametrize("configured", [False, True])
-    def test_new_transports_preserve_client_controls(self, monkeypatch, local_model_cost_map, provider, client_control, envelope, configured):
+    def test_new_transports_preserve_client_controls(
+        self, monkeypatch, local_model_cost_map, provider, client_control, envelope, configured
+    ):
         from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 
         model = "claude-sonnet-5"
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
-        monkeypatch.setitem(litellm.model_cost, f"{provider}/{model}", {
-            **litellm.model_cost[f"{provider}/{model}"], "supports_prompt_caching": True,
-        })
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"{provider}/{model}",
+            {
+                **litellm.model_cost[f"{provider}/{model}"],
+                "supports_prompt_caching": True,
+            },
+        )
         control = {"type": "ephemeral"}
-        messages = [{"role": "user", "content": [{"type": "text", "text": "question", **({"cache_control": control} if client_control == "message" else {})}]}]
-        system = [{"type": "text", "text": "stable context", **({"cache_control": control} if client_control == "system" else {})}]
-        tools = [{"name": "lookup", "description": "Lookup", "input_schema": {"type": "object", "properties": {}}, **({"cache_control": control} if client_control == "tool" else {})}]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "question",
+                        **({"cache_control": control} if client_control == "message" else {}),
+                    }
+                ],
+            }
+        ]
+        system = [
+            {
+                "type": "text",
+                "text": "stable context",
+                **({"cache_control": control} if client_control == "system" else {}),
+            }
+        ]
+        tools = [
+            {
+                "name": "lookup",
+                "description": "Lookup",
+                "input_schema": {"type": "object", "properties": {}},
+                **({"cache_control": control} if client_control == "tool" else {}),
+            }
+        ]
         if client_control == "function":
             tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}, "cache_control": control}}]
-        kwargs = {"metadata": {}, "model_info": {"id": "selected-deployment"}, **({"cache_control": control} if client_control == "top_level" else {})}
+        kwargs = {
+            "metadata": {},
+            "model_info": {"id": "selected-deployment"},
+            **({"cache_control": control} if client_control == "top_level" else {}),
+        }
         if envelope == "extra_body":
             kwargs["extra_body"] = {"messages": messages, "system": system, "tools": tools}
             if "cache_control" in kwargs:
@@ -1759,7 +2330,12 @@ class TestEnableAnthropicPromptCaching:
         seeded = copy.deepcopy(kwargs)
         original = copy.deepcopy((messages, system, tools))
         result_messages, result_system = AnthropicCacheControlHook.maybe_inject_cache_control(
-            messages, system, kwargs, model, provider, tools=tools,
+            messages,
+            system,
+            kwargs,
+            model,
+            provider,
+            tools=tools,
         )
         if client_control != "none" and not configured:
             assert (result_messages, result_system, tools) == original
@@ -1774,32 +2350,46 @@ class TestEnableAnthropicPromptCaching:
             assert (result_system == original[1]) == (envelope == "request" and client_control == "system")
             if provider == "vertex_ai":
                 wire = VertexAIAnthropicConfig().transform_request(
-                    model=model, messages=[{"role": "system", "content": result_system}, *result_messages],
-                    optional_params={"max_tokens": 8}, litellm_params={}, headers={},
+                    model=model,
+                    messages=[{"role": "system", "content": result_system}, *result_messages],
+                    optional_params={"max_tokens": 8},
+                    litellm_params={},
+                    headers={},
                 )
                 assert wire["system"][0]["cache_control"] == control
                 assert wire["messages"][-1]["content"][-1]["cache_control"] == control
         affinity = AnthropicCacheControlHook.messages_with_default_injections(
-            [{"role": "system", "content": original[1]}, *original[0]], [f"{provider}/{model}"],
-            tools=tools, request_kwargs=seeded,
+            [{"role": "system", "content": original[1]}, *original[0]],
+            [f"{provider}/{model}"],
+            tools=tools,
+            request_kwargs=seeded,
         )
         if client_control != "none":
             assert affinity == [{"role": "system", "content": original[1]}, *original[0]]
         AnthropicCacheControlHook.maybe_seed_default_injection_points(
-            seeded, [{"role": "system", "content": original[1]}, *original[0]], model, provider, tools=tools,
+            seeded,
+            [{"role": "system", "content": original[1]}, *original[0]],
+            model,
+            provider,
+            tools=tools,
         )
         assert bool(seeded.get("cache_control_injection_points")) == (client_control == "none" or configured)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("asynchronous", [False, True])
-    @pytest.mark.parametrize("model, target, client_control, expected", [
-        ("vertex_ai/claude-sonnet-5", "bedrock/amazon.nova-pro-v1:0", False, 0),
-        ("azure_ai/gpt-6-astra", "azure_ai/claude-sonnet-5", False, 2),
-        ("azure_ai/claude-sonnet-5", None, False, 2),
-        ("azure_ai/claude-sonnet-5", None, True, 1),
-        ("azure_ai/model_router/claude-replacement", None, False, 2),
-    ])
-    async def test_public_completion_cache_ownership(self, monkeypatch, local_model_cost_map, asynchronous, model, target, client_control, expected):
+    @pytest.mark.parametrize(
+        "model, target, client_control, expected",
+        [
+            ("vertex_ai/claude-sonnet-5", "bedrock/amazon.nova-pro-v1:0", False, 0),
+            ("azure_ai/gpt-6-astra", "azure_ai/claude-sonnet-5", False, 2),
+            ("azure_ai/claude-sonnet-5", None, False, 2),
+            ("azure_ai/claude-sonnet-5", None, True, 1),
+            ("azure_ai/model_router/claude-replacement", None, False, 2),
+        ],
+    )
+    async def test_public_completion_cache_ownership(
+        self, monkeypatch, local_model_cost_map, asynchronous, model, target, client_control, expected
+    ):
         import httpx
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -1812,22 +2402,46 @@ class TestEnableAnthropicPromptCaching:
                 monkeypatch.setitem(litellm.model_cost, qualified, entry)
                 monkeypatch.setitem(litellm.model_cost, qualified.split("/", 1)[-1], entry)
         sent = []
+
         def respond(request):
             sent.append(json.loads(request.content))
-            return httpx.Response(200, request=request, json={
-                "id": "msg-test", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
-                "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn", "stop_sequence": None,
-                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}}, "stopReason": "end_turn",
-                "usage": {"input_tokens": 10, "output_tokens": 1, "inputTokens": 10, "outputTokens": 1, "totalTokens": 11},
-            })
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "msg-test",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                    "stopReason": "end_turn",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 1,
+                        "inputTokens": 10,
+                        "outputTokens": 1,
+                        "totalTokens": 11,
+                    },
+                },
+            )
+
         control = {"type": "ephemeral", "ttl": "1h"}
         messages = [{"role": "system", "content": "stable context"}, {"role": "user", "content": "question"}]
         metadata = {}
         kwargs = {
-            "model": model, "messages": copy.deepcopy(messages), "max_tokens": 32, "num_retries": 0,
+            "model": model,
+            "messages": copy.deepcopy(messages),
+            "max_tokens": 32,
+            "num_retries": 0,
             "litellm_metadata": metadata,
-            "api_base": "https://rig.services.ai.azure.com/anthropic", "api_key": "synthetic-test-key",
-            "aws_access_key_id": "synthetic", "aws_secret_access_key": "synthetic", "aws_region_name": "us-east-1",
+            "api_base": "https://rig.services.ai.azure.com/anthropic",
+            "api_key": "synthetic-test-key",
+            "aws_access_key_id": "synthetic",
+            "aws_secret_access_key": "synthetic",
+            "aws_region_name": "us-east-1",
             **({"extra_body": {"cache_control": control}} if client_control else {}),
         }
         if asynchronous:
@@ -1916,7 +2530,9 @@ class TestEnableAnthropicPromptCaching:
         """OpenAI-shaped tools nest cache_control under ``function``; the Anthropic
         chat transform honors that location, so the stand-down must see it too."""
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
-        tools = [{"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}}]
+        tools = [
+            {"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}}
+        ]
         assert self._points(tools=tools) == []
 
     def test_seed_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
@@ -1946,6 +2562,40 @@ class TestEnableAnthropicPromptCaching:
         )
         assert result_sys == "sys"
         assert result_msgs == messages
+
+    @pytest.mark.parametrize(
+        "tool_call_controls",
+        [
+            pytest.param(({"type": "ephemeral"},) * 3, id="three_5m_marks_would_exceed_the_cap"),
+            pytest.param(({"type": "ephemeral", "ttl": "1h"},), id="1h_mark_would_follow_a_5m_default"),
+        ],
+    )
+    def test_seed_stands_down_when_only_assistant_tool_calls_carry_cache_control(self, tool_call_controls):
+        tool_calls: Final = [
+            {
+                "id": f"call_{index}",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+                "cache_control": control,
+            }
+            for index, control in enumerate(tool_call_controls)
+        ]
+        messages: Final = [
+            {"role": "system", "content": "a long system prompt"},
+            {"role": "user", "content": "weather in three cities"},
+            {"role": "assistant", "content": "Checking.", "tool_calls": tool_calls},
+            *({"role": "tool", "tool_call_id": call["id"], "content": "sunny"} for call in tool_calls),
+            {"role": "user", "content": "summarize"},
+        ]
+        params: Final[dict] = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=cast(List[AllMessageValues], messages),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            enable_prompt_caching=True,
+        )
+        assert "cache_control_injection_points" not in params
 
     def test_default_ttl_is_anthropics_five_minute_cache(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
@@ -2663,7 +3313,10 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
 
         self._seed(params, copy.deepcopy(self.CLEAN_MESSAGES), tools=[self.MARKED_TOOL_TOP_LEVEL])
         affinity = AnthropicCacheControlHook.messages_with_default_injections(
-            copy.deepcopy(self.CLEAN_MESSAGES), ["claude-sonnet-4-5"], tools=[self.MARKED_TOOL_TOP_LEVEL], request_kwargs=params
+            copy.deepcopy(self.CLEAN_MESSAGES),
+            ["claude-sonnet-4-5"],
+            tools=[self.MARKED_TOOL_TOP_LEVEL],
+            request_kwargs=params,
         )
 
         assert [p["index"] for p in params["cache_control_injection_points"]] == [None, -1]
@@ -2717,9 +3370,7 @@ class TestAnthropicPromptCachingEnvVars:
             print(json.dumps([litellm.enable_anthropic_prompt_caching, litellm.anthropic_prompt_caching_ttl]))
             """
         )
-        result = subprocess.run(
-            [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=300
-        )
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=300)
         assert result.returncode == 0, result.stderr
         enabled, ttl = json.loads(result.stdout.strip().splitlines()[-1])
         return enabled, ttl
@@ -2821,7 +3472,7 @@ class TestOpenAIPromptCacheBreakpoint:
         ],
     )
     def test_dialect_resolution(self, model, provider, expected):
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(model, provider) is expected
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(model, provider) is expected
 
     def test_count_covers_both_marker_kinds(self):
         message = {
@@ -2840,7 +3491,7 @@ class TestOpenAIPromptCacheBreakpoint:
         messages, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
         assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
         assert not _contains_key(system, "cache_control")
 
     def test_v1_messages_list_system_marks_last_block_only(self):
@@ -2851,7 +3502,7 @@ class TestOpenAIPromptCacheBreakpoint:
             {"type": "text", "text": "a"},
             {"type": "text", "text": "b", "prompt_cache_breakpoint": self.EXPLICIT},
         ]
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_v1_messages_targets_by_role(self):
         messages = [
@@ -2867,7 +3518,7 @@ class TestOpenAIPromptCacheBreakpoint:
         ]
         assert result[1] == messages[1]
         assert result[2]["content"] == [{"type": "text", "text": "last", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_v1_messages_targets_by_index(self):
         messages = [
@@ -2894,8 +3545,9 @@ class TestOpenAIPromptCacheBreakpoint:
         assert not _contains_key(system, "cache_control")
         assert not _contains_key(messages, "cache_control")
 
-    def test_v1_messages_keeps_caller_prompt_cache_options(self):
-        caller_options = {"mode": "explicit", "ttl": "30m"}
+    @pytest.mark.parametrize("mode", ["explicit", "implicit"])
+    def test_v1_messages_keeps_caller_prompt_cache_options(self, mode):
+        caller_options = {"mode": mode, "ttl": "30m"}
         kwargs = {
             "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
             "prompt_cache_options": dict(caller_options),
@@ -2903,6 +3555,15 @@ class TestOpenAIPromptCacheBreakpoint:
         _, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
         assert system[0]["prompt_cache_breakpoint"] == self.EXPLICIT
         assert kwargs["prompt_cache_options"] == caller_options
+
+    def test_v1_messages_and_chat_paths_default_to_the_same_implicit_mode(self):
+        messages_kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        self._inject([{"role": "user", "content": "hi"}], "sys", messages_kwargs)
+        _, _, chat_params = self._chat(
+            [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)},
+        )
+        assert messages_kwargs["prompt_cache_options"] == chat_params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_v1_messages_no_prompt_cache_options_when_nothing_injected(self):
         kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
@@ -2937,7 +3598,7 @@ class TestOpenAIPromptCacheBreakpoint:
         result, system = self._inject(messages, "sys", kwargs)
         assert result == messages
         assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
 
     def test_v1_messages_tail_point_applies_beside_client_system_breakpoint(self):
         system = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
@@ -2948,7 +3609,7 @@ class TestOpenAIPromptCacheBreakpoint:
             {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]}
         ]
         assert result_system == system
-        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
 
     def test_chat_system_string_wrapped_with_block_breakpoint(self):
         params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
@@ -2960,7 +3621,7 @@ class TestOpenAIPromptCacheBreakpoint:
         }
         assert processed[1] == {"role": "user", "content": "hi"}
         assert returned is params
-        assert returned == {"prompt_cache_options": self.EXPLICIT}
+        assert returned == {"prompt_cache_options": {"mode": "implicit"}}
 
     def test_chat_list_content_marks_last_block(self):
         messages = [
@@ -2982,21 +3643,22 @@ class TestOpenAIPromptCacheBreakpoint:
                 "prompt_cache_breakpoint": self.EXPLICIT,
             },
         ]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_chat_unprefixed_model_resolves_to_openai(self):
         params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
         _, processed, _ = self._chat([{"role": "system", "content": "sys"}], params, model="gpt-5.6")
         assert processed[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
-    def test_chat_keeps_caller_prompt_cache_options(self):
+    @pytest.mark.parametrize("mode", ["explicit", "implicit"])
+    def test_chat_keeps_caller_prompt_cache_options(self, mode):
         params = {
             "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
-            "prompt_cache_options": {"mode": "implicit"},
+            "prompt_cache_options": {"mode": mode, "ttl": "24h"},
         }
         self._chat([{"role": "system", "content": "sys"}], params)
-        assert params["prompt_cache_options"] == {"mode": "implicit"}
+        assert params["prompt_cache_options"] == {"mode": mode, "ttl": "24h"}
 
     def test_chat_no_prompt_cache_options_when_nothing_injected(self):
         params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
@@ -3030,7 +3692,7 @@ class TestOpenAIPromptCacheBreakpoint:
         _, processed, _ = self._chat(messages, params)
         assert processed[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert processed[1] == messages[1]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_cap_counts_client_breakpoints_of_both_kinds(self):
         messages = [
@@ -3077,12 +3739,16 @@ class TestOpenAIPromptCacheBreakpointPlacementRules:
     def test_tool_message_text_is_marked_on_chat_path(self):
         messages = [
             {"role": "user", "content": "weather?"},
-            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "w", "arguments": "{}"}}]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "w", "arguments": "{}"}}],
+            },
             {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
         ]
         out, params = self._chat(messages, [{"location": "message", "index": -1}])
         assert out[2]["content"] == [{"type": "text", "text": "sunny", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_tool_result_only_turn_is_skipped_on_v1_messages(self):
         messages = [
@@ -3126,7 +3792,7 @@ class TestOpenAIPromptCacheBreakpointPlacementRules:
             {"type": "tool_result", "tool_use_id": "t1", "content": "sunny"},
             {"type": "text", "text": "thanks", "prompt_cache_breakpoint": self.EXPLICIT},
         ]
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_marker_walks_back_to_last_eligible_block(self):
         messages = [
@@ -3194,12 +3860,12 @@ class TestChatPathProviderStamp:
     def test_explicit_openai_provider_uses_openai_dialect(self):
         out, params = self._seed_and_run("gpt-5.6", "openai")
         assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_bare_gpt_model_without_provider_resolves_to_openai(self):
         out, params = self._seed_and_run("gpt-5.6", None)
         assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_points_keep_identity_for_models_below_gpt_5_6(self):
         points = copy.deepcopy(self.POINTS)
@@ -3216,8 +3882,8 @@ class TestChatPathProviderStamp:
         from unittest.mock import patch
 
         with patch.object(AnthropicCacheControlHook, "_resolve_provider") as resolve:
-            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-4.1", None) is False
-            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("my-custom-model", None) is False
+            assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("gpt-4.1", None) is False
+            assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("my-custom-model", None) is False
         resolve.assert_not_called()
 
     def test_litellm_proxy_target_keeps_anthropic_style_markers(self):
@@ -3240,7 +3906,7 @@ class TestChatPathProviderStamp:
     def test_regional_openai_api_base_uses_openai_dialect(self):
         out, params = self._seed_and_run("gpt-5.6", None, api_base="https://eu.api.openai.com/v1")
         assert out[0]["content"] == self.OPENAI_STYLE
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     @pytest.mark.parametrize("env_var", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
     def test_env_api_base_override_keeps_anthropic_style_markers(self, monkeypatch, env_var):
@@ -3259,7 +3925,7 @@ class TestChatPathProviderStamp:
         monkeypatch.setenv("OPENAI_BASE_URL", self.CUSTOM_API_BASE)
         out, params = self._seed_and_run("gpt-5.6", None, api_base="https://api.openai.com/v1")
         assert out[0]["content"] == self.OPENAI_STYLE
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     @pytest.mark.parametrize(
         "api_base,expected",
@@ -3301,9 +3967,9 @@ class TestChatPathProviderStamp:
 
 class TestClientBreakpointsCountedOnce:
     def test_client_message_breakpoints_are_not_double_counted(self):
-        messages = [{"role": "user", "content": [{"type": "text", "text": "m0", "cache_control": {"type": "ephemeral"}}]}] + [
-            {"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(1, 4)
-        ]
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "m0", "cache_control": {"type": "ephemeral"}}]}
+        ] + [{"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(1, 4)]
         out, system, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
             messages=messages,
             system="sys",
@@ -3350,7 +4016,7 @@ class TestResponsesInputPartsEligible:
             "text": "second",
             "prompt_cache_breakpoint": self.EXPLICIT,
         }
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     @pytest.mark.parametrize(
         "part",
@@ -3362,7 +4028,7 @@ class TestResponsesInputPartsEligible:
     def test_input_image_and_input_file_parts_are_eligible(self, part):
         out, params = self._chat([{"role": "user", "content": [part]}], [{"location": "message", "index": -1}])
         assert out[0]["content"][0] == {**part, "prompt_cache_breakpoint": self.EXPLICIT}
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
 
 class TestMessagesPathApiBaseGate:
@@ -3407,12 +4073,12 @@ class TestMessagesPathApiBaseGate:
     def test_regional_openai_api_base_uses_openai_dialect(self):
         block, kwargs = self._inject("gpt-5.6", api_base="https://eu.api.openai.com/v1")
         assert block == self.BREAKPOINT_BLOCK
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_default_api_base_uses_openai_dialect(self):
         block, kwargs = self._inject("openai/gpt-5.6")
         assert block == self.BREAKPOINT_BLOCK
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
 
 class TestToolConfigSlotInOpenAIDialect:
@@ -3433,7 +4099,7 @@ class TestToolConfigSlotInOpenAIDialect:
             dynamic_callback_params={},
         )
         assert [msg["content"][0].get("prompt_cache_breakpoint") for msg in out] == [self.EXPLICIT] * 4
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_messages_path_marks_all_four_messages(self):
         out, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
@@ -3457,10 +4123,9 @@ class TestPromptCacheBreakpointCapability:
         bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
         with open(bundled) as handle:
             monkeypatch.setattr(litellm, "model_cost", json.load(handle))
-        litellm.utils._cached_get_model_info_helper.cache_clear()
+        litellm.utils.cached_get_model_info_helper.cache_clear()
         yield
-        litellm.utils._cached_get_model_info_helper.cache_clear()
-
+        litellm.utils.cached_get_model_info_helper.cache_clear()
 
     def test_listed_model_uses_the_model_map_flag(self, monkeypatch):
         flagged = {**litellm.model_cost["gpt-4.1"], "supports_prompt_cache_breakpoint": True}
@@ -3479,6 +4144,13 @@ class TestPromptCacheBreakpointCapability:
         )
         assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is False
 
+    @pytest.mark.parametrize("model", ["gpt-4.1", "gpt-5.6"])
+    @pytest.mark.parametrize("flag", ["true", 1, "false", 0])
+    def test_listed_model_with_an_odd_typed_flag_is_not_eligible(self, monkeypatch, model, flag):
+        monkeypatch.setitem(
+            litellm.model_cost, model, {**litellm.model_cost[model], "supports_prompt_cache_breakpoint": flag}
+        )
+        assert supports_openai_prompt_cache_breakpoint(model) is False
 
     def test_published_map_without_the_flag_still_injects_on_gpt_5_6(self, monkeypatch):
         unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}
@@ -3496,19 +4168,461 @@ class TestPromptCacheBreakpointCapability:
         assert chat_messages[0]["content"] == [
             {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
         ]
-        assert chat_params["prompt_cache_options"] == {"mode": "explicit"}
+        assert chat_params["prompt_cache_options"] == {"mode": "implicit"}
 
         kwargs = {"cache_control_injection_points": copy.deepcopy(points)}
         _, system = AnthropicCacheControlHook.maybe_inject_cache_control(
             [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
         )
         assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        assert kwargs == {"prompt_cache_options": {"mode": "explicit"}}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
 
     @pytest.mark.parametrize("model,expected", [("gpt-5.6-2026-01-01", True), ("gpt-5.5-preview-unlisted", False)])
     def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):
         assert model not in litellm.model_cost
         assert supports_openai_prompt_cache_breakpoint(model) is expected
+
+    def test_a_null_prompt_cache_options_takes_the_implicit_default_on_both_paths(self):
+        points = [{"location": "message", "role": "system"}]
+
+        _, _, chat_params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": copy.deepcopy(points), "prompt_cache_options": None},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert chat_params["prompt_cache_options"] == {"mode": "implicit"}
+
+        kwargs = {"cache_control_injection_points": copy.deepcopy(points), "prompt_cache_options": None}
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
+        )
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
+
+
+class TestHostedOpenAIDialectFlag:
+    """#38666: an OpenAI-shaped model served by another provider can opt in through its own
+    model-map entry, instead of being excluded by the openai-only provider check."""
+
+    MANTLE_MODEL = "bedrock_mantle/openai.gpt-5.6-sol"
+
+    def _register(self, monkeypatch, key, provider, flag=True, **extra):
+        entry = {"litellm_provider": provider, "mode": "chat", **extra}
+        if flag is not None:
+            entry["supports_prompt_cache_breakpoint"] = flag
+        monkeypatch.setitem(litellm.model_cost, key, entry)
+
+    def test_flagged_non_openai_deployment_is_eligible(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is True
+        )
+
+    def test_bedrock_api_base_does_not_veto_the_explicit_flag(self, monkeypatch):
+        """The api_base check exists to sniff for api.openai.com, which a Bedrock host never is."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+                self.MANTLE_MODEL,
+                "bedrock_mantle",
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+            )
+            is True
+        )
+
+    def test_flag_set_false_keeps_the_deployment_ineligible(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=False)
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    @pytest.mark.parametrize("flag", ["true", 1, "false", 0])
+    def test_an_odd_typed_flag_keeps_the_deployment_ineligible(self, monkeypatch, flag):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=flag)
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    def test_unflagged_non_openai_deployment_stays_ineligible(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=None)
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    def test_entry_provider_must_match_the_request_provider(self, monkeypatch):
+        """A flagged entry does not license a different provider serving the same model string."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "azure") is False
+
+    def test_openai_entries_still_go_through_the_api_base_check(self, monkeypatch):
+        """gpt-5.6 is flagged and openai-provided, so it must not bypass the host gate."""
+        assert litellm.model_cost["gpt-5.6"]["supports_prompt_cache_breakpoint"] is True
+        assert litellm.model_cost["gpt-5.6"]["litellm_provider"] == "openai"
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+                "gpt-5.6", "openai", api_base="https://some-compatible-host.example.com"
+            )
+            is False
+        )
+
+    def test_azure_hosted_gpt_5_6_remains_ineligible(self):
+        """Regression guard: the openai entry's flag must not leak to another provider."""
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("gpt-5.6", "azure") is False
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("azure/gpt-5.6", None) is False
+
+    REGIONAL_MODEL = "bedrock_mantle/us-east-1/openai.gpt-5.6-sol"
+
+    def test_region_prefixed_deployment_reads_its_region_free_entry(self, monkeypatch):
+        """``bedrock_mantle/<region>/<model>`` is a documented routing form the map keys without the region."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
+            is True
+        )
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, None) is True
+
+    def test_region_prefixed_deployment_honors_a_flag_set_false(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=False)
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    def test_region_prefixed_entry_outranks_the_region_free_one(self, monkeypatch):
+        """A row keyed with the region states that deployment's own dialect; GovCloud rows carry no flag."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        gov_model = "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-sol"
+        self._register(monkeypatch, gov_model, "bedrock_mantle", flag=None)
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(gov_model, "bedrock_mantle") is False
+
+    def test_region_free_entry_does_not_license_another_provider(self, monkeypatch):
+        """The candidate keys are built for the request's provider, so a flagged Mantle row stays Mantle's."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("us-east-1/openai.gpt-5.6-sol", "azure")
+            is False
+        )
+
+    def test_unmapped_deployment_name_stays_ineligible(self):
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("azure/my-deployment", None) is False
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("my-deployment", "azure") is False
+
+    def test_bare_name_colliding_with_an_openai_row_reads_its_own_provider_entry(self, monkeypatch):
+        """The Responses layer hands the hook a bare deployment name plus its provider. The openai row keyed by
+        that bare name neither answers for the deployment nor stops the lookup of the provider's own entry."""
+        self._register(monkeypatch, "gpt-collide", "openai")
+        self._register(monkeypatch, "azure_ai/gpt-collide", "azure_ai")
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is True
+
+    def test_bare_name_colliding_with_an_openai_row_stays_ineligible_without_its_own_flag(self, monkeypatch):
+        self._register(monkeypatch, "gpt-collide", "openai")
+        self._register(monkeypatch, "azure_ai/gpt-collide", "azure_ai", flag=None)
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is False
+
+    def test_the_support_check_reads_the_served_providers_row_for_a_provider_stripped_name(self, monkeypatch):
+        """The chat-to-Responses bridge holds the provider-stripped deployment name and the provider that
+        serves it, which has no row and no ``gpt-`` version of its own."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert supports_openai_prompt_cache_breakpoint("openai.gpt-5.6-sol") is False
+        assert supports_openai_prompt_cache_breakpoint("openai.gpt-5.6-sol", "bedrock_mantle") is True
+        assert supports_openai_prompt_cache_breakpoint("us-east-1/openai.gpt-5.6-sol", "bedrock_mantle") is True
+
+    def test_the_support_check_honors_the_served_providers_opt_out_over_the_version_rule(self, monkeypatch):
+        self._register(monkeypatch, "bedrock_mantle/gpt-6-luna", "bedrock_mantle", flag=False)
+        assert supports_openai_prompt_cache_breakpoint("gpt-6-luna") is True
+        assert supports_openai_prompt_cache_breakpoint("gpt-6-luna", "bedrock_mantle") is False
+
+    def test_the_support_check_ignores_a_served_provider_without_a_row_of_its_own(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert supports_openai_prompt_cache_breakpoint("openai.gpt-5.6-sol", "azure") is False
+        assert supports_openai_prompt_cache_breakpoint("gpt-5.6", "azure") is True
+
+
+class TestBedrockMantleGptShipsTheOpenAIDialect:
+    """The shipped cost map flags Bedrock Mantle's GPT-5.6 and newer OpenAI rows, so a configured injection point
+    on one of them reaches the wire as prompt_cache_breakpoint instead of an Anthropic cache_control the Mantle
+    bridge strips (verified live against bedrock-mantle.us-east-1 on 2026-10-07: cache_write_tokens then
+    cached_tokens on the repeat call)."""
+
+    MANTLE_MODEL = "bedrock_mantle/openai.gpt-5.6-sol"
+
+    @pytest.fixture(autouse=True)
+    def _bundled_model_map(self, monkeypatch):
+        bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
+        with open(bundled) as handle:
+            monkeypatch.setattr(litellm, "model_cost", json.load(handle))
+        litellm.utils.cached_get_model_info_helper.cache_clear()
+        yield
+        litellm.utils.cached_get_model_info_helper.cache_clear()
+
+    def test_shipped_entry_makes_the_deployment_eligible(self):
+        assert supports_openai_prompt_cache_breakpoint(self.MANTLE_MODEL) is True
+        assert (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is True
+        )
+
+    def test_every_flagged_mantle_row_is_an_openai_gpt_5_6_or_newer_model(self):
+        flagged = {
+            key
+            for key, entry in litellm.model_cost.items()
+            if key.startswith("bedrock_mantle/") and entry.get("supports_prompt_cache_breakpoint") is True
+        }
+        assert self.MANTLE_MODEL in flagged
+        for key in flagged:
+            bare = key.rsplit("/", 1)[-1].removeprefix("openai.")
+            assert supports_openai_prompt_cache_breakpoint(bare) is True, key
+
+    def test_seeding_stamps_the_openai_dialect_for_a_configured_point(self):
+        non_default_params = {"cache_control_injection_points": [{"location": "message", "role": "system"}]}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=non_default_params,
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            model=self.MANTLE_MODEL,
+            custom_llm_provider=None,
+        )
+        assert non_default_params["cache_control_injection_points"][0]["_litellm_openai_dialect"] is True
+
+    def test_configured_point_emits_the_openai_marker_and_default_options(self):
+        _, messages, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.MANTLE_MODEL,
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == [
+            {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        ]
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
+
+    def test_region_prefixed_deployment_emits_the_openai_marker(self):
+        """The region-prefixed routing form documented for Mantle lands on the same shipped row."""
+        _, messages, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="bedrock_mantle/us-east-1/openai.gpt-5.6-sol",
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == [
+            {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        ]
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
+
+    BARE_MODEL = "openai.gpt-5.6-sol"
+    POINTS = [{"location": "message", "role": "system"}]
+    MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    MARKED_SYSTEM = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+
+    def test_a_bare_deployment_name_with_its_provider_is_stamped_on_the_openai_dialect(self):
+        """A deployment written as ``model: openai.gpt-5.6-sol`` plus ``custom_llm_provider: bedrock_mantle``
+        has no row of its own and no openai row of the same name, so only the provider-keyed row can
+        answer; the stamp must read it the way the dialect resolution does."""
+        stamped = AnthropicCacheControlHook._stamped_with_dialect(
+            copy.deepcopy(self.POINTS), self.BARE_MODEL, "bedrock_mantle", None, None
+        )
+        assert stamped[0]["_litellm_openai_dialect"] is True
+
+    def test_a_bare_deployment_name_without_its_provider_keeps_its_points_and_costs_no_lookup(self):
+        points = copy.deepcopy(self.POINTS)
+        with patch.object(AnthropicCacheControlHook, "_resolve_provider") as resolve:
+            assert AnthropicCacheControlHook._stamped_with_dialect(points, self.BARE_MODEL, None, None, None) is points
+        resolve.assert_not_called()
+
+    def test_the_chat_seed_carries_the_resolved_provider_for_a_bare_deployment_name(self):
+        params: dict = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model=self.BARE_MODEL,
+            custom_llm_provider="bedrock_mantle",
+        )
+        _, messages, out = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.BARE_MODEL,
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == self.MARKED_SYSTEM
+        assert out["prompt_cache_options"] == {"mode": "implicit"}
+
+    def test_the_responses_stamp_carries_the_resolved_provider_for_a_bare_deployment_name(self):
+        from litellm.responses.main import _stamp_injection_points_for_the_hook
+
+        kwargs: dict = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        _stamp_injection_points_for_the_hook(kwargs, self.BARE_MODEL, "bedrock_mantle", None, None)
+        _, messages, out = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.BARE_MODEL,
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=kwargs,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == self.MARKED_SYSTEM
+        assert out["prompt_cache_options"] == {"mode": "implicit"}
+
+
+class TestResponsesLayerReservesMarksOutsideTheProvisionalMessages:
+    """The Responses layer's hook pass sees only the role-bearing input items, while the bridge
+    forwards a function_call or function_call_output mark onto the tool call or tool message it
+    builds, so the pass reserves those marks before placing an ordinal point and the bridge's
+    pass, which sees them in its own messages, replaces the reservation with its own count."""
+
+    MODEL = "claude-sonnet-4-6"
+    MARK = {"type": "ephemeral"}
+
+    @classmethod
+    def _items(cls, marked_calls: int) -> list[dict]:
+        calls = [
+            {
+                "type": "function_call",
+                "call_id": f"call_{index}",
+                "name": "weather",
+                "arguments": "{}",
+                "cache_control": cls.MARK,
+            }
+            for index in range(marked_calls)
+        ]
+        outputs = [
+            {"type": "function_call_output", "call_id": f"call_{index}", "output": "sunny"}
+            for index in range(marked_calls)
+        ]
+        return [
+            {"role": "user", "content": "ask", "cache_control": cls.MARK},
+            *calls,
+            *outputs,
+            {"role": "user", "content": "next"},
+        ]
+
+    @classmethod
+    def _tools(cls, marked_tools: int) -> list[dict[str, object]]:
+        return [
+            {"type": "function", "name": f"tool_{index}", "parameters": {}, "cache_control": cls.MARK}
+            for index in range(marked_tools)
+        ]
+
+    def _marks_on_the_last_message_after_the_responses_pass(
+        self, marked_calls: int, marked_tools: int = 0, other_items: tuple[dict[str, object], ...] = ()
+    ) -> int:
+        from litellm.responses.main import _stamp_injection_points_for_the_hook
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        *earlier, last = self._items(marked_calls)
+        items = [*earlier, *other_items, last]
+        kwargs: dict = {
+            "cache_control_injection_points": [{"location": "message", "index": -1}],
+            CARRY_UNMATCHED_MESSAGE_POINTS: True,
+        }
+        _stamp_injection_points_for_the_hook(kwargs, self.MODEL, "anthropic", items, self._tools(marked_tools))
+        _, messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.MODEL,
+            messages=ResponsesAPIRequestUtils.responses_input_to_chat_messages(items),
+            non_default_params=kwargs,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return AnthropicCacheControlHook._count_cache_control_blocks(messages[-1])
+
+    def test_function_call_marks_filling_the_cap_leave_the_ordinal_point_unplaced(self):
+        assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=3) == 0
+
+    def test_function_call_marks_under_the_cap_leave_the_ordinal_point_its_slot(self):
+        assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=2) == 1
+
+    def test_function_tool_marks_filling_the_cap_leave_the_ordinal_point_unplaced(self):
+        assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=1, marked_tools=2) == 0
+
+    def test_function_tool_marks_under_the_cap_leave_the_ordinal_point_its_slot(self):
+        assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=1, marked_tools=1) == 1
+
+    def test_marked_reasoning_items_leave_the_ordinal_point_its_slot(self):
+        reasoning = tuple(
+            {
+                "type": "reasoning",
+                "id": f"rs_{index}",
+                "summary": [{"type": "summary_text", "text": "checked the weather"}],
+                "cache_control": self.MARK,
+            }
+            for index in range(3)
+        )
+        assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=0, other_items=reasoning) == 1
+
+    def test_a_marked_tool_of_another_type_is_not_reserved(self):
+        from litellm.responses.main import _cache_control_marks_outside_the_provisional_messages
+
+        tools = [{"type": "web_search", "cache_control": self.MARK}, *self._tools(1)]
+        assert _cache_control_marks_outside_the_provisional_messages(self._items(1), tools) == 2
+
+    def test_sdk_typed_output_items_are_skipped_by_the_reserve(self):
+        from openai.types.responses import ResponseFunctionToolCall
+
+        from litellm.responses.main import _cache_control_marks_outside_the_provisional_messages
+
+        items = [
+            *self._items(1),
+            ResponseFunctionToolCall(type="function_call", call_id="call_typed", name="weather", arguments="{}"),
+        ]
+        assert _cache_control_marks_outside_the_provisional_messages(items, None) == 1
+
+    def test_sdk_typed_tools_are_skipped_by_the_reserve(self):
+        from openai.types.responses import FunctionTool
+
+        from litellm.responses.main import _cache_control_marks_outside_the_provisional_messages
+
+        tools = [*self._tools(1), FunctionTool(type="function", name="typed", parameters={}, strict=False)]
+        assert _cache_control_marks_outside_the_provisional_messages(self._items(1), tools) == 2
+
+    def test_the_chat_pass_replaces_the_count_the_responses_layer_stamped(self):
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "ask", "cache_control": self.MARK},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_0",
+                        "type": "function",
+                        "function": {"name": "weather", "arguments": "{}"},
+                        "cache_control": self.MARK,
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_0", "content": "sunny"},
+            {"role": "user", "content": "next"},
+        ]
+        params: dict = {
+            "cache_control_injection_points": [{"location": "message", "role": "system", EXTERNAL_BREAKPOINTS_STAMP: 3}]
+        }
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(messages),
+            model=self.MODEL,
+            custom_llm_provider="anthropic",
+        )
+        _, out, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.MODEL,
+            messages=copy.deepcopy(messages),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert AnthropicCacheControlHook._count_cache_control_blocks(out[0]) == 1
 
 
 class TestRecordGatewayInjection:
@@ -3642,3 +4756,177 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+
+
+class TestMalformedInjectionPointsAreIgnored:
+    """A ``cache_control_injection_points`` value that is not a list of points (a string, an int, a bare
+    dict, a list of strings) raised inside the hook and turned every request to that deployment into a 500.
+    Every entry point now reads it as no configured points, the way ``null`` already read."""
+
+    SHAPES = ("system", 5, {"location": "message", "role": "system"}, ["system"], None)
+    MIXED = ["system", {"location": "message", "role": "system"}, 3]
+    MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_reads_as_no_points(self, value):
+        assert configured_injection_points(value) == ()
+
+    def test_keeps_the_point_entries_of_a_mixed_list(self):
+        assert configured_injection_points(self.MIXED) == ({"location": "message", "role": "system"},)
+
+    def test_the_point_beside_junk_entries_survives_the_chat_seed_on_an_unstamped_deployment(self):
+        params: dict = {"cache_control_injection_points": copy.deepcopy(self.MIXED)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="claude-sonnet-4-5",
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert processed[0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_chat_prompt_hook_leaves_the_request_untouched(self, value):
+        _, processed, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params={"cache_control_injection_points": copy.deepcopy(value)},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert processed == self.MESSAGES
+        assert "cache_control_injection_points" not in params
+        assert "prompt_cache_options" not in params
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_chat_seeding_falls_through_to_the_defaults(self, monkeypatch, value):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params: dict = {"cache_control_injection_points": copy.deepcopy(value)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        seeded = params["cache_control_injection_points"]
+        assert seeded and all(isinstance(point, dict) and "location" in point for point in seeded)
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_messages_path_leaves_the_request_untouched(self, value):
+        kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
+        messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
+        )
+        assert (messages, system) == ([{"role": "user", "content": "hi"}], "sys")
+        assert "cache_control_injection_points" not in kwargs
+        assert "prompt_cache_options" not in kwargs
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_responses_dialect_stamp_leaves_the_request_untouched(self, value):
+        from litellm.responses.main import _stamp_injection_points_for_the_hook
+
+        kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
+        _stamp_injection_points_for_the_hook(kwargs, "gpt-5.6", "openai", None, None)
+        assert kwargs == {"cache_control_injection_points": value}
+
+
+def test_cache_control_hook_leaves_the_duplicate_tool_result_warning_to_the_request_builder(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    weather_answer: Final = {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}
+    messages: Final = [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        cast(AllMessageValues, {"role": "assistant", "content": None, "tool_calls": [_SEARCH_CALL, _WEATHER_CALL]}),
+        cast(AllMessageValues, _SEARCH_ANSWER),
+        cast(AllMessageValues, weather_answer),
+        cast(AllMessageValues, weather_answer),
+    ]
+    monkeypatch.setattr(verbose_logger, "propagate", True)
+    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+    warnings_from_the_hook: Final = len(caplog.records)
+    wire_marks: Final = _wire_cache_marks(messages)
+
+    assert (census, wire_marks) == (2, 2)
+    assert (warnings_from_the_hook, len(caplog.records)) == (0, 1)
+
+
+@pytest.mark.parametrize(
+    "stray_message",
+    [
+        pytest.param("junk", id="string"),
+        pytest.param(None, id="null"),
+        pytest.param(ChatCompletionMessage(role="assistant", content="Checking the weather"), id="openai_sdk_message"),
+    ],
+)
+def test_cache_control_hook_counts_marked_tool_calls_next_to_a_message_it_cannot_pair(
+    monkeypatch: pytest.MonkeyPatch, stray_message: object
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages: Final = [
+        stray_message,
+        {"role": "assistant", "content": None, "tool_calls": [_SEARCH_CALL, _WEATHER_CALL]},
+        _SEARCH_ANSWER,
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+    envelope_census: Final = AnthropicCacheControlHook.count_external_cache_breakpoints(
+        None, request_kwargs={"extra_body": {"messages": messages}}
+    )
+
+    assert (census, envelope_census) == (2, 2)
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        pytest.param(
+            {"role": "assistant", "content": None, "tool_calls": [{**_WEATHER_CALL, "id": {"id": "toolu_02"}}]},
+            id="tool_call_id_is_a_dict",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": None, "tool_calls": [{**_WEATHER_CALL, "id": ["toolu_02"]}]},
+            id="tool_call_id_is_a_list",
+        ),
+        pytest.param({"role": "tool", "tool_call_id": {"id": "toolu_02"}, "content": "18C"}, id="answer_id_is_a_dict"),
+        pytest.param({"role": ["assistant"], "content": "Checking"}, id="role_is_a_list"),
+    ],
+)
+def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool, malformed: dict[str, object]
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = [
+        {"role": "system", "content": "You are a weather assistant."},
+        {"role": "user", "content": "Weather in Paris?"},
+        {"role": "assistant", "content": None, "tool_calls": [_SEARCH_CALL]},
+        _SEARCH_ANSWER,
+        malformed,
+        _SYSTEM_NOTE,
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-opus-5-5",
+        messages=cast(list[AllMessageValues], messages),
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert [message.get("cache_control") for message in processed if message.get("role") == "system"] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+    ]

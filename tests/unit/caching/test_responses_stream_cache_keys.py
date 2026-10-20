@@ -32,7 +32,7 @@ async def test_async_get_cache_reuses_preset_cache_key_for_responses():
     original_cache = litellm.cache
     mock_cache = MagicMock()
     mock_cache.supported_call_types = [CallTypes.aresponses.value]
-    mock_cache._supports_async.return_value = True
+    mock_cache.supports_async.return_value = True
     mock_cache.get_cache_key.return_value = "responses-stream-cache-key"
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     litellm.cache = mock_cache
@@ -43,7 +43,7 @@ async def test_async_get_cache_reuses_preset_cache_key_for_responses():
         "stream": True,
         "litellm_params": {},
     }
-    await caching_handler._async_get_cache(
+    await caching_handler.async_get_cache(
         model="gpt-4.1-mini",
         original_function=aresponses,
         logging_obj=logging_obj,
@@ -82,7 +82,7 @@ async def test_async_get_cache_falls_back_to_sync_cache_for_responses():
     original_cache = litellm.cache
     mock_cache = MagicMock()
     mock_cache.supported_call_types = [CallTypes.aresponses.value]
-    mock_cache._supports_async.return_value = False
+    mock_cache.supports_async.return_value = False
     mock_cache.get_cache_key.return_value = "responses-stream-cache-key"
     mock_cache.get_cache.return_value = None
     litellm.cache = mock_cache
@@ -93,7 +93,7 @@ async def test_async_get_cache_falls_back_to_sync_cache_for_responses():
         "stream": True,
         "litellm_params": {},
     }
-    await caching_handler._async_get_cache(
+    await caching_handler.async_get_cache(
         model="gpt-4.1-mini",
         original_function=aresponses,
         logging_obj=logging_obj,

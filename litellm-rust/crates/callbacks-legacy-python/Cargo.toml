@@ -6,7 +6,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-litellm-types.workspace = true
 litellm-host.workspace = true
 litellm-host-python.workspace = true
 

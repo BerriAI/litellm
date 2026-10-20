@@ -12,7 +12,7 @@ import pytest
 
 from litellm._logging import (
     JsonFormatter,
-    _redact_string,
+    redact_string,
     _secret_filter,
     redact_internal_details_from_client_message,
     verbose_logger,
@@ -21,7 +21,6 @@ from litellm._logging import (
 )
 from litellm.litellm_core_utils.secret_redaction import (
     redact_internal_details,
-    redact_string,
     redact_structured_value,
 )
 
@@ -467,15 +466,30 @@ def test_service_account_blob_fully_redacted():
 
 
 def test_vertex_error_message_no_credential_leak():
-    """The old Vertex error format leaked the full credential JSON.
-    The new format must not contain any credential material."""
-    new_msg = (
-        "Unable to load vertex credentials from environment. "
-        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
-        "Parse error: JSONDecodeError"
+    """The old Vertex error format leaked the full credential JSON. Every message the
+    credential loader raises today must survive redaction unchanged, which it only can
+    if it never carried credential material in the first place."""
+    from litellm.llms.vertex_ai.credentials_source import (
+        VertexCredentialsFileInvalid,
+        VertexCredentialsFileUnreadable,
+        VertexCredentialsInlineNotJson,
+        raise_vertex_credentials_failure,
     )
-    result = _redact_string(new_msg)
-    assert result == new_msg  # nothing to redact
+    path = "/etc/litellm/vertexai.json"
+    failures = (
+        VertexCredentialsFileUnreadable(path, "No such file or directory (FileNotFoundError)"),
+        VertexCredentialsFileInvalid(path, "Invalid control character at: line 1 column 55"),
+        VertexCredentialsInlineNotJson(
+            "Expecting value: line 1 column 1 (char 0)", "Check for unescaped newlines in private_key."
+        ),
+    )
+
+    for failure in failures:
+        with pytest.raises(ValueError, match="vertex") as exc_info:
+            raise_vertex_credentials_failure(failure)
+        message = str(exc_info.value)
+        assert path not in message  # the path goes to the log, not to the API caller
+        assert redact_string(message) == message  # nothing to redact
 
 
 def test_vertex_traceback_redacts_pem():

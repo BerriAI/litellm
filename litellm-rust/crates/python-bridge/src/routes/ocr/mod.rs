@@ -4,15 +4,14 @@ mod host;
 mod project;
 
 use host::OcrPythonHost;
-use litellm_core::ocr::provider_config;
+use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
+use litellm_inference_ocr::provider_config;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
-use litellm_types::Operation;
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use pyo3::prelude::*;
+
+use super::NativeCall;
 
 use crate::{
     coercion::FieldSpec,
@@ -20,24 +19,14 @@ use crate::{
     python_settings::{PythonSettings, Snapshot},
 };
 
-const VERTEX_PROJECT: FieldSpec<Option<String>> =
-    FieldSpec::new("vertex_project", |field| field.falsy_optional_string());
-const VERTEX_LOCATION: FieldSpec<Option<String>> =
-    FieldSpec::new("vertex_location", |field| field.falsy_optional_string());
 const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
     FieldSpec::new("enable_azure_ad_token_refresh", |field| {
         Ok(field.exact_true())
     });
 
-fn run_ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>> {
+fn run_ocr(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) =
-        crate::routes::call_hooks(py, Operation::Ocr, &request, &args, &kwargs, asynchronous)?;
+        crate::routes::call_hooks(py, LoggingOperation::Ocr, &call, asynchronous)?;
     crate::routes::run_public_call(
         py,
         arguments,
@@ -52,10 +41,10 @@ fn run_ocr(
                 crate::secrets::source(py)?,
             )
             .map_err(http::client_error)?;
-            let route = litellm_core::ocr::OcrRoute::new(client);
+            let route = litellm_inference_ocr::OcrRoute::new(client);
             Ok(route.machine(request, None))
         },
-        OcrPythonHost::new(request.unbind()),
+        OcrPythonHost::new(call.view()?),
         hooks,
         asynchronous,
     )
@@ -67,31 +56,19 @@ fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
 
 fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
     Ok(OcrSettings {
-        vertex_project: snapshot.read(&VERTEX_PROJECT)?,
-        vertex_location: snapshot.read(&VERTEX_LOCATION)?,
         enable_azure_ad_token_refresh: snapshot.read(&ENABLE_AZURE_AD_TOKEN_REFRESH)?,
         ..OcrSettings::from_environment(&ProcessEnvironment)
     })
 }
 
 #[pyfunction]
-pub(crate) fn ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, false)
+pub(crate) fn ocr(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_ocr(py, call, false)
 }
 
 #[pyfunction]
-pub(crate) fn aocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, true)
+pub(crate) fn aocr(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_ocr(py, call, true)
 }
 
 #[pyfunction]
@@ -125,31 +102,29 @@ mod tests {
     use crate::python_settings::PythonSettings;
 
     #[rstest::rstest]
-    fn provider_defaults_distinguish_falsey_values_and_exact_true() {
+    fn provider_defaults_read_exact_true_only() {
         Python::initialize();
         Python::attach(|py| {
-            let value = py.eval(c"__import__('types').SimpleNamespace(vertex_project=[], vertex_location=0, enable_azure_ad_token_refresh=1)", None, None).unwrap();
+            let value = py
+                .eval(
+                    c"__import__('types').SimpleNamespace(enable_azure_ad_token_refresh=1)",
+                    None,
+                    None,
+                )
+                .unwrap();
             let snapshot = PythonSettings::ProviderDefaults.snapshot(value.clone());
-            let projected = super::project_provider_defaults(&snapshot).unwrap();
-            assert_eq!(projected.vertex_project, None);
-            assert_eq!(projected.vertex_location, None);
-            assert!(!projected.enable_azure_ad_token_refresh);
-            value.setattr("vertex_project", "project").unwrap();
-            value.setattr("vertex_location", "region").unwrap();
+            assert!(
+                !super::project_provider_defaults(&snapshot)
+                    .unwrap()
+                    .enable_azure_ad_token_refresh
+            );
             value
                 .setattr("enable_azure_ad_token_refresh", true)
                 .unwrap();
-            let next = super::project_provider_defaults(&snapshot).unwrap();
-            assert_eq!(next.vertex_project.as_deref(), Some("project"));
-            assert_eq!(next.vertex_location.as_deref(), Some("region"));
-            assert!(next.enable_azure_ad_token_refresh);
-            value.setattr("vertex_project", 1).unwrap();
-            let error = super::project_provider_defaults(&snapshot).err().unwrap();
-            assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
             assert!(
-                error
-                    .to_string()
-                    .contains("provider_defaults.vertex_project")
+                super::project_provider_defaults(&snapshot)
+                    .unwrap()
+                    .enable_azure_ad_token_refresh
             );
         });
     }

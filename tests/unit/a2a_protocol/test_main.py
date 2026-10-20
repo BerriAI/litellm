@@ -1,6 +1,7 @@
 """Tests for litellm/a2a_protocol/main.py non-streaming send behavior."""
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -23,6 +24,7 @@ from litellm.a2a_protocol.main import (
     asend_message,
     create_a2a_client,
 )
+from litellm.a2a_protocol.exceptions import A2AError
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
 from litellm.llms.custom_httpx.http_handler import (
@@ -30,6 +32,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from types import SimpleNamespace
+from uuid import uuid4
 
 
 def _request() -> SendMessageRequest:
@@ -220,6 +224,77 @@ _LANGGRAPH_TASK_REPLY = {
 }
 
 
+_LANGGRAPH_STREAM_EVENTS = [
+    {
+        "jsonrpc": "2.0",
+        "id": "reply",
+        "result": {
+            "kind": "task",
+            "id": "run-1:task-1",
+            "contextId": "thread-1",
+            "history": [
+                {
+                    "kind": "message",
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "m-user",
+                    "taskId": "run-1:task-1",
+                    "contextId": "thread-1",
+                }
+            ],
+            "status": {"state": "submitted"},
+        },
+    },
+    {
+        "jsonrpc": "2.0",
+        "id": "reply",
+        "result": {
+            "kind": "status-update",
+            "taskId": "run-1:task-1",
+            "contextId": "thread-1",
+            "status": {
+                "state": "working",
+                "message": {
+                    "kind": "message",
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": "langgraph echo: hi"}],
+                    "messageId": "m-agent",
+                    "taskId": "run-1:task-1",
+                    "contextId": "thread-1",
+                },
+            },
+            "final": False,
+        },
+    },
+    {
+        "jsonrpc": "2.0",
+        "id": "reply",
+        "result": {
+            "kind": "artifact-update",
+            "taskId": "run-1:task-1",
+            "contextId": "thread-1",
+            "artifact": {
+                "artifactId": "art-1",
+                "name": "Assistant Response",
+                "parts": [{"kind": "text", "text": "langgraph echo: hi"}],
+            },
+            "lastChunk": True,
+        },
+    },
+    {
+        "jsonrpc": "2.0",
+        "id": "reply",
+        "result": {
+            "kind": "status-update",
+            "taskId": "run-1:task-1",
+            "contextId": "thread-1",
+            "status": {"state": "completed"},
+            "final": True,
+        },
+    },
+]
+
+
 _LOWERCASE_BINDING_CARD = {
     "name": "langgraph-agent",
     "version": "1.0.0",
@@ -230,16 +305,28 @@ _LOWERCASE_BINDING_CARD = {
     "supportedInterfaces": [{"url": "http://127.0.0.1:9/", "protocolBinding": "jsonrpc", "protocolVersion": "1.0"}],
 }
 
+_UPPERCASE_BINDING_CARD = {
+    "name": "langgraph-agent",
+    "version": "1.0.0",
+    "capabilities": {"streaming": True},
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain"],
+    "skills": [],
+    "supportedInterfaces": [{"url": "http://127.0.0.1:9/", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+}
+
 
 class _RequestRecorder:
     """Records the headers httpx put on the wire, per outbound request."""
 
-    def __init__(self, card=_AGENT_CARD, rpc_reply=_RPC_REPLY):
+    def __init__(self, card=_AGENT_CARD, rpc_reply=_RPC_REPLY, rpc_stream_events=None):
         self.card = card
         self.rpc_reply = rpc_reply
+        self.rpc_stream_events = rpc_stream_events
         self.card_requests = []
         self.card_urls = []
         self.rpc_requests = []
+        self.rpc_bodies = []
         self.client = None
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -249,6 +336,10 @@ class _RequestRecorder:
             self.card_urls.append(str(request.url))
             return httpx.Response(200, json=self.card)
         self.rpc_requests.append(headers)
+        self.rpc_bodies.append(json.loads(request.content))
+        if self.rpc_stream_events is not None:
+            body = "".join(f"data: {json.dumps(event)}\n\n" for event in self.rpc_stream_events)
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
         return httpx.Response(200, json=self.rpc_reply)
 
 
@@ -257,7 +348,10 @@ def _a2a_client_cache_key(timeout: float, provider: str = httpxSpecialProvider.A
 
 
 async def _seed_shared_a2a_client(
-    card=_AGENT_CARD, rpc_reply=_RPC_REPLY, provider: str = httpxSpecialProvider.A2AProvider
+    card=_AGENT_CARD,
+    rpc_reply=_RPC_REPLY,
+    rpc_stream_events=None,
+    provider: str = httpxSpecialProvider.A2AProvider,
 ) -> _RequestRecorder:
     """Put the one A2A client the cache will hand out behind a mock transport.
 
@@ -265,7 +359,7 @@ async def _seed_shared_a2a_client(
     it. The injected client is a real httpx.AsyncClient, so the merge of per-request
     headers over client defaults, which is what these tests are about, stays real.
     """
-    recorder = _RequestRecorder(card=card, rpc_reply=rpc_reply)
+    recorder = _RequestRecorder(card=card, rpc_reply=rpc_reply, rpc_stream_events=rpc_stream_events)
     handler = AsyncHTTPHandler(timeout=DEFAULT_A2A_AGENT_TIMEOUT)
     owned_client = handler.client
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
@@ -390,6 +484,125 @@ async def test_lowercase_protocol_binding_card_round_trips_the_langgraph_dialect
     interface = a2a_client._litellm_agent_card.supported_interfaces[0]
     assert interface.protocol_binding == "JSONRPC"
     assert interface.protocol_version == "0.3"
+
+
+@pytest.mark.asyncio
+async def test_uppercase_binding_card_without_override_fails_with_actionable_hint(isolated_client_cache):
+    await _seed_shared_a2a_client(card=_UPPERCASE_BINDING_CARD, rpc_reply=_LANGGRAPH_TASK_REPLY)
+
+    with pytest.raises(A2AError) as error:
+        await asend_message(request=_send_request("uppercase-default"), api_base="http://127.0.0.1:9")
+
+    assert 'has no field named "kind"' in str(error.value)
+    assert "a2a_protocol_version" in str(error.value)
+
+
+@pytest.mark.parametrize("card", [_LOWERCASE_BINDING_CARD, _UPPERCASE_BINDING_CARD])
+@pytest.mark.asyncio
+async def test_protocol_version_override_round_trips_the_langgraph_dialect(card, isolated_client_cache):
+    recorder = await _seed_shared_a2a_client(card=card, rpc_reply=_LANGGRAPH_TASK_REPLY)
+
+    a2a_client = await create_a2a_client(base_url="http://127.0.0.1:9", protocol_version="0.3")
+    response = await _send_message(a2a_client, _send_request("override-round-trip"))
+
+    assert type(response.root.result).__name__ == "Task"
+    assert response.root.result.artifacts[0].parts[0].root.text == "langgraph echo: hi"
+    assert a2a_client._litellm_agent_card.supported_interfaces[0].protocol_version == "0.3"
+    assert recorder.rpc_bodies[-1]["method"] == "message/send"
+
+
+@pytest.mark.parametrize("card", [_LOWERCASE_BINDING_CARD, _UPPERCASE_BINDING_CARD])
+@pytest.mark.asyncio
+async def test_protocol_version_override_streams_the_langgraph_dialect(card, isolated_client_cache):
+    recorder = await _seed_shared_a2a_client(card=card, rpc_stream_events=_LANGGRAPH_STREAM_EVENTS)
+
+    a2a_client = await create_a2a_client(
+        base_url="http://127.0.0.1:9",
+        streaming=True,
+        protocol_version="0.3",
+    )
+    request = SendStreamingMessageRequest(
+        id="reply",
+        params=MessageSendParams(
+            message={"messageId": "m-user", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+    streamed = [chunk async for chunk in _stream_messages(a2a_client, request)]
+
+    artifact_event = next(chunk.root.result for chunk in streamed if chunk.root.result.kind == "artifact-update")
+    completed_status = next(
+        chunk.root.result for chunk in streamed if chunk.root.result.kind == "status-update" and chunk.root.result.final
+    )
+    assert artifact_event.artifact.parts[0].root.text == "langgraph echo: hi"
+    assert completed_status.status.state.value == "completed"
+    assert recorder.rpc_bodies[-1]["method"] == "message/stream"
+
+
+@pytest.mark.asyncio
+async def test_uppercase_binding_card_stream_without_override_fails(isolated_client_cache):
+    await _seed_shared_a2a_client(card=_UPPERCASE_BINDING_CARD, rpc_stream_events=_LANGGRAPH_STREAM_EVENTS)
+
+    a2a_client = await create_a2a_client(base_url="http://127.0.0.1:9", streaming=True)
+    request = SendStreamingMessageRequest(
+        id="reply",
+        params=MessageSendParams(
+            message={"messageId": "m-user", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+
+    with pytest.raises(Exception, match='has no field named "kind"'):
+        async for _ in _stream_messages(a2a_client, request):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_asend_message_resolves_float_protocol_version_from_agent_params(isolated_client_cache):
+    recorder = await _seed_shared_a2a_client(card=_UPPERCASE_BINDING_CARD, rpc_reply=_LANGGRAPH_TASK_REPLY)
+
+    response = await asend_message(
+        request=_send_request("float-protocol-override"),
+        api_base="http://127.0.0.1:9",
+        litellm_params={"a2a_protocol_version": 0.3},
+    )
+
+    assert response.result["artifacts"][0]["parts"][0]["text"] == "langgraph echo: hi"
+    assert recorder.rpc_bodies[-1]["method"] == "message/send"
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected_protocol_version"),
+    [({"a2a_protocol_version": "0.3"}, "0.3"), (None, None)],
+)
+@pytest.mark.asyncio
+async def test_streaming_passes_agent_protocol_version_to_client(litellm_params, expected_protocol_version):
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.a2a_protocol import main as a2a_main
+
+    request = SendStreamingMessageRequest(
+        id="stream-protocol-version",
+        params=MessageSendParams(
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+    captured = {}
+
+    async def _capture(*, base_url, extra_headers=None, streaming=False, protocol_version=None, **_):
+        captured["protocol_version"] = protocol_version
+        raise RuntimeError("stop")
+
+    with (
+        patch.object(a2a_main, "create_a2a_client", new=AsyncMock(side_effect=_capture)),
+        pytest.raises(RuntimeError, match="stop"),
+    ):
+        async for _ in a2a_main.asend_message_streaming(
+            request=request,
+            api_base="http://upstream.local",
+            litellm_params=litellm_params,
+        ):
+            pass
+
+    assert captured["protocol_version"] == expected_protocol_version
 
 
 @pytest.mark.asyncio
@@ -539,3 +752,107 @@ def test_streaming_logging_obj_keeps_agent_credentials_out_of_logging_params():
     assert logging_obj.litellm_params == expected
     assert logging_obj.optional_params == expected
     assert logging_obj.model_call_details["litellm_params"] == expected
+
+
+class MockA2AResponse:
+    def __init__(self, text: str):
+        self._payload = {
+            "id": str(uuid4()),
+            "jsonrpc": "2.0",
+            "result": {
+                "message": {
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": text}],
+                    "messageId": uuid4().hex,
+                }
+            },
+        }
+
+    def model_dump(self, mode="json", exclude_none=True):
+        return self._payload
+
+class MockA2AStreamingChunk(MockA2AResponse):
+    def __init__(self, text: str, state: str):
+        super().__init__(text=text)
+        self._payload["result"]["status"] = {"state": state}
+
+class MockA2AClient:
+    def __init__(self):
+        self._litellm_agent_card = SimpleNamespace(name="mock-agent", url="http://mock-agent.local")
+
+    async def send_message(self, request, *, context=None):
+        from a2a.compat.v0_3.conversions import pb2_v10
+
+        for text in ("hel", "hello"):
+            event = pb2_v10.StreamResponse()
+            message = event.message
+            message.message_id = uuid4().hex
+            message.role = pb2_v10.ROLE_AGENT
+            message.parts.add().text = text
+            yield event
+
+@pytest.fixture
+def mock_a2a_client(monkeypatch):
+    import litellm.a2a_protocol.main as a2a_main
+
+    async def _fake_create_a2a_client(
+        base_url, timeout=60.0, extra_headers=None, streaming=False, relative_card_path=None, **_
+    ):
+        return MockA2AClient()
+
+    monkeypatch.setattr(a2a_main, "create_a2a_client", _fake_create_a2a_client)
+
+@pytest.mark.asyncio
+async def test_a2a_non_streaming(mock_a2a_client):
+    """Test non-streaming A2A request."""
+    from a2a.compat.v0_3.types import MessageSendParams, SendMessageRequest
+
+    from litellm.a2a_protocol import asend_message
+
+    request = SendMessageRequest(
+        id=str(uuid4()),
+        params=MessageSendParams(
+            message={
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Say hello in one word"}],
+                "messageId": uuid4().hex,
+            }
+        ),
+    )
+
+    response = await asend_message(
+        request=request,
+        api_base="http://mock",
+    )
+
+    assert response is not None
+    print(f"\nNon-streaming response: {response}")
+
+@pytest.mark.asyncio
+async def test_a2a_streaming(mock_a2a_client):
+    """Test streaming A2A request."""
+    from a2a.compat.v0_3.types import MessageSendParams, SendStreamingMessageRequest
+
+    from litellm.a2a_protocol import asend_message_streaming
+
+    request = SendStreamingMessageRequest(
+        id=str(uuid4()),
+        params=MessageSendParams(
+            message={
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Say hello in one word"}],
+                "messageId": uuid4().hex,
+            }
+        ),
+    )
+
+    chunks = []
+    async for chunk in asend_message_streaming(
+        request=request,
+        api_base="http://mock",
+    ):
+        chunks.append(chunk)
+        print(f"\nStreaming chunk: {chunk}")
+
+    assert len(chunks) > 0, "Should receive at least one chunk"
+    print(f"\nTotal chunks received: {len(chunks)}")

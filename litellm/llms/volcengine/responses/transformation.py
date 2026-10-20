@@ -9,7 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _safe_convert_created_field,
+    safe_convert_created_field,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -245,7 +245,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
             raw_response_json: Final = self._parsed_response_body(raw_response)
             if "created_at" in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -259,8 +259,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             construct_response: Final[Callable[..., ResponsesAPIResponse]] = ResponsesAPIResponse.model_construct
             response = construct_response(**raw_response_json)
 
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response
 
     #########################################################
@@ -325,8 +325,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         processed_headers: Final = process_response_headers(raw_response_headers)
 
         response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response
 
     #########################################################
@@ -398,8 +398,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         processed_headers: Final = process_response_headers(raw_response_headers)
 
         response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response
 
     def should_fake_stream(
