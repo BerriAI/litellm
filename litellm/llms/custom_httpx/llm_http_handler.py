@@ -10349,7 +10349,7 @@ class BaseLLMHTTPHandler:
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={
                     "ssl_verify": litellm_params.get("ssl_verify", None),
-                    **vector_store_provider_config.get_httpx_client_params(),
+                    **vector_store_provider_config.get_async_httpx_client_params(),
                 },
             )
         else:
@@ -10487,12 +10487,7 @@ class BaseLLMHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = get_httpx_client(
-                params={
-                    "ssl_verify": litellm_params.get("ssl_verify", None),
-                    **vector_store_provider_config.get_httpx_client_params(),
-                }
-            )
+            sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 

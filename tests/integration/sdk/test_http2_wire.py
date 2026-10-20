@@ -39,7 +39,7 @@ from integration._support.vertex import service_account_json
 STREAM_CHUNKS: Final = 3
 HELD_SEARCHES: Final = 150
 HOLD_SECONDS: Final = 10.0
-_HOLD_ROOMS: Final = MappingProxyType({"hold-async": queue.SimpleQueue[int](), "hold-sync": queue.SimpleQueue[int]()})
+_HELD_ARRIVALS: Final = queue.SimpleQueue[int]()
 _TOKEN_REQUESTS: Final = queue.SimpleQueue[str]()
 _COUNTED_CLIENT_PORTS: Final = queue.SimpleQueue[int]()
 VERTEX_SERVING_CONFIG_PATH: Final = (
@@ -103,12 +103,9 @@ async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallab
         if message["type"] == "http.request" and not message["more_body"]:
             break
     version: Final = scope["http_version"]
-    hold_room: Final = _HOLD_ROOMS.get(scope["path"].split("/")[1])
-    if hold_room is not None and scope["path"].endswith(":search"):
+    if scope["path"] == "/hold:search":
         client: Final = scope["client"]
-        await _send_json(
-            send, {"results": [{"id": await _hold_until_all_arrive(hold_room, client[1] if client else 0)}]}
-        )
+        await _send_json(send, {"results": [{"id": await _hold_until_all_arrive(client[1] if client else 0)}]})
         return
     if scope["path"].endswith("/_oauth/token"):
         _TOKEN_REQUESTS.put(scope["path"])
@@ -139,12 +136,12 @@ async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallab
     await _send_json(send, {"http_version": version})
 
 
-async def _hold_until_all_arrive(arrivals: queue.SimpleQueue[int], client_port: int) -> str:
-    arrivals.put(client_port)
+async def _hold_until_all_arrive(client_port: int) -> str:
+    _HELD_ARRIVALS.put(client_port)
     deadline: Final = time.monotonic() + HOLD_SECONDS
-    while arrivals.qsize() < HELD_SEARCHES and time.monotonic() < deadline:
+    while _HELD_ARRIVALS.qsize() < HELD_SEARCHES and time.monotonic() < deadline:
         await asyncio.sleep(0.01)
-    return "held-together" if arrivals.qsize() >= HELD_SEARCHES else "released-alone"
+    return "held-together" if _HELD_ARRIVALS.qsize() >= HELD_SEARCHES else "released-alone"
 
 
 async def _send_json(send: ASGISendCallable, body: dict[str, object]) -> None:
@@ -302,11 +299,11 @@ async def _avertex_search_file_ids(
     return [result.get("file_id") for result in response.get("data") or ()]
 
 
-def test_sync_vertex_search_negotiates_http2_without_global_flag(
+def test_sync_vertex_search_stays_on_http1_without_global_flag(
     monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
 ) -> None:
     _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
-    assert _vertex_search_file_ids(http2_tls_peer) == ["http/2"]
+    assert _vertex_search_file_ids(http2_tls_peer) == ["http/1.1"]
 
 
 def test_async_vertex_search_negotiates_http2_without_global_flag(
@@ -372,7 +369,7 @@ def test_vertex_search_over_forced_ipv4_trusts_the_configured_ca(
     _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
     monkeypatch.setattr(litellm, "force_ipv4", True)
 
-    assert _vertex_search_file_ids(http2_tls_peer) == ["http/2"]
+    assert _vertex_search_file_ids(http2_tls_peer) == ["http/1.1"]
     assert asyncio.run(_avertex_search_file_ids(http2_tls_peer)) == ["http/2"]
 
 
@@ -553,8 +550,9 @@ def test_vertex_search_retries_a_connection_the_server_drains_with_goaway(
     _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
 
     with _raw_tls_peer(http2_tls_peer, "h2", _drain_every_other_connection) as (search_url, _):
-        assert _vertex_search_file_ids(http2_tls_peer, search_url=search_url) == ["answered"]
         assert asyncio.run(_avertex_search_file_ids(http2_tls_peer, search_url=search_url)) == ["answered"]
+        _set_http2(monkeypatch, True)
+        assert _vertex_search_file_ids(http2_tls_peer, search_url=search_url) == ["answered"]
 
 
 def test_vertex_search_sends_once_when_an_http1_server_hangs_up(
@@ -597,41 +595,25 @@ def test_vertex_search_keeps_its_http2_connection_across_an_idle_gap(
         assert accepted.qsize() == 1
 
 
-def _held_burst(peer: TlsPeer, room: str) -> list[str]:
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-
-    url: Final = f"{peer.url}/{room}/default_search:search"
-    if room == "hold-sync":
-        handler: Final = HTTPHandler(ssl_verify=str(peer.cert_file), http2=True)
-        try:
-            with ThreadPoolExecutor(max_workers=HELD_SEARCHES) as pool:
-                responses: Final = tuple(pool.map(lambda _: handler.post(url, json={}), range(HELD_SEARCHES)))
-            return [response.json()["results"][0]["id"] for response in responses]
-        finally:
-            handler.close()
-
-    async def _burst() -> list[str]:
-        async_handler: Final = AsyncHTTPHandler(ssl_verify=str(peer.cert_file), http2=True)
-        try:
-            async_responses: Final = await asyncio.gather(
-                *(async_handler.post(url, json={}) for _ in range(HELD_SEARCHES))
-            )
-            return [response.json()["results"][0]["id"] for response in async_responses]
-        finally:
-            await async_handler.close()
-
-    return asyncio.run(_burst())
-
-
-@pytest.mark.parametrize("room", ["hold-async", "hold-sync"])
-def test_http2_handlers_open_another_connection_once_the_streams_run_out(
-    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, room: str
+def test_async_http2_handler_opens_another_connection_once_the_streams_run_out(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
 ) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
     _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
 
-    search_ids: Final = _held_burst(http2_tls_peer, room)
-    arrivals: Final = _HOLD_ROOMS[room]
-    client_ports: Final = frozenset(arrivals.get_nowait() for _ in range(arrivals.qsize()))
+    async def _burst() -> list[str]:
+        handler: Final = AsyncHTTPHandler(ssl_verify=str(http2_tls_peer.cert_file), http2=True)
+        try:
+            responses: Final = await asyncio.gather(
+                *(handler.post(f"{http2_tls_peer.url}/hold:search", json={}) for _ in range(HELD_SEARCHES))
+            )
+            return [response.json()["results"][0]["id"] for response in responses]
+        finally:
+            await handler.close()
+
+    search_ids: Final = asyncio.run(_burst())
+    client_ports: Final = frozenset(_HELD_ARRIVALS.get_nowait() for _ in range(_HELD_ARRIVALS.qsize()))
 
     assert search_ids == ["held-together"] * HELD_SEARCHES
     assert len(client_ports) == 2
@@ -685,5 +667,6 @@ def test_vertex_search_over_forced_ipv4_presents_the_client_certificate(
         search_url,
         _,
     ):
-        assert _vertex_search_file_ids(http2_tls_peer, search_url=search_url) == ["answered"]
         assert asyncio.run(_avertex_search_file_ids(http2_tls_peer, search_url=search_url)) == ["answered"]
+        _set_http2(monkeypatch, True)
+        assert _vertex_search_file_ids(http2_tls_peer, search_url=search_url) == ["answered"]

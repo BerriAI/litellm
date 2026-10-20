@@ -234,7 +234,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def __init__(self):
         super().__init__()
 
-    def get_httpx_client_params(self) -> Mapping[str, object]:
+    def get_async_httpx_client_params(self) -> Mapping[str, object]:
         return MappingProxyType({"http2": True})
 
     @staticmethod

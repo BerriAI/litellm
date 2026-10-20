@@ -43,7 +43,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
-from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread, HTTP2ConnectionSpread
+from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -1485,19 +1485,17 @@ class HTTPHandler:
         disable_default_headers: bool
         | None = False,  # arize phoenix returns different API responses when user agent header in request
         follow_redirects: bool = True,
-        http2: bool = False,
     ):
         self.timeout = timeout
         self.ssl_verify = ssl_verify
         self.disable_default_headers = disable_default_headers
         self.follow_redirects = follow_redirects
-        self.http2 = http2
         self._owns_client = client is None
         self._heal_lock = threading.Lock()
         self._client = self.create_client() if client is None else client
 
     def create_client(self) -> httpx.Client:
-        use_http2: Final = _resolve_http2(self.http2, self.ssl_verify)
+        use_http2: Final = http2_enabled()
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration(self.ssl_verify, http2=use_http2)
 
@@ -1796,28 +1794,16 @@ class HTTPHandler:
             pass
 
     @staticmethod
-    def _create_sync_transport(
-        verify: VerifyTypes, cert: CertTypes | None, http2: bool
-    ) -> HTTPTransport | HTTP2ConnectionSpread | None:
+    def _create_sync_transport(verify: VerifyTypes, cert: CertTypes | None, http2: bool) -> HTTPTransport | None:
         """
-        Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True, and one that spreads requests over
-        as many HTTP/2 connections as the stream limit needs if HTTP/2 is on.
+        Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
         Otherwise, return litellm.sync_transport or None.
 
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
-        custom_transport: Final = None if litellm.force_ipv4 else getattr(litellm, "sync_transport", None)
-        if custom_transport is not None:
-            return custom_transport
-        local_address: Final = _IPV4_LOCAL_ADDRESS if litellm.force_ipv4 else None
-        if http2:
-            return HTTP2ConnectionSpread(
-                lambda: HTTPTransport(local_address=local_address, verify=verify, cert=cert, http2=True),
-                max_connections=DEFAULT_LIMITS.max_connections,
-            )
         if litellm.force_ipv4:
-            return HTTPTransport(local_address=local_address, verify=verify, cert=cert)
-        return None
+            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, verify=verify, cert=cert, http2=http2)
+        return getattr(litellm, "sync_transport", None)
 
     @staticmethod
     def _create_sync_proxy_mounts(
@@ -1828,14 +1814,9 @@ class HTTPHandler:
     ) -> Mapping[str, httpx.BaseTransport | None] | None:
         if transport is None or transport is getattr(litellm, "sync_transport", None):
             return None
-        if http2:
-            return _environment_proxy_mounts(
-                lambda proxy_url: HTTP2ConnectionSpread(
-                    lambda: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=True),
-                    max_connections=DEFAULT_LIMITS.max_connections,
-                )
-            )
-        return _environment_proxy_mounts(lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert))
+        return _environment_proxy_mounts(
+            lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2)
+        )
 
 
 def get_async_httpx_client(
