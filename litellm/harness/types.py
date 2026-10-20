@@ -7,10 +7,9 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Final, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import BaseModel
 
 from litellm.harness.errors import StateIncompatible
 
@@ -19,18 +18,6 @@ PermissionMode = Literal["read-only", "ask", "edit", "full"]
 FileChangeKind = Literal["created", "modified", "deleted"]
 
 STATE_VERSION = 1
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _StateDocument(TypedDict):
-    harness: ReadOnly[object]
-    version: ReadOnly[bool | int | float | str]
-    workdir: ReadOnly[str]
-    native_session_id: ReadOnly[NotRequired[str | None]]
-    model: ReadOnly[NotRequired[str | None]]
-
-
-_STATE_DOCUMENT: Final = TypeAdapter(_StateDocument)
 
 
 class Harness(Enum):
@@ -212,7 +199,7 @@ class State:
     @classmethod
     def loads(cls, data: bytes) -> State:
         try:
-            raw = _STATE_DOCUMENT.validate_python(json.loads(data.decode("utf-8")))
+            raw = json.loads(data.decode("utf-8"))
             harness = Harness(raw["harness"])
             version = int(raw["version"])
         except (ValueError, KeyError, TypeError, UnicodeDecodeError) as e:

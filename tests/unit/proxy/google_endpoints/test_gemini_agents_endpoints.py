@@ -11,11 +11,14 @@ longer accepted — they would appear in server logs.
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import Request
 from fastapi.datastructures import Headers, QueryParams
+from pydantic import ValidationError
 
 
+from litellm.llms.gemini.agents.transformation import GeminiAgentsConfig
 from litellm.proxy.google_endpoints.agents_endpoints import (
     _merge_query_params_into_data,
 )
@@ -470,3 +473,20 @@ def test_validate_environment_env_fallback_when_no_api_base_override(monkeypatch
     cfg = GeminiAgentsConfig()
     headers = cfg.validate_environment(headers={}, litellm_params={})
     assert headers["x-goog-api-key"] == "AIzaFromEnv"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_id"),
+    [(b'{"id": "agent-1", "base_agent": "waverunner"}', "agent-1"), (b"not json", "fallback-name")],
+)
+def test_transform_get_response_reads_the_id_or_falls_back_to_the_name_on_a_non_json_body(
+    body: bytes, expected_id: str
+):
+    response = GeminiAgentsConfig().transform_get_response(httpx.Response(200, content=body), name="fallback-name")
+
+    assert (response.id, response.name) == (expected_id, expected_id)
+
+
+def test_transform_get_response_rejects_a_json_body_that_is_not_an_object():
+    with pytest.raises(ValidationError):
+        GeminiAgentsConfig().transform_get_response(httpx.Response(200, content=b'["agent-1"]'), name="fallback-name")

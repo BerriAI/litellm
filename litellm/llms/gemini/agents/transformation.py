@@ -76,7 +76,7 @@ _GEMINI_AGENT_RESPONSE_ADAPTER: Final = TypeAdapter(_GeminiAgentResponse)
 _GEMINI_AGENT_LIST_RESPONSE_ADAPTER: Final = TypeAdapter(_GeminiAgentListResponse)
 _GEMINI_AGENT_VERSIONS_RESPONSE_ADAPTER: Final = TypeAdapter(_GeminiAgentVersionsResponse)
 
-_ResponseT = TypeVar("_ResponseT")
+_ResponseT: Final = TypeVar("_ResponseT")
 
 
 def _parse_response(
