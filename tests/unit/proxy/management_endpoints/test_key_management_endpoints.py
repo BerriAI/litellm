@@ -23214,8 +23214,6 @@ def test_key_info_unexpected_database_exception_sanitized(
         proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
 
 
-
-
 def test_key_info_missing_key_preserves_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -23306,3 +23304,6 @@ def test_key_info_database_not_connected_sanitized_500(
         assert "Database not connected" in caplog.text
     finally:
         proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+
