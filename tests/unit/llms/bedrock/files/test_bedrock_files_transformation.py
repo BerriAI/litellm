@@ -4488,17 +4488,17 @@ def _batch_line_with_body(field: str, value: object) -> str:
             id="string-body",
         ),
         pytest.param(
-            f"{_batch_line_with_body("model", 123)}\n".encode(),
+            f"{_batch_line_with_body('model', 123)}\n".encode(),
             "Batch input file line 1 has a body.model that is not a string",
             id="int-model",
         ),
         pytest.param(
-            f"{_batch_line_with_body("model", None)}\n".encode(),
+            f"{_batch_line_with_body('model', None)}\n".encode(),
             "Batch input file line 1 has a body.model that is not a string",
             id="null-model",
         ),
         pytest.param(
-            f"{_VALID_BATCH_LINE}\n{_batch_line_with_body("messages", "hi")}\n".encode(),
+            f"{_VALID_BATCH_LINE}\n{_batch_line_with_body('messages', 'hi')}\n".encode(),
             "Batch input file line 2 could not be converted to a Bedrock batch record",
             id="string-messages",
         ),
