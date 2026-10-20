@@ -72,12 +72,19 @@ class _RivaAuth(Protocol):
     """Opaque ``riva.client.Auth`` handle."""
 
 
+class _RecognizeFuture(Protocol):
+    def result(self, timeout: float | None = None) -> object: ...
+
+    def done(self) -> bool: ...
+
+    def cancel(self) -> bool: ...
+
+
 class _AsrService(Protocol):
     @property
     def streaming_response_generator(self) -> Callable[..., Iterable[object]]: ...
 
-    @property
-    def offline_recognize(self) -> Callable[..., object]: ...
+    def offline_recognize(self, audio_bytes: bytes, config: object, future: bool) -> _RecognizeFuture: ...
 
 
 class _EndpointingConfig(Protocol):
@@ -465,13 +472,17 @@ class NvidiaRivaAudioTranscription:
         recognition_config: _RecognitionConfig,
         timeout: float | None,
     ) -> Iterable[object]:
-        return (
-            asr_service.offline_recognize(
-                audio_bytes=pcm_bytes,
-                config=recognition_config,
-                **self._timeout_kwargs(asr_service.offline_recognize, timeout),
-            ),
-        )
+        pending: Final = asr_service.offline_recognize(audio_bytes=pcm_bytes, config=recognition_config, future=True)
+        try:
+            return (pending.result(timeout=timeout),)
+        except Exception as e:
+            if pending.done():
+                raise
+            pending.cancel()
+            raise NvidiaRivaException(
+                status_code=408,
+                message=f"NVIDIA Riva offline recognition did not finish within {timeout} seconds",
+            ) from e
 
     @classmethod
     def _timeout_kwargs(cls, rpc: Callable[..., object], timeout: float | None) -> Mapping[str, float]:

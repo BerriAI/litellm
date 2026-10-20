@@ -95,8 +95,22 @@ def mock_riva(monkeypatch):
     streaming_responses_holder = {"value": []}
     offline_response_holder = {"value": None}
     offline_error_holder = {"value": None}
+    offline_future_holder = {"value": None}
     streaming_calls = []
     offline_calls = {}
+
+    class FakeRecognizeFuture:
+        def result(self, timeout=None):
+            offline_calls["timeout"] = timeout
+            if offline_error_holder["value"] is not None:
+                raise offline_error_holder["value"]
+            return offline_response_holder["value"]
+
+        def done(self):
+            return True
+
+        def cancel(self):
+            return False
 
     class FakeASRService:
         def __init__(self, auth):
@@ -107,12 +121,11 @@ def mock_riva(monkeypatch):
             streaming_calls.append(list(audio_chunks))
             yield from streaming_responses_holder["value"]
 
-        def offline_recognize(self, audio_bytes, config):
+        def offline_recognize(self, audio_bytes, config, future=False):
             offline_calls["audio_bytes"] = audio_bytes
             offline_calls["config"] = config
-            if offline_error_holder["value"] is not None:
-                raise offline_error_holder["value"]
-            return offline_response_holder["value"]
+            pending = offline_future_holder["value"] or FakeRecognizeFuture()
+            return pending if future else pending.result()
 
     fake_riva_client = SimpleNamespace(
         Auth=FakeAuth,
@@ -133,6 +146,7 @@ def mock_riva(monkeypatch):
         responses=streaming_responses_holder,
         offline_response=offline_response_holder,
         offline_error=offline_error_holder,
+        offline_future=offline_future_holder,
         streaming_calls=streaming_calls,
         offline_calls=offline_calls,
         client=fake_riva_client,
@@ -285,7 +299,9 @@ def test_default_mode_streams_and_never_calls_offline_recognize(mock_riva, loggi
 
 
 @pytest.mark.parametrize(("riva_offline", "expect_offline"), [("false", False), ("False", False), ("true", True)])
-def test_riva_offline_string_from_multipart_form_is_parsed(mock_riva, logging_obj, riva_offline, expect_offline):
+def test_riva_offline_string_from_multipart_form_is_parsed(
+    mock_riva: SimpleNamespace, logging_obj: MagicMock, riva_offline: str, expect_offline: bool
+) -> None:
     mock_riva.responses["value"] = [
         _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
     ]
@@ -310,7 +326,9 @@ def test_riva_offline_string_from_multipart_form_is_parsed(mock_riva, logging_ob
 
 
 @pytest.mark.parametrize("riva_offline", ["yes", "", 1])
-def test_riva_offline_malformed_value_is_rejected_before_any_rpc(mock_riva, logging_obj, riva_offline):
+def test_riva_offline_malformed_value_is_rejected_before_any_rpc(
+    mock_riva: SimpleNamespace, logging_obj: MagicMock, riva_offline: object
+) -> None:
     with pytest.raises(NvidiaRivaException) as excinfo:
         NvidiaRivaAudioTranscription().audio_transcriptions(
             model="m",
@@ -330,7 +348,9 @@ def test_riva_offline_malformed_value_is_rejected_before_any_rpc(mock_riva, logg
     assert mock_riva.streaming_calls == []
 
 
-def test_riva_offline_malformed_value_is_dropped_under_drop_params(mock_riva, logging_obj):
+def test_riva_offline_malformed_value_is_dropped_under_drop_params(
+    mock_riva: SimpleNamespace, logging_obj: MagicMock
+) -> None:
     mock_riva.responses["value"] = [
         _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
     ]
@@ -351,7 +371,7 @@ def test_riva_offline_malformed_value_is_dropped_under_drop_params(mock_riva, lo
     assert mock_riva.offline_calls == {}
 
 
-def test_deployment_riva_offline_reaches_the_handler_through_transcription(mock_riva):
+def test_deployment_riva_offline_reaches_the_handler_through_transcription(mock_riva: SimpleNamespace) -> None:
     mock_riva.offline_response["value"] = _fake_response(
         results=[SimpleNamespace(alternatives=[_fake_alternative("offline")])]
     )
@@ -368,12 +388,12 @@ def test_deployment_riva_offline_reaches_the_handler_through_transcription(mock_
     assert mock_riva.offline_calls != {}
 
 
-def test_oversized_offline_audio_is_a_non_retryable_413(mock_riva, logging_obj):
+def test_oversized_offline_audio_is_a_non_retryable_413(mock_riva: SimpleNamespace, logging_obj: MagicMock) -> None:
     class FakeGrpcError(Exception):
-        def code(self):
+        def code(self) -> SimpleNamespace:
             return SimpleNamespace(name="RESOURCE_EXHAUSTED")
 
-        def details(self):
+        def details(self) -> str:
             return "SERVER: Received message larger than max (4348825 vs. 4194304)"
 
     mock_riva.offline_error["value"] = FakeGrpcError("rpc fail")
@@ -393,6 +413,49 @@ def test_oversized_offline_audio_is_a_non_retryable_413(mock_riva, logging_obj):
 
     assert excinfo.value.status_code == 413
     assert litellm.utils.should_retry(excinfo.value.status_code) is False
+
+
+def test_stalled_offline_recognition_is_cancelled_and_times_out_as_408(
+    mock_riva: SimpleNamespace, logging_obj: MagicMock
+) -> None:
+    class FutureTimeoutError(Exception):
+        pass
+
+    class StalledRecognizeFuture:
+        def __init__(self) -> None:
+            self.waited_for: float | None = None
+            self.cancelled = False
+
+        def result(self, timeout: float | None = None) -> object:
+            self.waited_for = timeout
+            raise FutureTimeoutError()
+
+        def done(self) -> bool:
+            return self.cancelled
+
+        def cancel(self) -> bool:
+            self.cancelled = True
+            return True
+
+    stalled = StalledRecognizeFuture()
+    mock_riva.offline_future["value"] = stalled
+
+    with pytest.raises(NvidiaRivaException) as excinfo:
+        NvidiaRivaAudioTranscription().audio_transcriptions(
+            model="m",
+            audio_file=_make_wav_bytes(),
+            optional_params={"language_code": "en-US", "riva_offline": True},
+            litellm_params={},
+            model_response=TranscriptionResponse(),
+            timeout=7.5,
+            logging_obj=logging_obj,
+            api_key=None,
+            api_base="localhost:50051",
+        )
+
+    assert excinfo.value.status_code == 408
+    assert stalled.waited_for == 7.5
+    assert stalled.cancelled is True
 
 def test_riva_offline_grpc_error_is_wrapped(mock_riva, logging_obj):
     class FakeGrpcError(Exception):

@@ -70,7 +70,6 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
         # ``api_base`` for the same reason as the OCI entries above.
         "nvcf_function_id",
         "use_ssl",
-        "riva_offline",
         # Server-owned federation and OAuth token-exchange fields, restated here from
         # server_owned_wif_litellm_params the same way azure_ad_token above is restated
         # despite also being declared on CredentialLiteLLMParams (hence covered by

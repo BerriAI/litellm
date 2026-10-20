@@ -3901,7 +3901,7 @@ class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
         )
 
 
-def test_riva_offline_in_request_body_is_rejected():
+def test_riva_offline_in_request_body_is_rejected() -> None:
     with pytest.raises(ValueError, match="riva_offline"):
         is_request_body_safe(
             request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
@@ -3911,7 +3911,7 @@ def test_riva_offline_in_request_body_is_rejected():
         )
 
 
-def test_admin_opt_in_proxy_wide_allows_riva_offline():
+def test_admin_opt_in_proxy_wide_allows_riva_offline() -> None:
     assert (
         is_request_body_safe(
             request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
@@ -3921,6 +3921,16 @@ def test_admin_opt_in_proxy_wide_allows_riva_offline():
         )
         is True
     )
+
+
+def test_api_base_override_keeps_the_deployments_riva_offline_mode() -> None:
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    out: Final = get_dynamic_litellm_params(
+        litellm_params={"model": "nvidia_riva/nvidia/parakeet-0.6b-tdt", "riva_offline": True},
+        request_kwargs={"api_base": "caller-riva:50051"},
+    )
+    assert (out["api_base"], out["riva_offline"]) == ("caller-riva:50051", True)
 
 
 class TestIsRequestBodySafeBlocksRivaUseSsl:

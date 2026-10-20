@@ -87,8 +87,8 @@ def grpc_error_to_litellm_exception(error: Exception) -> NvidiaRivaException:
         return NvidiaRivaException(
             status_code=413,
             message=(
-                f"NVIDIA Riva gRPC error ({status_name}): {detail}. The audio is too large for one request: "
-                "send shorter audio or raise the Riva server's gRPC max receive message size."
+                f"NVIDIA Riva gRPC error ({status_name}): {detail}. The audio is too large for one offline "
+                "request to this Riva server: send shorter audio, or drop riva_offline on models that support streaming."
             ),
         )
 
