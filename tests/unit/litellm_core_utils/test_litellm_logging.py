@@ -8350,10 +8350,10 @@ async def test_supabase_logs_the_request_messages_and_response_for_async_request
 
 def _resolve(custom_llm_provider, litellm_params, optional_params, model):
     from litellm.litellm_core_utils.litellm_logging import (
-        _resolve_vertex_location_for_cost,
+        resolve_vertex_location_for_cost,
     )
 
-    return _resolve_vertex_location_for_cost(
+    return resolve_vertex_location_for_cost(
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         optional_params=optional_params,
