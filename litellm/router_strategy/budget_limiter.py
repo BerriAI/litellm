@@ -154,10 +154,9 @@ class RouterBudgetLimiting(CustomLogger):
         self._flush_after_retire = loop.create_task(self._drain_increments_after_retire())
 
     async def _drain_increments_after_retire(self) -> None:
-        if not self.redis_increment_operation_queue:
-            return
-        if await self._push_in_memory_increments_to_redis():
-            await self._drain_increments_after_retire()
+        while self.redis_increment_operation_queue:
+            if not await self._push_in_memory_increments_to_redis():
+                await asyncio.sleep(DEFAULT_REDIS_SYNC_INTERVAL)
 
     @with_service_target("router_budgets")
     async def async_filter_deployments(

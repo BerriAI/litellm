@@ -21,13 +21,20 @@ from unittest.mock import MagicMock
 from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
+from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
     UserConfigRouters,
     route_request,
     user_config_routers,
+)
+from litellm.proxy.utils import ProxyLogging
+from litellm.router_strategy.adaptive_router.config import (
+    ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
+    ADAPTIVE_ROUTER_RESPONSE_HEADER,
 )
 from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
 
@@ -2563,6 +2570,41 @@ async def _proxy_router_outcomes(
         return [await outcome() for _ in range(requests)]
     finally:
         router.discard()
+
+
+@pytest.mark.asyncio
+async def test_a_user_config_adaptive_request_answers_with_the_model_it_picked() -> None:
+    data: Final = {
+        "model": "smart-cheap-router",
+        "messages": [{"role": "user", "content": "Write a one line python function that adds two numbers"}],
+        "metadata": {},
+        "user_config": {
+            "model_list": [
+                {
+                    "model_name": "smart-cheap-router",
+                    "litellm_params": {
+                        "model": "auto_router/adaptive_router",
+                        "adaptive_router_config": {"available_models": ["fast", "smart"]},
+                    },
+                },
+                {
+                    **_mock_deployment("fast"),
+                    "model_info": {"adaptive_router_preferences": {"quality_tier": 2, "strengths": []}},
+                },
+                {
+                    **_mock_deployment("smart"),
+                    "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}},
+                },
+            ]
+        },
+    }
+
+    await (await route_request(data, None, None, "acompletion"))
+    headers: Final = await ProxyLogging(user_api_key_cache=DualCache()).post_call_response_headers_hook(
+        data=data, user_api_key_dict=UserAPIKeyAuth(), response=None
+    )
+
+    assert headers == {ADAPTIVE_ROUTER_RESPONSE_HEADER: data["metadata"][ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY]}
 
 
 def _global_router_callbacks() -> tuple[list[object], list[object]]:
