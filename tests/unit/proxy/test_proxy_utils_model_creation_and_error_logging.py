@@ -1,4 +1,5 @@
 import datetime as real_datetime
+import json
 import smtplib
 from typing import Final
 
@@ -1919,6 +1920,35 @@ def test_a_request_that_reached_a_provider_bills_its_input_at_no_cost():
     assert usage.prompt_tokens > 0
     assert usage.completion_tokens == 0
     assert response_cost == 0.0
+
+
+
+def test_a_failed_responses_call_counts_its_input_from_the_newest_compaction_item():
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    instructions = {"role": "system", "content": "answer briefly"}
+    replaced_history = [
+        {"role": "user", "content": "a long turn " * 200},
+        {"role": "assistant", "content": "a long reply " * 200},
+    ]
+    compaction_item = {
+        "type": "compaction",
+        "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
+    }
+    later_turn = {"role": "user", "content": "what is the cat's name?"}
+
+    def prompt_tokens(request_input):
+        lifted = _failure_usage_to_lift(
+            model_call_details={"call_type": "aresponses", "model": FAILURE_USAGE_MODEL, "messages": request_input},
+            request_body={},
+            dispatched=True,
+        )
+        assert lifted is not None
+        return lifted[0].prompt_tokens
+
+    resent = prompt_tokens([instructions, *replaced_history, compaction_item, later_turn])
+    assert resent == prompt_tokens([instructions, compaction_item, later_turn])
+    assert resent < prompt_tokens([instructions, *replaced_history, later_turn])
 
 
 @pytest.mark.parametrize(

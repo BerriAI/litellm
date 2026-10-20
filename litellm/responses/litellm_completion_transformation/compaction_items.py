@@ -1,13 +1,12 @@
 import json
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, TypeVar
 
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
-from openai.types.responses.response_input_param import ResponseInputItemParam
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -155,6 +154,17 @@ def with_compaction_summary(encrypted_content: str, summary: str) -> str:
     return encrypted_content.removesuffix(original) + rewritten
 
 
+def with_visited_compaction_summary(item: object, visit: Callable[[str], str]) -> Mapping[str, object] | None:
+    fields: Final = _json_object(item)
+    if fields is None:
+        return None
+    summary: Final = compaction_summary(fields)
+    encrypted_content: Final = fields.get("encrypted_content")
+    if summary is None or not isinstance(encrypted_content, str):
+        return None
+    return {**fields, "encrypted_content": with_compaction_summary(encrypted_content, visit(summary))}
+
+
 def holds_compaction_summary(input: object) -> bool:
     try:
         items: Final = _OBJECT_LIST.validate_python(input)
@@ -206,7 +216,7 @@ def billable_input_since_newest_compaction(input: object) -> object:
     return [_summary_or_item(item) for item in _items_from_newest_compaction(items)]
 
 
-def _as_summary_message(item: ResponseInputItemParam) -> ResponseInputItemParam:
+def _as_summary_message(item: _Item) -> _Item | EasyInputMessageParam:
     summary: Final = compaction_summary(item)
     return item if summary is None else EasyInputMessageParam(role="user", content=summary, type="message")
 
@@ -215,3 +225,11 @@ def with_compaction_items_as_summaries(input: str | ResponseInputParam) -> str |
     if not isinstance(input, list) or not holds_compaction_summary(input):
         return input
     return [_as_summary_message(item) for item in _items_from_newest_compaction(input)]
+
+
+def messages_since_newest_compaction(input: object) -> object:
+    try:
+        items: Final = _OBJECT_LIST.validate_python(input)
+    except ValidationError:
+        return input
+    return [_as_summary_message(item) for item in _items_from_newest_compaction(items)]

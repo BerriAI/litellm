@@ -11,6 +11,12 @@ every text fragment.
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Final
 
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    compaction_summary,
+    input_items,
+    with_visited_compaction_summary,
+)
+
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
 # detection, …) should inspect. The proxy ingress passes ``route_type``
@@ -95,12 +101,12 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
     """Coerce a Responses-API ``data["input"]`` value into chat-style messages."""
     if isinstance(input_value, str):
         return [{"role": "user", "content": input_value}]
-    if not isinstance(input_value, list):
-        return []
     messages: Final[list[dict[str, object]]] = []
-    for item in input_value:
+    for item in input_items(input_value):
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
+        elif (summary := compaction_summary(item)) is not None:
+            messages.append({"role": "user", "content": summary})
         elif isinstance(item, dict):
             if _part_text(item) is not None:
                 messages.append({"role": item.get("role") or "user", "content": [item]})
@@ -189,11 +195,14 @@ def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
             data["input"] = visit(input_value)
         return visited
     if isinstance(input_value, list):
-        for idx, item in enumerate(input_value):
+        for idx, item in enumerate(input_items(input_value)):
             if isinstance(item, str):
                 if item:
                     visited += 1
                     input_value[idx] = visit(item)
+            elif (compaction := with_visited_compaction_summary(item, visit)) is not None:
+                visited += 1
+                input_value[idx] = compaction
             elif isinstance(item, dict):
                 if _part_text(item) is not None:
                     visited += 1

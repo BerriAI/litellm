@@ -86,6 +86,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     with_litellm_call_id,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
+from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
@@ -1041,7 +1042,7 @@ def _failure_usage_to_lift(
     system_input: Final = dispatched_system or request_body.get("system") or request_body.get("instructions")
     estimated_usage: Final = _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
-        request_input=model_call_details.get("messages"),
+        request_input=messages_since_newest_compaction(model_call_details.get("messages")),
         system_input=system_input,
     )
     if estimated_usage is None:

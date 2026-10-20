@@ -1209,6 +1209,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_metadata": copy.deepcopy(malicious_metadata),
         "weights": {"gpt-3.5-turbo": {"forged-deployment-id": 100}},
         "_router_weights": {"gpt-3.5-turbo": {"forged-deployment-id": 100}},
+        "_encrypted_content_affinity_pinned": True,
     }
 
     updated = await add_litellm_data_to_request(
@@ -1231,6 +1232,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "_router_weights" not in updated
     assert "weights" not in updated["proxy_server_request"]["body"]
     assert "_router_weights" not in updated["proxy_server_request"]["body"]
+    assert "_encrypted_content_affinity_pinned" not in updated
 
     stripped_keys = {
         "disable_global_guardrails",
