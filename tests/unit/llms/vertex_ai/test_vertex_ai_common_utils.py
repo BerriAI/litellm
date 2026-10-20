@@ -1629,6 +1629,8 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
         (["-3", "007", 4], True, ["-3", "7", "4"]),
         ([1, 2**63], True, None),
         ([-(2**63), 2**63 - 1], True, [str(-(2**63)), str(2**63 - 1)]),
+        ([str(-(2**63)), str(2**63 - 1)], True, [str(-(2**63)), str(2**63 - 1)]),
+        (["1", "9" * 5000], True, None),
         (["1", "--2"], True, None),
         (["1", "\u00b2"], True, None),
         ([True, 1], True, None),

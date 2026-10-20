@@ -677,7 +677,7 @@ def _gemini_integer_enum_value(value: object) -> str | None:
             return None
         case int() if _INT64_MIN <= value <= _INT64_MAX:
             return str(value)
-        case str() if re.fullmatch(r"-?[0-9]+", value) and _INT64_MIN <= int(value) <= _INT64_MAX:
+        case str() if re.fullmatch(r"-?[0-9]{1,19}", value) and _INT64_MIN <= int(value) <= _INT64_MAX:
             return str(int(value))
         case _:
             return None
