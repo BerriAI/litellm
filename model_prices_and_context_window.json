@@ -293,6 +293,7 @@
         "supports_nova_canvas_image_edit": true
     },
     "us.writer.palmyra-x4-v1:0": {
+        "deprecation_date": "2027-03-09",
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -300,11 +301,12 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-x4.md",
         "supports_function_calling": true,
         "supports_pdf_input": true
     },
     "us.writer.palmyra-x5-v1:0": {
+        "deprecation_date": "2027-03-21",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -317,6 +319,7 @@
         "supports_pdf_input": true
     },
     "writer.palmyra-x4-v1:0": {
+        "deprecation_date": "2027-03-09",
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -324,11 +327,12 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-x4.md",
         "supports_function_calling": true,
         "supports_pdf_input": true
     },
     "writer.palmyra-x5-v1:0": {
+        "deprecation_date": "2027-03-21",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -812,33 +816,40 @@
         "supports_image_input": true
     },
     "twelvelabs.pegasus-1-2-v1:0": {
+        "deprecation_date": "2027-03-22",
         "input_cost_per_video_per_second": 0.00049,
         "output_cost_per_token": 7.5e-06,
         "litellm_provider": "bedrock",
         "mode": "chat",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-twelvelabs-pegasus-v1-2.md",
         "supports_video_input": true
     },
     "us.twelvelabs.pegasus-1-2-v1:0": {
+        "deprecation_date": "2027-03-22",
         "input_cost_per_video_per_second": 0.00049,
         "output_cost_per_token": 7.5e-06,
         "litellm_provider": "bedrock",
         "mode": "chat",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-twelvelabs-pegasus-v1-2.md",
         "supports_video_input": true
     },
     "eu.twelvelabs.pegasus-1-2-v1:0": {
+        "deprecation_date": "2027-03-22",
         "input_cost_per_video_per_second": 0.00049,
         "output_cost_per_token": 7.5e-06,
         "litellm_provider": "bedrock",
         "mode": "chat",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-twelvelabs-pegasus-v1-2.md",
         "supports_video_input": true
     },
     "global.twelvelabs.pegasus-1-2-v1:0": {
+        "deprecation_date": "2027-03-22",
         "input_cost_per_video_per_second": 0.00049,
         "output_cost_per_token": 7.5e-06,
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_video_input": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-twelvelabs-pegasus-v1-2.md"
     },
     "amazon.titan-text-express-v1": {
         "input_cost_per_token": 2e-07,
@@ -29836,7 +29847,7 @@
         "supports_native_streaming": true
     },
     "vertex_ai/gemini-3.8-live": {
-        "deprecation_date": "2027-09-25",
+        "gemini_audio_only_live": true,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_image_token": 1e-06,
         "input_cost_per_token": 7.5e-07,
@@ -29849,6 +29860,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 4.5e-06,
+        "output_cost_per_video_token": 1e-06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/vertex_ai/live",
@@ -29869,9 +29881,7 @@
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_vision": true,
-        "supports_web_search": true,
-        "gemini_audio_only_live": true,
-        "output_cost_per_video_token": 1e-06
+        "supports_web_search": true
     },
     "vertex_ai/gemini-3.1-pro-preview": {
         "cache_creation_input_token_cost_above_200k_tokens": 2.5e-07,

@@ -15,10 +15,12 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
     strip_provider_specific_fields_from_anthropic_messages,
+    tools_marked_for_a_tool_config_point,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -26,6 +28,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -601,38 +604,34 @@ def anthropic_messages_handler(
     # downstream path (native passthrough and both bridges) gets real tools rather than a
     # reference the provider cannot resolve. Popped from kwargs so it never reaches the provider.
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
-    if not skip_mcp_handler and tools:
+    if not skip_mcp_handler and tools and may_name_litellm_mcp_gateway(tools):  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
         from litellm.llms.anthropic.pass_through.messages.mcp_handler import (
             anthropic_messages_with_mcp,
         )
-        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-            LiteLLM_Proxy_MCP_Handler,
-        )
 
-        if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
-            return anthropic_messages_with_mcp(
-                max_tokens=max_tokens,
-                messages=messages,
-                model=model,
-                metadata=metadata,
-                stop_sequences=stop_sequences,
-                stream=stream,
-                system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
-                    "str | None", system
-                ),
-                temperature=temperature,
-                thinking=thinking,
-                tool_choice=tool_choice,
-                tools=tools,
-                top_k=top_k,
-                top_p=top_p,
-                container=container,
-                api_key=api_key,
-                api_base=api_base,
-                client=client,
-                custom_llm_provider=custom_llm_provider,
-                **kwargs,
-            )
+        return anthropic_messages_with_mcp(
+            max_tokens=max_tokens,
+            messages=messages,
+            model=model,
+            metadata=metadata,
+            stop_sequences=stop_sequences,
+            stream=stream,
+            system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                "str | None", system
+            ),
+            temperature=temperature,
+            thinking=thinking,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_k=top_k,
+            top_p=top_p,
+            container=container,
+            api_key=api_key,
+            api_base=api_base,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
 
     anthropic_messages_provider_config: Final = _native_messages_config(
         model, custom_llm_provider, kwargs.get("model_info"), api_base
@@ -701,7 +700,13 @@ def anthropic_messages_handler(
             f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
         )
 
-    local_vars.update(kwargs)
+    request_kwargs: Final = cast(dict[str, object], kwargs)  # cast-ok: **kwargs of the handler is untyped
+    marked_tools: Final = tools_marked_for_a_tool_config_point(
+        local_vars.get("tools"), request_kwargs.pop("cache_control_injection_points", None)
+    )
+    if marked_tools is not None:
+        AnthropicCacheControlHook.record_gateway_injection(request_kwargs, 1)
+    local_vars.update({**request_kwargs, **({"tools": list(marked_tools)} if marked_tools is not None else {})})
     anthropic_messages_optional_request_params: Final = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             params=local_vars,

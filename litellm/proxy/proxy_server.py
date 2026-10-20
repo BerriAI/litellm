@@ -202,7 +202,7 @@ from litellm.types.utils import (
     is_server_derived_pricing_key,
     pricing_override_fields,
 )
-from litellm.utils import cost_map_omits_token_price, load_credentials_from_list
+from litellm.utils import cost_map_omits_token_price, load_credentials_from_list, with_named_credential
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -302,7 +302,11 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
-from litellm._logging import redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm._logging import (
+    redact_string,
+    verbose_proxy_logger,
+    verbose_router_logger,
+)
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import DeclaredBatchRead
 from litellm.caching.redis_batch import (
@@ -1350,6 +1354,7 @@ class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
 _LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
 _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
+_LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
 
@@ -4194,7 +4199,6 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
 def update_cache_read_keys(
     user_id: str | None,
     end_user_id: str | None,
-    team_id: str | None,
     tags: Sequence[object] | None,
     response_cost: float | None,
 ) -> tuple[str, ...]:
@@ -4202,9 +4206,8 @@ def update_cache_read_keys(
         return ()
     user_keys: tuple[str, ...] = (user_id, GLOBAL_PROXY_SPEND_CACHE_KEY) if user_id is not None else ()
     end_user_keys: tuple[str, ...] = (end_user_cache_key(end_user_id),) if end_user_id is not None else ()
-    team_keys: tuple[str, ...] = (f"team_id:{team_id}",) if team_id is not None else ()
     tag_keys: tuple[str, ...] = tuple(tag_cache_key(tag) for tag in tags or () if isinstance(tag, str) and tag)
-    return user_keys + end_user_keys + team_keys + tag_keys
+    return user_keys + end_user_keys + tag_keys
 
 
 _UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
@@ -4281,7 +4284,7 @@ async def update_cache(
     with service_target(AUTH_OBJECTS_TARGET):
         cached_values: Final = await _read_update_cache_values(
             keys=update_cache_read_keys(
-                user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
+                user_id=user_id, end_user_id=end_user_id, tags=tags, response_cost=response_cost
             ),
             parent_otel_span=parent_otel_span,
         )
@@ -4431,35 +4434,28 @@ async def update_cache(
             )
 
     ### UPDATE TEAM SPEND ###
-    async def _update_team_cache():
+    def _update_team_cache():
         if team_id is None or response_cost is None:
             return
 
         _id: Final = f"team_id:{team_id}"
         try:
-            cached_team: Final = cached_values.get(_id)
-            if cached_team is None:
-                # do nothing if team not in api key cache
-                return
-            existing_spend_obj: Final[LiteLLM_TeamTableCachedObj | None] = CacheCodec.deserialize(
-                cached_team, LiteLLM_TeamTableCachedObj
+            current_team: Final = CacheCodec.deserialize(
+                user_api_key_cache.get_cache(key=_id, local_only=True), LiteLLM_TeamTableCachedObj
             )
-            if existing_spend_obj is None:
+            if current_team is None:
                 return
             verbose_proxy_logger.debug(
-                "_update_team_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
+                "_update_team_db: existing spend: %s; response_cost: %s", current_team, response_cost
             )
-
-            existing_spend: Final[float] = existing_spend_obj.spend or 0.0
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend: Final = existing_spend + response_cost
-
-            existing_spend_obj.spend = new_spend
-            values_to_update_in_cache.append(
-                (
-                    _id,
-                    CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_TeamTableCachedObj),
-                )
+            user_api_key_cache.set_cache(
+                key=_id,
+                value=CacheCodec.serialize(
+                    current_team.model_copy(update={"spend": (current_team.spend or 0.0) + response_cost}),
+                    model_type=LiteLLM_TeamTableCachedObj,
+                ),
+                local_only=True,
+                ttl=get_management_object_ttl(user_api_key_cache),
             )
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -4536,7 +4532,7 @@ async def update_cache(
             await _update_end_user_cache()
 
         if team_id is not None:
-            await _update_team_cache()
+            _update_team_cache()
 
         if tags is not None:
             await _update_tag_cache()
@@ -14739,6 +14735,26 @@ def _provider_count_outcome(
     return result
 
 
+def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
+    call_params: Final = _LITELLM_PARAMS_COPY.validate_python(litellm_params)
+    try:
+        load_credentials_from_list(call_params)
+    except litellm.AuthenticationError as e:
+        raise ProxyException(
+            message=e.message,
+            type="auth_error",
+            param="model",
+            code=401,
+        ) from e
+    return call_params
+
+
+def _with_resolved_credentials(deployment: Mapping[str, object] | None) -> dict[str, object] | None:
+    if deployment is None:
+        return None
+    return {**deployment, "litellm_params": _with_resolved_api_key(deployment.get("litellm_params", {}))}
+
+
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -14799,7 +14815,7 @@ async def _try_provider_token_count(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=deployment_in_region,
+            deployment=_with_resolved_credentials(deployment_in_region),
             request_model=request_model,
             tools=tools,
             system=system,
@@ -14833,7 +14849,7 @@ async def _try_native_responses_count(
             model_to_use=model_to_use,
             request=responses_request,
             policy=policy,
-            deployment=deployment,
+            deployment=_with_resolved_credentials(deployment),
             request_model=request_model,
         )
     )
@@ -15292,7 +15308,12 @@ async def count_request_tokens(
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         model_info = deployment.get("model_info", {})
-        load_credentials_from_list(deployment.get("litellm_params", {}))
+        deployment = {  # rebind-ok: merge the named credential into a copy
+            **deployment,
+            "litellm_params": with_named_credential(
+                _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+            ),
+        }
         # remove the custom_llm_provider_prefix in the litellm_model_name
         if "/" in litellm_model_name:
             litellm_model_name = litellm_model_name.split("/", 1)[1]
@@ -17680,7 +17701,7 @@ async def model_info_v1(
     alias_models: Final = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
 
-    all_models = expand_wildcard_deployments_for_model_info(all_models)
+    all_models = expand_wildcard_deployments_for_model_info(all_models, llm_router)
 
     allowed_model_names: Final = await _get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=user_api_key_dict,
@@ -20136,9 +20157,9 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
     "personal_key_model_access_from_teams": {
         "type": "Boolean",
         "description": (
-            "Caps each personal key (a key with no team) to the models its owner's current teams can call, "
-            "re-evaluated on every request. A user in no team gets no model access. A user in several teams "
-            "can call any model one of those teams can call. Team keys are unaffected."
+            "Caps each personal key (a key with no team) to the models, MCP servers, MCP tools and agents its "
+            "owner's current teams can reach, re-evaluated on every request. A user in no team gets none of them. "
+            "A user in several teams gets the union of what those teams grant. Team keys are unaffected."
         ),
     },
     "max_ui_session_budget": {
