@@ -1724,6 +1724,13 @@ class LiteLLMProxyRequestSetup:
         if num_retries is not None:
             data["num_retries"] = num_retries
 
+        setup: Final = LiteLLMProxyRequestSetup
+        priority: Final = setup._get_case_insensitive_header(  # pyright: ignore[reportUnknownMemberType]  # legacy dict
+            headers, "x-litellm-priority"
+        )
+        if priority is not None:
+            data["priority"] = priority
+
         keepalive_seconds: Final = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(headers)
         if keepalive_seconds is not None:
             data["keepalive_seconds"] = keepalive_seconds

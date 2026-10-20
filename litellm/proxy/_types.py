@@ -4468,6 +4468,7 @@ class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
+    priority: str  # writable-ok: request setup adds caller priority before routing
     timeout: float | None
     stream_timeout: float | None
     user: str | None

@@ -2684,6 +2684,37 @@ def test_add_litellm_data_for_backend_llm_call_merges_keepalive_seconds_header()
     assert result.get("keepalive_seconds") == 20.0
 
 
+def test_add_litellm_data_for_backend_llm_call_priority_header_precedence() -> None:
+    header_only: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={"x-litellm-priority": "0"},
+        request_data={},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+    )
+    assert header_only.get("priority") == "0"
+
+    body_priority: Final = {"priority": 5}
+    header_overrides_body: Final = {
+        **body_priority,
+        **LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+            headers={"x-litellm-priority": "0"},
+            request_data=body_priority,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        ),
+    }
+    assert header_overrides_body["priority"] == "0"
+
+    body_without_header: Final = {"priority": 5}
+    body_priority_untouched: Final = {
+        **body_without_header,
+        **LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+            headers={},
+            request_data=body_without_header,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        ),
+    }
+    assert body_priority_untouched["priority"] == 5
+
+
 def test_add_user_api_key_auth_to_request_metadata():
     """
     Test that add_user_api_key_auth_to_request_metadata properly adds user API key authentication data to request metadata
