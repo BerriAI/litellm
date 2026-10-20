@@ -464,19 +464,31 @@ def test_a2a_spend_row_carries_the_mapped_tags(mapped: Rig) -> None:
         assert {mapped.exact_tag, mapped.tenant_tag(tenant)} <= _spend_tags(mapped.proxy, key)
 
 
-def test_spent_mapped_tag_budget_rejects_the_next_request_before_the_provider(mapped: Rig) -> None:
+@pytest.mark.parametrize(
+    ("key_fields", "fields", "headers"),
+    [
+        ({}, NO_FIELDS, {}),
+        ({}, {"metadata": {"tags": "run-123"}}, {"x-litellm-tags": "caller-tag"}),
+        ({"metadata": {"tags": ["key-tag"]}}, {"metadata": {"tags": "run-123"}}, {}),
+        ({}, {"metadata": {"tags": ""}}, {}),
+    ],
+    ids=["plain", "string_tags_with_header_tag", "string_tags_with_key_tag", "empty_string_tags"],
+)
+def test_spent_mapped_tag_budget_rejects_the_next_request_before_the_provider(
+    mapped: Rig, key_fields: Mapping[str, JsonValue], fields: Mapping[str, JsonValue], headers: Mapping[str, str]
+) -> None:
     entry: Final = uuid.uuid4().hex
     tag: Final = mapped.usecase_tag(entry)
     baggage: Final = f"entrypoint={entry},tenant={entry}"
     with mapped.proxy.scenario() as scenario:
-        key: Final = scenario.key()
+        key: Final = scenario.key(**key_fields)
         mapped.proxy.post("/tag/new", {"name": tag, "max_budget": 0.0001})
         scenario.cleanups.callback(lambda: mapped.proxy.request("POST", "/tag/delete", {"name": tag}))
         first: Final = _chat(mapped, key, baggage)
         assert first.status_code == 200, first.text
         eventually(lambda: _chat(mapped, key, baggage).status_code, lambda status: status != 200, seconds=70)
         mapped.provider.drain()
-        blocked: Final = _chat(mapped, key, baggage)
+        blocked: Final = _chat(mapped, key, baggage, fields=fields, **headers)
         assert blocked.status_code == 422, blocked.text
         assert "budget" in blocked.text.lower(), blocked.text
         assert mapped.provider.drain() == ()

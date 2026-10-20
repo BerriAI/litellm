@@ -10416,3 +10416,22 @@ async def test_string_metadata_tags_get_the_same_outcome_with_or_without_mapped_
     without_baggage: Final = await _string_tags_outcome(())
     with_baggage: Final = await _string_tags_outcome(((b"baggage", b"tenant=a"),))
     assert with_baggage == without_baggage
+
+
+def test_applying_mapped_baggage_tags_again_leaves_the_metadata_unchanged():
+    request: Final = Request({"type": "http", "headers": []})
+    request.state.litellm_baggage_mapped_tags = ("tenant:a",)
+    once: Final[dict[str, object]] = {"metadata": {"tags": ["client-tag"]}}
+    twice: Final[dict[str, object]] = copy.deepcopy(once)
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, once)
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, twice)
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, twice)
+    assert twice == once
+
+
+def test_mapped_baggage_tags_keep_non_string_client_tags_as_sent():
+    request: Final = Request({"type": "http", "headers": []})
+    request.state.litellm_baggage_mapped_tags = ("tenant:a",)
+    data: Final[dict[str, object]] = {"metadata": {"tags": [1, {"team": "x"}, "client-tag", "client-tag"]}}
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
+    assert data["metadata"]["tags"] == [1, {"team": "x"}, "client-tag", "client-tag", "tenant:a"]

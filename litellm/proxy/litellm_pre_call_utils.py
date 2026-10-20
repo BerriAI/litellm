@@ -1220,6 +1220,7 @@ _get_dynamic_logging_metadata: Final = get_dynamic_logging_metadata
 
 _TENANT_OTEL_PARAMS: Final = TypeAdapter(StandardCallbackDynamicParams)
 _STRING_TAGS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_CLIENT_TAGS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
 def _tenant_otel_params(callback_vars: Mapping[str, str]) -> StandardCallbackDynamicParams:
@@ -2216,12 +2217,15 @@ class LiteLLMProxyRequestSetup:
         slot: Final = metadata_key if metadata_key is not None else get_metadata_variable_name_from_kwargs(request_data)
         metadata: Final = _normalized_metadata_slot(request_data, slot)
         existing: Final = metadata.get("tags")
-        if existing is not None and not isinstance(existing, list):
+        if existing and not isinstance(existing, list):
             return
-        existing_tags: Final = _STRING_TAGS_ADAPTER.validate_python(existing) if existing is not None else ()
-        metadata["tags"] = list(dict.fromkeys((*existing_tags, *tags)))
+        existing_tags: Final = _CLIENT_TAGS_ADAPTER.validate_python(existing) if isinstance(existing, list) else ()
+        prior_stamp: Final = metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
+        prior_mapped: Final = prior_stamp.tags if isinstance(prior_stamp, BaggageMappedTagsStamp) else ()
+        sent_tags: Final = tuple(tag for tag in existing_tags if tag not in prior_mapped)
+        metadata["tags"] = [*existing_tags, *(tag for tag in tags if tag not in existing_tags)]
         metadata[BAGGAGE_MAPPED_TAGS_METADATA_KEY] = BaggageMappedTagsStamp(
-            tags=tuple(tag for tag in tags if tag not in existing_tags)
+            tags=tuple(tag for tag in tags if tag not in sent_tags)
         )
 
     @staticmethod

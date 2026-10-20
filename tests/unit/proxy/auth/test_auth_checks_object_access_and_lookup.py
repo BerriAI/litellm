@@ -3750,6 +3750,85 @@ async def test_tag_max_budget_check_still_enforces_registered_tag_over_budget():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_tags", "key_metadata"),
+    [
+        (b'"run-123"', {"tags": ["engineering"]}),
+        (b'""', {}),
+        (b"{}", {}),
+        (b"false", {}),
+        (b"0", {}),
+    ],
+    ids=["string_replaced_by_key_tags", "empty_string", "empty_object", "false", "zero"],
+)
+async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_the_client_sends(
+    client_tags: bytes, key_metadata: dict[str, list[str]]
+):
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.utils import ProxyLogging
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            return [_tag_registry_row("usecase:spent")]
+        return [_tag_db_row(name, max_budget=1.0) for name in kwargs["where"]["tag_name"]["in"]]
+
+    async def spent_tag_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 1.5 if counter_key == "spend:tag:usecase:spent" else fallback_spend
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b'{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"metadata":{"tags":'
+            + client_tags
+            + b"}}",
+        }
+
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=spent")],
+        },
+        receive,
+    )
+    request_body: Final = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        request_body,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        MagicMock(),
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.get_current_spend", spent_tag_spend),
+        pytest.raises(litellm.BudgetExceededError) as exc_info,
+    ):
+        await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            valid_token=UserAPIKeyAuth(token="test-token", metadata=key_metadata),
+            request=request,
+        )
+    assert exc_info.value.entity_id == "usecase:spent"
+
+
+@pytest.mark.asyncio
 async def test_get_team_object_raises_404_when_not_found():
     from unittest.mock import AsyncMock, MagicMock
 

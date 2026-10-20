@@ -1352,12 +1352,13 @@ async def common_checks(
     if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
-        if valid_token is not None:
-            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
+        if valid_token is not None:
             for tag_target in LiteLLMProxyRequestSetup.pre_auth_tag_merge_targets(request, request_body):
                 LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=tag_target, route=route)
                 LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(request_data=tag_target, user_api_key_dict=valid_token)
+        LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_body)
 
         async def _user_max_budget_check() -> None:
             # 4.1 personal budget
