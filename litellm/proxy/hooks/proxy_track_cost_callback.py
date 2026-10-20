@@ -55,7 +55,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     sanitize_error_information_for_spend_logs,
     should_store_prompts_and_responses_in_spend_logs,
 )
-from litellm.proxy.utils import ProxyUpdateSpend
+from litellm.proxy.utils import BilledFailedAttempt, ProxyUpdateSpend
 from litellm.types.utils import (
     CallTypes,
     LiteLLMBatch,
@@ -151,6 +151,73 @@ def _proxy_spend_writer() -> DBSpendUpdateWriter:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     return proxy_logging_obj.db_spend_update_writer
+
+
+def _billed_failed_attempts(request_data: Mapping[str, object]) -> tuple[BilledFailedAttempt, ...]:
+    """The earlier billed attempts ``_failure_fields_to_lift`` stashed on the request, if any."""
+    attempts: Final = request_data.get("billed_failed_attempts")
+    if not isinstance(attempts, tuple):
+        return ()
+    lifted: Final = cast("tuple[object, ...]", attempts)  # cast-ok: lifted by _failure_fields_to_lift, checked below
+    return tuple(attempt for attempt in lifted if isinstance(attempt, BilledFailedAttempt))
+
+
+def _failure_spend_rows(
+    request_data: Mapping[str, object], final_cost: float, late_guardrails_snapshot: object
+) -> tuple[tuple[float, Mapping[str, object]], ...]:
+    """One ``(response_cost, kwargs)`` per spend row a failure writes: the final attempt under the
+    request id, then every earlier attempt the provider also billed under its own row."""
+    final_row: Final[Mapping[str, object]] = (
+        request_data
+        if late_guardrails_snapshot is None
+        else {**request_data, "standard_logging_object": late_guardrails_snapshot}
+    )
+    return (
+        (final_cost, final_row),
+        *(
+            (attempt.response_cost, _attempt_spend_row_kwargs(request_data, attempt, position))
+            for position, attempt in enumerate(_billed_failed_attempts(request_data))
+        ),
+    )
+
+
+def _attempt_spend_row_kwargs(
+    request_data: Mapping[str, object], attempt: BilledFailedAttempt, position: int
+) -> Mapping[str, object]:
+    """The final attempt's row kwargs re-keyed for one earlier billed attempt: its own
+    ``request_id`` (``<id>-attempt-<position>``, since ``request_id`` is the spend-log primary key
+    and the retry count restarts after a fallback hop), its estimated usage and cost, its retry
+    count under ``attempted_retries`` and the deployment that billed it under ``model_info.id``."""
+    suffix: Final = f"-attempt-{position}"
+    raw_params: Final = cast("Mapping[str, object]", request_data.get("litellm_params") or {})  # cast-ok: request dict
+    litellm_params: Final = dict(raw_params)
+    metadata: Final = {
+        **cast("Mapping[str, object]", litellm_params.get("metadata") or {}),  # cast-ok: request dict
+        "attempted_retries": attempt.attempted_retries,
+    }
+    metadata.pop("previous_models", None)
+    if attempt.deployment_id is not None:
+        metadata["model_info"] = {
+            **cast("Mapping[str, object]", metadata.get("model_info") or {}),  # cast-ok: router dict
+            "id": attempt.deployment_id,
+        }
+    litellm_params["metadata"] = metadata
+    row: Final = {
+        **request_data,
+        "litellm_params": litellm_params,
+        "combined_usage_object": attempt.usage,
+        "response_cost": attempt.response_cost,
+    }
+    row.pop("billed_failed_attempts", None)
+    call_id: Final = request_data.get("litellm_call_id") or litellm_params.get("litellm_call_id")
+    if isinstance(call_id, str):
+        row["litellm_call_id"] = f"{call_id}{suffix}"
+    standard_logging_object: Final = request_data.get("standard_logging_object")
+    if isinstance(standard_logging_object, dict):
+        payload: Final = cast("Mapping[str, object]", standard_logging_object)  # cast-ok: StandardLoggingPayload dict
+        if isinstance(payload.get("id"), str):
+            row["standard_logging_object"] = {**payload, "id": f"{payload['id']}{suffix}"}
+    return row
 
 
 class _ProxyDBLogger(CustomLogger):
@@ -330,23 +397,39 @@ class _ProxyDBLogger(CustomLogger):
             existing_metadata.get("standard_logging_guardrail_information"),
         )
 
-        await self._spend_writer().update_database(
-            token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
-            response_cost=recovered_response_cost,
-            user_id=user_api_key_dict.user_id,
-            end_user_id=None if litellm.disable_end_user_cost_tracking else user_api_key_dict.end_user_id,
-            team_id=user_api_key_dict.team_id,
-            kwargs=(
-                request_data
-                if failure_snapshot_with_late_guardrails is None
-                else {**request_data, "standard_logging_object": failure_snapshot_with_late_guardrails}
-            ),
-            completion_response=original_exception,
+        await self._write_failure_spend_rows(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=original_exception,
             start_time=actual_start_time,
-            end_time=datetime.now(),
-            org_id=user_api_key_dict.org_id,
-            project_id=user_api_key_dict.project_id,
+            spend_rows=_failure_spend_rows(
+                cast("Mapping[str, object]", request_data),  # cast-ok: request dict, copied per row below
+                recovered_response_cost,
+                failure_snapshot_with_late_guardrails,
+            ),
         )
+
+    async def _write_failure_spend_rows(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        original_exception: Exception,
+        start_time: datetime,
+        spend_rows: Sequence[tuple[float, Mapping[str, object]]],
+    ) -> None:
+        """One spend row (and one key/team/user spend deduction) per ``(response_cost, kwargs)`` pair."""
+        for row_cost, row_kwargs in spend_rows:
+            await self._spend_writer().update_database(
+                token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+                response_cost=row_cost,
+                user_id=user_api_key_dict.user_id,
+                end_user_id=None if litellm.disable_end_user_cost_tracking else user_api_key_dict.end_user_id,
+                team_id=user_api_key_dict.team_id,
+                kwargs=dict(row_kwargs),
+                completion_response=original_exception,
+                start_time=start_time,
+                end_time=datetime.now(),
+                org_id=user_api_key_dict.org_id,
+                project_id=user_api_key_dict.project_id,
+            )
 
     async def _PROXY_track_cost_callback(
         self,
