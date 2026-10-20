@@ -539,6 +539,42 @@ def test_sagemaker_chat_stream_failure_after_the_first_chunks_reaches_the_caller
     assert len(errors) == 1 and expected in errors[0].message, outcome
 
 
+def _lmi_line(record: Mapping[str, JsonValue]) -> bytes:
+    return f"{json.dumps(dict(record), ensure_ascii=False)}\n".encode()
+
+
+_LMI_TOKENS: Final = ("sagemaker", " lmi tokens")
+_LMI_ERROR: Final = "exception occurred during rolling batch inference"
+# djl-serving 8a99e6e5: rolling_batch.py's error Token rendered by output_formatter._jsonlines_output_formatter
+_LMI_FAILED_GENERATION: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "token": {"id": -1, "text": "", "log_prob": -1, "special_token": True, "error_msg": _LMI_ERROR},
+        "generated_text": "".join(_LMI_TOKENS),
+        "details": {"finish_reason": "error"},
+    }
+)
+
+
+def test_sagemaker_lmi_failed_generation_after_the_first_tokens_reaches_the_caller_as_an_error(
+    gateway: Gateway,
+) -> None:
+    tokens: Final = tuple(
+        _lmi_line({"token": {"id": index, "text": text, "log_prob": -0.1}}) for index, text in enumerate(_LMI_TOKENS, 1)
+    )
+    reply: Final = event_stream_reply((*tokens, _lmi_line(_LMI_FAILED_GENERATION)))
+
+    with wire_server(lambda _request: reply) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(
+            scenario, wire, {"hf_model_name": "meta-llama/Llama-2-7b-chat-hf"}, provider="sagemaker"
+        )
+        outcome: Final = asyncio.run(_chat_openai_stream_until_error(gateway, model, marked_prompt()))
+        only_request(wire)
+    errors: Final = tuple(item for item in outcome if isinstance(item, openai.APIError))
+    assert "".join(item for item in outcome if isinstance(item, str)) == "".join(_LMI_TOKENS), outcome
+    assert len(errors) == 1, outcome
+    assert f"SageMaker endpoint streamed a failed generation: {_LMI_ERROR}" in errors[0].message, outcome
+
+
 @dataclass(frozen=True, slots=True)
 class _Call:
     endpoint: Endpoint
