@@ -3117,7 +3117,9 @@ class TestMultiPodBatchCostClaim:
         import litellm
         import respx
 
+        from litellm.caching.caching import DualCache
         from litellm.integrations.custom_logger import CustomLogger
+        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.utils import PrismaClient
@@ -3149,6 +3151,18 @@ class TestMultiPodBatchCostClaim:
                 if failure_phase == "external":
                     raise ConnectionError("External destination unavailable")
 
+        budget_cache: Final = DualCache()
+        RouterBudgetLimiting(
+            dual_cache=budget_cache,
+            provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+            model_list=[
+                {
+                    "model_name": "batch-alias",
+                    "litellm_params": {"model": "openai/batch-test-model", "max_budget": 100, "budget_duration": "1d"},
+                    "model_info": {"id": "model-123"},
+                }
+            ],
+        )
         dependency: Final = AccountingDependency()
         spend_prisma: Final = PrismaClient(
             database_url="postgresql://unused:unused@localhost:5432/unused", proxy_logging_obj=dependency
@@ -3197,7 +3211,9 @@ class TestMultiPodBatchCostClaim:
         from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer
 
         producer: Final = MagicMock(spec=SpendEventProducer) if collector_enabled else None
-        litellm.logging_callback_manager.add_litellm_async_success_callback(ProxyDBLogger(spend_event_producer=producer))
+        litellm.logging_callback_manager.add_litellm_async_success_callback(
+            ProxyDBLogger(spend_event_producer=producer)
+        )
         litellm.logging_callback_manager.add_litellm_async_success_callback(ExternalCallback())
         with (
             respx.mock,
@@ -3224,10 +3240,14 @@ class TestMultiPodBatchCostClaim:
             await worker.check_batch_cost()
 
         assert row.batch_processed is True
+        assert await budget_cache.async_get_cache("provider_spend:openai:1d") == pytest.approx(100 * input_rate)
+        assert await budget_cache.async_get_cache("deployment_spend:model-123:1d") == pytest.approx(100 * input_rate)
         create_spend_rows.assert_awaited_once()
         assert create_spend_rows.call_args.kwargs["data"][0]["spend"] == pytest.approx(100 * input_rate)
         if producer is not None:
-            assert all(json.loads(call.args[0])["call_type"] != "aretrieve_batch" for call in producer.publish.call_args_list)
+            assert all(
+                json.loads(call.args[0])["call_type"] != "aretrieve_batch" for call in producer.publish.call_args_list
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
