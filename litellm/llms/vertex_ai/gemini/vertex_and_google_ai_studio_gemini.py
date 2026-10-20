@@ -95,6 +95,7 @@ from ..common_utils import (
     build_json_schema,
     build_vertex_schema,
     supports_response_json_schema,
+    with_integer_enums_that_fit,
 )
 from ..context_caching.known_cached_contents import known_cached_contents
 from ..context_caching.rejected_cache_retry import (
@@ -692,13 +693,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(self, value: list[dict], optional_params: dict) -> list[Tools]:
+    def _map_function(self, value: list[dict], optional_params: dict, send_integer_enums: bool = False) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
         Args:
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
+            send_integer_enums: Whether to send integer enums with string values
 
         Returns:
             List of mapped tools in Vertex AI format
@@ -711,18 +713,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         googleSearch: dict | None = None
         googleSearchRetrieval: dict | None = None
         enterpriseWebSearch: dict | None = None
-        urlContext: dict | None = None
+        urlContext: dict[str, object] | None = None
         code_execution: dict | None = None
         googleMaps: dict | None = None
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
-        schema_value: Final[JsonValue] = cast(JsonValue, value)  # cast-ok: tool schemas come from JSON request data
+        schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
 
-        for tool in value:
+        for tool in cast(list[dict], schema_value):  # cast-ok: a deep copy keeps the caller's tool shape
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
@@ -732,7 +734,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = build_vertex_schema(_openai_function_object["parameters"])
+                    _openai_function_object["parameters"] = build_vertex_schema(
+                        _openai_function_object["parameters"], send_integer_enums=send_integer_enums
+                    )
 
                 openai_function_object = _openai_function_object
 
@@ -875,21 +879,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        send_integer_enums: bool = False,
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return self._map_function(value, optional_params)
+        return self._map_function(value, optional_params, send_integer_enums)
 
-    def _map_response_schema(self, value: dict) -> dict:
+    def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
         old_schema = deepcopy(value)
         if isinstance(old_schema, list):
             for item in old_schema:
                 if isinstance(item, dict):
-                    item = build_vertex_schema(parameters=item, add_property_ordering=True)
+                    item = build_vertex_schema(
+                        parameters=item, add_property_ordering=True, send_integer_enums=send_integer_enums
+                    )
 
         elif isinstance(old_schema, dict):
-            old_schema = build_vertex_schema(parameters=old_schema, add_property_ordering=True)
+            old_schema = build_vertex_schema(
+                parameters=old_schema, add_property_ordering=True, send_integer_enums=send_integer_enums
+            )
         return old_schema
 
-    def apply_response_schema_transformation(self, value: dict, optional_params: dict, model: str):
+    def apply_response_schema_transformation(
+        self, value: dict, optional_params: dict, model: str, allow_integer_enums: bool = True
+    ):
         new_value = deepcopy(value)
         # remove 'strict' from json schema (not supported by Gemini)
         new_value = remove_strict_from_schema(new_value)
@@ -931,7 +942,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - OpenAPI-style format (uppercase types)
                 # - No additionalProperties support
                 # - Requires propertyOrdering
-                optional_params["response_schema"] = self._map_response_schema(value=schema)
+                optional_params["response_schema"] = with_integer_enums_that_fit(
+                    partial(self._map_response_schema, schema),
+                    allow_integer_enums and self._is_gemini_3_or_newer(model),
+                )
 
     @property
     def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
@@ -1249,6 +1263,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        allow_integer_enums: bool = True,
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
         gemini_sampling_params_warned: bool = False
@@ -1299,7 +1314,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):
-                self.apply_response_schema_transformation(value=value, optional_params=optional_params, model=model)
+                self.apply_response_schema_transformation(
+                    value=value, optional_params=optional_params, model=model, allow_integer_enums=allow_integer_enums
+                )
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):
                     optional_params["frequency_penalty"] = value
@@ -1312,7 +1329,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = self._map_function(value=value, optional_params=optional_params)
+                mapped_tools = with_integer_enums_that_fit(
+                    partial(self._map_function, value, optional_params),
+                    allow_integer_enums and self._is_gemini_3_or_newer(model),
+                )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):
                 _tool_choice_value = self.map_tool_choice_values(
