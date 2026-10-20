@@ -1816,6 +1816,22 @@ class _RedisCacheOnClient(RedisCache):
         return self._injected_client
 
 
+class _FakeRedisHoldingOneReply(FakeAsyncRedis):
+    def __init__(self, server: FakeServer, held_increment: float, applied: asyncio.Event, released: asyncio.Event) -> None:
+        super().__init__(server=server)
+        self._held_increment: Final = held_increment
+        self._applied: Final = applied
+        self._released: Final = released
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> bytes | None:
+        key, increment = keys_and_args
+        total: Final = await self.incrbyfloat(key, increment)
+        if float(increment) == self._held_increment:
+            self._applied.set()
+            await self._released.wait()
+        return str(total).encode()
+
+
 _SharedGlobalSpendOutcome = Literal["peers_added_spend", "reset_elsewhere", "reset_while_redis_answers", "redis_down"]
 
 
@@ -1856,6 +1872,39 @@ async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_
     )
 
     assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_max_budget")
+async def test_update_cache_keeps_the_newest_global_proxy_spend_when_redis_replies_out_of_order() -> None:
+    held_increment_applied: Final = asyncio.Event()
+    held_reply_released: Final = asyncio.Event()
+    server: Final = FakeServer()
+    redis: Final = _FakeRedisHoldingOneReply(
+        server, held_increment=0.25, applied=held_increment_applied, released=held_reply_released
+    )
+    await redis.set(GLOBAL_PROXY_SPEND_CACHE_KEY, 10.0)
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=_RedisCacheOnClient(redis))
+    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0, local_only=True)
+
+    async def _request(response_cost: float) -> None:
+        await ps.update_cache(
+            token=None,
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            response_cost=response_cost,
+            parent_otel_span=None,
+            cache=cache,
+        )
+
+    earlier: Final = asyncio.create_task(_request(0.25))
+    await held_increment_applied.wait()
+    await _request(0.5)
+    held_reply_released.set()
+    await earlier
+
+    assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True) == 10.75
 
 
 @pytest.mark.asyncio

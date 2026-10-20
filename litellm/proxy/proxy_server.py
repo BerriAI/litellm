@@ -4268,9 +4268,12 @@ async def _add_spend_to_shared_global_proxy_spend(
 async def _add_spend_to_global_proxy_spend(
     cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
 ) -> None:
+    local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
     shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost, parent_otel_span)
     local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
     if not isinstance(local_total, (int, float)):
+        return
+    if shared_total is not None and local_total != local_before and shared_total < local_total:
         return
     cache.set_cache(
         key=GLOBAL_PROXY_SPEND_CACHE_KEY,
