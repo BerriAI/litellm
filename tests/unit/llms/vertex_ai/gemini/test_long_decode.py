@@ -1659,6 +1659,34 @@ async def test_env_budget_caps_each_deployment_at_its_own_model_info_limit_and_n
     ]
 
 
+@pytest.mark.parametrize("deployment_limit", [0, -1])
+@pytest.mark.asyncio
+async def test_env_budget_ignores_a_deployment_model_info_limit_that_is_not_positive(
+    monkeypatch: pytest.MonkeyPatch, deployment_limit: int
+):
+    model: Final = "gemini/gemini-2.5-flash"
+    budget: Final = _cost_map_max_output_tokens(model) // 2
+    monkeypatch.setenv(BUDGET_ENV, str(budget))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "odd",
+                "litellm_params": {"model": model, "api_key": "fake-gemini-key"},
+                "model_info": {"max_output_tokens": deployment_limit},
+            }
+        ]
+    )
+    sent: Final[list[dict[str, object]]] = []
+
+    await router.acompletion(
+        model="odd",
+        messages=list(MESSAGES),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {"max_output_tokens": budget}
+
+
 @pytest.mark.asyncio
 async def test_env_budget_on_a_direct_call_never_goes_above_the_cost_map_limit_after_a_router_raised_it(
     monkeypatch: pytest.MonkeyPatch,

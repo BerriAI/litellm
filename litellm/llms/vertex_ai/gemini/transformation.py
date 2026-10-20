@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, PositiveInt, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -1327,7 +1327,7 @@ def _answers_text(cost_map_key: str) -> bool:
 
 
 class _OutputLimit(TypedDict):
-    max_output_tokens: NotRequired[ReadOnly[int | None]]
+    max_output_tokens: NotRequired[ReadOnly[PositiveInt | None]]
 
 
 _OUTPUT_LIMIT: Final = TypeAdapter(_OutputLimit)
