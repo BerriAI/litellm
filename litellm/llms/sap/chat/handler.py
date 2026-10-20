@@ -23,13 +23,87 @@ class GenAIHubOrchestrationError(BaseLLMException):
         self.message = message
 
 
-# -------------------------------
-# Stream parsing helpers
-# -------------------------------
+# ----------------------------------
+# Parsing and transformation helpers
+# ----------------------------------
 
 
 def _now_ts() -> int:
     return int(time.time())
+
+
+def normalize_choice(choice: dict[str, object]) -> dict[str, object]:
+    """Normalize a single choice dict (message or delta shape) in isolation."""
+    for key in ("message", "delta"):
+        carrier = choice.get(key)
+        if not isinstance(carrier, dict):
+            continue
+        reasoning_content = carrier.get("reasoning_content")
+        if not isinstance(reasoning_content, list):
+            continue
+        thinking_blocks: Final[
+            list[dict[str, object]]
+        ] = [  # mutable-ok: consumed immediately by the two carrier assignments below; never escapes as mutable
+            {
+                "type": "thinking",
+                "thinking": item.get("content") or "",
+                "signature": item.get("signature"),
+            }
+            for item in reasoning_content
+            if isinstance(item, dict)
+        ]
+        carrier["thinking_blocks"] = thinking_blocks
+        carrier["reasoning_content"] = (
+            "\n".join(str(block["thinking"]) for block in thinking_blocks if block["thinking"]) or None
+        )
+    return choice
+
+
+def normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:
+    """Transform reasoning_content from SAP Orchestration format [{"content": ..., "signature": ...}] to Optional[str] and a thinking_blocks list."""
+    choices: Final[list[object]] = list(
+        raw.get("choices") or []
+    )  # mutable-ok: intermediate wire list, immediately consumed by the comprehension below
+    normalized_choices: Final[
+        list[dict[str, object]]
+    ] = [  # mutable-ok: wire list passed to pydantic model_validate via normalized_result
+        normalize_choice(choice) for choice in choices if isinstance(choice, dict)
+    ]
+    normalized_result: Final[dict[str, object]] = {
+        **raw,
+        "choices": normalized_choices,
+    }  # mutable-ok: wire dict consumed by pydantic model_validate
+    return normalized_result
+
+
+def denormalize_reasoning_content(message: dict[str, object]) -> dict[str, object]:
+    """Inverse of normalize_reasoning_content: rebuild list[ReasoningBlock] from thinking_blocks.
+
+    LiteLLM normalizes SAP's reasoning_content list into a str + thinking_blocks before
+    returning a ModelResponse. When that response is replayed as a history message the dict
+    must be converted back to the SAP shape before SAPAssistantMessage validation.
+
+    If thinking_blocks is absent but reasoning_content is a plain str (e.g. from a
+    non-SAP provider), drop the field: we cannot reconstruct SAP ReasoningBlocks without
+    the original signatures.
+    """
+    if message.get("role") != "assistant":
+        return message
+    thinking_blocks = message.get("thinking_blocks")
+    if isinstance(thinking_blocks, list):
+        reasoning_content: Final[
+            list[dict[str, str | None]]
+        ] = [  # mutable-ok: wire list passed to validate_dict which expects list[ReasoningBlock]
+            {"content": block.get("thinking") or "", "signature": block.get("signature")}
+            for block in thinking_blocks
+            if isinstance(block, dict)
+        ]
+        return {k: v for k, v in message.items() if k not in ("thinking_blocks", "reasoning_content")} | {
+            "reasoning_content": reasoning_content
+        }
+    if isinstance(message.get("reasoning_content"), str):
+        return {k: v for k, v in message.items() if k not in ("thinking_blocks", "reasoning_content")}
+    return message
 
 
 def _is_terminal_chunk(chunk: OpenAIChatCompletionChunk) -> bool:
@@ -56,20 +130,22 @@ class _StreamParser:
             return None
 
         return OpenAIChatCompletionChunk.model_validate(
-            {
-                "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
-                "object": orc.get("object") or "chat.completion.chunk",
-                "created": orc.get("created") or evt.get("created") or _now_ts(),
-                "model": orc.get("model") or "unknown",
-                "choices": [
-                    {
-                        "index": c.get("index", 0),
-                        "delta": c.get("delta") or {},
-                        "finish_reason": c.get("finish_reason"),
-                    }
-                    for c in (orc.get("choices") or [])
-                ],
-            }
+            normalize_reasoning_content(
+                {
+                    "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
+                    "object": orc.get("object") or "chat.completion.chunk",
+                    "created": orc.get("created") or evt.get("created") or _now_ts(),
+                    "model": orc.get("model") or "unknown",
+                    "choices": [
+                        {
+                            "index": choice.get("index", 0),
+                            "delta": choice.get("delta") or {},
+                            "finish_reason": choice.get("finish_reason"),
+                        }
+                        for choice in (orc.get("choices") or [])
+                    ],
+                }
+            )
         )
 
     @staticmethod
@@ -93,7 +169,7 @@ class _StreamParser:
             # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"
-            return OpenAIChatCompletionChunk.model_validate(fr)
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(fr))
 
         # Orchestration incremental delta
         if "orchestration_result" in event_obj:
@@ -101,7 +177,7 @@ class _StreamParser:
 
         # Already an OpenAI-like chunk
         if "choices" in event_obj and "object" in event_obj:
-            return OpenAIChatCompletionChunk.model_validate(event_obj)
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(event_obj))
 
         # Unknown / heartbeat / metrics
         return None

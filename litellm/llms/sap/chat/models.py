@@ -133,11 +133,19 @@ class SAPUserMessage(LiteLLMBaseModel):
     content: str | TextContent | ImageContent | list[TextContent | ImageContent]
 
 
+class ReasoningBlock(
+    LiteLLMBaseModel
+):  # frozen-ok: adding model_config would override LiteLLMBaseModel's defer_build setting
+    content: str | None = None
+    signature: str | None = None
+
+
 class SAPAssistantMessage(LiteLLMBaseModel):
     role: Literal["assistant"] = "assistant"
     content: str | TextContent | list[TextContent] = ""
     refusal: str = ""
     tool_calls: list[MessageToolCall] = Field(default=[])
+    reasoning_content: list[ReasoningBlock] | None = None
 
 
 class SAPToolChatMessage(LiteLLMBaseModel):
