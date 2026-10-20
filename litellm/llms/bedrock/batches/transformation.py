@@ -178,9 +178,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         aws_region_name: Final = self._get_aws_region_name(request_params, model)
 
-        # Bedrock model invocation job endpoint
-        # Format: {control plane base}/model-invocation-job
-        bedrock_endpoint: Final = f"{bedrock_control_plane_base_url(request_params.get('aws_bedrock_control_plane_endpoint'), aws_region_name)}/model-invocation-job"
+        control_plane_base: Final = bedrock_control_plane_base_url(
+            request_params.get("aws_bedrock_control_plane_endpoint"), aws_region_name
+        )
+        bedrock_endpoint: Final = f"{control_plane_base}/model-invocation-job"
 
         return bedrock_endpoint
 
@@ -278,7 +279,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         # Use common utility for AWS signing
         request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         aws_region_name: Final = self._get_aws_region_name(request_params, model)
-        endpoint_url: Final = f"{bedrock_control_plane_base_url(request_params.get('aws_bedrock_control_plane_endpoint'), aws_region_name)}/model-invocation-job"
+        control_plane_base: Final = bedrock_control_plane_base_url(
+            request_params.get("aws_bedrock_control_plane_endpoint"), aws_region_name
+        )
+        endpoint_url: Final = f"{control_plane_base}/model-invocation-job"
         signed_headers, signed_data = self.common_utils.sign_aws_request(
             service_name="bedrock",
             data=bedrock_request,
@@ -429,7 +433,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         encoded_arn: Final = _ul.quote(batch_id, safe="")
         request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
-        endpoint_url: Final = f"{bedrock_control_plane_base_url(request_params.get('aws_bedrock_control_plane_endpoint'), region)}/model-invocation-job/{encoded_arn}"
+        control_plane_base: Final = bedrock_control_plane_base_url(
+            request_params.get("aws_bedrock_control_plane_endpoint"), region
+        )
+        endpoint_url: Final = f"{control_plane_base}/model-invocation-job/{encoded_arn}"
 
         # Use common utility for AWS signing
         signed_headers, _ = self.common_utils.sign_aws_request(

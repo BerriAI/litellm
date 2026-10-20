@@ -349,12 +349,13 @@ class BedrockBatchesHandler:
             # `GetModelInvocationJob` accepts either form, but only the bare id
             # produces a sensible-looking URL in logs.
             url_path_id: Final = _extract_job_id_from_arn(batch_id) or batch_id
+            control_plane_base: Final = bedrock_control_plane_base_url(control_plane_endpoint, region)
             logging_obj.pre_call(
                 input=batch_id,
                 api_key="",
                 additional_args={
                     "complete_input_dict": {"jobIdentifier": batch_id},
-                    "api_base": f"{bedrock_control_plane_base_url(control_plane_endpoint, region)}/model-invocation-job/{url_path_id}",
+                    "api_base": f"{control_plane_base}/model-invocation-job/{url_path_id}",
                 },
             )
 
