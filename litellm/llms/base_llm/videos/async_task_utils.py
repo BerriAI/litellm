@@ -8,7 +8,7 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.types.videos.utils import decode_video_id_with_provider
+from litellm.types.videos.utils import decode_video_id_with_provider, id_safe_name
 
 _FIELDS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _FILE_TUPLE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
@@ -25,16 +25,12 @@ def _logged_litellm_params(logging_obj: object) -> Mapping[str, object]:
     return _fields(getattr(logging_obj, "litellm_params", None)) or {}
 
 
-def _id_safe_name(name: object) -> str | None:
-    return name if isinstance(name, str) and name and ";" not in name else None
-
-
 def _stamped_models(metadata: object) -> tuple[str, str | None] | None:
     fields: Final = _fields(metadata)
     if fields is None:
         return None
-    requested: Final = _id_safe_name(fields.get("model_group"))
-    served: Final = _id_safe_name(fields.get("deployment_model_name"))
+    requested: Final = id_safe_name(fields.get("model_group"))
+    served: Final = id_safe_name(fields.get("deployment_model_name"))
     if requested is None:
         return None
     return requested, None if served is None or served == requested or "*" in served else served
