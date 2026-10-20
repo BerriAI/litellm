@@ -180,7 +180,7 @@ def non_rewriteable_tool_result_ids(messages: object) -> frozenset[str]:
     blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(messages)))
     results: Final = (as_str_mapping(block) for block in blocks)
     return frozenset(
-        sanitize_anthropic_tool_use_id(call_id)
+        call_id
         for result in results
         if result is not None
         and result.get("type") == "tool_result"

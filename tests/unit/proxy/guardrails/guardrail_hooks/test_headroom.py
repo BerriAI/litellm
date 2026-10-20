@@ -3246,6 +3246,7 @@ async def test_extra_invalid_response_row_uses_configured_failure_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_safe_result", [False, True])
+@pytest.mark.parametrize("unsafe_id", ["call_unsafe", "call.unsafe:1"])
 @pytest.mark.parametrize("unsafe_content", [
     [{"type": "text", "text": "long " * 100}, {"type": "text", "text": "other paragraph"}],
     [{"type": "text", "text": "long " * 100},
@@ -3253,14 +3254,14 @@ async def test_extra_invalid_response_row_uses_configured_failure_policy(
       "content": [{"type": "text", "text": "source text"}]}],
 ])
 async def test_native_multipart_tool_result_is_excluded_before_compression(
-    unsafe_content: list[dict[str, object]], with_safe_result: bool,
+    unsafe_content: list[dict[str, object]], with_safe_result: bool, unsafe_id: str,
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE)
-    unsafe: Final = {"type": "tool_result", "tool_use_id": "call_unsafe", "content": unsafe_content}
+    unsafe: Final = {"type": "tool_result", "tool_use_id": unsafe_id, "content": unsafe_content}
     safe: Final = {"type": "tool_result", "tool_use_id": "call_safe", "content": "file.py\n" * 100}
     result_blocks: Final = [unsafe, safe] if with_safe_result else [unsafe]
     messages: Final = [
