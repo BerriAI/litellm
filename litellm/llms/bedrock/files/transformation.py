@@ -600,12 +600,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             ## 1. If jsonl, check if there's a model name
             file_content: Final = self._get_content_from_openai_file(extracted_file_data_content)
 
-            # Split into lines and parse each line as JSON. A file that is not JSONL gets the generic name below; the
-            # upload's own conversion is what rejects a malformed batch file.
-            with suppress(json.JSONDecodeError):
-                openai_jsonl_content: Final = [json.loads(line) for line in file_content.splitlines() if line.strip()]
-                if len(openai_jsonl_content) > 0:
-                    return self._get_s3_object_name_from_batch_jsonl(openai_jsonl_content)
+            # Reject a malformed line here rather than falling back: the upload only converts (and so re-checks) files
+            # whose MIME type is on the batch allowlist, so for any other MIME type this is the only check.
+            openai_jsonl_content: Final = _parse_batch_jsonl(file_content)
+            if len(openai_jsonl_content) > 0:
+                return self._get_s3_object_name_from_batch_jsonl(openai_jsonl_content)
 
         ## 2. If not jsonl, store under a server-generated managed object name
         filename: Final = extracted_file_data.get("filename")

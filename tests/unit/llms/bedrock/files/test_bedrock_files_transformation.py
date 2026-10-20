@@ -4387,10 +4387,25 @@ class TestMalformedBatchJsonl:
         assert exc_info.value.status_code == 400
         assert "line 3" in exc_info.value.message
 
-    def test_object_name_inference_still_falls_back_for_a_non_json_file(self):
-        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+    @pytest.mark.parametrize("content_type", ["application/jsonl", "application/x-jsonl"])
+    def test_create_file_rejects_a_malformed_line_before_uploading(self, content_type: str):
+        """application/x-jsonl is not on the batch MIME allowlist, so the upload skips conversion for it; the line
+        check must still run so the broken file is rejected instead of landing in S3 unchanged."""
+        from litellm.llms.bedrock.common_utils import BedrockError
 
-        object_name = BedrockFilesConfig().get_object_name(
-            {"content": b"just some text, not jsonl", "filename": "notes.txt"}, purpose="batch"
-        )
-        assert object_name.endswith("notes.txt")
+        with respx.mock as router:
+            any_request: Final = router.route()
+            with pytest.raises(BedrockError) as exc_info:
+                litellm.create_file(
+                    file=("batch.jsonl", _MALFORMED_BATCH_JSONL, content_type),
+                    purpose="batch",
+                    custom_llm_provider="bedrock",
+                    model="bedrock/amazon.nova-pro-v1:0",
+                    s3_bucket_name="litellm-batch-bucket",
+                    aws_region_name="us-west-2",
+                    aws_access_key_id="test-key-id",
+                    aws_secret_access_key="test-secret",
+                )
+        assert exc_info.value.status_code == 400
+        assert "line 3" in exc_info.value.message
+        assert not any_request.called
