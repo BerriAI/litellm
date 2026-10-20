@@ -2652,6 +2652,58 @@ async def test_post_call_failure_hook_auth_error_llm_api_route():
         mock_handle_logging.assert_called_once()
 
 
+class _InlineThread:
+    def __init__(self, target, args=(), kwargs=None, daemon=None) -> None:
+        self._run = lambda: target(*args, **(kwargs or {}))
+
+    def start(self) -> None:
+        self._run()
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_failure_gives_a_logger_with_both_failure_hooks_only_the_async_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import types
+
+    import litellm.proxy.utils as proxy_utils
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    hooks: Final[list[str]] = []
+
+    class Recorder(CustomLogger):
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            hooks.append("sync_failure")
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            hooks.append("async_failure")
+
+    for name in ("failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(proxy_utils, "threading", types.SimpleNamespace(Thread=_InlineThread))
+    recorder: Final = Recorder()
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini-tts",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="aspeech",
+        start_time=datetime.now(),
+        litellm_call_id="proxy-only-failure",
+        function_id="proxy-only-failure",
+        dynamic_failure_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+
+    await proxy_utils.ProxyLogging._dispatch_proxy_only_failure_handlers(
+        litellm_logging_obj=logging_obj,
+        original_exception=HTTPException(status_code=401, detail="Authentication Error: invalid user key"),
+    )
+
+    assert hooks == ["async_failure"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_data, route, expected_call_type",

@@ -144,7 +144,7 @@ async def test_mapped_failure_identity_and_deployment_snapshot(server: Recording
     with pytest.raises(litellm.InternalServerError) as caught:
         await call_aocr(server, callbacks=[recorder])
     failures: Final = tuple(event for event in recorder.events if "failure" in event.name)
-    assert [event.name for event in failures] == ["log_failure_event", "async_log_failure_event"]
+    assert [event.name for event in failures] == ["async_log_failure_event"]
     assert all(event.kwargs["exception"] is caught.value for event in failures)
     assert caught.value.status_code == 500
     assert snapshots[0] is not caught.value
@@ -324,24 +324,26 @@ async def test_failure_callbacks_continue_within_both_families(server: Recording
     server.enqueue(ResponseSpec(body={"message": "failed"}, status=500))
     observed: Final = []
 
-    class Broken(CustomLogger):
+    class BrokenSync(CustomLogger):
         def log_failure_event(self, kwargs, response_obj, start_time, end_time):
             observed.append(("broken-sync", kwargs["exception"]))
             raise RuntimeError("sync observer")
 
+    class FollowingSync(CustomLogger):
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(("following-sync", kwargs["exception"]))
+
+    class BrokenAsync(CustomLogger):
         async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
             observed.append(("broken-async", kwargs["exception"]))
             raise RuntimeError("async observer")
 
-    class Following(CustomLogger):
-        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            observed.append(("following-sync", kwargs["exception"]))
-
+    class FollowingAsync(CustomLogger):
         async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
             observed.append(("following-async", kwargs["exception"]))
 
     with pytest.raises(litellm.InternalServerError) as caught:
-        await call_aocr(server, callbacks=[Broken(), Following()])
+        await call_aocr(server, callbacks=[BrokenSync(), FollowingSync(), BrokenAsync(), FollowingAsync()])
     assert [name for name, _ in observed] == ["broken-sync", "following-sync", "broken-async", "following-async"]
     assert all(error is caught.value for _, error in observed)
 
