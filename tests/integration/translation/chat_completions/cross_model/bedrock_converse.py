@@ -14,6 +14,7 @@ from integration.translation.chat_completions.bases.bedrock_converse import (
     CLAUDE_HAIKU_5_5_TEST_CASE,
     CLAUDE_OPUS_5_5_TEST_CASE,
     CLAUDE_OPUS_5_TEST_CASE,
+    CLAUDE_SONNET_5_5_TEST_CASE,
     GPT_5_6_LUNA_TEST_CASE,
     GPT_5_6_SOL_TEST_CASE,
     GPT_5_6_TERRA_TEST_CASE,
@@ -3187,6 +3188,445 @@ CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             "text_tokens": 1144,
             "cache_write_tokens": 0,
             "cache_creation_tokens": 0,
+        },
+    },
+)
+
+
+BEDROCK_CONVERSE_AGENT_PROVIDER_REQUEST: Final = {
+    **BEDROCK_CONVERSE_AGENT_REQUEST,
+    "additionalModelRequestFields": {
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "tool_choice": {"disable_parallel_tool_use": False},
+        "output_config": {"effort": "low"},
+    },
+    "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
+    "toolConfig": {
+        "tools": [
+            {
+                "toolSpec": {
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        }
+                    },
+                    "name": "read_file",
+                    "description": "Read a UTF-8 file in the repository.",
+                }
+            },
+            {
+                "toolSpec": {
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        }
+                    },
+                    "name": "search_code",
+                    "description": "Search repository source for a literal query.",
+                }
+            },
+            {
+                "toolSpec": {
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        }
+                    },
+                    "name": "run_tests",
+                    "description": "Run a specific pytest test path and return the exit code and output.",
+                }
+            },
+            {
+                "toolSpec": {
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {"patch": {"type": "string"}},
+                            "required": ["patch"],
+                        }
+                    },
+                    "name": "apply_patch",
+                    "description": "Apply a unified diff to repository files.",
+                }
+            },
+        ],
+        "toolChoice": {"auto": {}},
+    },
+}
+
+
+CLAUDE_SONNET_5_5_AGENT_TEST_CASE: Final = replace(
+    CLAUDE_SONNET_5_5_TEST_CASE,
+    scenario="agent_tools",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/us.anthropic.claude-sonnet-5-5"},
+    expected_provider_endpoint="/model/us.anthropic.claude-sonnet-5-5/converse",
+    expected_provider_headers={
+        "authorization": "Bearer synthetic-bedrock-key",
+        "content-type": "application/json",
+    },
+    expected_provider_request=BEDROCK_CONVERSE_AGENT_PROVIDER_REQUEST,
+    mock_provider_response={
+        "additionalModelResponseFields": {"usage": {"output_tokens_details": {"thinking_tokens": 0}}},
+        "metrics": {"latencyMs": 1294},
+        "output": {
+            "message": {
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "tooluse_2Z6A2nogMa1RGHgnwZXH6G",
+                            "type": "tool_use",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "tooluse_mwNqPITfkD3zc6JHkg5GJa",
+                            "type": "tool_use",
+                        }
+                    },
+                ],
+                "role": "assistant",
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+            "inputTokens": 1144,
+            "outputTokens": 105,
+            "serverToolUsage": {},
+            "totalTokens": 1249,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/us.anthropic.claude-sonnet-5-5",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "tooluse_2Z6A2nogMa1RGHgnwZXH6G",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "tooluse_mwNqPITfkD3zc6JHkg5GJa",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1144,
+            "total_tokens": 1249,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1144,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=CLAUDE_SONNET_5_5_AGENT_TEST_CASE.litellm_endpoint,
+    litellm_request={
+        **CLAUDE_SONNET_5_5_AGENT_TEST_CASE.litellm_request,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    expected_provider_headers=CLAUDE_SONNET_5_5_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_endpoint="/model/us.anthropic.claude-sonnet-5-5/converse-stream",
+    expected_provider_request=BEDROCK_CONVERSE_AGENT_PROVIDER_REQUEST,
+    mock_provider_frames=(
+        EventStreamFrame(
+            data={"p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX", "role": "assistant"},
+            headers={":event-type": "messageStart", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={
+                "contentBlockIndex": 0,
+                "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY",
+                "start": {
+                    "toolUse": {
+                        "name": "search_code",
+                        "toolUseId": "tooluse_6cLTZNBlXnKXY9x3Rp4wNo",
+                        "type": "tool_use",
+                    }
+                },
+            },
+            headers={":event-type": "contentBlockStart", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 0, "delta": {"toolUse": {"input": ""}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 0, "delta": {"toolUse": {"input": '{"qu'}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 0, "delta": {"toolUse": {"input": 'ery": '}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 0, "delta": {"toolUse": {"input": '"retries_r'}}, "p": "abcdefghijk"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 0, "delta": {"toolUse": {"input": 'emaining"}'}}, "p": "abcdef"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 0, "p": "abcdefghijklmnopqrstu"},
+            headers={":event-type": "contentBlockStop", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={
+                "contentBlockIndex": 1,
+                "p": "abcdefghijklmnopqrstuvwxyz",
+                "start": {
+                    "toolUse": {
+                        "name": "run_tests",
+                        "toolUseId": "tooluse_uoozKiVjrkiFbYLgq52Lh1",
+                        "type": "tool_use",
+                    }
+                },
+            },
+            headers={":event-type": "contentBlockStart", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 1, "delta": {"toolUse": {"input": ""}}, "p": "abcdefghijklmnopqrstuvwxyzA"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 1, "delta": {"toolUse": {"input": '{"p'}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 1, "delta": {"toolUse": {"input": 'ath": "tests'}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJK"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 1, "delta": {"toolUse": {"input": "/tes"}}, "p": "abcdefghijklmnopqrstuvw"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={
+                "contentBlockIndex": 1,
+                "delta": {"toolUse": {"input": "t_retry."}},
+                "p": "abcdefghijklmnopqrstuvwxyzAB",
+            },
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 1, "delta": {"toolUse": {"input": 'py"}'}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST"},
+            headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={"contentBlockIndex": 1, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU"},
+            headers={":event-type": "contentBlockStop", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={
+                "additionalModelResponseFields": {"usage": {"output_tokens_details": {"thinking_tokens": 0}}},
+                "p": "abcdefghijklmnopqr",
+                "stopReason": "tool_use",
+            },
+            headers={":event-type": "messageStop", ":content-type": "application/json", ":message-type": "event"},
+        ),
+        EventStreamFrame(
+            data={
+                "metrics": {"latencyMs": 1258},
+                "p": "abcde",
+                "usage": {"inputTokens": 1144, "outputTokens": 105, "serverToolUsage": {}, "totalTokens": 1249},
+            },
+            headers={":event-type": "metadata", ":content-type": "application/json", ":message-type": "event"},
+        ),
+    ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("tooluse_6cLTZNBlXnKXY9x3Rp4wNo", "tooluse_uoozKiVjrkiFbYLgq52Lh1"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1144,
+        "completion_tokens": 105,
+        "total_tokens": 1249,
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1144,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
+    },
+)
+
+
+CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_PROVIDER_REQUEST: Final = {
+    **BEDROCK_CONVERSE_AGENT_PROVIDER_REQUEST,
+    "messages": [
+        *list_value(BEDROCK_CONVERSE_AGENT_PROVIDER_REQUEST["messages"]),
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "toolUse": {
+                        "input": {"query": "retries_remaining"},
+                        "name": "search_code",
+                        "toolUseId": "tooluse_2Z6A2nogMa1RGHgnwZXH6G",
+                    }
+                },
+                {
+                    "toolUse": {
+                        "input": {"path": "tests/test_retry.py"},
+                        "name": "run_tests",
+                        "toolUseId": "tooluse_mwNqPITfkD3zc6JHkg5GJa",
+                    }
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "content": [
+                            {
+                                "text": (
+                                    '{"matches": [{"path": "src/worker.py", "line": 12, "text": '
+                                    '"remaining = retries_remaining(3, attempts)"}]}'
+                                )
+                            }
+                        ],
+                        "toolUseId": "tooluse_2Z6A2nogMa1RGHgnwZXH6G",
+                    }
+                },
+                {
+                    "toolResult": {
+                        "content": [
+                            {
+                                "text": (
+                                    '{"exit_code": 1, "output": "FAILED tests/test_retry.py::'
+                                    'test_retries_remaining - assert 4 == 2"}'
+                                )
+                            }
+                        ],
+                        "toolUseId": "tooluse_mwNqPITfkD3zc6JHkg5GJa",
+                    }
+                },
+                {
+                    "text": (
+                        "Stop after these diagnostics. Do not call more tools or change files. "
+                        "Summarize the bug, the caller found and the failed test in two short sentences."
+                    )
+                },
+            ],
+        },
+    ],
+}
+
+
+CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        CLAUDE_SONNET_5_5_AGENT_TEST_CASE.litellm_request,
+        CLAUDE_SONNET_5_5_AGENT_TEST_CASE.expected_litellm_response,
+    ),
+    expected_provider_endpoint="/model/us.anthropic.claude-sonnet-5-5/converse",
+    expected_provider_request=CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_PROVIDER_REQUEST,
+    mock_provider_response={
+        "additionalModelResponseFields": {"usage": {"output_tokens_details": {"thinking_tokens": 0}}},
+        "metrics": {"latencyMs": 1976},
+        "output": {
+            "message": {
+                "content": [
+                    {
+                        "text": (
+                            "The bug is that `retries_remaining` in `src/retry.py` returns `limit + attempts` "
+                            "instead of `max(0, limit - attempts)`. That gives 4 for `(3, 1)` where the test "
+                            "expects 2, and it can't be clamped to zero. The only other caller is "
+                            "`src/worker.py:12` (`retries_remaining(3, attempts)`), and "
+                            "`tests/test_retry.py::test_retries_remaining` fails with `assert 4 == 2`. "
+                            "I haven't changed any files."
+                        )
+                    }
+                ],
+                "role": "assistant",
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+            "inputTokens": 1452,
+            "outputTokens": 163,
+            "serverToolUsage": {},
+            "totalTokens": 1615,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/us.anthropic.claude-sonnet-5-5",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": (
+                        "The bug is that `retries_remaining` in `src/retry.py` returns `limit + attempts` "
+                        "instead of `max(0, limit - attempts)`. That gives 4 for `(3, 1)` where the test "
+                        "expects 2, and it can't be clamped to zero. The only other caller is "
+                        "`src/worker.py:12` (`retries_remaining(3, attempts)`), and "
+                        "`tests/test_retry.py::test_retries_remaining` fails with `assert 4 == 2`. "
+                        "I haven't changed any files."
+                    ),
+                    "role": "assistant",
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 163,
+            "prompt_tokens": 1452,
+            "total_tokens": 1615,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 163},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1452,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
         },
     },
 )
