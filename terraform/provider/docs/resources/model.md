@@ -216,7 +216,7 @@ The following arguments are supported:
 * `additional_model_info` - (Optional) map(string). Extra entries merged into the `model_info` object sent to the LiteLLM API, for example custom metadata that clients read from `/model/info`. Values are converted the same way as `additional_litellm_params`, so `jsonencode({...})` arrives at the proxy as a nested JSON object.
   * Keys that other arguments own or that the provider sets (`id`, `db_model`, `base_model`, `tier`, `mode`, `team_id`, `display_name`) are rejected at plan time. Use `base_model`, `pricing_base_model`, `tier`, `mode`, `team_id` or `display_name` instead.
   * Changes are applied in place through `PATCH /model/{id}/update` and never replace the model. Only added or changed entries are sent.
-  * Limitation: removing a key from the map does not remove it from the proxy, because the proxy merges `model_info` on update. To remove a key, set it to an empty value your clients ignore, or delete and recreate the model. A change inside a JSON-object value does work, since the whole value is replaced.
+  * Limitation: removing a key from the map does not remove it from the proxy, because the proxy merges `model_info` on update. To stop a key taking effect, set it to an empty value your clients ignore. A change inside a JSON-object value does work, since the whole value is replaced.
   * The provider does not read `additional_model_info` back from the proxy, since `/model/info` returns many computed `model_info` fields. State keeps the configured value, so changes made outside Terraform are not shown as drift.
 
   ```hcl
