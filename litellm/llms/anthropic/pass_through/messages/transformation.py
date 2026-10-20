@@ -694,7 +694,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(
-                drop_non_string_tool_result_texts(messages, litellm_params.drop_params)
+                drop_non_string_tool_result_texts(messages, getattr(litellm_params, "drop_params", None))
             ),
             max_tokens=max_tokens,
             model=model,
