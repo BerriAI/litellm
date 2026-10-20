@@ -108,7 +108,7 @@ _JSON_VALUE_ADAPTER: Final[TypeAdapter[_JsonPayload]] = TypeAdapter(
 )
 
 
-def _parsed_request_tags(request_tags: object) -> Iterable[object] | None:
+def _parsed_request_tags(request_tags: object) -> Iterable[object] | TypeError | None:
     if isinstance(request_tags, list):
         return request_tags
     if not isinstance(request_tags, str):
@@ -119,7 +119,7 @@ def _parsed_request_tags(request_tags: object) -> Iterable[object] | None:
         return None
     if isinstance(parsed, (Sequence, Mapping)):
         return parsed
-    raise TypeError(f"'{type(parsed).__name__}' object is not iterable")
+    return TypeError(f"'{type(parsed).__name__}' object is not iterable")
 
 
 def _org_member_transaction_key(org_id: str, user_id: str) -> str:
@@ -1459,9 +1459,11 @@ class DBSpendUpdateWriter:
                 return
 
             # Parse tags from JSON string
-            tags: Final[Iterable[object] | None] = _parsed_request_tags(request_tags)
+            tags: Final[Iterable[object] | TypeError | None] = _parsed_request_tags(request_tags)
             if tags is None:
                 return
+            if isinstance(tags, TypeError):
+                raise tags
 
             # Update spend for each tag
             for tag_name in tags:
