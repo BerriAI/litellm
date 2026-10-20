@@ -660,10 +660,6 @@ def test_audio_transcription_preserves_the_client_file_content_type(gateway: Gat
 def test_audio_transcription_bills_audio_tokens_at_the_input_rate_when_no_audio_rate_is_set(
     gateway: Gateway,
 ) -> None:
-    pytest.skip(
-        "BUG: with only input_cost_per_token set, transcription audio tokens are billed at 0, so "
-        "x-litellm-response-cost is 1e-05 instead of 2e-05 for 10 audio, 2 text and 4 output tokens"
-    )
     wav: Final = _WAV_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
