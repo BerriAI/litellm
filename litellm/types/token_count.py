@@ -2,7 +2,7 @@ from typing import Literal, TypeAlias
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-TokenCountSource: TypeAlias = Literal["provider", "token_count_model", "local_estimate"]
+TokenCountSource: TypeAlias = Literal["provider", "token_count_model", "local_estimate", "billed_request"]
 TokenCountTokenizer: TypeAlias = Literal["kimi_k3"]
 TokenCountProvider: TypeAlias = Literal["bedrock", "bedrock_mantle"]
 

@@ -8,7 +8,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -48,7 +48,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
-from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.proxy.common_utils.token_count_settings import count_source_fields, counts_with_billed_request
 from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 from litellm.router import Router
 
@@ -169,6 +169,20 @@ async def anthropic_response(
 
     This was a BETA endpoint that calls 100+ LLMs in the anthropic format.
     """
+    return await _anthropic_messages_response(
+        ProxyBaseLLMRequestProcessing(data=await read_request_body(request=request)),
+        fastapi_response,
+        request,
+        user_api_key_dict,
+    )
+
+
+async def _anthropic_messages_response(
+    base_llm_response_processor: ProxyBaseLLMRequestProcessing,
+    fastapi_response: Response,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> object:
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -182,8 +196,7 @@ async def anthropic_response(
         version,
     )
 
-    data: Final = await read_request_body(request=request)
-    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    data: Final = base_llm_response_processor.data
     try:
         result: Final = await base_llm_response_processor.base_process_llm_request(
             request=request,
@@ -244,7 +257,7 @@ async def anthropic_response(
             usage=_usage,
         )
 
-        if data.get("stream", None) is not None and data["stream"] is True:
+        if "stream" in data and data["stream"] is True:
             # For streaming, use the standard SSE data generator
             async def _passthrough_stream_generator():
                 yield _anthropic_response
@@ -334,6 +347,43 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
 _COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
 
 
+class _BilledUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: int
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+
+    @property
+    def billed_input_tokens(self) -> int:
+        return self.input_tokens + (self.cache_read_input_tokens or 0) + (self.cache_creation_input_tokens or 0)
+
+
+class _BilledResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    usage: _BilledUsage
+
+
+def _counts_with_billed_request(llm_router: Router | None, model: str, team_id: str | None) -> bool:
+    if llm_router is None:
+        return False
+    return counts_with_billed_request(llm_router.get_model_list(model_name=model, team_id=team_id) or ())
+
+
+async def _billed_input_tokens(
+    probe: ProxyBaseLLMRequestProcessing,
+    fastapi_response: Response,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> object:
+    response: Final = await _anthropic_messages_response(probe, fastapi_response, request, user_api_key_dict)
+    if isinstance(response, Response):
+        return response
+    billed: Final = _BilledResponse.model_validate(response, from_attributes=True)
+    return {"input_tokens": billed.usage.billed_input_tokens, "litellm_count_source": "billed_request"}
+
+
 class _CountTokensBodyOptions(TypedDict):
     output_format: ReadOnly[JsonValue]
     context_management: ReadOnly[JsonValue]
@@ -357,6 +407,7 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
     dependencies=[Depends(user_api_key_auth)],
 )
 async def count_tokens(
+    fastapi_response: Response,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
@@ -396,6 +447,18 @@ async def count_tokens(
 
         if not messages:
             raise HTTPException(status_code=400, detail="messages parameter is required")
+
+        if isinstance(model_name, str) and _counts_with_billed_request(
+            llm_router, model_name, user_api_key_dict.team_id
+        ):
+            return await _billed_input_tokens(
+                ProxyBaseLLMRequestProcessing(
+                    data={**request_data, "max_tokens": 1, "stream": False, "disable_fallbacks": True}
+                ),
+                fastapi_response,
+                request,
+                user_api_key_dict,
+            )
 
         auto_drop_params: Final = should_auto_drop_params_for_agentic_cli(
             request.headers.get("user-agent", ""), "drop_params" in data, proxy_config

@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, Literal
@@ -173,6 +173,13 @@ def resolve_token_count_settings(
             configured.get("token_count_model"), default.get("token_count_model"), deployment_region
         ),
         tokenizer=_tokenizer(default.get("token_count_tokenizer")),
+    )
+
+
+def counts_with_billed_request(deployments: Sequence[Mapping[str, object]]) -> bool:
+    return bool(deployments) and all(
+        (as_str_mapping(deployment.get("model_info")) or {}).get("token_count_billed_request") is True
+        for deployment in deployments
     )
 
 
