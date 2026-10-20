@@ -1321,7 +1321,7 @@ class TestTenantSampling:
 
     def test_a_span_that_ends_after_the_root_follows_the_requests_verdict(self):
         """A post-call database write that starts after the whole request tree has ended
-        goes where the rest of the tree went, without a second verdict."""
+        goes where the rest of the tree went."""
         kept_exporter, dropped_exporter = InMemorySpanExporter(), InMemorySpanExporter()
         kept = self._fan_out(kept_exporter, trace_id=KEPT_AT_HALF)
         dropped = self._fan_out(dropped_exporter, trace_id=DROPPED_AT_HALF)
@@ -1348,23 +1348,62 @@ class TestTenantSampling:
         }
         assert dropped_exporter.get_finished_spans() == ()
 
-    def test_a_late_span_whose_verdict_was_forgotten_is_decided_on_its_own_not_stranded(self):
-        """Once enough other requests have been decided to evict a request's verdict, a span
-        of it that starts late (a post-call database write) opens and closes its own count,
-        so it is decided on its own as soon as it ends instead of waiting in a tree nothing
-        would ever close."""
+    def test_a_span_that_ends_after_a_failed_root_follows_the_failed_requests_verdict(self):
+        """A post-call database write after a failed request goes where that request went,
+        though on its own it would answer to the success rate."""
         dest_exporter = InMemorySpanExporter()
         provider = self._fan_out(dest_exporter)
-        destinations = (arize_destination(arize_success_sampling_rate="1.0"),)
+        destinations = (arize_destination(arize_success_sampling_rate="0.0", arize_error_sampling_rate="1.0"),)
 
         def run():
             set_request_destinations(destinations)
             tracer = get_tracer(provider, "litellm")
             with tracer.start_as_current_span("POST /v1/chat/completions") as root:
+                root.set_status(Status(StatusCode.ERROR, "upstream 500"))
+                root_context = trace_api.set_span_in_context(root)
+            with tracer.start_as_current_span("postgres INSERT LiteLLM_SpendLogs", context=root_context):
+                pass
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "postgres INSERT LiteLLM_SpendLogs",
+        }
+
+    def test_a_failed_call_after_a_dropped_call_of_its_trace_still_answers_to_the_error_rate(self):
+        """A process that dropped a successful call of the trace keeps a later failed call of
+        it at an unset error rate, as a process that only served the failed call does."""
+        served_both, served_failed = InMemorySpanExporter(), InMemorySpanExporter()
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+        both = self._fan_out(served_both, trace_id=DROPPED_AT_HALF)
+
+        self._run(both, destinations)
+        self._run(both, destinations, failed=True)
+        self._run(self._fan_out(served_failed, trace_id=DROPPED_AT_HALF), destinations, failed=True)
+
+        assert [sorted(s.name for s in exporter.get_finished_spans()) for exporter in (served_both, served_failed)] == [
+            sorted(self.NAMES)
+        ] * 2
+
+    def test_a_late_span_whose_verdict_was_forgotten_is_decided_on_its_own_not_stranded(self):
+        """Once enough other failed requests have been decided to evict a failed request's
+        verdict, a span of it that starts late (a post-call database write) opens and closes
+        its own count, so it is decided on its own as soon as it ends instead of waiting in a
+        tree nothing would ever close."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+        destinations = (arize_destination(arize_success_sampling_rate="1.0", arize_error_sampling_rate="1.0"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions") as root:
+                root.set_status(Status(StatusCode.ERROR, "upstream 500"))
                 root_context = trace_api.set_span_in_context(root)
             for index in range(otel_providers._MAX_REMEMBERED_VERDICTS):
-                with tracer.start_as_current_span(f"POST {index}", context=trace_api.Context()):
-                    pass
+                with tracer.start_as_current_span(f"POST {index}", context=trace_api.Context()) as other:
+                    other.set_status(Status(StatusCode.ERROR, "upstream 500"))
             with tracer.start_as_current_span("postgres INSERT LiteLLM_SpendLogs", context=root_context):
                 pass
 
@@ -1511,7 +1550,7 @@ class TestTenantSampling:
 
         assert {s.name for s in dest_exporter.get_finished_spans()} == {"chat gpt-4", "embed ada"}
 
-    def test_a_zero_rate_drops_a_trace_any_other_rate_would_keep(self):
+    def test_a_zero_rate_drops_a_trace_a_half_rate_keeps(self):
         dest_exporter = InMemorySpanExporter()
         provider = self._fan_out(dest_exporter, trace_id=KEPT_AT_HALF)
 

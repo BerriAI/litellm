@@ -529,7 +529,8 @@ def _keeps_tree(destination: "OtelDestination", failed: bool, trace_id: int) -> 
     nothing.
 
     The first eight bytes of a SHA-256 of the trace id are read against the rate, so
-    every process serving a span of the trace reaches the same verdict."""
+    every process deciding a tree of the trace with the same outcome reaches the same
+    verdict."""
     rate: Final = destination.error_sampling_rate if failed else destination.success_sampling_rate
     if rate is None:
         return True
@@ -797,8 +798,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             return self._decide_locked(trace_id)
 
     def _decide_locked(self, trace_id: int) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
-        """Decide once per destination for the held tree; the spans the verdicts keep, and
-        a verdict remembered for the spans of this trace that start later."""
+        """Decide once per destination for the held tree; the spans the verdicts keep. A
+        failed tree's verdicts are remembered for the spans of its trace that start later,
+        such as a post-call database write that would otherwise answer to the success rate.
+        A successful tree's are not, so a later failed call of the trace answers to the
+        error rate here as it would on a process that never saw the trace."""
         tree: Final = self._pending.pop(trace_id, None)
         if tree is None:
             return ()
@@ -807,7 +811,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             key = _verdict_key(trace_id, destination)
             if key not in verdicts:
                 verdicts[key] = _keeps_tree(destination, tree.failed, trace_id)
-                self._verdicts[key] = verdicts[key]
+        if tree.failed:
+            self._verdicts.update(verdicts)
         while len(self._verdicts) > _MAX_REMEMBERED_VERDICTS:
             self._verdicts.popitem(last=False)
         return tuple(
