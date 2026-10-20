@@ -5,6 +5,7 @@ import io
 import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from functools import cached_property
 from itertools import accumulate, chain
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
@@ -21,7 +22,6 @@ from litellm.constants import (
     ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX,
     ANTHROPIC_IMAGE_MAX_PIXELS,
     ANTHROPIC_IMAGE_PIXELS_PER_TOKEN,
-    AZURE_DATA_ZONES,
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
@@ -31,6 +31,7 @@ from litellm.constants import (
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
     OPENAI_CHAT_MODES,
+    OPENAI_MODEL_NAME_MAX_DASHES,
     OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS,
     PDF_DATA_URL_PREFIX,
     PDF_MAX_FORM_XOBJECT_DEPTH,
@@ -426,8 +427,6 @@ class _MessageCountParams:
     A class to hold the parameters for counting tokens in messages.
     """
 
-    pdf_pricing: PdfPagePricing
-
     def __init__(
         self,
         model: str,
@@ -448,7 +447,11 @@ class _MessageCountParams:
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
         self.tool_section = chat_template_tool_section(model)
-        self.pdf_pricing = _pdf_page_pricing(model)
+        self._model = model
+
+    @cached_property
+    def pdf_pricing(self) -> PdfPagePricing:
+        return _pdf_page_pricing(self._model)
 
 
 def _is_openai_chat_model(model: str) -> bool:
@@ -456,17 +459,11 @@ def _is_openai_chat_model(model: str) -> bool:
 
 
 def _openai_deployment_name(model: str) -> str:
-    provider_free: Final = model.removeprefix("openai/").removeprefix("azure/")
-    zone, _, deployment_name = provider_free.partition("/")
-    return deployment_name if zone in AZURE_DATA_ZONES else provider_free
+    return model.rpartition("/")[2]
 
 
 def _openai_model_family(model: str) -> str | None:
-    longest_listed_name: Final = max(
-        map(len, chain(litellm.open_ai_chat_completion_models, litellm.azure_llms)), default=0
-    )
-    deployment_name: Final = _openai_deployment_name(model)
-    words: Final = deployment_name[: longest_listed_name + 1].split("-")
+    words: Final = _openai_deployment_name(model).split("-", OPENAI_MODEL_NAME_MAX_DASHES)
     prefixes: Final = ("-".join(words[:end]) for end in range(len(words), 0, -1))
     return next((prefix for prefix in prefixes if _is_openai_chat_model(prefix)), None)
 
@@ -486,6 +483,8 @@ def _is_azure_openai_chat_model(model: str) -> bool:
 
 
 def _is_openai_or_azure_model(model: str) -> bool:
+    if _is_listed_non_chat_model(_openai_deployment_name(model)):
+        return False
     return _is_openai_chat_model(model) or _openai_model_family(model) is not None or _is_azure_openai_chat_model(model)
 
 
@@ -993,16 +992,32 @@ def _pdf_form_drawing(form: Mapping[str, object], inherited: Mapping[str, object
     return cast(_PdfContent, ContentStream(form, None)), _pdf_resources(form, inherited)  # cast-ok: pypdf is untyped
 
 
+def _pdf_drawing_key(xobject: Mapping[str, object], inherited: Mapping[str, object] | None) -> tuple[int, int]:
+    return id(xobject), id(_pdf_resources(xobject, inherited))
+
+
 def _pdf_unseen_form_drawings(
-    drawn: tuple[tuple[Mapping[str, object], Mapping[str, object] | None], ...], seen: frozenset[int]
+    drawn: tuple[tuple[Mapping[str, object], Mapping[str, object] | None], ...], seen: frozenset[tuple[int, int]]
 ) -> tuple[_PdfDrawing, ...]:
-    forms: Final = {id(xobject): (xobject, inherited) for xobject, inherited in drawn if id(xobject) not in seen}
-    form_drawings: Final = (
-        _pdf_form_drawing(form, inherited)
-        for form, inherited in forms.values()
-        if _pdf_value(form, "/Subtype") == "/Form"
-    )
+    forms: Final = {
+        _pdf_drawing_key(xobject, inherited): (xobject, inherited)
+        for xobject, inherited in drawn
+        if _pdf_value(xobject, "/Subtype") == "/Form"
+    }
+    form_drawings: Final = (_pdf_form_drawing(*forms[key]) for key in forms.keys() - seen)
     return tuple(drawing for drawing in form_drawings if drawing is not None)
+
+
+_PdfWalkStep: TypeAlias = tuple[tuple[_PdfDrawing, ...], frozenset[tuple[int, int]]]
+
+
+def _pdf_walk_step(frontier: tuple[_PdfDrawing, ...], seen: frozenset[tuple[int, int]]) -> _PdfWalkStep | None:
+    drawn: Final = tuple(chain.from_iterable(map(_pdf_drawn_xobjects, frontier)))
+    if any(_pdf_value(xobject, "/Subtype") == "/Image" for xobject, _ in drawn):
+        return None
+    return _pdf_unseen_form_drawings(drawn, seen), seen | frozenset(
+        _pdf_drawing_key(xobject, inherited) for xobject, inherited in drawn
+    )
 
 
 def _pdf_page_draws_raster_image(page: _PdfPage) -> bool:
@@ -1013,17 +1028,15 @@ def _pdf_page_draws_raster_image(page: _PdfPage) -> bool:
     frontier: tuple[_PdfDrawing, ...] = (  # rebind-ok: breadth-first walk, recursion is banned
         (contents, _pdf_resources(page_dictionary, None)),
     )
-    seen: frozenset[int] = frozenset()  # rebind-ok: breadth-first walk, recursion is banned
+    seen: frozenset[tuple[int, int]] = frozenset()  # rebind-ok: breadth-first walk, recursion is banned
     for _ in range(PDF_MAX_FORM_XOBJECT_DEPTH):
         if not frontier:
             return False
         if any(_draws_inline_image(content) for content, _ in frontier):
             return True
-        drawn = tuple(chain.from_iterable(map(_pdf_drawn_xobjects, frontier)))
-        if any(_pdf_value(xobject, "/Subtype") == "/Image" for xobject, _ in drawn):
+        if (step := _pdf_walk_step(frontier, seen)) is None:
             return True
-        frontier = _pdf_unseen_form_drawings(drawn, seen)
-        seen = seen | frozenset(id(xobject) for xobject, _ in drawn)
+        frontier, seen = step
     return bool(frontier)
 
 

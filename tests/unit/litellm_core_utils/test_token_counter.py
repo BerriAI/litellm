@@ -2049,6 +2049,32 @@ def test_openai_model_keeps_the_text_of_a_page_whose_forms_nest_too_deep_to_walk
     )
 
 
+@pytest.mark.parametrize("drawing", [b" /A Do /B Do", b" /B Do /A Do"])
+def test_openai_model_finds_an_image_a_shared_form_without_resources_draws_from_one_parent(drawing: bytes):
+    """A form with no /Resources resolves names in the resources of whichever form draws it, so a child that two
+    parents share reaches the image only through the parent whose resources list it."""
+    model: Final = "gpt-4o"
+    child_without_resources: Final = b"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 5 >>\nstream\n/Y Do\nendstream"
+    parents_and_child: Final = (
+        _form_xobject(7, b"/C Do"),
+        b"<< /XObject << /C 10 0 R >> >>",
+        _form_xobject(9, b"/C Do"),
+        b"<< /XObject << /C 10 0 R /Y 11 0 R >> >>",
+        child_without_resources,
+        _ONE_PIXEL_IMAGE,
+    )
+
+    assert _pdf_cost(
+        model,
+        _pdf_base64(
+            ("",),
+            xobjects=parents_and_child,
+            drawing=drawing,
+            page_resources="<< /XObject << /A 6 0 R /B 8 0 R >> >>",
+        ),
+    ) == 85 + 4 * 170
+
+
 @pytest.mark.timeout(10)
 def test_openai_model_reads_resources_shared_by_many_forms_once():
     """3,000 forms that all list the same /Resources took 17 seconds to price before each dictionary was read once."""
@@ -2102,22 +2128,35 @@ def test_azure_openai_models_only_azure_lists_get_openai_pdf_pricing(model: str)
 
 
 @pytest.mark.parametrize(
-    "model", ["openrouter/openai/gpt-4o", "github_copilot/gpt-4o", "replicate/openai/gpt-5", "azure_ai/gpt-4o"]
+    "model",
+    [
+        "openrouter/openai/gpt-4o",
+        "github_copilot/gpt-4o",
+        "azure_ai/gpt-4o",
+        "azure/responses/gpt-5.6-sol",
+        "azure/o_series/o3-mini",
+    ],
 )
-def test_gpt_names_on_other_gateways_keep_their_pdf_pricing_and_encoding(model: str):
-    """Only openai/, azure/ and Azure data zones are stripped, so a GPT name served through another gateway keeps
-    the PDF pricing and text encoding it had before."""
+def test_gpt_names_behind_any_provider_or_route_prefix_count_like_the_bare_name(model: str):
+    """The proxy counts a deployment with its model name minus the provider prefix, so the SDK prices and encodes
+    a prefixed GPT name the same way the bare name counts. OpenRouter gpt-4o billed a text PDF page at 237 and a
+    full-page image at 297 on 2026-10-20, closer to OpenAI's pricing than to Claude's 1534 for either."""
+    bare_name: Final = model.rpartition("/")[2]
+    pdf_with_a_drawn_image: Final = _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,), drawing=_DRAW_X0)
+
+    assert _pdf_cost(model, pdf_with_a_drawn_image) == _pdf_cost(bare_name, pdf_with_a_drawn_image)
+    assert _pdf_cost(model, _pdf_base64(("",))) == 0
+    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
+        tiktoken.get_encoding("o200k_base").encode(_NON_LATIN_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize("model", ["text-embedding-ada-002-v2", "tts-1", "whisper-1", "azure/whisper-1"])
+def test_openai_models_that_are_not_chat_models_keep_counting_with_cl100k_and_claude_pdf_pricing(model: str):
+    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
+        tiktoken.get_encoding("cl100k_base").encode(_NON_LATIN_SAMPLE)
+    )
     assert _pdf_cost(model, _pdf_base64(("",))) == 1534
-    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
-        tiktoken.get_encoding("cl100k_base").encode(_NON_LATIN_SAMPLE)
-    )
-
-
-@pytest.mark.parametrize("model", ["text-embedding-ada-002-v2", "tts-1", "whisper-1"])
-def test_openai_models_that_are_not_chat_models_keep_counting_with_cl100k(model: str):
-    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
-        tiktoken.get_encoding("cl100k_base").encode(_NON_LATIN_SAMPLE)
-    )
 
 
 @pytest.mark.timeout(10)
