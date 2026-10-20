@@ -47,6 +47,7 @@ from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
+from .response_body_usage import apply_response_body_usage
 from .upstream_usage_headers import has_upstream_reported_usage
 
 cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
@@ -501,6 +502,12 @@ class PassThroughEndpointLogging:
             ]
             kwargs = normalized_llm_passthrough_logging_payload["kwargs"]
         if standard_logging_response_object is None:
+            # No provider handler read this body, so the only token counts
+            # we will ever get are the ones the target wrote in it.
+            apply_response_body_usage(
+                logging_obj=logging_obj,
+                response_body=response_body,  # pyright: ignore[reportUnknownArgumentType]  # untyped dict from the relayed body
+            )
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=_safe_response_text(httpx_response)
             )
