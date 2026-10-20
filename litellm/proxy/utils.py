@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from functools import partial
+from functools import partial, reduce
 from itertools import takewhile
 from operator import attrgetter
 from types import MappingProxyType
@@ -1226,14 +1226,17 @@ _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "updat
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
 
 
+def _extended_exception_chain(chain: tuple[BaseException, ...], iteration: int) -> tuple[BaseException, ...]:
+    if len(chain) != iteration + 1:
+        return chain
+    following: Final = chain[-1].__cause__ or chain[-1].__context__
+    if following is None or following in chain:
+        return chain
+    return (*chain, following)
+
+
 def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
-    chain: Final[list[BaseException]] = [exception]  # mutable-ok: built once, returned frozen
-    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
-        following = chain[-1].__cause__ or chain[-1].__context__
-        if following is None or following in chain:
-            break
-        chain.append(following)
-    return tuple(chain)
+    return reduce(_extended_exception_chain, range(_EXCEPTION_CHAIN_MAX_DEPTH), (exception,))
 
 
 def _timed_out_reading_from_provider(exception: Exception) -> bool:

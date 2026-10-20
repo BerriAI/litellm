@@ -467,7 +467,7 @@ class SpendLogCleanup:
                 rows: Final = _STORAGE_ROWS.validate_python(
                     await tx.query_raw(trusted_sql(_STORAGE_SQL), list(_SPEND_LOG_TABLES))
                 )
-        except Exception as e:  # noqa: BLE001 - a failed measurement skips the size pass, it must not fail the run
+        except Exception as e:  # noqa: BLE001  # a failed measurement skips the size pass, it must not fail the run
             verbose_proxy_logger.warning("Could not measure spend-log storage: %s: %s", type(e).__name__, e)
             return None
         if not rows:
@@ -493,7 +493,7 @@ class SpendLogCleanup:
                     await tx.query_raw(trusted_sql(_LOAD_SIZE_STATE_SQL), SPEND_LOG_SIZE_CLEANUP_STATE_PARAM)
                 )
             return SizeCleanupState.model_validate_json(rows[0].state_json) if rows else None
-        except Exception as e:  # noqa: BLE001 - an unreadable count restarts from the catalog, it must not fail the run
+        except Exception as e:  # noqa: BLE001  # an unreadable count restarts from the catalog, it must not fail the run
             verbose_proxy_logger.warning("Could not read the spend-log size cleanup state: %s: %s", type(e).__name__, e)
             return None
 
@@ -505,7 +505,7 @@ class SpendLogCleanup:
                 await tx.execute_raw(
                     trusted_sql(_SAVE_SIZE_STATE_SQL), SPEND_LOG_SIZE_CLEANUP_STATE_PARAM, state.model_dump_json()
                 )
-        except Exception as e:  # noqa: BLE001 - a lost save costs one re-seed from the catalog, it must not fail the run
+        except Exception as e:  # noqa: BLE001  # a lost save costs one re-seed from the catalog, it must not fail the run
             verbose_proxy_logger.warning("Could not save the spend-log size cleanup state: %s: %s", type(e).__name__, e)
 
     def _timeout_ms(self, deadline: float) -> int:
