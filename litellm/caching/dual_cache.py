@@ -154,14 +154,14 @@ class DualCache(BaseCache):
             # other, and the caller's kwargs object is never mutated.
             ttl_given: Final = "ttl" in kwargs
             if self.in_memory_cache is not None:
-                in_mem_kwargs: Final = dict(kwargs)
+                in_mem_kwargs: Final = dict(kwargs)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # kwargs-derived dict is Unknown by construction
                 if not ttl_given and self.default_in_memory_ttl is not None:
                     in_mem_kwargs["ttl"] = self.default_in_memory_ttl
 
                 self.in_memory_cache.set_cache(key, value, **in_mem_kwargs)
 
             if self.redis_cache is not None and local_only is False:
-                redis_kwargs: Final = dict(kwargs)
+                redis_kwargs: Final = dict(kwargs)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # kwargs-derived dict is Unknown by construction
                 if not ttl_given:
                     base_ttl: Final = self.default_redis_ttl
                     redis_ttl: Final = base_ttl if base_ttl is not None else self.default_in_memory_ttl
@@ -517,13 +517,13 @@ class DualCache(BaseCache):
         try:
             ttl_given: Final = "ttl" in kwargs
             if self.in_memory_cache is not None:
-                in_mem_kwargs: Final = dict(kwargs)
+                in_mem_kwargs: Final = dict(kwargs)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # kwargs-derived dict is Unknown by construction
                 if not ttl_given and self.default_in_memory_ttl is not None:
                     in_mem_kwargs["ttl"] = self.default_in_memory_ttl
                 await self.in_memory_cache.async_set_cache(key, value, **in_mem_kwargs)
 
             if self.redis_cache is not None and local_only is False:
-                redis_kwargs: Final = dict(kwargs)
+                redis_kwargs: Final = dict(kwargs)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # kwargs-derived dict is Unknown by construction
                 if not ttl_given:
                     base_ttl: Final = self.default_redis_ttl
                     redis_ttl: Final = base_ttl if base_ttl is not None else self.default_in_memory_ttl
@@ -570,13 +570,13 @@ class DualCache(BaseCache):
         try:
             ttl_given: Final = "ttl" in kwargs
             if self.in_memory_cache is not None:
-                in_mem_kwargs: Final = dict(kwargs)
+                in_mem_kwargs: Final = dict(kwargs)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # kwargs-derived dict is Unknown by construction
                 if not ttl_given and self.default_in_memory_ttl is not None:
                     in_mem_kwargs["ttl"] = self.default_in_memory_ttl
                 await self.in_memory_cache.async_set_cache_pipeline(cache_list=cache_list, **in_mem_kwargs)
 
             if self.redis_cache is not None and local_only is False:
-                redis_kwargs: Final = dict(kwargs)
+                redis_kwargs: Final = dict(kwargs)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # kwargs-derived dict is Unknown by construction
                 if not ttl_given:
                     base_ttl: Final = self.default_redis_ttl
                     redis_ttl: Final = base_ttl if base_ttl is not None else self.default_in_memory_ttl
