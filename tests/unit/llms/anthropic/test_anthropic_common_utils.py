@@ -4493,7 +4493,7 @@ def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal
     assert type(error) is litellm.InternalServerError
 
 
-_NON_NUMERIC_BUDGETS: Final = (True, "lots", [4096])
+_NON_NUMERIC_BUDGETS: Final = (True, False, None, "", "lots", [4096])
 
 
 @pytest.mark.usefixtures("local_model_cost_map")

@@ -999,7 +999,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if thinking is None or thinking.get("type") != "enabled":
             return
 
-        budget_tokens: Final = _legacy_budget_tokens(thinking.get("budget_tokens") or 0, drop_params=drop_params)
+        budget_tokens: Final = _legacy_budget_tokens(thinking.get("budget_tokens", 0), drop_params=drop_params)
         display: Final = thinking.get("display")
         supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
         carried_keys: Final = carried_thinking_keys(
