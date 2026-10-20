@@ -35,7 +35,7 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from redis import Redis
 
-_MODEL: Final = "claude-sonnet-5"
+_MODEL: Final = "claude-sonnet-4-5-20250929"
 _API_KEY: Final = "synthetic-anthropic-key"
 _TEXT: Final = "Hello"
 _SINK_EVENT_BATCH_ADAPTER: Final = TypeAdapter(list[dict[str, JsonValue]])

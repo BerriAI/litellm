@@ -464,13 +464,6 @@ def _failure_callbacks_blocked_logging_object(kwargs: Mapping[str, object]) -> L
     return logging_obj if logging_obj.model_call_details.get("has_logged_async_failure", False) is True else None
 
 
-def _capture_failure_callbacks_blocked_logging_obj(kwargs: Mapping[str, object]) -> tuple[Logging | None]:
-    failure_callbacks_blocked_logging_obj: Final = _failure_callbacks_blocked_logging_object(
-        _FALLBACK_KWARGS_ADAPTER.validate_python(kwargs)
-    )
-    return (failure_callbacks_blocked_logging_obj,)
-
-
 def _request_metadata_bucket(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
     bucket: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
     return bucket if isinstance(bucket, Mapping) else None
@@ -870,7 +863,9 @@ async def run_async_fallback(
                 )
                 continue
             attempted.record(attempt_key)
-        failure_callbacks_blocked_logging_obj, = _capture_failure_callbacks_blocked_logging_obj(kwargs)
+        failure_callbacks_blocked_logging_obj = _failure_callbacks_blocked_logging_object(
+            _FALLBACK_KWARGS_ADAPTER.validate_python(kwargs)
+        )
         try:
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)

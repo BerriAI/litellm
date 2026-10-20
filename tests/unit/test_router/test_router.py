@@ -23,7 +23,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 from opentelemetry import trace
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import APIConnectionError, Router
@@ -17981,6 +17981,14 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
     assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
 
 
+class _AnthropicMessagesRetryStashRecorder:
+    def __init__(self) -> None:
+        self.observed: tuple[Usage | None, ...] = ()
+
+    def record(self, usage: Usage | None) -> None:
+        self.observed = (*self.observed, usage)
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_partial_usage() -> None:
     """The dropped attempt's usage stays available for terminal billing without reaching the retry's success log."""
@@ -17996,9 +18004,13 @@ async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_pa
     )
     partial_usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
     logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
+    stash_recorder: Final = _AnthropicMessagesRetryStashRecorder()
+    usage_adapter: Final = TypeAdapter(Usage | None)
 
     def retry_stream() -> _AnthropicMessagesFakeByteStream:
-        assert "combined_usage_object" not in logging_obj.model_call_details
+        stash_recorder.record(
+            usage_adapter.validate_python(logging_obj.model_call_details.get("combined_usage_object"))
+        )
         return _anthropic_messages_retried_stream()
 
     provider: Final = _AnthropicMessagesScriptedProvider(_anthropic_messages_dropped_before_content, retry_stream)
@@ -18008,6 +18020,7 @@ async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_pa
     )
     body: Final = tuple([chunk async for chunk in stream])
 
+    assert stash_recorder.observed == (None,)
     assert body == (_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong"))
     assert "response_cost" not in logging_obj.model_call_details
     assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
