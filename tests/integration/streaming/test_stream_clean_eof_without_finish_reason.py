@@ -11,13 +11,19 @@ from integration._support.responses_stream import data_frames, spend_row, sse_ev
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
-Ending = Literal["ending-complete", "ending-clean-eof", "ending-done-without-finish"]
-Family = Literal["openai", "anthropic", "hosted_vllm"]
+Ending = Literal["ending-complete", "ending-clean-eof", "ending-done-without-finish", "ending-done-only"]
+Family = Literal["openai", "anthropic", "hosted_vllm", "gemini", "langgraph"]
 
-_ENDINGS: Final[tuple[Ending, ...]] = ("ending-complete", "ending-clean-eof", "ending-done-without-finish")
+_ENDINGS: Final[tuple[Ending, ...]] = (
+    "ending-complete",
+    "ending-clean-eof",
+    "ending-done-without-finish",
+    "ending-done-only",
+)
 _PARTIAL: Final = ('{"findings":[{"title":', '"unfinished')
 _BACKEND: Final = "gpt-4o-mini"
 _CLAUDE: Final = "claude-sonnet-4-5"
+_GEMINI: Final = "gemini-2.5-flash"
 _PROVIDER_KEY: Final = "synthetic-provider-key"
 _CALL_ID_HEADER: Final = "x-litellm-call-id"
 _USAGE: Final = {"prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16}
@@ -25,15 +31,19 @@ _TARGETS: Final[Mapping[Family, str]] = {
     "openai": "/chat/completions",
     "hosted_vllm": "/chat/completions",
     "anthropic": "/v1/messages",
+    "gemini": f"/models/{_GEMINI}:streamGenerateContent",
+    "langgraph": "/runs/stream",
 }
 _DEPLOYMENTS: Final[Mapping[Family, str]] = {
     "openai": f"openai/{_BACKEND}",
     "hosted_vllm": f"hosted_vllm/{_BACKEND}",
     "anthropic": f"anthropic/{_CLAUDE}",
+    "gemini": f"gemini/{_GEMINI}",
+    "langgraph": "langgraph/agent",
 }
 
 
-def _data(frame: Mapping[str, JsonValue]) -> bytes:
+def _data(frame: JsonValue) -> bytes:
     return b"data: " + json.dumps(frame).encode() + b"\n\n"
 
 
@@ -52,11 +62,54 @@ def _chat_frames(identity: str, ending: Ending) -> tuple[bytes, ...]:
             return content
         case "ending-done-without-finish":
             return (*content, b"data: [DONE]\n\n")
+        case "ending-done-only":
+            return (b"data: [DONE]\n\n",)
 
 
 def _anthropic_frames(identity: str, ending: Ending) -> tuple[bytes, ...]:
     content: Final = (message_start(identity, _CLAUDE), CONTENT_BLOCK_START, *map(text_delta, _PARTIAL))
     return (*content, CONTENT_TAIL) if ending == "ending-complete" else content
+
+
+def _gemini_frames(ending: Ending) -> tuple[bytes, ...]:
+    """Gemini puts finishReason on the last text chunk and can follow it with a usage-only chunk."""
+    finished: Final = ending == "ending-complete"
+    content: Final = tuple(
+        _data(
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": part}], "role": "model"},
+                        "index": 0,
+                        **({"finishReason": "STOP"} if finished and part == _PARTIAL[-1] else {}),
+                    }
+                ]
+            }
+        )
+        for part in _PARTIAL
+    )
+    usage: Final = _data({"usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}})
+    return (*content, usage) if finished else content
+
+
+def _langgraph_frames() -> tuple[bytes, ...]:
+    """LangGraph ends a run by closing the stream after its metadata event."""
+    return (
+        *(_data(["messages", [[{"type": "ai", "content": part}, {}]]]) for part in _PARTIAL),
+        _data(["metadata", {"run_id": "run-1"}]),
+    )
+
+
+def _frames(family: Family, identity: str, ending: Ending) -> tuple[bytes, ...]:
+    match family:
+        case "anthropic":
+            return _anthropic_frames(identity, ending)
+        case "gemini":
+            return _gemini_frames(ending)
+        case "langgraph":
+            return _langgraph_frames()
+        case "openai" | "hosted_vllm":
+            return _chat_frames(identity, ending)
 
 
 def _ending(request: Request) -> Ending:
@@ -65,13 +118,8 @@ def _ending(request: Request) -> Ending:
 
 def _upstream(family: Family) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
-        assert request.method == "POST" and request.target.endswith(_TARGETS[family]), request.target
-        identity: Final = f"upstream-{uuid.uuid4().hex}"
-        frames: Final = (
-            _anthropic_frames(identity, _ending(request))
-            if family == "anthropic"
-            else _chat_frames(identity, _ending(request))
-        )
+        assert request.method == "POST" and _TARGETS[family] in request.target, request.target
+        frames: Final = _frames(family, f"upstream-{uuid.uuid4().hex}", _ending(request))
         return Reply(content_type="text/event-stream", chunks=frames)
 
     return answering_model_discovery(respond)
@@ -150,7 +198,18 @@ def test_chat_stream_that_sends_done_without_a_finish_reason_reaches_the_client_
         assert spend_row(call_id)["status"] == "failure"
 
 
-@pytest.mark.parametrize("family", ["openai", "anthropic"])
+def test_chat_stream_that_sends_only_done_still_completes_empty(gateway: Gateway) -> None:
+    """Gemini's OpenAI-compatible endpoint answers with only [DONE] when reasoning uses up max_tokens."""
+    with wire_server(_upstream("openai")) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_DEPLOYMENTS["openai"], api_base=wire.url, api_key=_PROVIDER_KEY)
+        text, call_id = _chat(gateway, model, "ending-done-only")
+        assert _chat_text(text) == "", text
+        assert _finish_reasons(text) == ("stop",), text
+        assert _chat_errors(text) == (), text
+        assert spend_row(call_id)["status"] == "success"
+
+
+@pytest.mark.parametrize("family", ["openai", "anthropic", "gemini", "langgraph"])
 def test_chat_stream_with_a_provider_finish_reason_still_completes(gateway: Gateway, family: Family) -> None:
     with wire_server(_upstream(family)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_DEPLOYMENTS[family], api_base=wire.url, api_key=_PROVIDER_KEY)
@@ -159,6 +218,17 @@ def test_chat_stream_with_a_provider_finish_reason_still_completes(gateway: Gate
         assert _finish_reasons(text) == ("stop",), text
         assert _chat_errors(text) == (), text
         assert text.rstrip().endswith("data: [DONE]"), text
+        assert spend_row(call_id)["status"] == "success"
+
+
+def test_chat_stream_from_a_mock_response_deployment_still_completes(gateway: Gateway) -> None:
+    """mock_completion streams never carry a finish reason, so a mocked deployment must keep its synthetic stop."""
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_DEPLOYMENTS["openai"], mock_response="".join(_PARTIAL))
+        text, call_id = _chat(gateway, model, "ending-clean-eof")
+        assert _chat_text(text) == "".join(_PARTIAL), text
+        assert _finish_reasons(text) == ("stop",), text
+        assert _chat_errors(text) == (), text
         assert spend_row(call_id)["status"] == "success"
 
 

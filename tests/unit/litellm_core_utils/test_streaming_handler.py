@@ -1651,6 +1651,37 @@ def test_sync_openai_compatible_chat_clean_eof_without_finish_reason_raises_mids
     assert response.received_finish_reason is None
 
 
+async def _collect(wrapper: CustomStreamWrapper, sync_mode: bool) -> list[ModelResponseStream]:
+    if sync_mode:
+        return list(wrapper)
+    return [chunk async for chunk in wrapper]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure", "hosted_vllm"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_that_sends_no_chunks_keeps_the_default_stop(
+    logging_obj: Logging, custom_llm_provider: str, sync_mode: bool
+):
+    """Gemini's OpenAI-compatible endpoint answers with only [DONE] when reasoning uses up max_tokens."""
+
+    async def no_chunks() -> AsyncIterator[ModelResponseStream]:
+        for chunk in ():
+            yield chunk
+
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()) if sync_mode else no_chunks(),
+        model="gemini-2.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        stream_options={"include_usage": True},
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
+
+
 _ANTHROPIC_PARTIAL_EVENTS: Final[tuple[dict[str, object], ...]] = (
     {
         "type": "message_start",
@@ -1699,12 +1730,6 @@ def _anthropic_stream(
         custom_llm_provider="anthropic",
         logging_obj=logging_obj,
     )
-
-
-async def _collect(wrapper: CustomStreamWrapper, sync_mode: bool) -> list[ModelResponseStream]:
-    if sync_mode:
-        return list(wrapper)
-    return [chunk async for chunk in wrapper]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

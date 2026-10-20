@@ -71,7 +71,6 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
-_OPENAI_AZURE_CHAT_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
 
 
 def _next_sync_or_exhausted(it: Iterator[object]) -> object:
@@ -1908,7 +1907,7 @@ class CustomStreamWrapper:
     def _should_fail_on_clean_eof(self) -> bool:
         return (
             not self.is_mock
-            and (self.custom_llm_provider in _OPENAI_AZURE_CHAT_PROVIDERS or self.uses_openai_chat_stream)
+            and self.uses_openai_chat_stream
             and self.received_finish_reason is None
             and self.intermittent_finish_reason is None
             and not self.received_any_finish_reason
