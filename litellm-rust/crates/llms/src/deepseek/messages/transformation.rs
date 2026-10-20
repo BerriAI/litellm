@@ -104,6 +104,7 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _optional_params: &MessagesOptionalParams,
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -298,6 +299,7 @@ mod tests {
                 .collect(),
             api_key,
             "deepseek-v4-pro",
+            &MessagesOptionalParams::default(),
             &LitellmParams::default(),
             env,
         )
