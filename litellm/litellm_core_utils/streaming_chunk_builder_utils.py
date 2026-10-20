@@ -1288,7 +1288,10 @@ def _text_of(choice: TextChoices) -> str:
 
 
 def _index_of(choice: TextChoices) -> int:
-    return choice.index or 0
+    try:
+        return int(choice.index or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _rebuilt_text_choice(index: int, choices: Sequence[TextChoices]) -> TextChoices:

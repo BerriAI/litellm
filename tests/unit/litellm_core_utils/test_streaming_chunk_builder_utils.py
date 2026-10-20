@@ -2423,17 +2423,36 @@ def test_stream_chunk_builder_keeps_the_usage_a_chat_chunk_reports_in_a_text_com
     assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (3, 1, 4)
 
 
-def test_stream_chunk_builder_rebuilds_text_completion_choices_without_an_index_as_index_zero() -> None:
+@pytest.mark.parametrize(
+    ("first_index", "second_index", "expected"),
+    [
+        (None, None, ({"index": 0, "text": "Hello world", "finish_reason": "stop"},)),
+        ("0", 0, ({"index": 0, "text": "Hello world", "finish_reason": "stop"},)),
+        ("0", "0", ({"index": 0, "text": "Hello world", "finish_reason": "stop"},)),
+        (
+            0,
+            "1",
+            (
+                {"index": 0, "text": "Hello", "finish_reason": None},
+                {"index": 1, "text": " world", "finish_reason": "stop"},
+            ),
+        ),
+    ],
+    ids=["none", "string_then_int", "strings", "int_then_string"],
+)
+def test_stream_chunk_builder_rebuilds_text_completion_choice_indexes_that_are_none_or_strings_as_ints(
+    first_index: int | str | None,
+    second_index: int | str | None,
+    expected: tuple[Mapping[str, object], ...],
+) -> None:
     response: Final = stream_chunk_builder_text_completion(
         chunks=[
-            _text_completion_chunk({"text": "Hello", "index": None}),
-            _text_completion_chunk({"text": " world", "index": None, "finish_reason": "stop"}),
+            _text_completion_chunk({"text": "Hello", "index": first_index}),
+            _text_completion_chunk({"text": " world", "index": second_index, "finish_reason": "stop"}),
         ]
     )
 
-    assert [choice.model_dump(include={"index", "text", "finish_reason"}) for choice in response.choices] == [
-        {"index": 0, "text": "Hello world", "finish_reason": "stop"}
-    ]
+    assert tuple(choice.model_dump(include={"index", "text", "finish_reason"}) for choice in response.choices) == expected
 
 
 def test_stream_chunk_builder_text_completion_survives_uncountable_prompt() -> None:
