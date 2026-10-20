@@ -13,16 +13,24 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from types import SimpleNamespace
+from typing import Final
 
+import httpx
 import pytest
 from fastapi import FastAPI
+from pydantic import BaseModel, ConfigDict, GetJsonSchemaHandler
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
 
 from litellm.proxy.proxy_server import (
     _generate_stable_operation_id,
     _get_cors_config,
     _inject_websocket_stubs_into_openapi_schema,
     _strip_operation_id_method_suffix,
+    app,
     custom_openapi,
     ensure_unique_openapi_operation_ids,
     get_openapi_schema,
@@ -30,6 +38,8 @@ from litellm.proxy.proxy_server import (
 )
 
 from .conftest import normalize
+
+UNBLOCK_TIMEOUT_SECONDS: Final = 5
 
 # ---------------------------------------------------------------------------
 # _generate_stable_operation_id
@@ -279,6 +289,37 @@ def test_get_openapi_schema_missing_app_attribute_raises_error(monkeypatch):
     monkeypatch.setattr(ps, "app", SimpleNamespace(), raising=True)
     with pytest.raises(AttributeError):
         get_openapi_schema()
+
+
+async def test_a_request_is_answered_while_a_cold_openapi_json_builds(monkeypatch: pytest.MonkeyPatch):
+    build_started: Final = threading.Event()
+    liveliness_answered: Final = threading.Event()
+    build_saw_the_answer: Final = threading.Event()
+
+    class HoldsTheDocsBuild(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        @classmethod
+        def __get_pydantic_json_schema__(cls, schema: CoreSchema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
+            build_started.set()
+            if liveliness_answered.wait(UNBLOCK_TIMEOUT_SECONDS):
+                build_saw_the_answer.set()
+            return handler(schema)
+
+    import litellm.proxy.proxy_server as ps
+
+    proxy_app: Final = ps.app
+    monkeypatch.setattr(proxy_app, "openapi_schema", None)
+    monkeypatch.setattr(proxy_app.router, "routes", [*proxy_app.router.routes])
+    proxy_app.add_api_route("/holds-the-docs-build", lambda: None, response_model=HoldsTheDocsBuild)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy_app), base_url="http://proxy") as client:
+        docs_request: Final = asyncio.ensure_future(client.get("/openapi.json"))
+        await asyncio.to_thread(build_started.wait, UNBLOCK_TIMEOUT_SECONDS)
+        liveliness: Final = await client.get("/health/liveliness")
+        liveliness_answered.set()
+        docs: Final = await docs_request
+
+    assert (liveliness.status_code, docs.status_code, build_saw_the_answer.is_set()) == (200, 200, True)
 
 
 # ---------------------------------------------------------------------------
