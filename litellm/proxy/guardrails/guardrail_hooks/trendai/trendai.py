@@ -135,6 +135,9 @@ class TrendAIGuardrail(CustomGuardrail):
             GuardrailEventHooks.logging_only,
         ]
 
+    def supports_scan_only_tool_results(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -168,9 +171,12 @@ class TrendAIGuardrail(CustomGuardrail):
         redacted: Final = self._enforce(result)
         if redacted is None:
             return inputs
+        redacted_texts: Final = redact_request_texts(texts, prompt, redacted)
+        if redacted_texts is None:
+            self._raise_redaction_failure(request_data, started_at, event_type=None)
         redacted_inputs: Final[GenericGuardrailAPIInputs] = {
             **inputs,
-            "texts": list(redact_request_texts(texts, prompt, redacted)),
+            "texts": list(redacted_texts),
         }
         return redacted_inputs
 

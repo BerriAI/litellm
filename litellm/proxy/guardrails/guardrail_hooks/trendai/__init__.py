@@ -21,7 +21,7 @@ def _normalize_event_hook(
 
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> TrendAIGuardrail:
-    settings: Final = TrendAISettings.model_validate(litellm_params.model_dump(mode="python"))
+    settings: Final = TrendAISettings.model_validate(litellm_params.model_dump(mode="python", exclude_none=True))
     guardrail_name: Final = guardrail["guardrail_name"]
     callback: Final = TrendAIGuardrail(
         api_key=litellm_params.api_key,

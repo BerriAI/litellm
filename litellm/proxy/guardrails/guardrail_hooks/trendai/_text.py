@@ -2,9 +2,10 @@
 # This file has been modified for integration into LiteLLM.
 
 from collections.abc import Iterator, Sequence
+from itertools import chain
 from typing import Final
 
-from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts
+from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts, message_text_slot_count
 from litellm.types.llms.openai import AllMessageValues
 
 from ._models import TrendAIRequestPrompt, TrendAITextWindow
@@ -60,61 +61,50 @@ def apply_window_redaction(content: str, window: TrendAITextWindow, redacted: st
     return f"{content[: window.start]}{merged}{content[end:]}"
 
 
-def _last_user_text_parts(structured_messages: Sequence[AllMessageValues]) -> tuple[str, ...] | None:
-    last_user_message: Final = next(
-        (message for message in reversed(structured_messages) if message["role"] == "user"), None
-    )
-    return message_slot_texts(last_user_message) if last_user_message is not None else None
-
-
-def _last_occurrence(texts: Sequence[str], parts: Sequence[str]) -> int | None:
-    return next(
-        (
-            start
-            for start in range(len(texts) - len(parts), -1, -1)
-            if tuple(texts[start : start + len(parts)]) == tuple(parts)
-        ),
-        None,
-    )
-
-
 def locate_request_prompt(
     texts: Sequence[str],
     structured_messages: Sequence[AllMessageValues] | None,
 ) -> TrendAIRequestPrompt | None:
-    """Pick the text Trend AI Guard scans for a request and where it lives in ``texts``.
+    """Locate the last user turn by message order, never by matching its text.
 
-    The scanned prompt is the last user turn, matching the upstream plugin. Its text parts are
-    located as a run inside ``texts`` so a redacted prompt can be written back to exactly those
-    entries. Without structured messages the whole ``texts`` list is the prompt.
+    A different flat-text layout can still be scanned, but cannot be safely rewritten.
     """
-    parts: Final = _last_user_text_parts(structured_messages) if structured_messages else tuple(texts)
-    if parts is None or not parts:
+    messages: Final = tuple(structured_messages or ())
+    user_index: Final = next(
+        (index for index in reversed(range(len(messages))) if messages[index]["role"] == "user"), None
+    )
+    if messages and user_index is None:
         return None
+    parts: Final = message_slot_texts(messages[user_index]) if user_index is not None else tuple(texts)
     prompt: Final = "".join(parts).strip()
     if not prompt:
         return None
-    start: Final = _last_occurrence(texts, parts)
-    if start is None:
-        return None
-    return TrendAIRequestPrompt(prompt=prompt, start=start, end=start + len(parts))
+    start: Final = sum(map(message_text_slot_count, messages[:user_index])) if user_index is not None else 0
+    normalized_texts: Final = (
+        tuple(chain.from_iterable(map(message_slot_texts, messages))) if messages else tuple(texts)
+    )
+    text_range: Final = (start, start + len(parts)) if normalized_texts == tuple(texts) else None
+    return TrendAIRequestPrompt(prompt=prompt, text_range=text_range)
 
 
-def redact_request_texts(texts: Sequence[str], prompt: TrendAIRequestPrompt, redacted: str) -> tuple[str, ...]:
+def redact_request_texts(texts: Sequence[str], prompt: TrendAIRequestPrompt, redacted: str) -> tuple[str, ...] | None:
     """Write a redacted prompt back over the ``texts`` entries the prompt was assembled from.
 
     A single-part prompt is replaced outright. A multi-part prompt whose redaction kept its length
     is split back into the original parts; otherwise the first part carries the whole redaction and
     the rest are blanked, so no original part can leak.
     """
-    parts: Final = tuple(texts[prompt.start : prompt.end])
+    if prompt.text_range is None:
+        return None
+    start, end = prompt.text_range
+    parts: Final = tuple(texts[start:end])
     if len(parts) == 1:
-        return (*texts[: prompt.start], redacted, *texts[prompt.end :])
+        return (*texts[:start], redacted, *texts[end:])
     joined: Final = "".join(parts)
     leading: Final = len(joined) - len(joined.lstrip())
     aligned: Final = f"{joined[:leading]}{redacted}{joined[len(joined.rstrip()) :]}"
     if len(aligned) != len(joined):
-        return (*texts[: prompt.start], redacted, *("" for _ in parts[1:]), *texts[prompt.end :])
+        return (*texts[:start], redacted, *("" for _ in parts[1:]), *texts[end:])
     offsets: Final = tuple(sum(len(part) for part in parts[:index]) for index in range(len(parts) + 1))
     split: Final = tuple(aligned[offsets[index] : offsets[index + 1]] for index in range(len(parts)))
-    return (*texts[: prompt.start], *split, *texts[prompt.end :])
+    return (*texts[:start], *split, *texts[end:])

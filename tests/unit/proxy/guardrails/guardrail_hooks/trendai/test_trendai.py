@@ -1,14 +1,17 @@
 import json
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from functools import reduce
-from typing import Literal
+from typing import Final, Literal
 
 import httpx
 import pytest
 
+import litellm
 from litellm.exceptions import GuardrailRaisedException
+from litellm.llms.bedrock.passthrough.guardrail_translation.handler import BedrockPassthroughGuardrailHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
-from litellm.proxy.guardrails.guardrail_hooks.trendai import TrendAIGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.trendai import TrendAIGuardrail, initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.trendai._models import (
     TrendAIAllow,
     TrendAIBlock,
@@ -20,7 +23,8 @@ from litellm.proxy.guardrails.guardrail_hooks.trendai.trendai import (
     OPENAI_CHAT_COMPLETION_RESPONSE_V1,
     PLUGIN_VERSION,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.utils import (
     CallTypes,
     Choices,
@@ -223,6 +227,47 @@ def test_guardrail_is_discovered_by_global_registries() -> None:
     assert "trendai" in guardrail_initializer_registry
 
 
+@pytest.mark.parametrize(
+    ("timeout_config", "expected_timeout"),
+    [({}, 5.0), ({"timeout": None}, 5.0), ({"timeout": 2.5}, 2.5)],
+    ids=["omitted", "null", "configured"],
+)
+def test_initializer_defaults_null_timeout_and_preserves_configured_timeout(
+    timeout_config: Mapping[str, float | None], expected_timeout: float
+) -> None:
+    params: Final = LitellmParams.model_validate(
+        {
+            "guardrail": "trendai",
+            "mode": "pre_call",
+            "api_key": "test-key",
+            "api_base": "https://guard.example.com",
+            **timeout_config,
+        }
+    )
+    callback: Final = initialize_guardrail(params, {"guardrail_name": "trendai-timeout"})
+    try:
+        assert callback.timeout == expected_timeout
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
+
+
+def test_registry_rejects_tool_result_only_scanning() -> None:
+    with pytest.raises(ValueError, match="never scans tool results"):
+        InMemoryGuardrailHandler().initialize_guardrail(
+            {
+                "guardrail_name": "trendai-tool-results",
+                "litellm_params": {
+                    "guardrail": "trendai",
+                    "mode": "pre_call",
+                    "api_key": "test-key",
+                    "api_base": "https://guard.example.com",
+                    "timeout": 5.0,
+                    "scan_only_tool_results": True,
+                },
+            }
+        )
+
+
 Responder = Callable[[httpx.Request], httpx.Response]
 
 
@@ -300,6 +345,99 @@ async def test_request_scans_only_the_last_user_turn_and_writes_redaction_back()
     assert record["guardrail_status"] == "success"
     assert record["masked_entity_count"] == {"EMAIL": 1}
     assert record["guardrail_response"] == {"action": "allow", "redacted": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeated_role", ["assistant", "tool"])
+@pytest.mark.parametrize("multipart", [False, True], ids=["string", "multipart"])
+async def test_request_redaction_targets_the_last_user_even_when_later_messages_repeat_it(
+    repeated_role: Literal["assistant", "tool"], multipart: bool
+) -> None:
+    respond, scanned = _engine(redact={"a@b.com": "[EMAIL]"})
+    user_content: Final = (
+        [
+            {"type": "text", "text": "mail "},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+            {"type": "text", "text": "a@b.com"},
+        ]
+        if multipart
+        else "mail a@b.com"
+    )
+    repeated_message: Final = {
+        "role": repeated_role,
+        "content": (
+            [{"type": "text", "text": "mail "}, {"type": "text", "text": "a@b.com"}] if multipart else "mail a@b.com"
+        ),
+        **({"tool_call_id": "call-1"} if repeated_role == "tool" else {}),
+    }
+    expected_repeated_message: Final = deepcopy(repeated_message)
+    expected_content: Final = (
+        [
+            {"type": "text", "text": "mail "},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+            {"type": "text", "text": "[EMAIL]"},
+        ]
+        if multipart
+        else "mail [EMAIL]"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        out: Final = await OpenAIChatCompletionsHandler().process_input_messages(
+            data={
+                "messages": [
+                    {"role": "user", "content": "mail a@b.com"},
+                    {"role": "assistant", "content": "previous reply"},
+                    {"role": "user", "content": user_content},
+                    repeated_message,
+                ],
+                "metadata": {},
+            },
+            guardrail_to_apply=_guardrail(async_handler=client),
+        )
+
+    assert scanned == ["mail a@b.com"]
+    assert out["messages"] == [
+        {"role": "user", "content": "mail a@b.com"},
+        {"role": "assistant", "content": "previous reply"},
+        {"role": "user", "content": expected_content},
+        expected_repeated_message,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_converse_redaction_with_unaligned_text_slots_fails_closed() -> None:
+    respond, scanned = _engine(redact={"a@b.com": "[EMAIL]"})
+    body: Final = {
+        "messages": [
+            {"role": "user", "content": [{"text": "lookup"}]},
+            {
+                "role": "assistant",
+                "content": [{"toolUse": {"toolUseId": "call-1", "name": "lookup", "input": {}}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"text": "mail a@b.com"},
+                    {"toolResult": {"toolUseId": "call-1", "content": [{"text": "found"}]}},
+                ],
+            },
+        ],
+        "additionalModelRequestFields": {"system": "extra"},
+    }
+    original_body: Final = deepcopy(body)
+    request_data: Final[dict[str, object]] = {
+        "endpoint": "/model/test-model/converse",
+        "data": body,
+        "metadata": {},
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(GuardrailRaisedException, match="could not apply the requested redaction"):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(
+                request_data, _guardrail(async_handler=client, fallback_on_error="allow")
+            )
+
+    assert scanned == ["mail a@b.comextra"]
+    assert request_data["data"] == original_body
+    assert _guardrail_records(request_data)[-1]["guardrail_status"] == "guardrail_failed_to_respond"
 
 
 @pytest.mark.asyncio
