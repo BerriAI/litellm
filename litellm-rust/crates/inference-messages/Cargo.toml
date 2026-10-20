@@ -15,6 +15,7 @@ litellm-core-utils.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true
+litellm-inference-chat.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
 litellm-router-types.workspace = true

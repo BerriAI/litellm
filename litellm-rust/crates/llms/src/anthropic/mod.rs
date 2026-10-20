@@ -1,6 +1,7 @@
 pub mod beta_headers;
 pub mod common_utils;
 
+pub mod adapters;
 pub mod batches;
 pub mod chat;
 pub mod count_tokens;

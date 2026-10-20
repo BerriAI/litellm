@@ -12,7 +12,11 @@ use axum::{
     http::{HeaderName, HeaderValue, Request, header::CONTENT_TYPE},
     response::IntoResponse,
 };
-use futures_util::future::BoxFuture;
+use futures_util::{
+    StreamExt,
+    future::{BoxFuture, ready},
+    stream,
+};
 use litellm_config::Config;
 use litellm_gateway_auth::keys::{
     AllowedRoutes, KeyHash, KeyLookup, KeyModels, KeyProfile, KeyStatus, LookupFuture,
@@ -22,6 +26,7 @@ use litellm_gateway_hooks::{
 };
 use rstest::rstest;
 use serde_json::{Value, json};
+use std::convert::Infallible;
 use tokio::net::TcpListener;
 use tower::ServiceExt;
 
@@ -37,6 +42,16 @@ const MESSAGE_STREAM: &str = concat!(
     "data: {\"type\":\"message_stop\"}\n\n",
 );
 const COMPLETION: &str = r#"{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-x","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":6,"total_tokens":11}}"#;
+const COMPLETION_STREAM: &str = concat!(
+    "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: {\"id\":\"c\",\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}\n\n",
+    "data: [DONE]\n\n",
+);
+
+/// The one chunk a stalled provider sends before going quiet, without the usage it would end
+/// with.
+const STALLED_FIRST_CHUNK: &str =
+    "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n";
 
 type Bodies = Arc<Mutex<Vec<Value>>>;
 
@@ -48,13 +63,24 @@ async fn upstream(bodies: Bodies) -> String {
         let bodies = bodies.clone();
         async move {
             let path = request.uri().path().to_owned();
+            if path.starts_with("/stalled") {
+                let first = stream::once(ready(Ok::<_, Infallible>(Bytes::from_static(
+                    STALLED_FIRST_CHUNK.as_bytes(),
+                ))));
+                return (
+                    [(CONTENT_TYPE, "text/event-stream")],
+                    Body::from_stream(first.chain(stream::pending())),
+                )
+                    .into_response();
+            }
             let body: Value =
                 serde_json::from_slice(&to_bytes(request.into_body(), 1 << 20).await.unwrap())
                     .unwrap();
             let stream = body["stream"].as_bool().unwrap_or(false);
             bodies.lock().unwrap().push(body);
             let (content_type, payload) = match (path.ends_with("/chat/completions"), stream) {
-                (true, _) => ("application/json", COMPLETION),
+                (true, true) => ("text/event-stream", COMPLETION_STREAM),
+                (true, false) => ("application/json", COMPLETION),
                 (false, true) => ("text/event-stream", MESSAGE_STREAM),
                 (false, false) => ("application/json", MESSAGE),
             };
@@ -208,6 +234,15 @@ async fn harness() -> Harness {
       cache_read_input_token_cost: 0.0001
     model_info:
       id: claude-1
+  - model_name: stalled
+    litellm_params:
+      model: openai/gpt-x
+      api_base: {upstream}/stalled/v1
+      api_key: sk-upstream
+      input_cost_per_token: 1
+      output_cost_per_token: 2
+    model_info:
+      id: stalled-1
   - model_name: gpt
     litellm_params:
       model: openai/gpt-x
@@ -327,6 +362,49 @@ async fn messages_are_hooked_and_priced(
 }
 
 #[rstest]
+#[case::unary(false, (5, 0, 6), 17.0)]
+#[case::stream(true, (7, 0, 3), 13.0)]
+#[tokio::test]
+async fn messages_for_a_chat_deployment_are_hooked_and_priced(
+    #[case] stream: bool,
+    #[case] usage: (u64, u64, u64),
+    #[case] cost: f64,
+) {
+    let harness = harness().await;
+    let request = json!({"model": "gpt", "max_tokens": 8, "stream": stream,
+        "messages": [{"role": "user", "content": "hi"}]});
+    let (status, headers, body) =
+        send(&harness.app, "/v1/messages", "sk-team", request, false).await;
+    assert_eq!(status, 200, "{body:?}");
+    assert_eq!(headers["x-hooked"], "1");
+    let text = std::str::from_utf8(&body).unwrap();
+    match stream {
+        true => {
+            assert!(text.ends_with("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+        }
+        false => assert_eq!(
+            serde_json::from_str::<Value>(text).unwrap()["type"],
+            "message"
+        ),
+    }
+    let sent = harness.bodies.lock().unwrap()[0].clone();
+    assert_eq!(sent["user"], "hooked");
+    assert_eq!(sent["messages"], json!([{"role": "user", "content": "hi"}]));
+
+    litellm_gateway::hooks::close(&harness.inference).await;
+    assert_eq!(*harness.settled.lock().unwrap(), [200]);
+    let seen = harness.seen.0.lock().unwrap();
+    let [seen] = seen.as_slice() else {
+        panic!("{seen:?}")
+    };
+    assert_eq!(seen.deployment.as_deref(), Some("gpt-1"));
+    assert_eq!(seen.key_alias.as_deref(), Some("team-key"));
+    assert_eq!(seen.usage, Some(usage));
+    assert!(close(seen.cost.unwrap(), cost), "{seen:?}");
+    assert!(!seen.interrupted);
+}
+
+#[rstest]
 #[tokio::test]
 async fn chat_completions_are_priced() {
     let harness = harness().await;
@@ -392,4 +470,47 @@ async fn a_stream_dropped_early_is_recorded_as_interrupted() {
     let seen = harness.seen.0.lock().unwrap();
     assert!(seen[0].interrupted);
     assert_eq!(*harness.settled.lock().unwrap(), [200]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_translated_stream_cut_off_before_its_usage_records_none() {
+    let harness = harness().await;
+    let request = json!({"model": "stalled", "max_tokens": 8, "stream": true,
+        "messages": [{"role": "user", "content": "hi"}]});
+    let response = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/v1/messages")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer sk-team")
+                .body(Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body().into_data_stream();
+    let mut received = String::new();
+    while !received.contains("content_block_delta") {
+        let frame = body.next().await.unwrap().unwrap();
+        received.push_str(std::str::from_utf8(&frame).unwrap());
+    }
+    assert!(received.starts_with("event: message_start\n"), "{received}");
+    assert!(
+        received.contains("\"usage\":{\"input_tokens\":0,\"output_tokens\":0}"),
+        "{received}"
+    );
+    drop(body);
+
+    litellm_gateway::hooks::close(&harness.inference).await;
+    let seen = harness.seen.0.lock().unwrap();
+    let [seen] = seen.as_slice() else {
+        panic!("{seen:?}")
+    };
+    assert_eq!(seen.deployment.as_deref(), Some("stalled-1"));
+    assert!(seen.interrupted);
+    assert_eq!(seen.usage, None);
+    assert_eq!(seen.cost, None);
 }
