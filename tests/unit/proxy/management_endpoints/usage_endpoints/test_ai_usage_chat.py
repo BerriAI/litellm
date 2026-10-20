@@ -12,7 +12,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 
-from litellm.proxy._types import LitellmUserRoles, hash_token
+from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
     TOOL_HANDLERS,
     TOOLS_ADMIN,
@@ -1352,43 +1352,6 @@ class TestUsageAiChatTeamModelRouting:
         assert result.choices[0].message.content == "from the team deployment"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("user_role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN])
-    async def test_team_key_reaches_its_own_team_deployment_when_teams_share_a_public_name(
-        self, user_role: LitellmUserRoles
-    ):
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
-            _acompletion,
-        )
-        from litellm.router import Router
-
-        router: Final = Router(
-            model_list=[
-                {
-                    "model_name": f"model_name_{team_id}_internal",
-                    "litellm_params": {
-                        "model": "openai/gpt-4o",
-                        "api_key": "sk-dummy",
-                        "mock_response": f"from the {team_id} deployment",
-                    },
-                    "model_info": {"team_id": team_id, "team_public_model_name": "shared-team-model"},
-                }
-                for team_id in ("team-a", "team-b")
-            ]
-        )
-
-        with patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
-            "litellm.proxy.proxy_server.llm_router", router
-        ):
-            result: Final = await _acompletion(
-                model="shared-team-model",
-                messages=[{"role": "user", "content": "hi"}],
-                user_api_key_dict=UserAPIKeyAuth(user_role=user_role, team_id="team-b", api_key="sk-test"),
-            )
-
-        assert result.choices[0].message.content == "from the team-b deployment"
-
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("key_metadata", [{}, {"tags": "prod"}, {"tags": {"env": "prod"}}])
     @pytest.mark.parametrize("tag_routing_prefix", ["", "route:"])
     async def test_key_and_team_tags_pick_the_tagged_deployment(
@@ -1431,12 +1394,9 @@ class TestUsageAiChatTeamModelRouting:
         assert result.choices[0].message.content == "from the team-tag deployment"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("team_id", "billed_caller"),
-        [("team-a", (hash_token("sk-test"), "u1", "team-a")), ("litellm-dashboard", (None, None, None))],
-    )
-    async def test_ask_ai_bills_an_api_key_caller_and_never_an_admin_ui_session(
-        self, monkeypatch: pytest.MonkeyPatch, team_id: str, billed_caller: tuple[str | None, str | None, str | None]
+    @pytest.mark.parametrize("team_id", ["team-a", "litellm-dashboard"])
+    async def test_ask_ai_charges_no_key_user_or_team_spend_or_rate_limit(
+        self, monkeypatch: pytest.MonkeyPatch, team_id: str
     ):
         import asyncio
 
@@ -1469,7 +1429,7 @@ class TestUsageAiChatTeamModelRouting:
                 user_api_key_dict=caller,
             )
 
-        assert await asyncio.wait_for(logged.get(), timeout=10) == billed_caller
+        assert await asyncio.wait_for(logged.get(), timeout=10) == (None, None, None)
 
     @pytest.mark.asyncio
     async def test_team_public_model_name_without_team_id_uses_litellm(self):
