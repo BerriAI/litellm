@@ -1917,12 +1917,12 @@ async def test_http2_flag_bypasses_aiohttp_transport(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(litellm, "http2", True)
     assert AsyncHTTPHandler.should_use_aiohttp_transport() is False
-    assert AsyncHTTPHandler.create_async_transport() is None
+    assert not isinstance(AsyncHTTPHandler.create_async_transport(), LiteLLMAiohttpTransport)
 
     monkeypatch.setattr(litellm, "http2", False)
     monkeypatch.setenv("LITELLM_HTTP2", "True")
     assert AsyncHTTPHandler.should_use_aiohttp_transport() is False
-    assert AsyncHTTPHandler.create_async_transport() is None
+    assert not isinstance(AsyncHTTPHandler.create_async_transport(), LiteLLMAiohttpTransport)
 
 
 @pytest.mark.asyncio

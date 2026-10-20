@@ -11,9 +11,11 @@ import ssl
 import threading
 import time
 from collections.abc import Callable, Generator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -35,6 +37,9 @@ from integration._support.ports import allocate_port
 from integration._support.vertex import service_account_json
 
 STREAM_CHUNKS: Final = 3
+HELD_SEARCHES: Final = 150
+HOLD_SECONDS: Final = 10.0
+_HOLD_ROOMS: Final = MappingProxyType({"hold-async": queue.SimpleQueue[int](), "hold-sync": queue.SimpleQueue[int]()})
 VERTEX_SERVING_CONFIG_PATH: Final = (
     "/v1/projects/p/locations/global/collections/default_collection/engines/e/servingConfigs/default_search"
 )
@@ -96,6 +101,13 @@ async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallab
         if message["type"] == "http.request" and not message["more_body"]:
             break
     version: Final = scope["http_version"]
+    hold_room: Final = _HOLD_ROOMS.get(scope["path"].split("/")[1])
+    if hold_room is not None and scope["path"].endswith(":search"):
+        client: Final = scope["client"]
+        await _send_json(
+            send, {"results": [{"id": await _hold_until_all_arrive(hold_room, client[1] if client else 0)}]}
+        )
+        return
     if scope["path"] == "/_oauth/token":
         await _send_json(send, {"access_token": "scripted", "expires_in": 3600, "token_type": "Bearer"})
         return
@@ -117,6 +129,14 @@ async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallab
         await send(HTTPResponseBodyEvent(type="http.response.body", body=b"", more_body=False))
         return
     await _send_json(send, {"http_version": version})
+
+
+async def _hold_until_all_arrive(arrivals: queue.SimpleQueue[int], client_port: int) -> str:
+    arrivals.put(client_port)
+    deadline: Final = time.monotonic() + HOLD_SECONDS
+    while arrivals.qsize() < HELD_SEARCHES and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    return "held-together" if arrivals.qsize() >= HELD_SEARCHES else "released-alone"
 
 
 async def _send_json(send: ASGISendCallable, body: dict[str, object]) -> None:
@@ -454,11 +474,17 @@ def _answer_every_connection(context: ssl.SSLContext, raw: socket.socket, connec
 
 @contextmanager
 def _raw_tls_peer(
-    peer: TlsPeer, alpn: str, serve_connection: Callable[[ssl.SSLContext, socket.socket, int], None]
+    peer: TlsPeer,
+    alpn: str,
+    serve_connection: Callable[[ssl.SSLContext, socket.socket, int], None],
+    client_ca: Path | None = None,
 ) -> Generator[tuple[str, queue.SimpleQueue[int]]]:
     context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(peer.cert_file, peer.key_file)
     context.set_alpn_protocols([alpn])
+    if client_ca is not None:
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.load_verify_locations(client_ca)
     stop: Final = threading.Event()
     accepted: Final = queue.SimpleQueue[int]()
 
@@ -532,3 +558,73 @@ def test_vertex_search_keeps_its_http2_connection_across_an_idle_gap(
     with _raw_tls_peer(http2_tls_peer, "h2", _answer_every_connection) as (search_url, accepted):
         assert asyncio.run(_search_twice(search_url)) == ["answered", "answered"]
         assert accepted.qsize() == 1
+
+
+def _held_burst(peer: TlsPeer, room: str) -> list[str]:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    url: Final = f"{peer.url}/{room}/default_search:search"
+    if room == "hold-sync":
+        handler: Final = HTTPHandler(ssl_verify=str(peer.cert_file), http2=True)
+        try:
+            with ThreadPoolExecutor(max_workers=HELD_SEARCHES) as pool:
+                responses: Final = tuple(pool.map(lambda _: handler.post(url, json={}), range(HELD_SEARCHES)))
+            return [response.json()["results"][0]["id"] for response in responses]
+        finally:
+            handler.close()
+
+    async def _burst() -> list[str]:
+        async_handler: Final = AsyncHTTPHandler(ssl_verify=str(peer.cert_file), http2=True)
+        try:
+            async_responses: Final = await asyncio.gather(
+                *(async_handler.post(url, json={}) for _ in range(HELD_SEARCHES))
+            )
+            return [response.json()["results"][0]["id"] for response in async_responses]
+        finally:
+            await async_handler.close()
+
+    return asyncio.run(_burst())
+
+
+@pytest.mark.parametrize("room", ["hold-async", "hold-sync"])
+def test_http2_handlers_open_another_connection_once_the_streams_run_out(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, room: str
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+
+    search_ids: Final = _held_burst(http2_tls_peer, room)
+    arrivals: Final = _HOLD_ROOMS[room]
+    client_ports: Final = frozenset(arrivals.get_nowait() for _ in range(arrivals.qsize()))
+
+    assert search_ids == ["held-together"] * HELD_SEARCHES
+    assert len(client_ports) == 2
+
+
+def test_forced_ipv4_handlers_honour_ssl_verify_false(monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "force_ipv4", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    for enabled in (False, True):
+        _set_http2(monkeypatch, enabled)
+        _assert_negotiated(_async_exchange(http2_tls_peer.url), enabled)
+        _assert_negotiated(_sync_exchange(http2_tls_peer.url), enabled)
+
+
+def test_vertex_search_over_forced_ipv4_presents_the_client_certificate(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, tmp_path: Path
+) -> None:
+    import litellm
+
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    monkeypatch.setattr(litellm, "force_ipv4", True)
+    client_pem: Final = tmp_path / "client.pem"
+    client_pem.write_bytes(http2_tls_peer.cert_file.read_bytes() + http2_tls_peer.key_file.read_bytes())
+    monkeypatch.setenv("SSL_CERTIFICATE", str(client_pem))
+
+    with _raw_tls_peer(http2_tls_peer, "h2", _answer_every_connection, client_ca=http2_tls_peer.cert_file) as (
+        search_url,
+        _,
+    ):
+        assert _vertex_search_file_ids(http2_tls_peer, search_url=search_url) == ["answered"]
+        assert asyncio.run(_avertex_search_file_ids(http2_tls_peer, search_url=search_url)) == ["answered"]

@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread, HTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -73,7 +74,7 @@ _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes
 
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
-_HttpxTransportT = TypeVar("_HttpxTransportT", HTTPTransport, AsyncHTTPTransport)
+_HttpxTransportT: Final = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
 
 HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
 
@@ -1245,7 +1246,7 @@ class AsyncHTTPHandler:
         http2: bool = False,
         cert: CertTypes | None = None,
         limits: httpx.Limits = DEFAULT_LIMITS,
-    ) -> LiteLLMAiohttpTransport | AsyncHTTPTransport | None:
+    ) -> LiteLLMAiohttpTransport | AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None:
         """
         - Creates a transport for httpx.AsyncClient
             - if litellm.force_ipv4 is True, it will return AsyncHTTPTransport with local_address="0.0.0.0"
@@ -1430,38 +1431,43 @@ class AsyncHTTPHandler:
         verify: ssl.SSLContext | bool = True,
         cert: CertTypes | None = None,
         limits: httpx.Limits = DEFAULT_LIMITS,
-    ) -> AsyncHTTPTransport | None:
+    ) -> AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None:
         """
         Creates an AsyncHTTPTransport
 
+        - If HTTP/2 is on, it spreads requests over as many HTTP/2 connections as the stream limit needs
         - If force_ipv4 is True, it will create an AsyncHTTPTransport with local_address set to "0.0.0.0"
-        - [Default] If force_ipv4 is False, it will return None
+        - [Default] Otherwise it will return None
         """
-        if litellm.force_ipv4:
-            return AsyncHTTPTransport(
-                local_address=_IPV4_LOCAL_ADDRESS,
-                verify=verify,
-                cert=cert,
-                http2=http2 or http2_enabled(),
-                limits=limits,
+        local_address: Final = _IPV4_LOCAL_ADDRESS if litellm.force_ipv4 else None
+        if http2 or http2_enabled():
+            return AsyncHTTP2ConnectionSpread(
+                lambda: AsyncHTTPTransport(
+                    local_address=local_address, verify=verify, cert=cert, http2=True, limits=limits
+                )
             )
-        else:
-            return None
+        if litellm.force_ipv4:
+            return AsyncHTTPTransport(local_address=local_address, verify=verify, cert=cert, limits=limits)
+        return None
 
     @staticmethod
     def create_httpx_proxy_mounts(
-        transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | None,
+        transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None,
         verify: VerifyTypes,
         cert: CertTypes | None,
         http2: bool = False,
         limits: httpx.Limits = DEFAULT_LIMITS,
-    ) -> Mapping[str, AsyncHTTPTransport | None] | None:
-        if not isinstance(transport, AsyncHTTPTransport):
+    ) -> Mapping[str, httpx.AsyncBaseTransport | None] | None:
+        if not isinstance(transport, (AsyncHTTPTransport, AsyncHTTP2ConnectionSpread)):
             return None
-        return _environment_proxy_mounts(
-            lambda proxy_url: AsyncHTTPTransport(
-                proxy=proxy_url, verify=verify, cert=cert, http2=http2 or http2_enabled(), limits=limits
+        if http2 or http2_enabled():
+            return _environment_proxy_mounts(
+                lambda proxy_url: AsyncHTTP2ConnectionSpread(
+                    lambda: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=True, limits=limits)
+                )
             )
+        return _environment_proxy_mounts(
+            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, limits=limits)
         )
 
     _create_httpx_proxy_mounts = create_httpx_proxy_mounts
@@ -1500,10 +1506,12 @@ class HTTPHandler:
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers() if not self.disable_default_headers else None
 
+        transport: Final = self._create_sync_transport(verify=ssl_config, cert=cert, http2=use_http2)
+
         # Create a client with a connection pool
         return httpx.Client(
-            transport=self._create_sync_transport(verify=ssl_config, cert=cert, http2=use_http2),
-            mounts=self._create_sync_proxy_mounts(verify=ssl_config, cert=cert, http2=use_http2),
+            transport=transport,
+            mounts=self._create_sync_proxy_mounts(transport, verify=ssl_config, cert=cert, http2=use_http2),
             timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
             verify=ssl_config,
             cert=cert,
@@ -1786,29 +1794,44 @@ class HTTPHandler:
             pass
 
     @staticmethod
-    def _create_sync_transport(verify: VerifyTypes, cert: CertTypes | None, http2: bool) -> HTTPTransport | None:
+    def _create_sync_transport(
+        verify: VerifyTypes, cert: CertTypes | None, http2: bool
+    ) -> HTTPTransport | HTTP2ConnectionSpread | None:
         """
-        Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
-        Otherwise, return None.
+        Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True, and one that spreads requests over
+        as many HTTP/2 connections as the stream limit needs if HTTP/2 is on.
+        Otherwise, return litellm.sync_transport or None.
 
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
+        custom_transport: Final = None if litellm.force_ipv4 else getattr(litellm, "sync_transport", None)
+        if custom_transport is not None:
+            return custom_transport
+        local_address: Final = _IPV4_LOCAL_ADDRESS if litellm.force_ipv4 else None
+        if http2:
+            return HTTP2ConnectionSpread(
+                lambda: HTTPTransport(local_address=local_address, verify=verify, cert=cert, http2=True)
+            )
         if litellm.force_ipv4:
-            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, verify=verify, cert=cert, http2=http2)
-        else:
-            return getattr(litellm, "sync_transport", None)
+            return HTTPTransport(local_address=local_address, verify=verify, cert=cert)
+        return None
 
     @staticmethod
     def _create_sync_proxy_mounts(
+        transport: httpx.BaseTransport | None,
         verify: VerifyTypes,
         cert: CertTypes | None,
         http2: bool,
-    ) -> Mapping[str, HTTPTransport | None] | None:
-        if not litellm.force_ipv4:
+    ) -> Mapping[str, httpx.BaseTransport | None] | None:
+        if transport is None or transport is getattr(litellm, "sync_transport", None):
             return None
-        return _environment_proxy_mounts(
-            lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2)
-        )
+        if http2:
+            return _environment_proxy_mounts(
+                lambda proxy_url: HTTP2ConnectionSpread(
+                    lambda: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=True)
+                )
+            )
+        return _environment_proxy_mounts(lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert))
 
 
 def get_async_httpx_client(
