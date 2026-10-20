@@ -560,8 +560,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Internal sync generator that parses SSE and yields ModelResponse chunks.
         """
         buffer = ""
-        sent_finish = False
-        message_stopped = False  # runtimes that send no metadata or final message end on messageStop
+        sent_finish = False  # rebind-ok: flips when a finish chunk goes out
+        message_stopped = False  # rebind-ok: flips on messageStop, the only end some runtimes send
         for text_chunk in response.iter_text():
             buffer += text_chunk
 
@@ -790,8 +790,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Internal async generator that parses SSE and yields ModelResponse chunks.
         """
         buffer = ""
-        sent_finish = False
-        message_stopped = False  # runtimes that send no metadata or final message end on messageStop
+        sent_finish = False  # rebind-ok: flips when a finish chunk goes out
+        message_stopped = False  # rebind-ok: flips on messageStop, the only end some runtimes send
         async for text_chunk in response.aiter_text():
             buffer += text_chunk
 
