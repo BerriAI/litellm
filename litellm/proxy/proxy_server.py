@@ -7833,9 +7833,9 @@ class ProxyConfig:
         externally_managed_ids: Final[frozenset[str]] = frozenset(
             model_id
             for model_id in router_model_ids
-            if (deployment := llm_router.get_deployment(model_id=model_id)) is not None
-            and deployment.model_info.db_model is False
-            and deployment.model_info.get("managed_by")
+            if (managed_deployment := llm_router.get_deployment(model_id=model_id)) is not None
+            and managed_deployment.model_info.db_model is False
+            and managed_deployment.model_info.get("managed_by")
         )
         desired_ids: Final = frozenset(combined_id_list) | kept_config_ids | externally_managed_ids
 
