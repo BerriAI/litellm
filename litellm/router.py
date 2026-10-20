@@ -10028,39 +10028,7 @@ class Router:
                     model_info=_model_info,
                 )
             )
-            for field in CustomPricingLiteLLMParams.model_fields:
-                if deployment.litellm_params.get(field) is not None:
-                    _model_info[field] = deployment.litellm_params[field]
-
-            Router._inherit_builtin_base_rates_for_off_peak(
-                model_info=_model_info,
-                backend_model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
-            if _model_info.get("input_cost_per_token") is not None:
-                Router._inherit_builtin_cache_pricing(
-                    model_info=_model_info,
-                    backend_model=deployment.litellm_params.model,
-                    custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-                )
-            Router._inherit_builtin_service_tier_pricing(
-                model_info=_model_info,
-                backend_model=Router._cost_map_backend_model(deployment),
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
-            Router._inherit_builtin_tiered_output_rate(
-                model_info=_model_info,
-                backend_model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
-
-            ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
-            Router._register_deployment_in_model_cost(
-                model_id=deployment.model_info.id,
-                model_info=_model_info,
-                model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
+            Router._register_deployment_pricing(deployment)
 
             ## Check if LLM Deployment is allowed for this deployment
             if self.deployment_is_active_for_environment(deployment=deployment) is not True:

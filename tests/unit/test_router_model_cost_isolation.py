@@ -836,12 +836,14 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
 @pytest.mark.parametrize("rate", (0.0, 0.004))
 @pytest.mark.parametrize("explicit_base", (False, True))
 @pytest.mark.parametrize("provider", (None, "bedrock"))
+@pytest.mark.parametrize("registration_path", ("direct", "startup", "reload"))
 def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
     monkeypatch: pytest.MonkeyPatch,
     field: str,
     rate: float,
     explicit_base: bool,
     provider: str | None,
+    registration_path: str,
 ) -> None:
     from litellm.cost_calculator import completion_cost
     from litellm.types.utils import ModelResponse, Usage, PromptTokensDetailsWrapper
@@ -875,7 +877,12 @@ def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
             }
         ),
     )
-    Router._register_deployment_pricing(deployment)
+    if registration_path == "direct":
+        Router._register_deployment_pricing(deployment)
+    else:
+        router: Final = Router(model_list=[deployment.to_json(exclude_none=True)])
+        if registration_path == "reload":
+            router.replay_model_cost_registrations()
     response: Final = ModelResponse(
         model=model,
         usage=Usage(
@@ -2740,14 +2747,7 @@ def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered() -> None:
         )
 
         rebuilt = litellm.model_cost["priced-id"]
-        assert at_boot.items() <= rebuilt.items(), (
-            f"the rebuild changed or dropped a field the boot registration wrote: "
-            f"{ {k: (v, rebuilt.get(k)) for k, v in at_boot.items() if rebuilt.get(k) != v} }"
-        )
-        assert {field: rebuilt[field] for field in set(rebuilt) - set(at_boot)} == {
-            "db_model": False,
-            "member_auto_router": False,
-        }
+        assert at_boot == rebuilt
         assert "member_auto_router" not in litellm.model_cost["gpt-4o"]
         assert router.model_list
     finally:
