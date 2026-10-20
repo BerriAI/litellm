@@ -62,7 +62,7 @@ def apply_window_redaction(content: str, window: TrendAITextWindow, redacted: st
 
 def _last_user_text_parts(structured_messages: Sequence[AllMessageValues]) -> tuple[str, ...] | None:
     last_user_message: Final = next(
-        (message for message in reversed(structured_messages) if message.get("role") == "user"), None
+        (message for message in reversed(structured_messages) if message["role"] == "user"), None
     )
     return message_slot_texts(last_user_message) if last_user_message is not None else None
 
