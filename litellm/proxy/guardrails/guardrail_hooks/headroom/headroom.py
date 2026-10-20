@@ -36,6 +36,7 @@ from litellm.proxy.guardrails.guardrail_hooks.content_text import (
     assistant_text_from_response,
     content_to_text,
     is_all_text_parts,
+    is_rewriteable_text_content,
     merge_rewritten_text_parts,
     replace_text_content,
 )
@@ -301,6 +302,11 @@ def _protected_indices(
             for index in group
         )
         | frozenset(index for index, message in enumerate(messages) if message.get("role") == "assistant")
+        | frozenset(
+            index
+            for index, message in enumerate(messages)
+            if compress_latest_turn and not is_rewriteable_text_content(message.get("content"))
+        )
     )
 
 
@@ -857,11 +863,43 @@ class HeadroomGuardrail(CustomGuardrail):
         if not messages:
             return inputs
 
+        from litellm.llms.base_llm.guardrail_translation.utils import (
+            effective_skip_system_message_for_guardrail,
+            scoped_structured_message_indices,
+        )
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+            patch_response_request_fields,
+            rewriteable_response_message_indices,
+        )
+
+        native_request: Final = self.compress_latest_turn and "input" in request_data
+        full_messages: Final = (
+            OpenAIResponsesHandler().get_structured_messages(request_data) or [] if native_request else []
+        )
+        scoped_indices: Final = scoped_structured_message_indices(
+            full_messages,
+            scan_only_tool_results=False,
+            skip_system=effective_skip_system_message_for_guardrail(self),
+            skip_tool=False,
+        )
+        rewriteable: Final = (
+            rewriteable_response_message_indices(
+                request_data.get("input"), request_data.get("instructions"), full_messages
+            )
+            if native_request
+            else frozenset()
+        )
+        native_protected: Final = frozenset(
+            index for index, original_index in enumerate(scoped_indices) if original_index not in rewriteable
+        )
+
         typed_request: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data)
         raw_messages: Final = typed_request.get("messages")
         raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
-        protected_indices: Final = _protected_indices(
-            messages, raw_retrieve_call_ids, compress_latest_turn=self.compress_latest_turn
+        protected_indices: Final = (
+            _protected_indices(messages, raw_retrieve_call_ids, compress_latest_turn=self.compress_latest_turn)
+            | native_protected
         )
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
@@ -910,37 +948,20 @@ class HeadroomGuardrail(CustomGuardrail):
             protected_indices=protected_indices,
         )
 
-        if self.compress_latest_turn and "input" in request_data:
-            from litellm.llms.base_llm.guardrail_translation.utils import (
-                effective_skip_system_message_for_guardrail,
-                scoped_structured_message_indices,
-            )
-            from litellm.llms.openai.responses.guardrail_translation.handler import (
-                OpenAIResponsesHandler,
-                patch_response_request_fields,
-            )
-
-            full_messages: Final = OpenAIResponsesHandler().get_structured_messages(request_data) or []
-            scoped_indices: Final = scoped_structured_message_indices(
+        if (
+            native_request
+            and patch_response_request_fields(
+                typed_request.get("input"),
+                typed_request.get("instructions"),
                 full_messages,
-                scan_only_tool_results=False,
-                skip_system=effective_skip_system_message_for_guardrail(self),
-                skip_tool=False,
+                compressed,
+                preserve_text_metadata=True,
+                scoped_indices=scoped_indices,
             )
-
-            if (
-                patch_response_request_fields(
-                    typed_request.get("input"),
-                    typed_request.get("instructions"),
-                    full_messages,
-                    compressed,
-                    preserve_text_metadata=True,
-                    scoped_indices=scoped_indices,
-                )
-                is None
-            ):
-                self._record_skipped_rewrite(request_data, start_time, end_time)
-                return inputs
+            is None
+        ):
+            self._record_skipped_rewrite(request_data, start_time, end_time)
+            return inputs
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=result.stats,

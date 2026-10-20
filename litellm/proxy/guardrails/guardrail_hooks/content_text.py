@@ -101,23 +101,22 @@ def assistant_text_from_response(response: object) -> str | None:
 _TEXT_PARTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
-def replace_text_content(content: object, text: str) -> object:
-    if not text.strip():
-        return None
+def is_rewriteable_text_content(content: object) -> bool:
     if isinstance(content, str):
-        return text
-    if not isinstance(content, list) or not content:
-        return None
+        return True
+    if not isinstance(content, list) or len(content) != 1:
+        return False
     try:
         parts: Final = _TEXT_PARTS_ADAPTER.validate_python(content)
     except ValidationError:
+        return False
+    return parts[0].get("type") in ("text", "input_text", "output_text") and isinstance(parts[0].get("text"), str)
+
+
+def replace_text_content(content: object, text: str) -> object:
+    if not text.strip() or not is_rewriteable_text_content(content):
         return None
-    if any(
-        part.get("type") not in ("text", "input_text", "output_text") or not isinstance(part.get("text"), str)
-        for part in parts
-    ):
-        return None
-    texts: Final = text.split("\n\n", len(parts) - 1)
-    if len(texts) != len(parts) or any(not value.strip() for value in texts):
-        return None
-    return [{**part, "text": value} for part, value in zip(parts, texts)]
+    if isinstance(content, str):
+        return text
+    parts: Final = _TEXT_PARTS_ADAPTER.validate_python(content)
+    return [{**parts[0], "text": text}]

@@ -4204,8 +4204,7 @@ async def test_headroom_latest_turn_patches_native_tool_result_with_metadata(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raw_input", ["long " * 100, [{"role": "user", "content": [
-    {"type": "input_text", "text": "long " * 100, "source": "first"},
-    {"type": "input_text", "text": "long " * 100, "source": "second"},
+    {"type": "input_text", "text": "long\n\nparagraph " * 100, "source": "first"},
 ]}]])
 async def test_headroom_latest_user_input_preserves_native_text_metadata(
     raw_input: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
@@ -4221,8 +4220,7 @@ async def test_headroom_latest_user_input_preserves_native_text_metadata(
     assert route.called
     assert result["input"] == ([{"role": "user", "content": "short\n\nsummary"}] if isinstance(raw_input, str) else [
         {"role": "user", "content": [
-            {"type": "input_text", "text": "short", "source": "first"},
-            {"type": "input_text", "text": "summary", "source": "second"},
+            {"type": "input_text", "text": "short\n\nsummary", "source": "first"},
         ]},
     ])
 
@@ -4243,19 +4241,13 @@ async def test_headroom_unsafe_native_mapping_preserves_request_and_tools(
         {"type": "function_call_output", "call_id": "call_1", "output": "long " * 100},
     ]
     original: Final = {"input": items}
-    route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(200, json={
-        "messages": [{"role": "tool", "tool_call_id": "call_1", "content": "short"}],
-        "ccr_hashes": ["abcdefabcdef"],
-    })
     result: Final = await OpenAIResponsesHandler().process_input_messages(original, callback)
-    assert route.called
+    assert not respx_mock.calls
     assert result["input"] == items
     assert "tools" not in result
     _, metadata = get_or_create_metadata_bucket(original)
     entries: Final = metadata.get("standard_logging_guardrail_information", [])
-    assert len(entries) == 1
-    assert entries[0]["guardrail_status"] == "guardrail_failed_to_respond"
-    assert entries[0]["duration"] >= 0
+    assert entries == []
     assert extract_compression_saved_tokens({"guardrail_information": entries}) == 0
 
 
@@ -4301,3 +4293,43 @@ async def test_headroom_skipped_system_messages_preserve_response_compression(
         {"role": "user", "content": "Read new"}, items[len(prefix) + 5],
         {"type": "function_call_output", "call_id": "new_call", "output": "new summary"},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", [
+    [{"type": "input_text", "text": "First\n\nparagraph", "source": "one"},
+     {"type": "input_text", "text": "Second", "source": "two"}],
+    [{"type": "input_text", "text": "Image context"},
+     {"type": "input_image", "image_url": "https://example.com/image.png"}],
+])
+async def test_headroom_native_tool_parts_remain_intact_while_latest_output_compresses(
+    output: list[dict[str, object]], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base="https://headroom.example.com", compress_latest_turn=True)
+    items: Final = [
+        {"type": "function_call", "call_id": "old", "name": "read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "old", "output": output},
+        {"role": "user", "content": "Read new data"},
+        {"type": "function_call", "call_id": "new", "name": "read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "new", "output": "new " * 500},
+    ]
+    route: Final = respx_mock.post("https://headroom.example.com/v1/compress").respond(200, json={"messages": [
+        {"role": "user", "content": "Read new data"},
+        {"role": "tool", "tool_call_id": "new", "content": "new summary"},
+    ]})
+    result: Final = await OpenAIResponsesHandler().process_input_messages({"input": items}, callback)
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": "Read new data"},
+        {"role": "tool", "tool_call_id": "new", "content": "new " * 500},
+    ]
+    assert result["input"] == [*items[:-1], {**items[-1], "output": "new summary"}]
+
+
+@pytest.mark.parametrize("raw_input", [None, 42, ["invalid item"], [{1: "invalid key"}]])
+def test_native_compression_excludes_invalid_input_shapes(raw_input: object) -> None:
+    from litellm.llms.openai.responses.guardrail_translation.handler import rewriteable_response_message_indices
+
+    assert rewriteable_response_message_indices(raw_input, None, []) == frozenset()

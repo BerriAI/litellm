@@ -32,6 +32,7 @@ import copy
 import json
 import time
 import uuid
+from collections import Counter
 from collections.abc import Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, repeat
@@ -478,6 +479,37 @@ def _input_item_provenance(
         for message_index in range(boundaries[unit_index], boundaries[unit_index + 1])
     )
     return item_for_message, tainted
+
+
+_RESPONSE_INPUT_ITEMS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def rewriteable_response_message_indices(
+    raw_input: object, instructions: object, original_messages: Sequence[object]
+) -> frozenset[int]:
+    from litellm.proxy.guardrails.guardrail_hooks.content_text import is_rewriteable_text_content
+
+    input_items: Final = [{"role": "user", "content": raw_input}] if isinstance(raw_input, str) else raw_input
+    if not isinstance(input_items, list):
+        return frozenset()
+    try:
+        items: Final = _RESPONSE_INPUT_ITEMS_ADAPTER.validate_python(input_items)
+    except ValidationError:
+        return frozenset()
+    offset: Final = 1 if instructions else 0
+    provenance: Final = _input_item_provenance(items, tuple(original_messages)[offset:])
+    if provenance is None:
+        return frozenset()
+    item_for_message, tainted = provenance
+    item_counts: Final = Counter(item_for_message.values())
+    return frozenset(
+        message_index + offset
+        for message_index, item_index in item_for_message.items()
+        if message_index not in tainted
+        and item_counts[item_index] == 1
+        and (field := _item_rewrite_field(items[item_index])) is not None
+        and is_rewriteable_text_content(items[item_index].get(field))
+    )
 
 
 class _RequestFields(NamedTuple):
