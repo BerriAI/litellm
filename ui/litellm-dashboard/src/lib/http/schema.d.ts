@@ -11084,46 +11084,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/openai/v1/realtime/translations/calls": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Proxy Realtime Calls
-         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
-         */
-        post: operations["proxy_realtime_calls_openai_v1_realtime_translations_calls_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/openai/v1/realtime/translations/client_secrets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create Realtime Client Secret
-         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
-         */
-        post: operations["create_realtime_client_secret_openai_v1_realtime_translations_client_secrets_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/openai/v1/responses": {
         parameters: {
             query?: never;
@@ -48064,6 +48024,54 @@ export interface components {
              */
             success_definition: string;
         };
+        /** TranscriptionDetectedLanguage */
+        TranscriptionDetectedLanguage: {
+            /** Code */
+            code: string;
+        };
+        /** TranscriptionResponse */
+        TranscriptionResponse: {
+            /** Languages */
+            languages?: components["schemas"]["TranscriptionDetectedLanguage"][] | null;
+            /** Text */
+            text?: string | null;
+            /** Usage */
+            usage?: components["schemas"]["TranscriptionUsageDurationObject"] | components["schemas"]["TranscriptionUsageTokensObject"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** TranscriptionUsageDurationObject */
+        TranscriptionUsageDurationObject: {
+            /** Seconds */
+            seconds: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "duration";
+        };
+        /** TranscriptionUsageInputTokenDetailsObject */
+        TranscriptionUsageInputTokenDetailsObject: {
+            /** Audio Tokens */
+            audio_tokens: number;
+            /** Text Tokens */
+            text_tokens: number;
+        };
+        /** TranscriptionUsageTokensObject */
+        TranscriptionUsageTokensObject: {
+            input_token_details?: components["schemas"]["TranscriptionUsageInputTokenDetailsObject"] | null;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tokens";
+        };
         /** TransformRequestBody */
         TransformRequestBody: {
             call_type: components["schemas"]["CallTypes"];
@@ -52777,7 +52785,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TranscriptionResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -66920,156 +66929,6 @@ export interface operations {
             };
         };
     };
-    proxy_realtime_calls_openai_v1_realtime_translations_calls_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/sdp": string;
-            };
-        };
-        responses: {
-            /** @description WebRTC SDP answer */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                    "application/sdp": string;
-                };
-            };
-        };
-    };
-    create_realtime_client_secret_openai_v1_realtime_translations_client_secrets_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "model": "gpt-realtime-translate",
-                 *       "session": {
-                 *         "model": "gpt-realtime-translate",
-                 *         "type": "translation"
-                 *       }
-                 *     }
-                 */
-                "application/json": {
-                    expires_after?: {
-                        /**
-                         * Anchor
-                         * @default created_at
-                         */
-                        anchor?: string | null;
-                        /** Seconds */
-                        seconds?: number | null;
-                    } | null;
-                    /** Model */
-                    model?: string | null;
-                    session?: ({
-                        audio?: ({
-                            input?: ({
-                                /** Format */
-                                format?: string | {
-                                    [key: string]: unknown;
-                                } | null;
-                                /** Noise Reduction */
-                                noise_reduction?: {
-                                    [key: string]: unknown;
-                                } | null;
-                                transcription?: ({
-                                    /** Delay */
-                                    delay?: ("minimal" | "low" | "medium" | "high" | "xhigh") | null;
-                                    /** Keywords */
-                                    keywords?: string[] | null;
-                                    /** Language */
-                                    language?: string | null;
-                                    /** Languages */
-                                    languages?: string[] | null;
-                                    /** Model */
-                                    model?: string | null;
-                                    /** Prompt */
-                                    prompt?: string | null;
-                                } & {
-                                    [key: string]: unknown;
-                                }) | null;
-                                /** Turn Detection */
-                                turn_detection?: {
-                                    [key: string]: unknown;
-                                } | null;
-                            } & {
-                                [key: string]: unknown;
-                            }) | null;
-                            output?: ({
-                                /** Format */
-                                format?: string | {
-                                    [key: string]: unknown;
-                                } | null;
-                                /** Language */
-                                language?: string | null;
-                                /** Voice */
-                                voice?: string | {
-                                    [key: string]: unknown;
-                                } | null;
-                            } & {
-                                [key: string]: unknown;
-                            }) | null;
-                        } & {
-                            [key: string]: unknown;
-                        }) | null;
-                        /** Include */
-                        include?: string[] | null;
-                        /** Instructions */
-                        instructions?: string | null;
-                        /** Max Output Tokens */
-                        max_output_tokens?: number | string | null;
-                        /** Model */
-                        model?: string | null;
-                        /** Output Modalities */
-                        output_modalities?: string[] | null;
-                        /** Prompt */
-                        prompt?: {
-                            [key: string]: unknown;
-                        } | null;
-                        /** Tool Choice */
-                        tool_choice?: unknown | null;
-                        /** Tools */
-                        tools?: {
-                            [key: string]: unknown;
-                        }[] | null;
-                        /** Tracing */
-                        tracing?: unknown | null;
-                        /** Truncation */
-                        truncation?: unknown | null;
-                        /** Type */
-                        type?: ("realtime" | "transcription" | "translation") | null;
-                    } & {
-                        [key: string]: unknown;
-                    }) | null;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RealtimeClientSecretResponse"];
-                };
-            };
-        };
-    };
     responses_api_openai_v1_responses_post: {
         parameters: {
             query?: never;
@@ -70457,13 +70316,12 @@ export interface operations {
         };
         responses: {
             /** @description WebRTC SDP answer */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
-                    "application/sdp": string;
+                    "text/plain": string;
                 };
             };
         };
@@ -77823,7 +77681,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TranscriptionResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -81527,13 +81386,12 @@ export interface operations {
         };
         responses: {
             /** @description WebRTC SDP answer */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
-                    "application/sdp": string;
+                    "text/plain": string;
                 };
             };
         };

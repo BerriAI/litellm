@@ -199,6 +199,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountMessagesFormat,
     TokenCountResponse,
+    TranscriptionResponse,
     echoed_cost_map_pricing_fields,
     is_server_derived_pricing_key,
     pricing_override_fields,
@@ -13360,11 +13361,13 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
+    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
 )
 @router.post(
     "/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
+    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
 )
 async def audio_transcriptions(
     request: Request,
@@ -13452,9 +13455,42 @@ async def audio_transcriptions(
         finally:
             file_object.close()  # close the file read in by io library
 
-        if data.get("stream") is True:
-            if not hasattr(response, "__aiter__"):
-                raise TypeError(f"Streaming transcription returned {type(response).__name__}, expected an async stream")
+        ### ALERTING ###
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
+
+        ### RESPONSE HEADERS ###
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        model_id: Final = hidden_params.get("model_id", None) or ""
+        cache_key: Final = hidden_params.get("cache_key", None) or ""
+        api_base: Final = hidden_params.get("api_base", None) or ""
+        response_cost: Final = hidden_params.get("response_cost", None) or ""
+        response_call_id: Final = hidden_params.get("litellm_call_id", None) or litellm_call_id
+        additional_headers: Final[dict] = hidden_params.get("additional_headers", {}) or {}
+
+        custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            model_id=model_id,
+            cache_key=cache_key,
+            api_base=api_base,
+            version=version,
+            response_cost=response_cost,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            call_id=response_call_id,
+            request_data=data,
+            hidden_params=hidden_params,
+            **additional_headers,
+        )
+
+        # Call response headers hook (matches base_process_llm_request behavior)
+        callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        response_headers: Final = {**custom_headers, **(callback_headers or {})}
+
+        if data.get("stream") is True and hasattr(response, "__aiter__"):
             stream_response: Final = cast(AsyncIterator[TranscriptionStreamEvent], response)
 
             async def transcription_event_stream(
@@ -13473,45 +13509,10 @@ async def audio_transcriptions(
             return StreamingResponse(
                 transcription_event_stream(stream_response),
                 media_type="text/event-stream",
+                headers=response_headers,
             )
 
-        ### ALERTING ###
-        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
-
-        ### RESPONSE HEADERS ###
-        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
-        model_id: Final = hidden_params.get("model_id", None) or ""
-        cache_key: Final = hidden_params.get("cache_key", None) or ""
-        api_base: Final = hidden_params.get("api_base", None) or ""
-        response_cost: Final = hidden_params.get("response_cost", None) or ""
-        response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
-        additional_headers: Final[dict] = hidden_params.get("additional_headers", {}) or {}
-
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                call_id=response_call_id,
-                request_data=data,
-                hidden_params=hidden_params,
-                **additional_headers,
-            )
-        )
-
-        # Call response headers hook (matches base_process_llm_request behavior)
-        callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_headers=dict(request.headers),
-        )
-        if callback_headers:
-            fastapi_response.headers.update(callback_headers)
+        fastapi_response.headers.update(response_headers)
 
         return response
     except Exception as e:

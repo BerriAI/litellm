@@ -10,7 +10,7 @@ Pins (PR2):
 from __future__ import annotations
 
 import io
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from openai import AsyncOpenAI
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -350,9 +351,58 @@ def test_streaming_transcription_rejects_applicable_output_guardrails(
             data={"model": "gpt-transcribe", "stream": "true"},
         )
 
-    assert response.status_code == expected_status
-    if expected_status == 400:
-        assert "stream=false" in response.json()["error"]["message"]
-        assert "hello world" not in response.text
-    else:
-        assert '"text":"hello world"' in response.text
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert '"text":"hello world"' in response.text
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+def test_streamed_transcription_returns_the_litellm_call_and_model_headers(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b'data: {"type":"transcript.text.done","text":"hello world"}\n\n',
+                    headers={"content-type": "text/event-stream"},
+                )
+            )
+        ),
+    )
+
+    async def route_to_the_sdk(
+        data: Mapping[str, object], route_type: str, llm_router: object, user_model: object
+    ) -> object:
+        return litellm.atranscription(
+            model="openai/gpt-transcribe",
+            file=data["file"],
+            stream=True,
+            client=upstream,
+            litellm_call_id=data["litellm_call_id"],
+            model_info={"id": "transcription-deployment"},
+        )
+
+    monkeypatch.setattr(proxy_server, "route_request", route_to_the_sdk)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+            headers={"x-litellm-call-id": "streamed-transcription-call"},
+        )
+
+    assert response.status_code == 200
+    assert '"text":"hello world"' in response.text
+    assert response.headers["x-litellm-call-id"] == "streamed-transcription-call"
+    assert response.headers["x-litellm-model-id"] == "transcription-deployment"
+    assert "x-litellm-response-cost" not in response.headers
+    proxy_server.proxy_logging_obj.update_request_status.assert_called_once_with(
+        litellm_call_id="streamed-transcription-call", status="success"
+    )

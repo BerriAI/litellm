@@ -1,8 +1,12 @@
 import asyncio
+import ipaddress
 import json
+import ssl
+import threading
 import time
-from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import TracebackType
 from typing import Final
@@ -11,17 +15,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.realtime_streaming import TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE, RealTimeStreaming
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.realtime import RealtimeQueryParams
 
 
 @pytest.fixture
@@ -745,28 +755,39 @@ _GA_CLIENT: Final = _ClientWebSocketWithHeaders(headers=())
 _BETA_CLIENT: Final = _ClientWebSocketWithHeaders(headers=((b"openai-beta", b"realtime=v1"),))
 
 
-@pytest.mark.parametrize("model", ["gpt-realtime-2.1", "gpt-realtime-2", "gpt-realtime-2-2026-05-06"])
-def test_azure_ga_only_protocol_comes_from_model_metadata(local_model_cost_map, model: str) -> None:
+_GA_DEFAULT_SESSIONS: Final = (
+    pytest.param("gpt-realtime-2.1", "realtime", None, id="ga-only-model"),
+    pytest.param("gpt-realtime-2", "realtime", None, id="ga-only-alias"),
+    pytest.param("gpt-realtime-2-2026-05-06", "realtime", None, id="ga-only-snapshot"),
+    pytest.param("my-transcribe-deployment", "realtime", {"intent": "transcription"}, id="transcription-intent"),
+    pytest.param("my-translate-deployment", "translation", None, id="translation-mode"),
+)
+
+
+@pytest.mark.parametrize(("model", "realtime_mode", "query_params"), _GA_DEFAULT_SESSIONS)
+def test_azure_realtime_protocol_defaults_to_ga_when_none_is_configured(
+    local_model_cost_map, model: str, realtime_mode: str, query_params: RealtimeQueryParams | None
+) -> None:
     from litellm.llms.azure.realtime.handler import azure_realtime_protocol_for_client
 
-    assert (
-        azure_realtime_protocol_for_client(
-            None,
-            model=model,
-            realtime_mode="realtime",
-            query_params=None,
-            websocket=_BETA_CLIENT,
-        )
-        == "GA"
+    protocol: Final = azure_realtime_protocol_for_client(
+        None, model=model, realtime_mode=realtime_mode, query_params=query_params, websocket=_BETA_CLIENT
     )
-    with pytest.raises(ValueError, match="requires the Azure OpenAI v1 Realtime API"):
-        azure_realtime_protocol_for_client(
-            "beta",
-            model=model,
-            realtime_mode="realtime",
-            query_params=None,
-            websocket=_BETA_CLIENT,
-        )
+
+    assert protocol == "GA"
+
+
+@pytest.mark.parametrize(("model", "realtime_mode", "query_params"), _GA_DEFAULT_SESSIONS)
+def test_azure_realtime_protocol_configured_by_the_operator_wins(
+    local_model_cost_map, model: str, realtime_mode: str, query_params: RealtimeQueryParams | None
+) -> None:
+    from litellm.llms.azure.realtime.handler import azure_realtime_protocol_for_client
+
+    protocol: Final = azure_realtime_protocol_for_client(
+        "beta", model=model, realtime_mode=realtime_mode, query_params=query_params, websocket=_GA_CLIENT
+    )
+
+    assert protocol == "beta"
 
 
 async def _azure_backend_url_dialed_for(websocket: _ClientWebSocketWithHeaders, **kwargs: object) -> str | None:
@@ -1278,3 +1299,348 @@ async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_key
             model_params={"model": "openai/gpt-realtime", **federated_deployment},
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}
+
+
+def _realtime_http_route_call(
+    route: str,
+    logging_obj: Logging,
+    custom_llm_provider: str,
+    api_base: str,
+    client: AsyncHTTPHandler | None = None,
+) -> Awaitable[httpx.Response]:
+    if route == "client_secrets":
+        return realtime_main.acreate_realtime_client_secret.__wrapped__(
+            model="gpt-realtime",
+            custom_llm_provider=custom_llm_provider,
+            api_key="sk-test",
+            api_base=api_base,
+            client=client,
+            litellm_logging_obj=logging_obj,
+        )
+    if route == "translation_client_secrets":
+        return realtime_main.acreate_realtime_translation_client_secret.__wrapped__(
+            model="gpt-realtime-translate",
+            custom_llm_provider=custom_llm_provider,
+            api_key="sk-test",
+            api_base=api_base,
+            client=client,
+            litellm_logging_obj=logging_obj,
+        )
+    if route == "calls":
+        return realtime_main.arealtime_calls.__wrapped__(
+            openai_ephemeral_key="ek_test",
+            sdp_body=b"v=0",
+            model="gpt-realtime",
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            client=client,
+            litellm_logging_obj=logging_obj,
+        )
+    return realtime_main.arealtime_translation_calls.__wrapped__(
+        openai_ephemeral_key="ek_test",
+        sdp_body=b"v=0",
+        model="gpt-realtime-translate",
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        client=client,
+        litellm_logging_obj=logging_obj,
+    )
+
+
+def _realtime_http_logging(route: str) -> Logging:
+    return Logging(
+        model="gpt-realtime",
+        messages=[],
+        stream=False,
+        call_type="acreate_realtime_client_secret",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id=f"test-realtime-{route}",
+        function_id=f"test-realtime-{route}",
+    )
+
+
+_OPENAI_REALTIME_HTTP_ROUTE_PATHS: Final = {
+    "client_secrets": "/v1/realtime/client_secrets",
+    "translation_client_secrets": "/v1/realtime/translations/client_secrets",
+    "calls": "/v1/realtime/calls",
+    "translation_calls": "/v1/realtime/translations/calls",
+}
+
+
+def _validity(builder: x509.CertificateBuilder) -> x509.CertificateBuilder:
+    now: Final = datetime.now(timezone.utc)
+    return (
+        builder.serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(hours=1))
+    )
+
+
+def _write_private_ca_and_loopback_certificate(directory: Path) -> tuple[Path, Path, Path]:
+    ca_key: Final = ec.generate_private_key(ec.SECP256R1())
+    server_key: Final = ec.generate_private_key(ec.SECP256R1())
+    ca_name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "litellm realtime test CA")])
+    ca_certificate: Final = (
+        _validity(x509.CertificateBuilder())
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    server_certificate: Final = (
+        _validity(x509.CertificateBuilder())
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]))
+        .issuer_name(ca_name)
+        .public_key(server_key.public_key())
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    ca_path: Final = directory / "ca.pem"
+    certificate_path: Final = directory / "server.pem"
+    key_path: Final = directory / "server.key"
+    ca_path.write_bytes(ca_certificate.public_bytes(serialization.Encoding.PEM))
+    certificate_path.write_bytes(server_certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        server_key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
+    return ca_path, certificate_path, key_path
+
+
+class _EchoPathHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        body: Final = json.dumps({"value": "ek_test", "path": self.path}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture
+def private_ca_upstream(tmp_path: Path) -> Iterator[tuple[str, Path]]:
+    ca_path, certificate_path, key_path = _write_private_ca_and_loopback_certificate(tmp_path)
+    tls: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(certificate_path, key_path)
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _EchoPathHandler)
+    server.socket = tls.wrap_socket(server.socket, server_side=True)
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"https://127.0.0.1:{server.server_address[1]}", ca_path
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", tuple(_OPENAI_REALTIME_HTTP_ROUTE_PATHS))
+async def test_openai_realtime_http_routes_trust_the_ca_bundle_set_in_litellm_ssl_verify(
+    route: str, private_ca_upstream: tuple[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api_base, ca_path = private_ca_upstream
+    monkeypatch.setattr(litellm, "ssl_verify", str(ca_path))
+
+    response: Final = await _realtime_http_route_call(
+        route, _realtime_http_logging(route), custom_llm_provider="openai", api_base=api_base
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"value": "ek_test", "path": _OPENAI_REALTIME_HTTP_ROUTE_PATHS[route]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", tuple(_OPENAI_REALTIME_HTTP_ROUTE_PATHS))
+async def test_openai_realtime_http_routes_surface_the_upstream_error_body_verbatim(route: str) -> None:
+    upstream_error: Final = {
+        "error": {
+            "message": "Invalid model",
+            "type": "invalid_request_error",
+            "param": "session.model",
+            "code": "invalid_value",
+        }
+    }
+
+    with pytest.raises(BaseLLMException) as raised:
+        await _realtime_http_route_call(
+            route,
+            _realtime_http_logging(route),
+            custom_llm_provider="openai",
+            api_base="https://upstream.example",
+            client=AsyncHTTPHandler(
+                transport=httpx.MockTransport(lambda request: httpx.Response(400, json=upstream_error))
+            ),
+        )
+
+    assert raised.value.status_code == 400
+    assert json.loads(raised.value.message) == upstream_error
+
+
+class _GatewayThatRecordsTheSession:
+    session: Mapping[str, object] | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.session = json.loads(request.content)["session"]
+        return httpx.Response(200, json={"value": "ek_test"})
+
+
+@pytest.mark.asyncio
+async def test_client_secret_keeps_the_realtime_session_model_when_input_transcription_names_another() -> None:
+    gateway: Final = _GatewayThatRecordsTheSession()
+    logging_obj: Final = _realtime_http_logging("client_secrets")
+
+    await realtime_main.acreate_realtime_client_secret.__wrapped__(
+        model="gpt-realtime",
+        session={
+            "type": "realtime",
+            "model": "gpt-realtime",
+            "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
+        },
+        custom_llm_provider="openai",
+        api_key="sk-test",
+        api_base="https://upstream.example",
+        litellm_logging_obj=logging_obj,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+
+    assert gateway.session is not None
+    assert gateway.session["model"] == "gpt-realtime"
+    assert gateway.session["audio"] == {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}
+    assert logging_obj.model == "gpt-realtime"
+
+
+class _UpstreamThatMustNotBeCalled:
+    called: bool = False
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.called = True
+        return httpx.Response(200, json={"value": "ek_test"})
+
+
+class _RecordingClientWebSocket:
+    def __init__(self) -> None:
+        self.scope: Final = {"headers": ()}
+        self.sent: tuple[str, ...] = ()
+        self.close_code: int | None = None
+
+    async def send_text(self, data: str) -> None:
+        self.sent = (*self.sent, data)
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        self.close_code = code
+
+
+def _block_every_request_with_a_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            CustomGuardrail(
+                guardrail_name="translation-blocker", event_hook=GuardrailEventHooks.pre_call, default_on=True
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("translation_client_secrets", "translation_calls"))
+async def test_translation_http_routes_refuse_a_guarded_request_before_any_upstream_call(
+    route: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _block_every_request_with_a_guardrail(monkeypatch)
+    upstream: Final = _UpstreamThatMustNotBeCalled()
+
+    with pytest.raises(litellm.BadRequestError, match=TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE) as raised:
+        await _realtime_http_route_call(
+            route,
+            _realtime_http_logging(route),
+            custom_llm_provider="openai",
+            api_base="https://upstream.example",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+        )
+
+    assert raised.value.status_code == 400
+    assert upstream.called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("translation_client_secrets", "translation_calls"))
+async def test_translation_http_routes_refuse_a_provider_other_than_openai_and_azure_before_any_upstream_call(
+    route: str,
+) -> None:
+    upstream: Final = _UpstreamThatMustNotBeCalled()
+
+    with pytest.raises(litellm.BadRequestError, match="supports only the azure, openai providers, got xai") as raised:
+        await _realtime_http_route_call(
+            route,
+            _realtime_http_logging(route),
+            custom_llm_provider="xai",
+            api_base="https://upstream.example",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+        )
+
+    assert raised.value.status_code == 400
+    assert upstream.called is False
+
+
+@pytest.mark.asyncio
+async def test_translation_websocket_closes_1008_for_a_guarded_request_before_the_upstream_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _block_every_request_with_a_guardrail(monkeypatch)
+    websocket: Final = _RecordingClientWebSocket()
+    connect: Final = _CapturingConnect()
+
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="openai/gpt-realtime-translate",
+            websocket=websocket,
+            api_key="fake-key",
+            realtime_mode="translation",
+            litellm_logging_obj=FakeLogging(),
+        )
+
+    assert connect.url is None
+    assert websocket.close_code == 1008
+    assert [json.loads(event)["error"]["message"] for event in websocket.sent] == [
+        TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE
+    ]
+
+
+@pytest.mark.asyncio
+async def test_translation_websocket_closes_1008_for_a_provider_other_than_openai_and_azure() -> None:
+    websocket: Final = _RecordingClientWebSocket()
+    connect: Final = _CapturingConnect()
+
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="xai/grok-voice",
+            websocket=websocket,
+            api_key="fake-key",
+            realtime_mode="translation",
+            litellm_logging_obj=FakeLogging(),
+        )
+
+    assert connect.url is None
+    assert websocket.close_code == 1008
+    assert [json.loads(event)["error"]["message"] for event in websocket.sent] == [
+        "Realtime translation supports only the azure, azure_ai, openai providers, got xai"
+    ]

@@ -63357,7 +63357,7 @@
         "litellm_provider": "openai",
         "mode": "audio_transcription",
         "provider_specific_entry": {
-            "transcription_json_only": 1,
+            "transcription_json_or_text_only": 1,
             "transcription_usage_duration": 1
         },
         "source": "https://developers.openai.com/api/docs/pricing",
@@ -63412,7 +63412,6 @@
         "supports_function_calling": true
     },
     "gpt-realtime-translate": {
-        "input_cost_per_second": 0.000566666666667,
         "litellm_provider": "openai",
         "max_input_tokens": 16000,
         "max_output_tokens": 2000,
@@ -71190,7 +71189,7 @@
         "provider_specific_entry": {
             "realtime_ga_only": 1,
             "transcription_deployment_api": 1,
-            "transcription_json_only": 1,
+            "transcription_json_or_text_only": 1,
             "transcription_usage_duration": 1
         },
         "supports_native_streaming": true

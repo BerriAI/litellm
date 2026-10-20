@@ -8256,7 +8256,8 @@ def _validate_gpt_transcription_request(
     language: str | None,
     languages: Sequence[str] | None,
     response_format: str | None,
-) -> None:
+    drop_params: object,
+) -> str | None:
     model_cost_key: Final = next(
         (key for key in (f"{custom_llm_provider}/{model}", model) if key in litellm.model_cost), None
     )
@@ -8278,15 +8279,18 @@ def _validate_gpt_transcription_request(
             llm_provider=custom_llm_provider,
         )
     if (
-        provider_specific_entry is not None
-        and provider_specific_entry.get("transcription_json_only") == 1
-        and response_format not in (None, "json")
+        provider_specific_entry is None
+        or provider_specific_entry.get("transcription_json_or_text_only") != 1
+        or response_format in (None, "json", "text")
     ):
-        raise litellm.UnsupportedParamsError(
-            message=f"{model} only supports response_format='json'",
-            model=model,
-            llm_provider=custom_llm_provider,
-        )
+        return response_format
+    if litellm.drop_params is True or normalize_drop_params(drop_params) is True:
+        return None
+    raise litellm.UnsupportedParamsError(
+        message=f"{model} only supports response_format 'json' or 'text'",
+        model=model,
+        llm_provider=custom_llm_provider,
+    )
 
 
 @client
@@ -8354,12 +8358,13 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
-    _validate_gpt_transcription_request(
+    supported_response_format: Final = _validate_gpt_transcription_request(
         model=model,
         custom_llm_provider=custom_llm_provider,
         language=language,
         languages=languages,
         response_format=response_format,
+        drop_params=kwargs.get("drop_params"),
     )
 
     optional_params: Final = get_optional_params_transcription(
@@ -8368,7 +8373,7 @@ def transcription(
         languages=languages,
         keywords=keywords,
         prompt=prompt,
-        response_format=response_format,
+        response_format=supported_response_format,
         timestamp_granularities=timestamp_granularities,
         temperature=temperature,
         stream=stream,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 import traceback
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Final, Protocol
 
 from openai import AsyncStream, Stream
@@ -94,6 +94,7 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
         start_time: datetime.datetime,
     ) -> None:
         self.__dict__.update(stream.__dict__)
+        self._hidden_params: Mapping[str, object] = {}
         self._logging_obj = logging_obj
         self._start_time = start_time
         self._collector = _TranscriptionEventCollector(getattr(stream, "_litellm_audio_duration", None))
@@ -144,6 +145,7 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
         start_time: datetime.datetime,
     ) -> None:
         self.__dict__.update(stream.__dict__)
+        self._hidden_params: Mapping[str, object] = {}
         self._logging_obj = logging_obj
         self._start_time = start_time
         self._collector = _TranscriptionEventCollector(getattr(stream, "_litellm_audio_duration", None))

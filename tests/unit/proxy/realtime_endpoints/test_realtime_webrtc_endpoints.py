@@ -14,7 +14,9 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from starlette.routing import Match
 
+from litellm.proxy._lazy_features import LAZY_FEATURES, attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import ConfigGeneralSettings, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -1163,10 +1165,36 @@ async def test_translation_client_secret_binds_authorized_nested_transcription_m
 
 @pytest.mark.parametrize(
     "path",
+    (
+        "/openai/v1/realtime/client_secrets",
+        "/openai/v1/realtime/calls",
+        "/openai/v1/realtime/translations/client_secrets",
+        "/openai/v1/realtime/translations/calls",
+    ),
+)
+def test_openai_prefixed_realtime_http_paths_stay_with_the_openai_pass_through(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import openai_proxy_route
+
+    monkeypatch.setenv("LITELLM_DISABLE_LAZY_ROUTES", "true")
+    features = tuple(feature for feature in LAZY_FEATURES if feature.name in ("llm_passthrough", "realtime"))
+    app = FastAPI()
+    reserve_lazy_slot(app, "llm_passthrough", features=features)
+    attach_lazy_features(app, features)
+    scope = {"type": "http", "method": "POST", "path": path, "root_path": "", "headers": [], "query_string": b""}
+
+    with TestClient(app):
+        resolved = next(route for route in app.router.routes if route.matches(scope)[0] is Match.FULL)
+
+    assert getattr(resolved, "endpoint", None) is openai_proxy_route
+
+
+@pytest.mark.parametrize(
+    "path",
     [
         "/v1/realtime/translations/client_secrets",
         "/realtime/translations/client_secrets",
-        "/openai/v1/realtime/translations/client_secrets",
     ],
 )
 def test_translation_client_secret_aliases_bind_token_family(
@@ -1232,7 +1260,6 @@ def test_translation_client_secret_aliases_bind_token_family(
     [
         "/v1/realtime/translations/calls",
         "/realtime/translations/calls",
-        "/openai/v1/realtime/translations/calls",
     ],
 )
 def test_translation_calls_aliases_route_translation_session(

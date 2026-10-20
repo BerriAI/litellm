@@ -71,14 +71,14 @@ def azure_realtime_protocol_for_client(
     query_params: RealtimeQueryParams | None,
     websocket: ScopedWebSocket,
 ) -> str:
-    if azure_realtime_requires_ga(model):
-        if isinstance(configured_protocol, str) and configured_protocol.upper() not in ("GA", "V1"):
-            raise ValueError(f"{model} requires the Azure OpenAI v1 Realtime API")
-        return "GA"
-    if realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription":
-        return "GA"
     if isinstance(configured_protocol, str) and configured_protocol:
         return configured_protocol
+    if (
+        realtime_mode == "translation"
+        or (query_params or {}).get("intent") == "transcription"
+        or azure_realtime_requires_ga(model)
+    ):
+        return "GA"
     return "beta" if client_sent_openai_beta_realtime_header(websocket) else "GA"
 
 

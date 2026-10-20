@@ -41,20 +41,6 @@ def _include_router(attr_name: str = "router") -> Callable[["FastAPI", object], 
     return _register
 
 
-def _include_router_prepend(attr_name: str = "router") -> Callable[["FastAPI", object], None]:
-    def _register(app: "FastAPI", module: object) -> None:
-        router: Final = app.router
-        route_count: Final = len(router.routes)
-        app.include_router(getattr(module, attr_name))
-        new_routes: Final = router.routes[route_count:]
-        router.routes[:] = [
-            *new_routes,
-            *router.routes[:route_count],
-        ]
-
-    return _register
-
-
 def _mount_app(prefix: str, attr_name: str = "app") -> Callable[["FastAPI", object], None]:
     def _register(app: "FastAPI", module: object) -> None:
         app.mount(path=prefix, app=getattr(module, attr_name))
@@ -260,7 +246,6 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="realtime",
         module_path="litellm.proxy.realtime_endpoints.endpoints",
         path_prefixes=("/openai/v1/realtime", "/v1/realtime", "/realtime"),
-        register_fn=_include_router_prepend(),
     ),
     LazyFeature(
         name="anthropic_passthrough",
@@ -518,10 +503,13 @@ def _lazy_lock(app: "FastAPI", module_path: str) -> asyncio.Lock:
 
 
 def _register_feature(app: "FastAPI", feat: LazyFeature, module: object, features: tuple[LazyFeature, ...]) -> None:
-    before: Final = len(app.router.routes)
+    routes_before: Final = frozenset(id(route) for route in app.router.routes)
     feat.register_fn(app, module)
     lazy_routes: Final[Mapping[str, tuple[BaseRoute, ...]]] = MappingProxyType(
-        {**_lazy_routes(app), feat.module_path: tuple(app.router.routes[before:])}
+        {
+            **_lazy_routes(app),
+            feat.module_path: tuple(route for route in app.router.routes if id(route) not in routes_before),
+        }
     )
     app.state.lazy_routes = lazy_routes  # rebind-ok: the app owns the record of which routes each feature added
     app.router.routes[:] = _route_table(  # rebind-ok: the app owns its route table

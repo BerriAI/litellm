@@ -1,11 +1,8 @@
-import gzip
-import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from openai import AsyncOpenAI
 
 from litellm.llms.azure.realtime.http_transformation import AzureRealtimeHTTPConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -186,99 +183,3 @@ async def test_translation_calls_use_translation_session_and_path():
     assert call["url"] == "https://api.openai.com/v1/realtime/translations/calls"
     assert call["headers"]["Content-Type"] == "application/sdp"
     assert call["content"] == "v=0\r\n"
-
-
-@pytest.mark.asyncio
-async def test_standard_client_secret_uses_openai_sdk_resource():
-    async def send_response(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/realtime/client_secrets"
-        return httpx.Response(
-            200,
-            content=gzip.compress(b'{"value":"ek_test"}'),
-            headers={"content-encoding": "gzip"},
-        )
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
-    openai_client = AsyncOpenAI(api_key="sk-test", base_url="https://example.com/v1", http_client=http_client)
-    handler = BaseLLMHTTPHandler()
-    logging_obj = MagicMock()
-
-    response = await handler.async_realtime_client_secret_handler(
-        api_base="https://example.com",
-        api_key="sk-test",
-        request_data={"session": {"type": "realtime", "model": "gpt-realtime-2.1"}},
-        logging_obj=logging_obj,
-        timeout=10,
-        client=openai_client,
-        use_openai_sdk=True,
-    )
-    await openai_client.close()
-
-    assert response.status_code == 200
-    assert response.json() == {"value": "ek_test"}
-    assert "content-encoding" not in response.headers
-
-
-@pytest.mark.asyncio
-async def test_translation_client_secret_uses_openai_sdk_custom_post():
-    async def send_response(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/realtime/translations/client_secrets"
-        assert json.loads(request.content)["session"]["audio"]["output"]["language"] == "es"
-        return httpx.Response(200, content=gzip.compress(b'{"value":"ek_translation"}'), headers={"content-encoding": "gzip"})
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
-    openai_client = AsyncOpenAI(api_key="sk-test", base_url="https://example.com/v1", http_client=http_client)
-    handler = BaseLLMHTTPHandler()
-
-    response = await handler.async_realtime_translation_client_secret_handler(
-        api_base="https://example.com",
-        api_key="sk-test",
-        request_data={
-            "session": {
-                "model": "gpt-realtime-translate",
-                "audio": {"output": {"language": "es"}},
-            }
-        },
-        logging_obj=MagicMock(),
-        timeout=10,
-        client=openai_client,
-        use_openai_sdk=True,
-    )
-    await openai_client.close()
-
-    assert response.status_code == 200
-    assert response.json() == {"value": "ek_translation"}
-    assert "content-encoding" not in response.headers
-    assert int(response.headers["content-length"]) == len(response.content)
-
-
-@pytest.mark.asyncio
-async def test_translation_calls_use_openai_sdk_custom_post():
-    async def send_response(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/realtime/translations/calls"
-        body = await request.aread()
-        assert request.headers["content-type"] == "application/sdp"
-        assert body == b"v=0\r\n"
-        return httpx.Response(201, content=gzip.compress(b"v=0\r\n"), headers={"content-encoding": "gzip"})
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
-    openai_client = AsyncOpenAI(api_key="ek_test", base_url="https://example.com/v1", http_client=http_client)
-    handler = BaseLLMHTTPHandler()
-
-    response = await handler.async_realtime_calls_handler(
-        api_base="https://example.com",
-        openai_ephemeral_key="ek_test",
-        sdp_body=b"v=0\r\n",
-        logging_obj=MagicMock(),
-        timeout=10,
-        model="gpt-realtime-translate",
-        client=openai_client,
-        translation=True,
-        use_openai_sdk=True,
-    )
-    await openai_client.close()
-
-    assert response.status_code == 201
-    assert response.text == "v=0\r\n"
-    assert "content-encoding" not in response.headers
-    assert int(response.headers["content-length"]) == len(response.content)

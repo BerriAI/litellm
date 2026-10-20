@@ -27,9 +27,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import httpx
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
-from openai import AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
-from openai.types.realtime import RealtimeSessionCreateRequestParam
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
@@ -6849,9 +6847,8 @@ class BaseLLMHTTPHandler:
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: Mapping[str, object] | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
-        use_openai_sdk: bool = False,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/client_secrets to upstream provider.
@@ -6859,30 +6856,6 @@ class BaseLLMHTTPHandler:
         Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
         header auth when available; falls back to the legacy OpenAI-style defaults.
         """
-        if use_openai_sdk:
-            openai_client, owns_client, normalized_api_base = self._realtime_sdk_client(api_base, api_key, client)
-            logging_obj.pre_call(
-                input=request_data,
-                api_key="",
-                additional_args={
-                    "complete_input_dict": request_data,
-                    "api_base": normalized_api_base,
-                },
-            )
-            try:
-                configured_client: Final = openai_client.with_options(
-                    timeout=timeout,
-                    set_default_headers={key: str(value) for key, value in (extra_headers or {}).items()},
-                )
-                raw_response: Final = await configured_client.post(
-                    "/realtime/client_secrets",
-                    cast_to=httpx.Response,
-                    body=request_data,
-                )
-                return self._decoded_realtime_sdk_response(raw_response)
-            finally:
-                if owns_client:
-                    await openai_client.close()
         return await self._async_realtime_session_post(
             endpoint="client_secrets",
             api_base=api_base,
@@ -6907,7 +6880,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: Mapping[str, object] | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
         """Forward POST /v1/realtime/transcription_sessions to upstream provider."""
@@ -6935,36 +6908,9 @@ class BaseLLMHTTPHandler:
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: Mapping[str, object] | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
-        use_openai_sdk: bool = False,
     ) -> httpx.Response:
-        if use_openai_sdk:
-            openai_client, owns_client, normalized_api_base = self._realtime_sdk_client(api_base, api_key, client)
-            logging_obj.pre_call(
-                input=request_data,
-                api_key="",
-                additional_args={
-                    "complete_input_dict": request_data,
-                    "api_base": normalized_api_base,
-                },
-            )
-            try:
-                configured_client: Final = openai_client.with_options(
-                    timeout=timeout,
-                    set_default_headers=MappingProxyType(
-                        {key: str(value) for key, value in (extra_headers or MappingProxyType({})).items()}
-                    ),
-                )
-                raw_response: Final = await configured_client.post(
-                    "/realtime/translations/client_secrets",
-                    cast_to=httpx.Response,
-                    body=request_data,
-                )
-                return self._decoded_realtime_sdk_response(raw_response)
-            finally:
-                if owns_client:
-                    await openai_client.close()
         return await self._async_realtime_session_post(
             endpoint="translation_client_secrets",
             api_base=api_base,
@@ -6990,7 +6936,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: Mapping[str, object] | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
         """
@@ -7059,92 +7005,6 @@ class BaseLLMHTTPHandler:
                 )
             raise
 
-    async def _async_realtime_calls_sdk(
-        self,
-        api_base: str,
-        openai_ephemeral_key: str,
-        sdp_text: str,
-        session_data: Mapping[str, object],
-        logging_obj: LiteLLMLoggingObj,
-        timeout: float | httpx.Timeout,
-        extra_headers: Mapping[str, object] | None,
-        client: object | None,
-        translation: bool,
-    ) -> httpx.Response:
-        openai_client, owns_client, normalized_api_base = self._realtime_sdk_client(
-            api_base, openai_ephemeral_key, client
-        )
-        logging_obj.pre_call(
-            input="realtime_sdp_offer",
-            api_key="",
-            additional_args={
-                "api_base": normalized_api_base,
-                "session": session_data,
-            },
-        )
-        try:
-            if translation:
-                configured_client: Final = openai_client.with_options(
-                    timeout=timeout,
-                    set_default_headers={
-                        "Content-Type": "application/sdp",
-                        **MappingProxyType(
-                            {key: str(value) for key, value in (extra_headers or MappingProxyType({})).items()}
-                        ),
-                    },
-                )
-                translation_response: Final = await configured_client.post(
-                    "/realtime/translations/calls",
-                    cast_to=httpx.Response,
-                    content=sdp_text.encode("utf-8"),
-                )
-                return self._decoded_realtime_sdk_response(translation_response)
-            realtime_session_data: Final = cast(  # cast-ok: endpoint validation produced an OpenAI realtime session
-                RealtimeSessionCreateRequestParam,
-                session_data,
-            )
-            sdk_extra_headers: Final = MappingProxyType(
-                {key: str(value) for key, value in (extra_headers or MappingProxyType({})).items()}
-            )
-            raw_response: Final = await openai_client.realtime.calls.with_raw_response.create(
-                sdp=sdp_text,
-                session=realtime_session_data,
-                extra_headers=sdk_extra_headers,
-                timeout=timeout,
-            )
-            return self._decoded_realtime_sdk_response(raw_response.http_response)
-        finally:
-            if owns_client:
-                await openai_client.close()
-
-    @staticmethod
-    def _realtime_sdk_client(api_base: str, api_key: str, client: object | None) -> tuple[AsyncOpenAI, bool, str]:
-        trimmed_api_base: Final = api_base.rstrip("/")
-        normalized_api_base: Final = trimmed_api_base if trimmed_api_base.endswith("/v1") else f"{trimmed_api_base}/v1"
-        if isinstance(client, AsyncOpenAI):
-            return client, False, normalized_api_base
-        if isinstance(client, AsyncHTTPHandler):
-            return (
-                AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0, http_client=client.client),
-                False,
-                normalized_api_base,
-            )
-        return AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0), True, normalized_api_base
-
-    @staticmethod
-    def _decoded_realtime_sdk_response(response: httpx.Response) -> httpx.Response:
-        headers: Final = {
-            key: value
-            for key, value in response.headers.items()
-            if key.lower() not in ("content-encoding", "content-length", "transfer-encoding")
-        }
-        return httpx.Response(
-            status_code=response.status_code,
-            headers=headers,
-            content=response.content,
-            request=response.request,
-        )
-
     @staticmethod
     def _get_realtime_async_http_client(client: object | None) -> AsyncHTTPHandler:
         if isinstance(client, AsyncHTTPHandler):
@@ -7162,10 +7022,9 @@ class BaseLLMHTTPHandler:
         model: str | None = None,
         session_config: Mapping[str, object] | None = None,
         extra_headers: Mapping[str, object] | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
         translation: bool = False,
-        use_openai_sdk: bool = False,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/calls (SDP exchange) to upstream provider.
@@ -7186,19 +7045,6 @@ class BaseLLMHTTPHandler:
             session_data["model"] = model
 
         sdp_text: Final = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
-
-        if use_openai_sdk:
-            return await self._async_realtime_calls_sdk(
-                api_base=api_base,
-                openai_ephemeral_key=openai_ephemeral_key,
-                sdp_text=sdp_text,
-                session_data=session_data,
-                logging_obj=logging_obj,
-                timeout=timeout,
-                extra_headers=extra_headers,
-                client=client,
-                translation=translation,
-            )
 
         async_httpx_client: Final = self._get_realtime_async_http_client(client)
 

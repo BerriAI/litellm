@@ -8,7 +8,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
 import httpx
-from openai import AsyncOpenAI
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -42,7 +41,12 @@ from ..litellm_core_utils.core_helpers import normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from ..litellm_core_utils.realtime_streaming import client_websocket_scope
+from ..litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
+from ..litellm_core_utils.realtime_streaming import (
+    TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE,
+    client_websocket_scope,
+    realtime_guardrails_apply,
+)
 from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
@@ -109,6 +113,72 @@ def _build_litellm_metadata(kwargs: Mapping[str, object]) -> dict[str, object]:
     internal_metadata: Final = _METADATA_ADAPTER.validate_python(kwargs.get("litellm_metadata") or {})
     guardrails: Final = request_metadata.get("guardrails") or kwargs.get("guardrails")
     return {**request_metadata, **internal_metadata, **({"guardrails": guardrails} if guardrails else {})}
+
+
+_HTTP_TRANSLATION_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
+_WEBSOCKET_TRANSLATION_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value, *AZURE_OPENAI_AUDIO_PROVIDERS})
+
+
+@dataclass(frozen=True, slots=True)
+class _TranslationProviderUnsupported:
+    provider: str
+    supported_providers: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _TranslationGuardrailsUnsupported:
+    pass
+
+
+_TranslationRejection = _TranslationProviderUnsupported | _TranslationGuardrailsUnsupported
+
+
+def _translation_rejection(
+    custom_llm_provider: str, supported_providers: frozenset[str], kwargs: Mapping[str, object]
+) -> _TranslationRejection | None:
+    if custom_llm_provider not in supported_providers:
+        return _TranslationProviderUnsupported(provider=custom_llm_provider, supported_providers=supported_providers)
+    if realtime_guardrails_apply({"litellm_metadata": _build_litellm_metadata(kwargs)}):
+        return _TranslationGuardrailsUnsupported()
+    return None
+
+
+def _translation_rejection_message(rejection: _TranslationRejection) -> str:
+    match rejection:
+        case _TranslationProviderUnsupported(provider=provider, supported_providers=supported_providers):
+            return (
+                f"Realtime translation supports only the {', '.join(sorted(supported_providers))} providers, "
+                f"got {provider}"
+            )
+        case _TranslationGuardrailsUnsupported():
+            return TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE
+        case _:
+            assert_never(rejection)
+
+
+def _translation_rejection_error_type(rejection: _TranslationRejection) -> str:
+    match rejection:
+        case _TranslationProviderUnsupported():
+            return "invalid_request_error"
+        case _TranslationGuardrailsUnsupported():
+            return "guardrail_error"
+        case _:
+            assert_never(rejection)
+
+
+def _raise_if_http_translation_rejected(custom_llm_provider: str, model: str, kwargs: Mapping[str, object]) -> None:
+    rejection: Final = _translation_rejection(custom_llm_provider, _HTTP_TRANSLATION_PROVIDERS, kwargs)
+    if rejection is None:
+        return
+    raise litellm.BadRequestError(
+        message=_translation_rejection_message(rejection), model=model, llm_provider=custom_llm_provider
+    )
+
+
+async def _refuse_translation_session(websocket: "WebSocket", rejection: _TranslationRejection) -> None:
+    message: Final = _translation_rejection_message(rejection)
+    await websocket.send_text(realtime_error_event(message, error_type=_translation_rejection_error_type(rejection)))
+    await websocket.close(code=1008, reason=websocket_close_reason(message, fallback="Translation session refused"))
 
 
 def _get_realtime_http_provider_config(
@@ -189,6 +259,7 @@ async def acreate_realtime_client_secret(
     transcription_model: Final = (
         req.session.audio.input.transcription.model
         if req.session is not None
+        and req.session.type == "transcription"
         and req.session.audio is not None
         and req.session.audio.input is not None
         and req.session.audio.input.transcription is not None
@@ -257,7 +328,6 @@ async def acreate_realtime_client_secret(
         extra_headers=resolved_extra_headers,
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
-        use_openai_sdk=custom_llm_provider == "openai",
     )
 
 
@@ -293,6 +363,7 @@ async def acreate_realtime_translation_client_secret(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    _raise_if_http_translation_rejected(custom_llm_provider, model_name, kwargs)
     provider_config, resolved_api_base, resolved_api_key = _get_realtime_http_provider_config(
         custom_llm_provider=custom_llm_provider,
         dynamic_api_base=dynamic_api_base,
@@ -332,11 +403,8 @@ async def acreate_realtime_translation_client_secret(
         provider_config=provider_config,
         model=model_name,
         extra_headers=resolved_extra_headers,
-        client=client
-        if isinstance(client := kwargs.get("client"), (HTTPHandler, AsyncHTTPHandler, AsyncOpenAI))
-        else None,
+        client=client if isinstance(client := kwargs.get("client"), (HTTPHandler, AsyncHTTPHandler)) else None,
         api_version=litellm_params.api_version,
-        use_openai_sdk=custom_llm_provider == "openai",
     )
 
 
@@ -472,7 +540,6 @@ async def arealtime_calls(
         extra_headers=kwargs.get("extra_headers"),
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
-        use_openai_sdk=custom_llm_provider == "openai",
     )
 
 
@@ -497,6 +564,7 @@ async def arealtime_translation_calls(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    _raise_if_http_translation_rejected(custom_llm_provider, model_name, kwargs)
     provider_config, resolved_api_base, _ = _get_realtime_http_provider_config(
         custom_llm_provider=custom_llm_provider,
         dynamic_api_base=dynamic_api_base,
@@ -531,12 +599,9 @@ async def arealtime_translation_calls(
         model=model_name,
         session_config=session_config,
         extra_headers=as_str_mapping(kwargs.get("extra_headers")),
-        client=client
-        if isinstance(client := kwargs.get("client"), (HTTPHandler, AsyncHTTPHandler, AsyncOpenAI))
-        else None,
+        client=client if isinstance(client := kwargs.get("client"), (HTTPHandler, AsyncHTTPHandler)) else None,
         api_version=litellm_params.api_version,
         translation=True,
-        use_openai_sdk=custom_llm_provider == "openai",
     )
 
 
@@ -713,6 +778,15 @@ async def _arealtime(
         litellm_params=litellm_params_dict,
         custom_llm_provider=_custom_llm_provider,
     )
+
+    translation_rejection: Final = (
+        _translation_rejection(_custom_llm_provider, _WEBSOCKET_TRANSLATION_PROVIDERS, kwargs)
+        if realtime_mode == "translation"
+        else None
+    )
+    if translation_rejection is not None:
+        await _refuse_translation_session(websocket, translation_rejection)
+        return
 
     if live_session_start is not None:
         await _alive_session(

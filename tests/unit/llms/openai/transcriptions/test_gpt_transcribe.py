@@ -1,7 +1,7 @@
 import io
 import json
 import wave
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from typing import Final, NamedTuple
 from unittest.mock import AsyncMock, MagicMock
@@ -266,13 +266,88 @@ def test_gpt_transcribe_rejects_conflicting_language_inputs():
 def test_gpt_transcribe_rejects_whisper_response_formats(local_model_cost_map: None, model: str) -> None:
     audio_file = io.BytesIO(b"audio")
     audio_file.name = "sample.wav"
-    with pytest.raises(litellm.UnsupportedParamsError, match="only supports response_format='json'"):
+    with pytest.raises(litellm.UnsupportedParamsError, match="only supports response_format 'json' or 'text'"):
         litellm.transcription(
             model=model,
             file=audio_file,
             response_format="verbose_json",
             api_key="sk-test",
         )
+
+
+@pytest.mark.parametrize("drop_globally", (True, False))
+def test_gpt_transcribe_drops_whisper_response_formats_under_drop_params(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, drop_globally: bool
+) -> None:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: collects what the mock upstream received
+
+    def send_response(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.read())
+        return httpx.Response(200, json={"text": "hello", "usage": {"type": "duration", "seconds": 1}})
+
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    audio_file: Final = io.BytesIO(b"audio")
+    audio_file.name = "sample.wav"
+    with OpenAI(
+        api_key="sk-test",
+        base_url="https://example.com/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(send_response)),
+    ) as client:
+        response: Final = litellm.transcription(
+            model="gpt-transcribe",
+            file=audio_file,
+            response_format="verbose_json",
+            client=client,
+            **({} if drop_globally else {"drop_params": True}),
+        )
+
+    assert response.text == "hello"
+    assert len(sent_bodies) == 1
+    assert b"verbose_json" not in sent_bodies[0]
+
+
+def _openai_transcription_client(transport: httpx.MockTransport) -> OpenAI:
+    return OpenAI(api_key="sk-test", base_url="https://example.com/v1", http_client=httpx.Client(transport=transport))
+
+
+def _azure_transcription_client(transport: httpx.MockTransport) -> AzureOpenAI:
+    return AzureOpenAI(
+        api_key="azure-test-key",
+        azure_endpoint="https://example.openai.azure.com",
+        api_version=litellm.AZURE_DEFAULT_API_VERSION,
+        http_client=httpx.Client(transport=transport),
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "make_client"),
+    (("gpt-transcribe", _openai_transcription_client), ("azure/gpt-transcribe", _azure_transcription_client)),
+)
+def test_gpt_transcribe_sends_text_response_format_to_the_provider(
+    local_model_cost_map: None, model: str, make_client: Callable[[httpx.MockTransport], OpenAI | AzureOpenAI]
+) -> None:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: collects what the mock upstream received
+
+    def send_response(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.read())
+        return httpx.Response(200, text="hello", headers={"content-type": "text/plain"})
+
+    audio_file: Final = io.BytesIO(b"audio")
+    audio_file.name = "sample.wav"
+    with make_client(httpx.MockTransport(send_response)) as client:
+        response: Final = litellm.transcription(
+            model=model,
+            file=audio_file,
+            response_format="text",
+            api_key="sk-test",
+            api_base="https://example.openai.azure.com",
+            api_version=litellm.AZURE_DEFAULT_API_VERSION,
+            client=client,
+        )
+
+    assert response.text == "hello"
+    assert len(sent_bodies) == 1
+    assert b'name="response_format"\r\n\r\ntext\r\n' in sent_bodies[0]
 
 
 def test_gpt_live_transcribe_rejects_file_transcription(local_model_cost_map: None) -> None:

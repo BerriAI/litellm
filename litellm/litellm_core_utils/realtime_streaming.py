@@ -249,6 +249,45 @@ DefaultLoggedRealTimeEventTypes: Final = [
 ]
 
 
+TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE: Final = "Translation sessions cannot enforce configured realtime guardrails"
+
+
+def _guardrails_run_for_event_hooks(
+    request_data: Mapping[str, object],
+    event_hooks: Sequence["GuardrailEventHooks"],
+) -> bool:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    return any(
+        isinstance(cb, CustomGuardrail)
+        and any(cb.should_run_guardrail(data={**request_data, "stream": True}, event_type=et) for et in event_hooks)
+        for cb in litellm.callbacks
+    )
+
+
+def realtime_guardrails_apply(request_data: Mapping[str, object]) -> bool:
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    if any(
+        isinstance(bucket, Mapping) and "_guardrail_pipelines" in bucket
+        for bucket in (request_data.get("metadata"), request_data.get("litellm_metadata"))
+    ):
+        from litellm.proxy.utils import pipeline_managed_guardrail_names
+
+        if pipeline_managed_guardrail_names(request_data, "pre_call") or pipeline_managed_guardrail_names(
+            request_data, "post_call"
+        ):
+            return True
+    return _guardrails_run_for_event_hooks(
+        request_data,
+        (
+            GuardrailEventHooks.realtime_input_transcription,
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ),
+    )
+
+
 class RealTimeStreaming:
     def __init__(
         self,
@@ -1170,41 +1209,10 @@ class RealTimeStreaming:
         self,
         event_hooks: Sequence["GuardrailEventHooks"],
     ) -> bool:
-        """Return True if any callback would run for one of ``event_hooks``."""
-        from litellm.integrations.custom_guardrail import CustomGuardrail
-
-        return any(
-            isinstance(cb, CustomGuardrail)
-            and any(
-                cb.should_run_guardrail(
-                    data={**self.request_data, "stream": True},
-                    event_type=et,
-                )
-                for et in event_hooks
-            )
-            for cb in litellm.callbacks
-        )
+        return _guardrails_run_for_event_hooks(self.request_data, event_hooks)
 
     def _has_realtime_guardrails(self) -> bool:
-        from litellm.types.guardrails import GuardrailEventHooks
-
-        if any(
-            isinstance(bucket, Mapping) and "_guardrail_pipelines" in bucket
-            for bucket in (self.request_data.get("metadata"), self.request_data.get("litellm_metadata"))
-        ):
-            from litellm.proxy.utils import pipeline_managed_guardrail_names
-
-            if pipeline_managed_guardrail_names(self.request_data, "pre_call") or pipeline_managed_guardrail_names(
-                self.request_data, "post_call"
-            ):
-                return True
-        return self._has_realtime_guardrails_for_event_hooks(
-            [
-                GuardrailEventHooks.realtime_input_transcription,
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-            ]
-        )
+        return realtime_guardrails_apply(self.request_data)
 
     def _has_audio_transcription_guardrails(self) -> bool:
         """Return True when a guardrail is configured for the audio/VAD transcript path.
@@ -1976,13 +1984,9 @@ class RealTimeStreaming:
     async def bidirectional_forward(self) -> None:
         if self._is_translation_session and self._has_realtime_guardrails():
             await self.websocket.send_text(
-                realtime_error_event(
-                    "Translation sessions cannot enforce configured realtime guardrails", error_type="guardrail_error"
-                )
+                realtime_error_event(TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE, error_type="guardrail_error")
             )
-            await self.websocket.close(
-                code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"
-            )
+            await self.websocket.close(code=1008, reason=TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE)
             return
         forward_task: Final = asyncio.create_task(self.backend_to_client_send_messages())
         client_task: Final = asyncio.create_task(self.client_ack_messages())

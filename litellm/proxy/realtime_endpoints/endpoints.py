@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import status as http_status
+from fastapi.responses import PlainTextResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -58,9 +59,6 @@ _TRANSLATION_SECRET_BODY: Final = {
 }
 _TRANSLATION_SDP_BODY: Final = {
     "requestBody": {"required": True, "content": {"application/sdp": {"schema": {"type": "string"}}}}
-}
-_TRANSLATION_SDP_RESPONSES: Final[dict[int | str, dict[str, object]]] = {
-    200: {"description": "WebRTC SDP answer", "content": {"application/sdp": {"schema": {"type": "string"}}}}
 }
 
 
@@ -314,12 +312,6 @@ def _decode_realtime_token_payload(
     dependencies=[Depends(user_api_key_auth)],
     tags=["realtime"],
 )
-@router.post(
-    "/openai/v1/realtime/translations/client_secrets",
-    openapi_extra=_TRANSLATION_SECRET_BODY,
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["realtime"],
-)
 async def create_realtime_client_secret(
     request: Request,
     fastapi_response: Response,
@@ -472,20 +464,18 @@ async def create_realtime_client_secret(
 )
 @router.post(
     "/v1/realtime/translations/calls",
+    status_code=http_status.HTTP_201_CREATED,
+    response_class=PlainTextResponse,
+    response_description="WebRTC SDP answer",
     openapi_extra=_TRANSLATION_SDP_BODY,
-    responses=_TRANSLATION_SDP_RESPONSES,
     tags=["realtime"],
 )
 @router.post(
     "/realtime/translations/calls",
+    status_code=http_status.HTTP_201_CREATED,
+    response_class=PlainTextResponse,
+    response_description="WebRTC SDP answer",
     openapi_extra=_TRANSLATION_SDP_BODY,
-    responses=_TRANSLATION_SDP_RESPONSES,
-    tags=["realtime"],
-)
-@router.post(
-    "/openai/v1/realtime/translations/calls",
-    openapi_extra=_TRANSLATION_SDP_BODY,
-    responses=_TRANSLATION_SDP_RESPONSES,
     tags=["realtime"],
 )
 async def proxy_realtime_calls(
