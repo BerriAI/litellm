@@ -3,11 +3,12 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 """
 
 import json
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -23,12 +24,18 @@ if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import LiteLLM_ManagedObjectTable
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.repositories.prisma_protocols import TableActions
     from litellm.router import Router
     from litellm.types.router import Deployment
     from litellm.types.utils import LiteLLMBatch
 
 
+def _error_names_resource(error: Exception, resource_id: str) -> bool:
+    return resource_id in re.findall(r"""[^\s"'`]+""", str(error))
+
+
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
+RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
     "completed",
@@ -42,6 +49,48 @@ TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
     *PROVIDER_TERMINAL_BATCH_STATUSES,
     "stale_expired",
 )
+
+
+class _ManagedObjectRow(Protocol):
+    @property
+    def created_at(self) -> datetime: ...
+
+    @property
+    def updated_at(self) -> datetime: ...
+
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def unified_object_id(self) -> str: ...
+
+    @property
+    def created_by(self) -> str | None: ...
+
+    @property
+    def file_object(self) -> object: ...
+
+
+def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
+    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
+    return table
+
+
+def _user_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_UserTable]":
+    table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = prisma_client.db.litellm_usertable
+    return table
+
+
+def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
+    table: Final[TableActions[prisma_models.LiteLLM_VerificationToken]] = (
+        prisma_client.db.litellm_verificationtoken
+    )
+    return table
+
+
+def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
+    table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = prisma_client.db.litellm_teamtable
+    return table
 
 
 class CheckBatchCost:
@@ -63,6 +112,11 @@ class CheckBatchCost:
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
         self.batch_processed_support_confirmed: bool = False
+        self._poll_cursor: tuple[datetime, str] | None = None
+        self._poll_before: datetime = datetime.now(timezone.utc)
+        self._arrival_cursor: tuple[datetime, str] | None = None
+        self._arrival_before: datetime = self._poll_before
+        self._poll_arrivals: bool = False
 
     @staticmethod
     def _is_missing_batch_processed_column_error(err: Exception) -> bool:
@@ -244,29 +298,9 @@ class CheckBatchCost:
                 f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
             )
 
-        if not self._has_batch_processed_column:
-            return
-
-        # A row already in a terminal status is never rewritten by the sweep above, so
-        # without this it keeps a poll-page slot forever and starves newer batches.
-        retired: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
-            where={
-                "file_purpose": "batch",
-                "batch_processed": False,
-                "status": {"in": ["complete", "completed"]},
-                "created_at": {"lt": cutoff},
-            },
-            data={"batch_processed": True},
-        )
-        if retired > 0:
-            verbose_proxy_logger.warning(
-                f"CheckBatchCost: gave up on {retired} completed managed objects older than "
-                f"{MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days that were never costed"
-            )
-
-    async def _fallback_find_jobs(self) -> list:
+    async def _fallback_find_jobs(self) -> "Sequence[_ManagedObjectRow]":
         """Query batch jobs without the batch_processed filter (for older schemas)."""
-        return await self.prisma_client.db.litellm_managedobjecttable.find_many(
+        return await self._find_jobs(
             where={
                 "file_purpose": "batch",
                 "status": {
@@ -280,31 +314,76 @@ class CheckBatchCost:
                     ]
                 },
             },
-            take=MAX_OBJECTS_PER_POLL_CYCLE,
-            order={"created_at": "asc"},
         )
 
-    async def _retire_job(self, job: "LiteLLM_ManagedObjectTable", reason: str) -> None:
+    async def _find_jobs(self, where: Mapping[str, object]) -> Sequence[_ManagedObjectRow]:
+        arrivals: Final = self._poll_arrivals
+        page: Final = await self._find_job_page(where, arrivals=arrivals)
+        self._poll_arrivals = not arrivals if page else arrivals
+        if page:
+            return page
+        return await self._find_job_page(where, arrivals=not arrivals)
+
+    async def _find_job_page(self, where: Mapping[str, object], *, arrivals: bool) -> Sequence[_ManagedObjectRow]:
+        cursor: Final = self._arrival_cursor if arrivals else self._poll_cursor
+        if cursor is None:
+            if arrivals:
+                self._arrival_before = datetime.now(timezone.utc)
+            else:
+                self._poll_before = datetime.now(timezone.utc) - RECENT_BATCH_POLL_WINDOW
+        before: Final = self._arrival_before if arrivals else self._poll_before
+        page: Final = await _managed_object_table(self.prisma_client).find_many(
+            where={
+                **where,
+                "created_at": {
+                    "lte": before,
+                    **({"gt": before - RECENT_BATCH_POLL_WINDOW} if arrivals else {}),
+                },
+                **(
+                    {
+                        "OR": [
+                            {"created_at": {"gt": cursor[0]}},
+                            {"created_at": cursor[0], "id": {"gt": cursor[1]}},
+                        ]
+                    }
+                    if cursor is not None
+                    else {}
+                ),
+            },
+            take=MAX_OBJECTS_PER_POLL_CYCLE,
+            order=[{"created_at": "asc"}, {"id": "asc"}],
+        )
+        next_cursor: Final = (page[-1].created_at, page[-1].id) if len(page) == MAX_OBJECTS_PER_POLL_CYCLE else None
+        if arrivals:
+            self._arrival_cursor = next_cursor
+        else:
+            self._poll_cursor = next_cursor
+        return page
+
+    def _unprocessed_snapshot(self, job: _ManagedObjectRow) -> Mapping[str, object]:
+        return {
+            "id": job.id,
+            "updated_at": job.updated_at,
+            **({"batch_processed": False} if self._has_batch_processed_column else {}),
+        }
+
+    async def _retire_job(self, job: "_ManagedObjectRow", reason: str) -> None:
         """
         Take a row that can never be costed out of the poll page. Leaving it selectable
         would burn one of the MAX_OBJECTS_PER_POLL_CYCLE slots on every future cycle, and
         once enough such rows accumulate no newer batch is ever reached. Older schemas
         without batch_processed can only be excluded through the status filter.
         """
-        data: Final = (
-            {"batch_processed": True}
-            if self._has_batch_processed_column
-            else {"status": "stale_expired"}
-        )
+        data: Final = {"batch_processed": True} if self._has_batch_processed_column else {"status": "stale_expired"}
         try:
-            await self.prisma_client.db.litellm_managedobjecttable.update(
-                where={"id": job.id},
+            retired: Final = await _managed_object_table(self.prisma_client).update_many(
+                where=self._unprocessed_snapshot(job),
                 data=data,
             )
         except Exception as db_err:
-            verbose_proxy_logger.error(
-                f"CheckBatchCost: failed to retire uncostable job {job.id} ({reason}): {db_err}"
-            )
+            verbose_proxy_logger.error(f"CheckBatchCost: failed to retire uncostable job {job.id} ({reason}): {db_err}")
+            return
+        if retired == 0:
             return
         verbose_proxy_logger.warning(
             f"CheckBatchCost: job {job.id} can never be costed ({reason}), "
@@ -395,13 +474,13 @@ class CheckBatchCost:
 
         from litellm.exceptions import NotFoundError
 
-        return isinstance(error, (NotFoundError, openai.NotFoundError)) and batch_id in str(error)
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, batch_id)
 
     def _batch_deployment_exists(self, model_id: str) -> bool:
         """A 404 only proves the batch is gone when it came from the batch's own
         deployment. Once that deployment leaves the router, default fallbacks can
         silently send the retrieve to a provider that never saw the batch, so its
-        404 must not retire the row; the staleness sweep bounds it instead."""
+        404 must not retire a potentially recoverable row."""
         return self.llm_router.get_deployment(model_id=model_id) is not None
 
     @staticmethod
@@ -416,7 +495,7 @@ class CheckBatchCost:
 
         if not output_file_id:
             return False
-        return isinstance(error, (NotFoundError, openai.NotFoundError)) and output_file_id in str(error)
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, output_file_id)
 
     async def _finalize_unbilled_terminal_job(
         self, job: "prisma_models.LiteLLM_ManagedObjectTable", response: "LiteLLMBatch"
@@ -438,15 +517,17 @@ class CheckBatchCost:
                 db_batch_object=job,
                 unified_batch_id=_is_base64_encoded_unified_file_id(job.unified_object_id),
             )
-            update_data: Final[dict] = {
+            update_data: Final[dict[str, object]] = {
                 "status": response.status,
                 "file_object": response.model_dump_json(),
                 **({"batch_processed": True} if self._has_batch_processed_column else {}),
             }
-            await self.prisma_client.db.litellm_managedobjecttable.update(
-                where={"id": job.id},
+            finalized: Final = await _managed_object_table(self.prisma_client).update_many(
+                where=self._unprocessed_snapshot(job),
                 data=update_data,
             )
+            if finalized == 0:
+                return
             verbose_proxy_logger.info(
                 f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
             )
@@ -954,7 +1035,7 @@ class CheckBatchCost:
                 # endpoint may transition a batch to "complete" before
                 # CheckBatchCost runs.  The batch_processed=False filter
                 # already prevents reprocessing finished batches.
-                jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+                jobs = await self._find_jobs(
                     where={
                         "file_purpose": "batch",
                         "batch_processed": False,
@@ -967,8 +1048,6 @@ class CheckBatchCost:
                             ]
                         },
                     },
-                    take=MAX_OBJECTS_PER_POLL_CYCLE,
-                    order={"created_at": "asc"},
                 )
                 self.batch_processed_support_confirmed = True
             except Exception as query_err:
