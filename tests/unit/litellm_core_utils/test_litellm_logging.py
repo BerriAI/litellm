@@ -11014,6 +11014,86 @@ def test_uncached_price_leaves_no_failure_debug_info_for_unpriced_model():
     assert "response_cost_failure_debug_information" not in logging_obj.model_call_details
 
 
+PR44187_PRICED_MODEL: Final = "lit44187-priced-model"
+PR44187_INPUT_COST: Final = 1e-6
+PR44187_OUTPUT_COST: Final = 2e-6
+
+
+@pytest.fixture
+def pr44187_priced_model() -> Iterator[str]:
+    litellm.register_model(
+        model_cost={
+            PR44187_PRICED_MODEL: {
+                "input_cost_per_token": PR44187_INPUT_COST,
+                "output_cost_per_token": PR44187_OUTPUT_COST,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        yield PR44187_PRICED_MODEL
+    finally:
+        litellm.model_cost.pop(PR44187_PRICED_MODEL, None)
+
+
+def _pr44187_logging_obj(model: str) -> LitellmLogging:
+    logging_obj: Final = LitellmLogging(
+        model=model,
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="lit44187-late-priced-stream",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model=model, user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    return logging_obj
+
+
+def _pr44187_response(model: str) -> ModelResponse:
+    return ModelResponse(
+        model=model,
+        choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hello"))],
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+
+
+def test_a_later_successful_price_clears_an_earlier_price_failure(pr44187_priced_model: str):
+    logging_obj: Final = _pr44187_logging_obj("openai/lit44187-deployment-name")
+    stream_start_cost: Final = logging_obj.response_cost_calculator(
+        result=_pr44187_response("lit44187-deployment-name"), litellm_model_name="openai/lit44187-deployment-name"
+    )
+    assert stream_start_cost is None
+    assert logging_obj.model_call_details["response_cost_failure_debug_information"] is not None
+
+    final_cost: Final = logging_obj.response_cost_calculator(
+        result=_pr44187_response(pr44187_priced_model), litellm_model_name=pr44187_priced_model
+    )
+
+    assert final_cost == pytest.approx(10 * PR44187_INPUT_COST + 20 * PR44187_OUTPUT_COST)
+    assert logging_obj.model_call_details.get("response_cost_failure_debug_information") is None
+
+
+@pytest.mark.parametrize("uncached_model_is_priced", [True, False], ids=["uncached-priced", "uncached-unpriced"])
+def test_uncached_price_keeps_an_earlier_price_failure(pr44187_priced_model: str, uncached_model_is_priced: bool):
+    uncached_model: Final = pr44187_priced_model if uncached_model_is_priced else "lit44187-other-unpriced-model"
+    logging_obj: Final = _pr44187_logging_obj(uncached_model)
+    logging_obj.response_cost_calculator(
+        result=_pr44187_response("lit44187-deployment-name"), litellm_model_name="openai/lit44187-deployment-name"
+    )
+    earlier_failure: Final = logging_obj.model_call_details["response_cost_failure_debug_information"]
+    assert earlier_failure is not None
+
+    uncached: Final = logging_obj.uncached_price(result=_pr44187_response(uncached_model))
+
+    assert (uncached.cost is not None) is uncached_model_is_priced
+    assert logging_obj.model_call_details["response_cost_failure_debug_information"] == earlier_failure
+
+
 def test_enterprise_alerting_loggers_resolves_real_classes():
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
