@@ -26,13 +26,6 @@ _CHAT_COMPLETION: Final = {
     "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
 }
 
-_EMBEDDING: Final = {
-    "object": "list",
-    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
-    "model": "intfloat/e5-mistral-7b-instruct",
-    "usage": {"prompt_tokens": 3, "total_tokens": 3},
-}
-
 
 def test_stackit_is_a_registered_provider():
     assert litellm.LlmProviders.STACKIT.value == "stackit"
@@ -134,7 +127,7 @@ def test_stackit_supported_endpoints():
         "chat_completions": True,
         "messages": True,
         "responses": True,
-        "embeddings": True,
+        "embeddings": False,
         "image_generations": False,
         "audio_transcriptions": False,
         "audio_speech": False,
@@ -159,7 +152,7 @@ def test_stackit_cost_map_entries():
         stackit = {k: v for k, v in cost_map.items() if v.get("litellm_provider") == "stackit"}
         assert stackit, "no stackit entries in cost map"
         assert all(key.startswith("stackit/") for key in stackit)
-        assert {v["mode"] for v in stackit.values()} == {"chat", "embedding"}
+        assert {v["mode"] for v in stackit.values()} == {"chat"}
 
         # STACKIT price tiers (EUR per 1M tokens): standard 0.15/0.25, plus 0.45/0.65, premium 1.50/1.75
         gpt_oss_20b = stackit["stackit/openai/gpt-oss-20b"]
@@ -176,16 +169,6 @@ def test_stackit_cost_map_entries():
         assert qwen_vl["input_cost_per_token"] == pytest.approx(1.50e-6)
         assert qwen_vl["output_cost_per_token"] == pytest.approx(1.75e-6)
         assert qwen_vl["supports_vision"] is True
-
-        e5 = stackit["stackit/intfloat/e5-mistral-7b-instruct"]
-        assert e5["input_cost_per_token"] == pytest.approx(0.02e-6)
-        assert e5["output_cost_per_token"] == 0.0
-        assert e5["output_vector_size"] == 4096
-
-        qwen_embedding = stackit["stackit/Qwen/Qwen3-VL-Embedding-8B"]
-        assert qwen_embedding["input_cost_per_token"] == pytest.approx(0.08e-6)
-        assert qwen_embedding["max_input_tokens"] == 32000
-
 
 def test_stackit_chat_completion_request():
     with respx.mock() as upstream:
@@ -217,24 +200,6 @@ def test_stackit_chat_completion_cost_uses_cost_map():
 
     # 4 prompt tokens * 0.45e-6 + 3 completion tokens * 0.65e-6
     assert response._hidden_params["response_cost"] == pytest.approx(4 * 0.45e-6 + 3 * 0.65e-6)
-
-
-def test_stackit_embedding_request():
-    with respx.mock() as upstream:
-        route: Final = upstream.post(f"{_BASE_URL}/embeddings").respond(200, json=_EMBEDDING)
-        response: Final = litellm.embedding(
-            model="stackit/intfloat/e5-mistral-7b-instruct",
-            input=["hello"],
-            api_key="stackit-test-key",
-        )
-
-    request: Final = route.calls.last.request
-    body: Final = json.loads(request.content)
-    assert route.call_count == 1
-    assert request.headers["authorization"] == "Bearer stackit-test-key"
-    assert body["model"] == "intfloat/e5-mistral-7b-instruct"
-    assert body["input"] == ["hello"]
-    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
 
 def test_stackit_responses_request_is_bridged_to_chat_completions():
