@@ -1,4 +1,4 @@
-import type { components } from "@/lib/http/schema";
+import type { components, operations } from "@/lib/http/schema";
 import type { BreakdownMetrics, DailyData, KeyMetadata, KeyMetricWithMetadata, MetricWithMetadata } from "./types";
 
 export type DailyActivityEntity = "user" | "team" | "tag" | "organization" | "customer" | "agent";
@@ -26,7 +26,14 @@ export interface DailyActivityRequest {
   model?: string | null;
   includeCurrentUtcDay?: boolean;
   apiKeyLimit?: number;
+  /** Team reports only: "tag" buckets one team's spend by tag (needs exactly one id in entityIds). */
+  groupBy?: TeamGroupBy;
 }
+
+type TeamAggregatedQuery = NonNullable<
+  operations["get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"]["parameters"]["query"]
+>;
+export type TeamGroupBy = NonNullable<TeamAggregatedQuery["group_by"]>;
 
 export const EMPTY_DAILY_ACTIVITY_METADATA: DailyActivityMetadata = {
   has_more: false,
