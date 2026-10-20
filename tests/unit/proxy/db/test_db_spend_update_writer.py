@@ -4130,28 +4130,57 @@ async def test_commit_spend_updates_raises_after_exhausting_lock_timeout_retries
     assert mock_prisma_client.db.tx.call_count == 3
 
 
+def _responses_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "native",
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test"},
+                "model_info": {"id": "dep-native"},
+            },
+            {
+                "model_name": "bridged",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-bridged"},
+            },
+            {
+                "model_name": "forced-bridge",
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test", "use_chat_completions_api": True},
+                "model_info": {"id": "dep-forced-bridge"},
+            },
+        ]
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "call_type, expects_flush",
-    [("aresponses", True), ("responses", True), ("acompletion", False)],
+    "call_type, model_id, expects_flush",
+    [
+        ("aresponses", "dep-bridged", True),
+        ("responses", "dep-bridged", True),
+        ("aresponses", "dep-forced-bridge", True),
+        ("aresponses", None, True),
+        ("aresponses", "dep-native", False),
+        ("responses", "dep-native", False),
+        ("acompletion", "dep-bridged", False),
+    ],
 )
-async def test_insert_spend_log_asks_for_an_immediate_flush_on_rows_other_workers_read_back(
-    call_type: str, expects_flush: bool
+async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bridge_reads_back(
+    call_type: str, model_id: str | None, expects_flush: bool
 ):
     """
-    A `previous_response_id` chained straight off the previous turn reads the DB, so a
-    Responses row cannot sit in this worker's queue until the monitor's next poll.
+    A `previous_response_id` chained straight off a bridged turn reads that turn's row from the
+    DB, so it cannot sit in this worker's queue until the monitor's next poll. A native Responses
+    provider holds the conversation itself, so its row waits for the batch write like a chat row.
     """
     db_writer = DBSpendUpdateWriter()
     prisma = _tool_usage_prisma()
     prisma.spend_log_flush_requested = asyncio.Event()
+    payload = {"request_id": "req-1", "call_type": call_type, "model_id": model_id}
 
-    await db_writer._insert_spend_log_to_db(
-        payload={"request_id": "req-1", "call_type": call_type},
-        prisma_client=prisma,
-    )
+    await db_writer._insert_spend_log_to_db(payload=payload, prisma_client=prisma, llm_router=_responses_router())
 
-    assert prisma.spend_log_transactions == [{"request_id": "req-1", "call_type": call_type}]
+    assert prisma.spend_log_transactions == [payload]
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
 
 
