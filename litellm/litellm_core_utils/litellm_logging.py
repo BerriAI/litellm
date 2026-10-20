@@ -2480,6 +2480,12 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception:
             return True
 
+    @property
+    def async_success_log_claimed(self) -> bool:
+        """True once the call returned and its success log was scheduled, so a later failure raised around
+        it (a disconnect cancelling a still-pending guardrail task) must not bill the prompt a second time."""
+        return self._async_success_scheduled
+
     def claim_async_success_log(self) -> bool:
         """One async success log per request. The innermost @client wrapper always exits first,
         since the outer one is awaiting it, so it claims the log here and the outer wrapper gets
