@@ -2,7 +2,7 @@ import asyncio
 import math
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -254,6 +254,7 @@ class SizePassReport:
     rule: SizeRule
     before: SpendLogStorage
     after: SpendLogStorage
+    partitions_dropped: tuple[str, ...]
     results: tuple[TableCleanupResult, ...]
 
     @property
@@ -1028,7 +1029,9 @@ class SpendLogCleanup:
         Bring the spend-log tables under the size target, oldest rows first.
 
         Live bytes are the files on disk less the reclaimable count carried in LiteLLM_Config (see
-        `SizeCleanupState`), rolled forward from the catalog's cumulative insert and delete counters. Rows go in steps: the rows still needed to reach the target follow
+        `SizeCleanupState`), rolled forward from the catalog's cumulative insert and delete counters. A
+        partitioned table gives its oldest fully elapsed partitions back first, because a DROP returns disk at
+        once, re-measuring after each. Then rows go in steps: the rows still needed to reach the target follow
         from bytes per row, and each step turns that many of the oldest rows (at most
         SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES batches) into a cutoff and runs the same bounded DELETE the age
         rule uses, for the spend logs and the tool index rows derived from them. Progress is counted from the
@@ -1066,7 +1069,7 @@ class SpendLogCleanup:
             )
             SpendLogCleanupMetrics.set_storage_bytes("above_target", 0)
             await self._save_size_state(prisma_client, deadline, state)
-            return SizePassReport(rule=rule, before=before, after=before, results=())
+            return SizePassReport(rule=rule, before=before, after=before, partitions_dropped=(), results=())
         verbose_proxy_logger.warning(
             "Spend-log storage is over maximum_spend_logs_size (estimated_live=%s allocated=%s reclaimable=%s "
             "limit=%s bytes); deleting the oldest spend logs down to %s bytes",
@@ -1076,9 +1079,20 @@ class SpendLogCleanup:
             rule.limit_bytes,
             rule.target_bytes,
         )
-        rows_to_delete: Final = max(
-            0, math.ceil((before.estimated_live_bytes - rule.target_bytes) / before.bytes_per_row)
+        latest: Final[list[SpendLogStorage]] = [before]  # mutable-ok: last measurement, rewritten per partition drop
+
+        async def still_over_target() -> bool:
+            measured: Final = await self._probe_storage(prisma_client, deadline)
+            if measured is None:
+                return False
+            latest[0] = latest[0].after_deleting(0, measured.allocated_bytes)
+            return latest[0].estimated_live_bytes > rule.target_bytes
+
+        partitions_dropped: Final = await self._drop_oldest_partitions_for_size(
+            prisma_client, deadline, still_over_target
         )
+        base: Final = latest[0]
+        rows_to_delete: Final = max(0, math.ceil((base.estimated_live_bytes - rule.target_bytes) / base.bytes_per_row))
 
         def rows_still_needed(rows_deleted: int) -> int:
             return rows_to_delete - rows_deleted
@@ -1086,19 +1100,35 @@ class SpendLogCleanup:
         results: Final = await self._delete_oldest_rows_for_size(prisma_client, deadline, rows_still_needed)
         rows_deleted: Final = sum(result.rows_deleted for result in results)
         remeasured: Final = await self._probe_storage(prisma_client, deadline)
-        after: Final = before.after_deleting(
-            rows_deleted, remeasured.allocated_bytes if remeasured is not None else before.allocated_bytes
+        after: Final = base.after_deleting(
+            rows_deleted, remeasured.allocated_bytes if remeasured is not None else base.allocated_bytes
         )
         await self._save_size_state(
             prisma_client,
             deadline,
             after.to_state(inserted_total=probe.inserted_total, deleted_total=probe.deleted_total + rows_deleted),
         )
-        report: Final = SizePassReport(rule=rule, before=before, after=after, results=results)
+        report: Final = SizePassReport(
+            rule=rule, before=before, after=after, partitions_dropped=partitions_dropped, results=results
+        )
         SpendLogCleanupMetrics.set_storage_bytes("allocated", after.allocated_bytes)
         SpendLogCleanupMetrics.set_storage_bytes("estimated_live", after.estimated_live_bytes)
         SpendLogCleanupMetrics.set_storage_bytes("above_target", report.above_target_bytes)
         return report
+
+    async def _drop_oldest_partitions_for_size(
+        self, prisma_client: PrismaClient, deadline: float, still_over_target: Callable[[], Awaitable[bool]]
+    ) -> tuple[str, ...]:
+        remaining_timeout_ms: Final = self._remaining_timeout_ms(deadline)
+        if time.monotonic() >= deadline or not self._setting("use_spend_logs_partitioning"):
+            return ()
+        if not await self.partition_manager.is_partitioned(prisma_client, remaining_timeout_ms):
+            return ()
+        dropped: Final = await self.partition_manager.drop_oldest_partitions_while(
+            prisma_client, datetime.now(timezone.utc), remaining_timeout_ms, still_over_target
+        )
+        verbose_proxy_logger.info("Dropped %d oldest spend-log partitions for the size rule: %s", len(dropped), dropped)
+        return tuple(dropped)
 
     async def _delete_oldest_rows_for_size(
         self,
@@ -1275,7 +1305,8 @@ class SpendLogCleanup:
             f"allocated_after={report.after.allocated_bytes} estimated_live_after={report.after.estimated_live_bytes} "
             f"reclaimable_after={report.after.reclaimable_bytes} "
             f"limit={report.rule.limit_bytes} target={report.rule.target_bytes} "
-            f"target_reached={str(report.target_reached).lower()} above_target={report.above_target_bytes}{reclaim_note}"
+            f"target_reached={str(report.target_reached).lower()} above_target={report.above_target_bytes} "
+            f"partitions_dropped={len(report.partitions_dropped)}{reclaim_note}"
         )
 
     @classmethod
