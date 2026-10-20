@@ -9,9 +9,10 @@ import asyncio
 import base64
 import json
 import logging
+from types import MappingProxyType
 
 import pytest
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
@@ -176,15 +177,17 @@ def _make_managed_files_over_rows(rows):
 
 
 def _make_managed_files_instance():
-    """Create a _PROXY_LiteLLMManagedFiles with storage methods mocked out."""
+    """Create a PROXY_LiteLLMManagedFiles with storage methods mocked out."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
 
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=mock_cache,
         prisma_client=mock_prisma,
     )
@@ -297,6 +300,90 @@ async def test_get_user_created_file_ids_remaps_stored_raw_provider_id_to_unifie
     assert [file.id for file in files] == [unified_id]
     assert files[0].filename == raw_provider_object.filename
     assert files[0].purpose == raw_provider_object.purpose
+
+
+@pytest.mark.asyncio
+async def test_provider_file_id_resolver_returns_owned_mappings_with_owner_scoped_filter() -> (
+    None
+):
+    managed_files: Final = _make_managed_files_instance()
+    managed_row: Final = MagicMock(
+        unified_file_id="unified-file-id",
+        flat_model_file_ids=["file-provider-1", "file-provider-2"],
+    )
+    find_many: Final = AsyncMock(return_value=[managed_row])
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = find_many
+
+    unified_file_ids: Final = (
+        await managed_files.get_unified_file_ids_for_provider_file_ids(
+            provider_file_ids=(
+                "file-provider-1",
+                "file-provider-2",
+                "file-unmanaged-2",
+                "file-provider-1",
+            ),
+            user_api_key_dict=_make_team_member_api_key_dict(),
+        )
+    )
+
+    assert unified_file_ids == {
+        "file-provider-1": "unified-file-id",
+        "file-provider-2": "unified-file-id",
+    }
+    assert isinstance(unified_file_ids, MappingProxyType)
+    find_many.assert_awaited_once_with(
+        where={
+            "OR": [{"created_by": "test-user"}, {"team_id": "test-team"}],
+            "flat_model_file_ids": {
+                "hasSome": ["file-provider-1", "file-provider-2", "file-unmanaged-2"],
+            },
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_file_id_resolver_denies_unowned_callers_without_database_query() -> (
+    None
+):
+    managed_files: Final = _make_managed_files_instance()
+    find_many: Final = AsyncMock()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = find_many
+    no_owner: Final = UserAPIKeyAuth(
+        api_key=None,
+        token=None,
+        user_id=None,
+        team_id=None,
+        parent_otel_span=None,
+    )
+
+    unified_file_ids: Final = (
+        await managed_files.get_unified_file_ids_for_provider_file_ids(
+            provider_file_ids=("file-provider-1",),
+            user_api_key_dict=no_owner,
+        )
+    )
+
+    assert unified_file_ids == {}
+    assert isinstance(unified_file_ids, MappingProxyType)
+    find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_file_id_resolver_skips_database_query_for_empty_input() -> None:
+    managed_files: Final = _make_managed_files_instance()
+    find_many: Final = AsyncMock()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = find_many
+
+    unified_file_ids: Final = (
+        await managed_files.get_unified_file_ids_for_provider_file_ids(
+            provider_file_ids=(),
+            user_api_key_dict=_make_user_api_key_dict(),
+        )
+    )
+
+    assert unified_file_ids == {}
+    assert isinstance(unified_file_ids, MappingProxyType)
+    find_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1108,7 +1195,7 @@ def _managed_deletion_file_id(provider_file_id):
 def _managed_files_with_deletion_row(unified_file_id, provider_file_id, file_object):
     from litellm.caching import DualCache
     from litellm.models.managed_files import LiteLLM_ManagedFileTable
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
     row = LiteLLM_ManagedFileTable(
         unified_file_id=unified_file_id,
@@ -1120,7 +1207,7 @@ def _managed_files_with_deletion_row(unified_file_id, provider_file_id, file_obj
         find_first=AsyncMock(return_value=row),
         delete=AsyncMock(),
     )
-    return _PROXY_LiteLLMManagedFiles(
+    return PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(db=MagicMock(litellm_managedfiletable=table)),
     ), table
@@ -1292,16 +1379,18 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
 
 
 def _make_real_managed_files_instance():
-    """Create a _PROXY_LiteLLMManagedFiles with a real store_unified_file_id but
+    """Create a PROXY_LiteLLMManagedFiles with a real store_unified_file_id but
     an AsyncMock prisma client, so the DB write path itself can be asserted."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
 
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_managedfiletable.upsert = AsyncMock()
     mock_prisma.db.litellm_managedfiletable.create = AsyncMock(
         side_effect=AssertionError(
@@ -1310,7 +1399,7 @@ def _make_real_managed_files_instance():
     )
 
     return (
-        _PROXY_LiteLLMManagedFiles(
+        PROXY_LiteLLMManagedFiles(
             internal_usage_cache=mock_cache,
             prisma_client=mock_prisma,
         ),
@@ -1322,7 +1411,7 @@ def _make_object_store_instance():
     """A real store_unified_object_id over an AsyncMock prisma client, so both the
     upsert and the update-only write path can be asserted."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     mock_cache = MagicMock()
@@ -1333,7 +1422,7 @@ def _make_object_store_instance():
     mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock()
 
     return (
-        _PROXY_LiteLLMManagedFiles(
+        PROXY_LiteLLMManagedFiles(
             internal_usage_cache=mock_cache,
             prisma_client=mock_prisma,
         ),
@@ -1408,6 +1497,51 @@ async def test_create_still_upserts_and_claims_attribution():
     assert created["api_key"] != "sk-the-creator"
     assert created["created_by"] == "alice"
     assert created["team_id"] == "team-alpha"
+
+
+@pytest.mark.asyncio
+async def test_a_stored_background_response_names_its_creators_end_user_and_holds_none_of_its_output():
+    """Billing reads only a stored response's status and model, so neither the row nor its cache
+    entry keeps what the model generated, and the row names the end user the create billed to."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    managed_files, mock_prisma = _make_object_store_instance()
+    generated_text = "the generated answer"
+    response = ResponsesAPIResponse(
+        id="resp_unified",
+        object="response",
+        status="completed",
+        created_at=1,
+        model="gpt-5.6",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": generated_text, "annotations": []}],
+            }
+        ],
+        background=True,
+    )
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="resp_unified",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="resp_provider",
+        file_purpose="response",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-the-creator", end_user_id="customer-42", parent_otel_span=None),
+        persist_attribution=True,
+    )
+
+    written = mock_prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]
+    cached = managed_files.internal_usage_cache.async_set_cache.await_args.kwargs["value"]
+    assert generated_text not in json.dumps(written, default=str)
+    assert generated_text not in json.dumps(cached, default=str)
+    assert json.loads(written["create"]["file_object"])["status"] == "completed"
+    assert written["create"]["end_user_id"] == "customer-42"
+    assert generated_text in response.model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -1870,7 +2004,7 @@ async def test_afile_delete_bedrock_unified_id_end_to_end(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provider_files():
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
     from openai.types import FileDeleted
 
     from litellm.caching import DualCache
@@ -1888,7 +2022,7 @@ async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provid
     )
     file_table = MagicMock(find_first=AsyncMock(return_value=row), delete=AsyncMock())
     content_table = MagicMock(delete=AsyncMock())
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(
             db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table)
@@ -1913,7 +2047,7 @@ async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provid
 
 @pytest.mark.asyncio
 async def test_afile_content_storage_backed_row_returns_stored_bytes_not_provider_content():
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
     from prisma import Base64
 
     from litellm.caching import DualCache
@@ -1932,7 +2066,7 @@ async def test_afile_content_storage_backed_row_returns_stored_bytes_not_provide
     )
     file_table = MagicMock(find_first=AsyncMock(return_value=row))
     content_table = MagicMock(find_unique=AsyncMock(return_value=MagicMock(content=Base64.encode(stored_bytes))))
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(
             db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table)
@@ -1985,12 +2119,12 @@ async def test_store_unified_object_id_batch_processed_is_written_only_when_aske
 
 @pytest.mark.asyncio
 async def test_store_unified_file_id_caches_the_storage_location_the_db_row_gets():
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
     from litellm.caching import DualCache
 
     file_table = MagicMock(upsert=AsyncMock(), find_first=AsyncMock(side_effect=AssertionError("cache miss")))
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(db=MagicMock(litellm_managedfiletable=file_table)),
     )

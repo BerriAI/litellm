@@ -118,13 +118,14 @@ export const useTeamsTable = (
 };
 
 export const teamKeys = createQueryKeys("teams");
-export const useTeams = (): UseQueryResult<Team[]> => {
+export const useTeams = (queryOptions: { enabled?: boolean } = {}): UseQueryResult<Team[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
-  return useQuery<Team[]>({
+  const teamsQueryOptions = {
     queryKey: teamKeys.list({}),
     queryFn: async () => await fetchTeams(accessToken!, userId, userRole, null),
-    enabled: Boolean(accessToken),
-  });
+    enabled: Boolean(accessToken) && queryOptions.enabled !== false,
+  };
+  return useQuery<Team[]>(teamsQueryOptions);
 };
 
 const ALL_TEAMS_PAGE_SIZE = 100;

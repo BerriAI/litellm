@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -29,27 +29,30 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
+from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_new_user_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # /user/new defaults; result validated below
     check_if_default_team_set,
 )
-from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage]  # same permission check /user/new uses
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
+    _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage]  # same permission check /user/new uses
     generate_key_helper_fn,  # pyright: ignore[reportUnknownVariableType]  # legacy untyped helper; result validated by _KEY_RESPONSE
     metadata_json_with_limits,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared with /user/new; result validated below
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    set_object_permission,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared with /user/new; result validated below
 )
 from litellm.proxy.management_helpers.utils import (
     _resolve_member_budget_id,  # pyright: ignore[reportPrivateUsage]  # shared with /team/member_add
@@ -58,6 +61,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkNewUserItem,
     BulkNewUserMeta,
@@ -95,7 +99,7 @@ class _PendingUser:
     teams: tuple[NewUserRequestTeam, ...]
 
 
-class _UserRow(BaseModel):
+class _UserRow(LiteLLMBaseModel):
     """The `/user/new` body after defaults and object permission were applied."""
 
     model_config = ConfigDict(extra="ignore")
@@ -175,7 +179,7 @@ _ERROR_DETAIL: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
-class _KeyResponse(BaseModel):
+class _KeyResponse(LiteLLMBaseModel):
     token: str
 
 
@@ -212,7 +216,9 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
         )
     try:
         validate_budget_duration(item.budget_duration)
-        _check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
+        check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
+        if item.auto_create_key:
+            enforce_batch_limits_are_admin_only(item, None, user_api_key_dict, "key")
     except Exception as exc:  # noqa: BLE001  # any validation failure is reported on this row only
         return _error_message(exc)
     return None
@@ -270,8 +276,8 @@ async def _existing_user_conflicts(
     if not user_ids:
         return frozenset(), frozenset()
     table: Final = _user_table(prisma_client)
-    id_filter: Final = {"user_id": {"in": user_ids}}  # mutable-ok: Prisma query filters are dict-shaped
-    email_filter: Final = {"user_email": {"in": emails, "mode": "insensitive"}}  # mutable-ok: Prisma filter
+    id_filter: Final = {"user_id": {"in": user_ids}}
+    email_filter: Final = {"user_email": {"in": emails, "mode": "insensitive"}}
     id_rows: Final = await table.find_many(where=id_filter)
     email_rows: Final = await table.find_many(where=email_filter) if emails else ()
     return (
@@ -283,9 +289,7 @@ async def _existing_user_conflicts(
 async def _load_teams(prisma_client: PrismaClient, team_ids: frozenset[str]) -> Mapping[str, LiteLLM_TeamTable]:
     if not team_ids:
         return MappingProxyType({})
-    rows: Final = await TeamRepository(prisma_client).table.find_many(
-        where={"team_id": {"in": sorted(team_ids)}}  # mutable-ok: Prisma query filters are dict-shaped
-    )
+    rows: Final = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": sorted(team_ids)}})
     return MappingProxyType({row.team_id: LiteLLM_TeamTable.model_validate(row.model_dump()) for row in rows})
 
 
@@ -338,11 +342,11 @@ def _db_failure(
 
 async def _prepare_user(user: _PendingUser, prisma_client: PrismaClient) -> _PreparedUser | _RowFailure:
     try:
-        dumped: Final = user.request.model_dump(exclude={"user_id"})  # mutable-ok: pydantic IncEx takes a set
-        data: Final = {**dumped, "user_id": user.user_id}  # mutable-ok: /user/new defaults helper mutates in place
+        dumped: Final = user.request.model_dump(exclude={"user_id"})
+        data: Final = {**dumped, "user_id": user.user_id}
         data_json: Final = _JSON_OBJECT.validate_python(_update_internal_new_user_params(data, user.request))
         with_permission: Final = _JSON_OBJECT.validate_python(
-            await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
+            await set_object_permission(data_json=data_json, prisma_client=prisma_client)
         )
         return _PreparedUser(user, _USER_ROW.validate_python(with_permission))
     except Exception as exc:  # noqa: BLE001  # any preparation failure is reported on this row only
@@ -435,7 +439,7 @@ async def _insert_users(
         verbose_proxy_logger.warning("/user/bulk_new: create_many failed, retrying rows individually", exc_info=True)
         outcome_unknown: Final = PrismaDBExceptionHandler.is_database_infrastructure_error(exc)
     requested: Final = frozenset(payload["user_id"] for payload in payloads)
-    landed_rows: Final = await table.find_many(where={"user_id": {"in": list(requested)}})  # mutable-ok: Prisma filter
+    landed_rows: Final = await table.find_many(where={"user_id": {"in": list(requested)}})
     landed: Final = frozenset(row.user_id for row in landed_rows)
     # create_many is one INSERT: after a lost response the full set is ours, any partial set belongs to another request
     if outcome_unknown and landed == requested:
@@ -563,7 +567,7 @@ async def _write_team_roster(
                 *(Member(user_id=m.user_id, user_email=m.user_email, role=m.role) for m in new_members),
             )
             await _team_tx_db(tx).update(
-                where={"team_id": team.team_id},  # mutable-ok: Prisma query filters are dict-shaped
+                where={"team_id": team.team_id},
                 data=_RosterData(members_with_roles=json.dumps(tuple(member.model_dump() for member in after))),
             )
         return _TeamWrite(
@@ -590,7 +594,7 @@ async def _detach_failed_teams(
     table: Final = _user_table(prisma_client)
     updates: Final = tuple(
         table.update(
-            where={"user_id": user.row.user_id},  # mutable-ok: Prisma query filters are dict-shaped
+            where={"user_id": user.row.user_id},
             data=_TeamsData(teams=landed),
         )
         for user in created
@@ -686,7 +690,7 @@ async def _add_to_organizations(
                 organization_id=organization_id,
                 member=OrgMember(user_id=prepared.row.user_id, role=LitellmUserRoles.INTERNAL_USER),
             ),
-            http_request=Request(scope={"type": "http", "path": "/user/bulk_new"}),  # mutable-ok: ASGI scopes are dicts
+            http_request=Request(scope={"type": "http", "path": "/user/bulk_new"}),
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -710,7 +714,7 @@ async def _write_audit_logs(
     if not created:
         return
     created_ids: Final = sorted(user.row.user_id for user in created)
-    created_filter: Final = {"user_id": {"in": created_ids}}  # mutable-ok: Prisma query filters are dict-shaped
+    created_filter: Final = {"user_id": {"in": created_ids}}
     rows: Final = await _user_table(prisma_client).find_many(where=created_filter)
     outcomes: Final = await _bounded(
         BULK_NEW_USER_CONCURRENCY,

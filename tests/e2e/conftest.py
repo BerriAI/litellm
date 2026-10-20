@@ -17,7 +17,6 @@ import functools
 import os
 from collections.abc import Generator, Iterator
 from datetime import datetime, timezone
-from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
@@ -29,13 +28,15 @@ from e2e_config import (
     FIXTURE_DIR,
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
-    MCP_OAUTH_LIVE_OPT_IN_ENV,
     OTEL_TLS_OPT_IN_ENV,
     OTEL_V2_OPT_IN_ENV,
+    OWNED_GATEWAY_OPT_IN_ENV,
+    PERF_TESTS_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
-    REDIS_CHAOS_OPT_IN_ENV,
+    SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
+    SAGEMAKER_NOVA_OPT_IN_ENV,
     SECRET_MANAGER_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
@@ -59,20 +60,23 @@ _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
 _IDLE_RSS = pytest.StashKey[RssCapture]()
 
-IDLE_RSS_READ_TIMEOUT_SECONDS: Final = 10.0
+IDLE_RSS_READ_TIMEOUT_SECONDS: Final = 30.0
 
 OPT_IN_MARKERS: Final = MappingProxyType(
     {
         "weekly": WEEKLY_ANOMALY_OPT_IN_ENV,
         "managed_files": MANAGED_FILES_OPT_IN_ENV,
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
-        "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
+        "redis_chaos": PERF_TESTS_OPT_IN_ENV,
+        "perf": PERF_TESTS_OPT_IN_ENV,
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
-        "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
+        "owned_gateway": OWNED_GATEWAY_OPT_IN_ENV,
         "otel_v2": OTEL_V2_OPT_IN_ENV,
         "otel_tls": OTEL_TLS_OPT_IN_ENV,
         "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
+        "sagemaker_nova": SAGEMAKER_NOVA_OPT_IN_ENV,
+        "sagemaker_nova2_lite": SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
     }
 )
 
@@ -123,12 +127,18 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "meta(subject): typed e2e_metadata.Subject describing what this test drives"
+        " (domain/route/providers/models/capabilities/mode); attach it with @meta(Subject(...))",
+    )
+    config.addinivalue_line(
+        "markers",
         "replayable: edge-wired test whose provider traffic replays from a fixture bundle, so it makes "
         "zero provider calls in replay mode; the record/replay CI lane selects it with -m replayable",
     )
     config.addinivalue_line(
         "markers",
-        "load: heavy throughput/load test; collected last so it never perturbs latency-sensitive suites",
+        "perf: performance test (throughput, latency, memory) against mocked deployments; collected last so it "
+        "never perturbs latency-sensitive suites, and deselected unless E2E_PERF_TESTS is set",
     )
     config.addinivalue_line(
         "markers",
@@ -150,7 +160,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
-        "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
+        "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_PERF_TESTS is set",
     )
     config.addinivalue_line(
         "markers",
@@ -159,13 +169,13 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "mcp_oauth_live: real Linear OAuth consent via a captured browser session; deselected unless "
-        "E2E_MCP_OAUTH_LIVE is set",
+        "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
+        "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
     )
     config.addinivalue_line(
         "markers",
-        "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
-        "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
+        "owned_gateway: boots its own proxy from source against the stack's Postgres, so it needs DATABASE_URL "
+        "on the pytest host; deselected unless E2E_OWNED_GATEWAY is set",
     )
     config.addinivalue_line(
         "markers",
@@ -179,6 +189,16 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "secret_manager: needs a proxy booted from gateway/secret_manager_<system>_ci_config.yml against that live "
         "secret manager; deselected unless E2E_SECRET_MANAGER names the backend (see secret_manager/secret_backends.py)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "sagemaker_nova: needs a deployed SageMaker Nova endpoint the proxy's AWS credentials can invoke; "
+        "deselected unless SAGEMAKER_NOVA_ENDPOINT names it",
+    )
+    config.addinivalue_line(
+        "markers",
+        "sagemaker_nova2_lite: needs a deployed SageMaker Nova 2 Lite endpoint the proxy's AWS credentials can invoke; "
+        "deselected unless SAGEMAKER_NOVA2_LITE_ENDPOINT names it",
     )
 
 
@@ -225,7 +245,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     standard report and these properties for package rollups and coverage
     drill-down. See junit_properties.py.
 
-    Also sort `load`-marked items last so a whole-tree run drives heavy throughput
+    Also sort `perf`-marked items last so a whole-tree run drives heavy throughput
     traffic only after the latency-sensitive suites have finished."""
     deselected = [item for item in items if _needs_unset_opt_in(item)]
     if deselected:
@@ -238,7 +258,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = [item for item in items if item.get_closest_marker("migration_startup") is None]
         if deselected:
             deselected[0].config.hook.pytest_deselected(items=deselected)
-    items.sort(key=lambda item: item.get_closest_marker("load") is not None)
+    items.sort(key=lambda item: item.get_closest_marker("perf") is not None)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -303,8 +323,6 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         item.user_properties.extend(item.config.stash[_IDLE_RSS].junit_properties)
     if not _reaches_proxy(item):
         return
-    if isinstance(item, pytest.Function) and "oauth_gateway" in item.fixturenames:
-        return
     reason = _proxy_fail_reason()
     if reason is not None:
         pytest.fail(reason)
@@ -348,12 +366,6 @@ def pytest_runtest_makereport(
     report = yield
     if report.when in ("setup", "call"):
         attach_step_properties(item)
-    if item.get_closest_marker("mcp_oauth_live") is not None and call.excinfo is not None:
-        # Publish code locations only, never exception messages, source text or locals.
-        item.user_properties.append(("oauth_failure_phase", report.when))
-        item.user_properties.append(("oauth_exception_type", call.excinfo.type.__name__))
-        for entry in call.excinfo.traceback:
-            item.user_properties.append(("oauth_frame", f"{Path(entry.path).name}:{entry.lineno + 1}:{entry.name}"))
     if report.when == "call":
         item.stash[_CALL_PASSED] = report.passed
     report.user_properties = list(item.user_properties)

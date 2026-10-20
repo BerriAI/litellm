@@ -83,17 +83,16 @@ impl Embedder for PreparedEmbedding {
     }
 }
 
-/// `get_str_from_messages`: every message's text content followed by its search results.
+/// `get_semantic_cache_prompt_from_messages`: every message's text content, including the text of
+/// Messages API `tool_result` blocks, followed by its search results.
 pub fn str_from_messages(messages: &[Value]) -> String {
     let mut text = String::new();
     for message in messages.iter().filter_map(Value::as_object) {
         match message.get("content") {
             Some(Value::String(content)) => text.push_str(content),
-            Some(Value::Array(parts)) => {
-                for part in parts {
-                    if let Some(part_text) = part.get("text").and_then(Value::as_str) {
-                        text.push_str(part_text);
-                    }
+            Some(Value::Array(blocks)) => {
+                for block in blocks {
+                    push_block_text(&mut text, block);
                 }
             }
             _ => {}
@@ -101,6 +100,28 @@ pub fn str_from_messages(messages: &[Value]) -> String {
         push_search_results_text(&mut text, message.get("search_results"));
     }
     text
+}
+
+fn push_block_text(text: &mut String, block: &Value) {
+    if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+        push_text_field(text, block);
+        return;
+    }
+    match block.get("content") {
+        Some(Value::String(result)) => text.push_str(result),
+        Some(Value::Array(blocks)) => {
+            for inner in blocks {
+                push_text_field(text, inner);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_text_field(text: &mut String, block: &Value) {
+    if let Some(block_text) = block.get("text").and_then(Value::as_str) {
+        text.push_str(block_text);
+    }
 }
 
 /// The messages prompt Qdrant embeds: `None` when the request carries no messages.
@@ -161,6 +182,10 @@ fn collect_input_text(value: &Value, parts: &mut Vec<String>) {
         Value::Object(map) => {
             if let Some(content) = map.get("content").filter(|content| !content.is_null()) {
                 collect_input_text(content, parts);
+                return;
+            }
+            if let Some(output) = map.get("output").filter(|output| output.is_array()) {
+                collect_input_text(output, parts);
                 return;
             }
             for key in ["text", "output", "input_text", "output_text"] {

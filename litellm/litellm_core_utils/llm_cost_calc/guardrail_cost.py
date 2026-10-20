@@ -2,22 +2,23 @@ import math
 from collections.abc import Mapping
 from typing import Annotated, Final
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import CostBreakdown
 
 BEDROCK_GUARDRAIL_PRICING_KEY: Final = "bedrock/guardrails"
 
 
-class GuardrailPricing(BaseModel):
+class GuardrailPricing(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     guardrail_cost_per_unit: Mapping[str, float]
 
 
-class GuardrailCostEntry(BaseModel):
+class GuardrailCostEntry(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     guardrail_cost: float | None = None
@@ -30,7 +31,7 @@ class GuardrailCostEntry(BaseModel):
 _GUARDRAIL_COST_ENTRY_ADAPTER: Final[TypeAdapter[GuardrailCostEntry]] = TypeAdapter(GuardrailCostEntry)
 
 
-class GuardrailCostByUnitEntry(BaseModel):
+class GuardrailCostByUnitEntry(LiteLLMBaseModel):
     """The rollup-side view of a ``guardrail_information`` entry, validated apart from
     ``GuardrailCostEntry`` so a forged per-counter map can never zero the spend path."""
 
@@ -79,7 +80,7 @@ def bedrock_guardrail_cost_by_unit(
     pricing: Final = _bedrock_guardrail_pricing(aws_region_name)
     if pricing is None:
         return None
-    return {  # mutable-ok: stamped into guardrail_information, which safe_dumps only serializes as a plain dict
+    return {
         counter: _priced_units(units, pricing.guardrail_cost_per_unit.get(counter))
         for counter, units in usage_units.items()
     }

@@ -8,14 +8,12 @@ import pytest
 def _invoke_connector_factory(http_handler_module):
     """
     Drive the lambda factory installed on the transport so TCPConnector is
-    actually constructed. _create_aiohttp_transport returns a transport whose
+    actually constructed. create_aiohttp_transport returns a transport whose
     _client_factory is the lambda that builds (TCPConnector → ClientSession);
-    invoking it directly avoids relying on _get_valid_client_session's internal
+    invoking it directly avoids relying on get_valid_client_session's internal
     branching to trigger connector construction.
     """
-    transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(
-        shared_session=None
-    )
+    transport = http_handler_module.AsyncHTTPHandler.create_aiohttp_transport(shared_session=None)
     transport._client_factory()
     return transport
 
@@ -93,7 +91,7 @@ def test_socket_factory_sets_keepalive_options(monkeypatch):
     monkeypatch.setattr(http_handler_module, "AIOHTTP_TCP_KEEPINTVL", 15)
     monkeypatch.setattr(http_handler_module, "AIOHTTP_TCP_KEEPCNT", 4)
 
-    factory = http_handler_module._build_aiohttp_keepalive_socket_factory()
+    factory = http_handler_module.build_aiohttp_keepalive_socket_factory()
     assert factory is not None
 
     addr_info = (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("", 0))
@@ -137,7 +135,7 @@ def test_socket_factory_uses_tcp_keepalive_when_keepidle_unavailable(monkeypatch
     monkeypatch.setattr(http_handler_module, "_AIOHTTP_SUPPORTS_SOCKET_FACTORY", True)
     monkeypatch.setattr(http_handler_module, "AIOHTTP_TCP_KEEPIDLE", 60)
 
-    factory = http_handler_module._build_aiohttp_keepalive_socket_factory()
+    factory = http_handler_module.build_aiohttp_keepalive_socket_factory()
     assert factory is not None
 
     fake_socket_module = MagicMock(spec=[])
@@ -167,7 +165,7 @@ def test_socket_factory_uses_tcp_keepalive_when_keepidle_unavailable(monkeypatch
 @pytest.mark.asyncio
 async def test_shared_session_transport_rebuilds_with_socket_factory(monkeypatch):
     """
-    The proxy hands _create_aiohttp_transport an already-built shared session.
+    The proxy hands create_aiohttp_transport an already-built shared session.
     When that session is rebuilt (closed session, or a session from another
     event loop) the replacement must still carry the keep-alive socket factory
     and the configured keepalive timeout, otherwise AIOHTTP_SO_KEEPALIVE stops
@@ -179,14 +177,16 @@ async def test_shared_session_transport_rebuilds_with_socket_factory(monkeypatch
     monkeypatch.setattr(http_handler_module, "_AIOHTTP_SUPPORTS_SOCKET_FACTORY", True)
 
     shared_session = aiohttp.ClientSession()
-    transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(shared_session=shared_session)
+    transport = http_handler_module.AsyncHTTPHandler.create_aiohttp_transport(shared_session=shared_session)
     await shared_session.close()
 
     rebuilt_session = MagicMock(name="rebuilt_session")
 
-    with patch.object(http_handler_module, "TCPConnector", return_value=MagicMock(name="connector")) as mock_tcp_connector:
+    with patch.object(
+        http_handler_module, "TCPConnector", return_value=MagicMock(name="connector")
+    ) as mock_tcp_connector:
         with patch.object(http_handler_module, "ClientSession", return_value=rebuilt_session):
-            assert transport._get_valid_client_session() is rebuilt_session
+            assert transport.get_valid_client_session() is rebuilt_session
 
     assert mock_tcp_connector.call_count == 1
     assert callable(mock_tcp_connector.call_args.kwargs.get("socket_factory"))

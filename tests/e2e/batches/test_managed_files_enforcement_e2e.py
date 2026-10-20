@@ -22,9 +22,10 @@ import pytest
 
 from batch_client import BatchClient, FileObject
 from batch_cleanup import cleanup_file
-from capabilities import batch_model_name, is_managed_id, openai_batch_params
+from capabilities import OPENAI_BATCH_BACKEND, batch_model_name, is_managed_id, openai_batch_params
 from e2e_config import unique_marker
 from e2e_http import FileUploadForm, Result, UnknownApiError, unwrap
+from e2e_metadata import Domain, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 
 pytestmark = [pytest.mark.e2e, pytest.mark.managed_files]
@@ -64,6 +65,12 @@ def managed_model(client: BatchClient) -> Iterator[str]:
 
 
 @pytest.mark.covers(UPLOAD_ROW)
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.FILES,
+    )
+)
 def test_upload_without_target_model_names_rejected(
     client: BatchClient, scoped_key: str, managed_model: str
 ) -> None:
@@ -76,6 +83,12 @@ def test_upload_without_target_model_names_rejected(
 
 
 @pytest.mark.covers(UPLOAD_ROW)
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.FILES,
+    )
+)
 def test_upload_with_model_param_rejected(
     client: BatchClient, scoped_key: str, managed_model: str
 ) -> None:
@@ -89,12 +102,26 @@ def test_upload_with_model_param_rejected(
 
 
 @pytest.mark.covers(ISOLATION_ROW)
+@meta(
+    Subject(
+        domain=Domain.PROXY_AUTH,
+        route=Route.FILES,
+    )
+)
 def test_raw_provider_file_id_rejected(client: BatchClient, scoped_key: str) -> None:
     result = client.retrieve_file("file-e2e-raw-provider-id", key=scoped_key)
     expect_api_error(result, 400, "Raw provider file ids cannot be used")
 
 
 @pytest.mark.covers(ISOLATION_ROW)
+@meta(
+    Subject(
+        domain=Domain.PROXY_AUTH,
+        route=Route.FILES,
+        providers=(Provider.OPENAI,),
+        models=(OPENAI_BATCH_BACKEND,),
+    )
+)
 def test_cross_user_managed_id_denied_owner_allowed(
     client: BatchClient, resources: ResourceManager, managed_model: str
 ) -> None:

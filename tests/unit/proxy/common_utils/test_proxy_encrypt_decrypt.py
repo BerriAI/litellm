@@ -12,10 +12,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from tests._master_key import MASTER_KEY
 
 
 def test_encrypt_decrypt_with_master_key():
-    setattr(proxy_server, "master_key", "sk-1234")
+    setattr(proxy_server, "master_key", MASTER_KEY)
     assert decrypt_value_helper(encrypt_value_helper("test"), key="test_key") == "test"
     assert decrypt_value_helper(encrypt_value_helper(10), key="test_key") == 10
     assert decrypt_value_helper(encrypt_value_helper(True), key="test_key") is True

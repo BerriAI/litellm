@@ -30,3 +30,23 @@ describe("GuardrailDetailView logo", () => {
     expect(screen.getByText("B")).toBeInTheDocument();
   });
 });
+
+describe("GuardrailDetailView decision model card", () => {
+  it("labels a decision model card as a billed Decision Model guardrail", () => {
+    renderDetail(makeCard({ id: "dm_perplexity", name: "Perplexity Decision", category: "decision_model" }));
+
+    expect(screen.getByRole("row", { name: "Provider Decision Model" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("row", { name: "Cost Billed per call by the decision model provider" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Decision Model")).toHaveLength(2);
+  });
+
+  it("keeps the partner labels and no cost row on a partner card", () => {
+    renderDetail(makeCard());
+
+    expect(screen.getByRole("row", { name: "Provider Partner Guardrail" })).toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /^Cost/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Partner")).toBeInTheDocument();
+  });
+});
