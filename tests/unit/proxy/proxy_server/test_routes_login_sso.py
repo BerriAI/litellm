@@ -11,7 +11,11 @@ Routes covered:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
 
 from .conftest import normalize
 
@@ -398,6 +402,29 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
     }
 
 
+def _sealed_return_to(return_to: str) -> str:
+    """The cookie value /sso/key/generate writes: return_to sealed under the master key, never plaintext."""
+    from litellm.constants import CP_RETURN_TO_COOKIE_PREFIX
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_bearer_token
+
+    return encrypt_bearer_token(return_to, prefix=CP_RETURN_TO_COOKIE_PREFIX)
+
+
+def test_login_form_ignores_a_plaintext_return_to_cookie(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A return_to the proxy did not seal (a client-planted or pre-upgrade plaintext cookie) is not
+    honored: /login lands on the dashboard and clears the cookie."""
+    _install_login_mocks(monkeypatch)
+    response: Final = client.post(
+        "/login",
+        data={"username": "admin", "password": "password"},
+        cookies={"litellm_cp_return_to": "/mcp/authorize?client_id=llm_dcrc_abc"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "/ui" in response.headers.get("location", "")
+    assert 'litellm_cp_return_to=""' in response.headers.get("set-cookie", "")
+
+
 def test_login_form_honors_same_origin_return_to_cookie(client, monkeypatch):
     """The aggregate DCR connect flow preserves a same-origin return_to in the litellm_cp_return_to
     cookie; /login must RESUME there after password sign-in instead of dead-ending at the dashboard."""
@@ -406,7 +433,7 @@ def test_login_form_honors_same_origin_return_to_cookie(client, monkeypatch):
     response = client.post(
         "/login",
         data={"username": "admin", "password": "password"},
-        cookies={"litellm_cp_return_to": return_to},
+        cookies={"litellm_cp_return_to": _sealed_return_to(return_to)},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -425,7 +452,7 @@ def test_login_form_honors_control_plane_return_to_cookie(client, monkeypatch):
     response = client.post(
         "/login",
         data={"username": "admin", "password": "password"},
-        cookies={"litellm_cp_return_to": "https://cp.example.com/console"},
+        cookies={"litellm_cp_return_to": _sealed_return_to("https://cp.example.com/console")},
         follow_redirects=False,
     )
     location = response.headers.get("location", "")
@@ -447,7 +474,7 @@ def test_login_form_survives_stale_control_plane_return_to(client, monkeypatch):
     response = client.post(
         "/login",
         data={"username": "admin", "password": "password"},
-        cookies={"litellm_cp_return_to": "https://old-cp.example.com/console"},
+        cookies={"litellm_cp_return_to": _sealed_return_to("https://old-cp.example.com/console")},
         follow_redirects=False,
     )
     assert response.status_code == 303, "login must not break on a stale return_to cookie"
@@ -463,7 +490,7 @@ def test_login_form_ignores_open_redirect_return_to(client, monkeypatch):
     response = client.post(
         "/login",
         data={"username": "admin", "password": "password"},
-        cookies={"litellm_cp_return_to": "https://evil.example.com/steal"},
+        cookies={"litellm_cp_return_to": _sealed_return_to("https://evil.example.com/steal")},
         follow_redirects=False,
     )
     assert response.status_code == 303
