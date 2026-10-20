@@ -654,8 +654,15 @@ def _hoisted_message_order(messages: Sequence[AllMessageValues]) -> tuple[int, .
 def _developer_message_as_user(message: AllMessageValues) -> AllMessageValues:
     if message["role"] != "developer":
         return message
-    as_user: Final[ChatCompletionUserMessage] = {"role": "user", "content": message["content"]}
-    return as_user
+    if "cache_control" not in message:
+        as_user: Final[ChatCompletionUserMessage] = {"role": "user", "content": message["content"]}
+        return as_user
+    cached_as_user: Final[ChatCompletionUserMessage] = {
+        "role": "user",
+        "content": message["content"],
+        "cache_control": message["cache_control"],
+    }
+    return cached_as_user
 
 
 def merge_system_message_runs(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:

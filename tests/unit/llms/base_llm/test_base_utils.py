@@ -301,6 +301,18 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Reply with the single word PONG and nothing else."},
         ]
 
+    def test_closing_developer_message_keeps_its_cache_mark_as_a_user_turn(self):
+        messages = [
+            {"role": "user", "content": "Hi there"},
+            {"role": "assistant", "content": "Hello! How can I help?"},
+            {"role": "developer", "content": "Reply with PONG.", "cache_control": {"type": "ephemeral"}},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages))[-1] == {
+            "role": "user",
+            "content": "Reply with PONG.",
+            "cache_control": {"type": "ephemeral"},
+        }
+
     def test_only_the_closing_developer_run_after_an_assistant_turn_becomes_user_turns(self):
         messages = [
             {"role": "system", "content": "Base"},
