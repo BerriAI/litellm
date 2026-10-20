@@ -123,8 +123,7 @@ class _BulkDeleteResponse(BaseModel):
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
-        response: Final = client.get("/__observations")
-        assert response.status_code == 200, response.text
+        client.delete("/__observations").raise_for_status()
         yield client
 
 
@@ -209,6 +208,7 @@ def test_member_delete_revokes_the_removed_members_warmed_key(
         assert stayer_warm.status_code == 200, stayer_warm.text
         observed_before_delete: Final = _models(upstream)
         assert observed_before_delete == (provider_model, provider_model), repr(observed_before_delete)
+        upstream.delete("/__observations").raise_for_status()
 
         delete_body: Final = (
             {"team_id": team, "user_id": leaver}
@@ -252,6 +252,7 @@ def test_member_delete_revokes_the_removed_members_warmed_key(
         _refused(refused, 401, "token_not_found_in_db")
         after_refused: Final = _models(upstream)
         assert after_refused == (), repr(after_refused)
+        upstream.delete("/__observations").raise_for_status()
         stayer_after: Final = _chat(gateway, model, stayer_key, "stayer after delete " + uuid.uuid4().hex)
         assert stayer_after.status_code == 200, stayer_after.text
         observed_after_delete: Final = _models(upstream)
@@ -282,6 +283,7 @@ def test_member_delete_by_email_removes_a_legacy_email_only_roster_entry(
         assert leaver_warm.status_code == 200, leaver_warm.text
         observed_before_delete: Final = _models(upstream)
         assert observed_before_delete == (provider_model,), repr(observed_before_delete)
+        upstream.delete("/__observations").raise_for_status()
 
         stayer_roster: Final = _roster_member(stayer, None)
         legacy_roster: Final = {"role": "user", "user_id": None, "user_email": email}
@@ -320,6 +322,7 @@ def test_member_delete_by_email_removes_a_legacy_email_only_roster_entry(
         _refused(refused, 401, "token_not_found_in_db")
         after_refused: Final = _models(upstream)
         assert after_refused == (), repr(after_refused)
+        upstream.delete("/__observations").raise_for_status()
         served: Final = _chat(gateway, model, stayer_key, "stayer after legacy delete " + uuid.uuid4().hex)
         assert served.status_code == 200, served.text
         observed: Final = _models(upstream)
@@ -351,6 +354,7 @@ def test_member_delete_by_case_variant_email_removes_member_and_refuses_warmed_k
         assert warmed.status_code == 200, warmed.text
         observed_before_delete: Final = _models(upstream)
         assert observed_before_delete == (provider_model,), repr(observed_before_delete)
+        upstream.delete("/__observations").raise_for_status()
 
         deleted: Final = gateway.request(
             "POST",
@@ -540,6 +544,7 @@ def test_member_add_list_mixing_id_and_email_applies_budget_and_allowed_models(
         denied_one: Final = _chat(gateway, model_two, key_one, "mixed member one denied")
         _refused(denied_one, 403, "team_model_access_denied")
         after_denied_one: Final = _models(upstream)
+        upstream.delete("/__observations").raise_for_status()
         allowed_two: Final = _chat(gateway, model_one, key_two, "mixed member two allowed")
         assert allowed_two.status_code == 200, allowed_two.text
         denied_two: Final = _chat(gateway, model_two, key_two, "mixed member two denied")
@@ -801,6 +806,7 @@ def test_bulk_delete_removes_exactly_the_named_members_and_revokes_their_access(
         assert stayer_warm.status_code == 200, stayer_warm.text
         observed_before_delete: Final = _models(upstream)
         assert observed_before_delete == (provider_model, provider_model, provider_model), repr(observed_before_delete)
+        upstream.delete("/__observations").raise_for_status()
 
         probe_user: Final = scenario.user()
         admin_route_before: Final = gateway.request(
@@ -851,9 +857,11 @@ def test_bulk_delete_removes_exactly_the_named_members_and_revokes_their_access(
         denied_admin: Final = _chat(gateway, model, admin_key, "deleted admin key")
         _refused(denied_admin, 401, "token_not_found_in_db")
         observed_after_admin_denied: Final = _models(upstream)
+        upstream.delete("/__observations").raise_for_status()
         denied_member: Final = _chat(gateway, model, member_key, "deleted member key")
         _refused(denied_member, 401, "token_not_found_in_db")
         observed_after_member_denied: Final = _models(upstream)
+        upstream.delete("/__observations").raise_for_status()
         denied_admin_route: Final = gateway.request(
             "POST",
             "/team/member_add",
@@ -900,6 +908,7 @@ def test_bulk_delete_by_case_variant_email_removes_member_and_refuses_warmed_key
         assert warmed.status_code == 200, warmed.text
         observed_before_delete: Final = _models(upstream)
         assert observed_before_delete == (provider_model,), repr(observed_before_delete)
+        upstream.delete("/__observations").raise_for_status()
 
         deleted: Final = gateway.request(
             "POST",
