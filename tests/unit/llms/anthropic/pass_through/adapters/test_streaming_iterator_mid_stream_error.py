@@ -21,7 +21,7 @@ import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from typing import Iterator, List, Optional
+from typing import Final, Iterator, List, Optional
 from unittest.mock import MagicMock
 
 import httpx
