@@ -285,7 +285,7 @@ def _parse_token_threshold(threshold: str) -> float:
 
 
 def _parse_above_token_threshold(key: str) -> float:
-    return _parse_token_threshold(key.split("_above_")[1].split("_tokens")[0])
+    return _parse_token_threshold(key.rsplit("_above_", 1)[1].split("_tokens")[0])
 
 
 def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: bool) -> bool:
@@ -748,10 +748,12 @@ def _get_token_base_cost(
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
     # Standard thresholds and thresholds suffixed for this request's service tier both count.
     tier_key_suffix: Final = get_service_tier_cost_key("", service_tier)
+    threshold_prefixes: Final = tuple(f"{prefix}_above_" for prefix in _BATCH_RATE_PREFIXES)
     threshold_keys: Final = [
         k
         for k in model_info
-        if k.startswith("input_cost_per_token_above_")
+        if k.startswith(threshold_prefixes)
+        and "_tokens" in k
         and (
             not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES) or (tier_key_suffix != "" and k.endswith(tier_key_suffix))
         )
@@ -759,12 +761,12 @@ def _get_token_base_cost(
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: float | None = None
-    for key in sorted(threshold_keys, key=_parse_above_token_threshold, reverse=True):
+    for key in sorted(threshold_keys, key=_parse_above_token_threshold):
         value = model_info.get(key)
         if value is not None:
             try:
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
-                threshold_str = key.split("_above_")[1].split("_tokens")[0]
+                threshold_str = key.rsplit("_above_", 1)[1].split("_tokens")[0]
                 threshold = _parse_above_token_threshold(key)
                 if _prompt_exceeds_threshold(usage.prompt_tokens, threshold, threshold_is_inclusive):
                     # Prefer a service_tier-specific above-threshold key when available,
@@ -777,7 +779,7 @@ def _get_token_base_cost(
                             service_tier,
                         )
                         if service_tier
-                        else key
+                        else f"input_cost_per_token_above_{threshold_str}_tokens"
                     )
                     prompt_base_cost = cast(
                         float,
@@ -833,8 +835,6 @@ def _get_token_base_cost(
                     )
 
                     cache_read_cost = get_cost_per_unit(model_info, cache_read_tiered_key, cache_read_cost)
-
-                    break
             except (IndexError, ValueError):
                 continue
             except Exception:
@@ -1780,20 +1780,23 @@ def get_billed_token_rates(
     vertex_location: str | None = None,
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
+    model_info: ModelInfo | None = None,
 ) -> BilledTokenRates | None:
     """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
     breakdown resolve them. None when the model's pricing cannot be resolved."""
     if custom_cost_per_token is not None:
         return _custom_pricing_rates(custom_cost_per_token)
     try:
-        model_info: Final = apply_provider_cache_read_default(
-            get_model_info(model=model, custom_llm_provider=custom_llm_provider),
+        resolved_model_info: Final = apply_provider_cache_read_default(
+            model_info
+            if model_info is not None
+            else get_model_info(model=model, custom_llm_provider=custom_llm_provider),
             custom_llm_provider,
         )
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
         return None
     return _cost_map_billed_rates(
-        model_info=model_info,
+        model_info=resolved_model_info,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
         service_tier=service_tier,
@@ -1812,6 +1815,7 @@ def get_token_type_cost_breakdown(
     vertex_location: str | None = None,
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
+    model_info: ModelInfo | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -1836,6 +1840,7 @@ def get_token_type_cost_breakdown(
         vertex_location=vertex_location,
         current_time=current_time,
         custom_cost_per_token=custom_cost_per_token,
+        model_info=model_info,
     )
     if rates is None:
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)

@@ -114,6 +114,10 @@ ignored_function_names = [
     "_aanthropic_messages_yield_recovered",  # Tested through every mid-stream retry and fallback test in test_router.py
     "_anthropic_messages_policy_retries",  # Tested through the retry budget precedence test in test_router.py
     "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
+    "_prompt_management_acompletion",  # Tested through the scheduled prompt-management model test in test_router.py
+    "_request_deployment_params",  # Tested through the team-route and deployment-id drop_params priority tests in test_router.py
+    "split_request_priority",  # Tested through the acompletion, atext_completion and queue route priority tests
+    "_pinned_deployment",  # Tested through the deployment-id scheduler test in test_router.py
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
     "_merged_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
@@ -141,6 +145,16 @@ ignored_function_names = [
     "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
     "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
     "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "without_deployments_that_cannot_batch",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "batch_create_routing",  # Tested through the mixed-group acreate_batch tests in test_router.py
+    "is_batch_create_routing",  # Tested through the chat-after-batch-create test in test_router.py
+    "is_batch_capable",  # Tested through the mixed-group acreate_batch and model group info tests in test_router.py
+    "deployments_the_caller_may_use",  # Tested through the usage-based-routing team batch create test in test_router.py
+    "deployment_supported_endpoints",  # Tested through the model group info batch endpoint tests in test_router.py
+    "_endpoint_paths",  # Read by deployment_supported_endpoints, tested through the malformed endpoint list group info test in test_router.py
+    "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
+    "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
+    "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
 ]
 
 
