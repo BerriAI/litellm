@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { MessageSquare, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -245,24 +246,17 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
       style={{ width: 420 }}
     >
       {/* Header */}
-      <div className="px-5 pt-5 pb-3 border-b border-border shrink-0">
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
-            <svg className="w-5 h-5 text-info" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1zm4 7l.75 1.75L14.5 10.5l-1.75.75L12 13l-.75-1.75L9.5 10.5l1.75-.75L12 8zM4 9l.75 1.75L6.5 11.5l-1.75.75L4 14l-.75-1.75L1.5 11.5l1.75-.75L4 9z" />
-            </svg>
-            <h3 className="text-base font-semibold text-foreground">Ask AI</h3>
-          </div>
-          <button
-            onClick={handleClose}
-            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md hover:bg-accent"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-5 pt-4 pb-3">
+        <div className="min-w-0">
+          <h3 className="flex items-center gap-2 text-sm leading-5 font-medium text-foreground">
+            <Sparkles aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+            Ask AI
+          </h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">Ask about your spend, models, keys, and trends</p>
         </div>
-        <p className="text-xs text-muted-foreground">Ask about your spend, models, keys, and trends</p>
+        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={handleClose}>
+          <X />
+        </Button>
       </div>
 
       {/* Model selector */}
@@ -293,18 +287,11 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
       </div>
 
       {/* Chat messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-muted">
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 bg-muted/40">
         {messages.length === 0 && !streamingContent && !isLoading && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-            <svg className="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
-              />
-            </svg>
-            <p className="text-sm font-medium">Ask a question about your usage</p>
+            <MessageSquare aria-hidden="true" className="mb-2 size-6" strokeWidth={1.5} />
+            <p className="text-sm font-medium text-foreground">Ask a question about your usage</p>
             <p className="text-xs mt-1">e.g. &quot;Which model costs me the most?&quot;</p>
           </div>
         )}
@@ -364,7 +351,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
       </div>
 
       {/* Input area */}
-      <div className="px-4 py-3 border-t border-border bg-card shrink-0">
+      <div className="px-5 py-3 border-t border-border bg-card shrink-0">
         <div className="flex gap-2">
           <Textarea
             value={inputText}

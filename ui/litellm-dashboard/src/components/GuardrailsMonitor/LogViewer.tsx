@@ -1,18 +1,25 @@
-import { CircleCheck, ChevronDown, TriangleAlert, X } from "lucide-react";
+import { CircleCheck, ChevronDown, MinusCircle, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { uiSpendLogsCall } from "@/components/networking";
-import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
-import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
+import { LogDetailsDrawer } from "@/components/logs/detail";
+import type { LogEntry as ViewLogsLogEntry } from "@/components/logs/types";
 import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
-  "blocked" | "passed" | "flagged",
+  "blocked" | "passed" | "flagged" | "not_run",
   { icon: React.ElementType; color: string; bg: string; border: string; label: string }
 > = {
+  not_run: {
+    icon: MinusCircle,
+    color: "text-muted-foreground",
+    bg: "bg-muted",
+    border: "border-border",
+    label: "Not run",
+  },
   blocked: {
     icon: X,
     color: "text-destructive",
@@ -92,7 +99,8 @@ export function LogViewer({
     enabled: Boolean(accessToken && selectedRequestId && drawerOpen),
   });
 
-  const selectedLog: ViewLogsLogEntry | null = fullLogResponse?.data?.[0] ?? null;
+  const selectedLog: ViewLogsLogEntry | null =
+    fullLogResponse?.data?.find((log) => log.request_id === selectedRequestId) ?? fullLogResponse?.data?.[0] ?? null;
 
   const handleLogClick = (log: LogEntry) => {
     setSelectedRequestId(log.id);

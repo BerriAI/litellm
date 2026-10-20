@@ -29,7 +29,7 @@ def realtime_models(client: RealtimeClient) -> Iterator[dict[str, str]]:
     provider-id -> model-name map the tests connect with; delete them on teardown.
     Every provider is provisioned (never skipped): a provider whose credentials or
     upstream model are missing on the gateway hard-fails its test, per the suite's
-    fail-on-behavior contract in tests/e2e/CLAUDE.md."""
+    fail-on-behavior contract in tests/e2e/AGENTS.md."""
     records = tuple((provider.id, *client.provision(provider)) for provider in PROVIDERS)
     try:
         yield {provider_id: model_name for provider_id, model_name, _ in records}

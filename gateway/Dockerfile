@@ -1,9 +1,9 @@
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:1d95114038f76513a9ace6fca107d5582b08c65981f81f61cb56bf7fd2ef216d
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:1d95114038f76513a9ace6fca107d5582b08c65981f81f61cb56bf7fd2ef216d
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 # Checksum from https://www.pgbouncer.org/downloads/ (the Wolfi repo only carries 1.24.x)
-ARG PGBOUNCER_VERSION=1.25.2
-ARG PGBOUNCER_SHA256=924ad35113fd0a71c8e2dbe85b5d03445532e2b7b37a9f8a48983beea238b332
+ARG PGBOUNCER_VERSION=1.26.0
+ARG PGBOUNCER_SHA256=afd25dd61ee6775d37b40629b87ce08736b3e6955f3057bb212e410fbf21c71d
 
 FROM $UV_IMAGE AS uvbin
 
@@ -19,6 +19,33 @@ RUN curl -fsSL -o pgbouncer.tar.gz "https://www.pgbouncer.org/downloads/files/${
     ./configure --prefix=/usr/local --with-openssl=/usr && \
     make -j"$(nproc)" pgbouncer && \
     install -m 0755 pgbouncer /usr/local/bin/pgbouncer
+
+# ---------- Rust extension ----------
+# Copies only the native build's inputs, so the fat-LTO compile stays cached across Python-only changes
+FROM $LITELLM_BUILD_IMAGE AS rust-native
+
+WORKDIR /app
+USER root
+
+COPY --from=uvbin /uv /uvx /usr/local/bin/
+
+RUN for i in 1 2 3; do \
+      apk add --no-cache bash gcc python-3.13 python-3.13-dev openssl openssl-dev && break; \
+      [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
+      sleep 5; \
+    done
+
+ENV UV_PYTHON_DOWNLOADS=0
+
+COPY pyproject.toml README.md rust-toolchain.toml ./
+COPY .cargo ./.cargo
+COPY litellm-rust ./litellm-rust
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    mkdir -p litellm/rust_bridge /wheels && \
+    touch litellm/__init__.py litellm/rust_bridge/__init__.py && \
+    uvx --python python3.13 --from maturin==1.15.0 --with puccinialin==0.1.14 \
+        python -c "import maturin; maturin.build_wheel('/wheels')"
 
 # ---------- Builder ----------
 FROM $LITELLM_BUILD_IMAGE AS builder
@@ -60,22 +87,27 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra bedrock-realtime \
         --python python3.13
 
-# Stage 2 — copy source and install the project + workspace members.
+# Stage 2 — copy source and install the workspace members.
 COPY . .
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-default-groups --no-editable \
+    uv sync --frozen --no-install-project --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra bedrock-realtime \
         --python python3.13
+
+RUN --mount=type=bind,from=rust-native,source=/wheels,target=/wheels \
+    uv pip install --python /app/.venv/bin/python --no-deps /wheels/litellm-*.whl
 
 # PYTHONPATH=/app makes the source tree shadow the installed package, so the
 # compiled Rust extension must live next to the source or it is never imported.

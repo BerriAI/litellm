@@ -86,7 +86,7 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
       : { ...values, guardrails: undefined, modelLimits: undefined, metadata: undefined };
 
     const params: ProjectUpdateParams = {
-      ...buildProjectUpdateParams(submitted),
+      ...buildProjectUpdateParams(submitted, project.litellm_budget_table?.max_budget),
       team_id: submitted.team_id,
     };
 

@@ -3,12 +3,25 @@ Class to handle llm wildcard routing and regex pattern matching
 """
 
 import copy
+import itertools
 import re
 from re import Match
 from typing import Final
 
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+
 from litellm._logging import verbose_router_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+from litellm.types.router import LiteLLM_Params
+
+
+class _RoutedDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    litellm_params: LiteLLM_Params
+
+
+_ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
 
 
 class PatternUtils:
@@ -69,7 +82,7 @@ class PatternMatchRouter:
             llm_deployment: str or List[str]
         """
         # Convert the pattern to a regex
-        regex: Final = self._pattern_to_regex(pattern)
+        regex: Final = self.pattern_to_regex(pattern)
         if regex in self.patterns:
             self.patterns[regex].append(llm_deployment)
             return
@@ -86,7 +99,7 @@ class PatternMatchRouter:
             if (remaining := [d for d in deployments if (d.get("model_info") or {}).get("id") != model_id])
         }
 
-    def _pattern_to_regex(self, pattern: str) -> str:
+    def pattern_to_regex(self, pattern: str) -> str:
         """
         Convert a wildcard pattern to a regex pattern
 
@@ -110,7 +123,9 @@ class PatternMatchRouter:
         # return f"^{regex}$"
         return re.escape(pattern).replace(r"\*", "(.*)")
 
-    def _return_pattern_matched_deployments(self, matched_pattern: Match, deployments: list[dict]) -> list[dict]:
+    _pattern_to_regex = pattern_to_regex
+
+    def _return_pattern_matched_deployments(self, matched_pattern: Match[str], deployments: list[dict]) -> list[dict]:
         new_deployments: Final = []
         for deployment in deployments:
             new_deployment = copy.deepcopy(deployment)
@@ -141,7 +156,7 @@ class PatternMatchRouter:
                 return None
 
             regex_filtered_model_names: Final = (
-                tuple(self._pattern_to_regex(m) for m in filtered_model_names)
+                tuple(self.pattern_to_regex(m) for m in filtered_model_names)
                 if filtered_model_names is not None
                 else ()
             )
@@ -158,9 +173,17 @@ class PatternMatchRouter:
 
         return None  # No matching pattern found
 
+    def routes_to_provider(self, request: str, custom_llm_provider: str) -> bool:
+        deployments: Final = _ROUTED_DEPLOYMENTS.validate_python(self.get_pattern(request) or ())
+        return any(
+            (deployment.litellm_params.custom_llm_provider or inferred_provider(deployment.litellm_params.model))
+            == custom_llm_provider
+            for deployment in deployments
+        )
+
     @staticmethod
     def set_deployment_model_name(
-        matched_pattern: Match,
+        matched_pattern: Match[str],
         litellm_deployment_litellm_model: str,
     ) -> str:
         """
@@ -218,17 +241,8 @@ class PatternMatchRouter:
         Returns:
             bool: True if pattern exists, False otherwise
         """
-        provider: Final = (
-            custom_llm_provider or declared_authenticating_provider(model) or self._resolved_provider(model)
-        )
+        provider: Final = custom_llm_provider or inferred_provider(model)
         return self.route(model) or self.route(f"{provider}/{model}")
-
-    @staticmethod
-    def _resolved_provider(model: str | None) -> str | None:
-        try:
-            return get_llm_provider(model=model)[1] if model else None
-        except Exception:  # noqa: BLE001  # get_llm_provider raises when the provider is unknown; the name then routes as-is
-            return None
 
     def get_deployments_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> list[dict]:
         """
@@ -245,6 +259,28 @@ class PatternMatchRouter:
         if pattern_match:
             return pattern_match
         return []
+
+    def get_models_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> frozenset[str]:
+        """The models get_deployments_by_pattern would route ``model`` to, without copying the deployments."""
+        provider: Final = custom_llm_provider or inferred_provider(model)
+        requests_by_pattern: Final = itertools.product((model, f"{provider}/{model}"), self.patterns)
+        matched: Final = next(
+            (
+                (pattern_match, pattern)
+                for request, pattern in requests_by_pattern
+                if (pattern_match := re.match(pattern, request)) is not None
+            ),
+            None,
+        )
+        if matched is None:
+            return frozenset()
+        pattern_match, pattern = matched
+        return frozenset(
+            PatternMatchRouter.set_deployment_model_name(
+                matched_pattern=pattern_match, litellm_deployment_litellm_model=deployment["litellm_params"]["model"]
+            )
+            for deployment in self.patterns[pattern]
+        )
 
 
 # Example usage:

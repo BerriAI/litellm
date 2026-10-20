@@ -79,7 +79,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
             input_list = [str(input)]
 
         return dict(
-            BedrockCohereEmbeddingConfig()._transform_request(
+            BedrockCohereEmbeddingConfig().transform_request(
                 model=model,
                 input=input_list,
                 inference_params=optional_params,
@@ -111,7 +111,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         if isinstance(input_value, str):
             input_value = [input_value]
 
-        return CohereEmbeddingConfig()._populate_embedding_response(
+        return CohereEmbeddingConfig().populate_embedding_response(
             response_json=raw_response.json(),
             model_response=model_response,
             model=model,

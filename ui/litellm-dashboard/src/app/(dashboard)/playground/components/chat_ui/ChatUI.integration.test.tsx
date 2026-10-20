@@ -35,10 +35,12 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = () => {};
 });
 
-const CHAT_REQUEST_ARG_COUNT = 26;
+const CHAT_REQUEST_ARG_COUNT = 27;
 const STREAMING_ENABLED_ARG_INDEX = 25;
-const MESSAGES_REQUEST_ARG_COUNT = 19;
+const CHAT_CUSTOM_HEADERS_ARG_INDEX = 26;
+const MESSAGES_REQUEST_ARG_COUNT = 20;
 const MESSAGES_STREAMING_ENABLED_ARG_INDEX = 18;
+const MESSAGES_CUSTOM_HEADERS_ARG_INDEX = 19;
 
 async function openComboboxByPlaceholder(placeholder: string) {
   const user = userEvent.setup();
@@ -447,6 +449,63 @@ describe("ChatUI", () => {
     expect(requestArgs[MESSAGES_STREAMING_ENABLED_ARG_INDEX]).toBe(false);
   });
 
+  it("should send custom headers entered in the sidebar with /v1/chat/completions and /v1/messages requests", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await selectComboboxOption("Select a Model", "Model 1");
+    await user.click(screen.getByRole("button", { name: "Add Header" }));
+    await user.click(screen.getByRole("button", { name: "Add Header" }));
+    const [firstName] = screen.getAllByPlaceholderText("Header Name");
+    const [firstValue, secondValue] = screen.getAllByPlaceholderText("Header Value");
+    fireEvent.change(firstName, { target: { value: "anthropic-beta" } });
+    fireEvent.change(firstValue, { target: { value: "context-1m-2025-08-07" } });
+    fireEvent.change(secondValue, { target: { value: "ignored because the name is blank" } });
+
+    const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+    await act(async () => {
+      fireEvent.change(messageInput, { target: { value: "hello" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+    });
+
+    await waitFor(() => {
+      expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
+    });
+    const chatArgs = vi.mocked(makeOpenAIChatCompletionRequest).mock.calls[0];
+    expect(chatArgs).toHaveLength(CHAT_REQUEST_ARG_COUNT);
+    expect(chatArgs[CHAT_CUSTOM_HEADERS_ARG_INDEX]).toEqual({ "anthropic-beta": "context-1m-2025-08-07" });
+
+    await selectComboboxOption("Select an endpoint", "/v1/messages");
+    await selectComboboxOption("Select a Model", "Model 1");
+    await act(async () => {
+      fireEvent.change(messageInput, { target: { value: "hello again" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+    });
+
+    await waitFor(() => {
+      expect(makeAnthropicMessagesRequest).toHaveBeenCalledTimes(1);
+    });
+    const messagesArgs = vi.mocked(makeAnthropicMessagesRequest).mock.calls[0];
+    expect(messagesArgs).toHaveLength(MESSAGES_REQUEST_ARG_COUNT);
+    expect(messagesArgs[MESSAGES_CUSTOM_HEADERS_ARG_INDEX]).toEqual({ "anthropic-beta": "context-1m-2025-08-07" });
+  });
+
   it("should force streaming in simplified mode even when the playground setting is off", async () => {
     sessionStorage.setItem("streamingEnabled", "false");
 
@@ -731,5 +790,59 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText("Select a Model")).toBeEnabled();
     });
+  });
+
+  it("sends scroll the chat pane to the new message, tokens do not, jump button scrolls to bottom", async () => {
+    const scrollTopSetter = vi.spyOn(HTMLElement.prototype, "scrollTop", "set");
+    let streamChunk: ((chunk: string, model?: string) => void) | undefined;
+    vi.mocked(makeOpenAIChatCompletionRequest).mockImplementation(async (...args) => {
+      streamChunk = args[1] as (chunk: string, model?: string) => void;
+    });
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
+    await selectComboboxOption("Select a Model", "Model 1");
+    const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+    await act(async () => {
+      fireEvent.change(messageInput, { target: { value: "hello" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+    });
+
+    await waitFor(() => {
+      expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
+    });
+
+    expect(scrollTopSetter).toHaveBeenCalled();
+    scrollTopSetter.mockClear();
+
+    const scrollIntoViewMock = vi.mocked(Element.prototype.scrollIntoView);
+    const scrollIntoViewCallsBeforeTokens = scrollIntoViewMock.mock.calls.length;
+
+    await act(async () => {
+      streamChunk?.("Hello world", "Model 1");
+    });
+
+    expect(scrollTopSetter).not.toHaveBeenCalled();
+    expect(scrollIntoViewMock.mock.calls.length).toBe(scrollIntoViewCallsBeforeTokens);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Jump to bottom" }));
+
+    expect(scrollTopSetter).toHaveBeenCalled();
   });
 });

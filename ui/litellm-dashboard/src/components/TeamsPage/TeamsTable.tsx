@@ -83,7 +83,8 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
 
   const {
     data: teamsResponse,
-    isPending: isLoading,
+    isPending,
+    isPlaceholderData,
     isFetching,
     refetch,
   } = useTeamsTable(tablePagination.pageIndex + 1, tablePagination.pageSize, teamListOptions);
@@ -161,7 +162,7 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
       onColumnFiltersChange={handleColumnFiltersChange}
       enableColumnResizing
       columnResizeMode="onChange"
-      isLoading={isLoading}
+      isLoading={isPending || isPlaceholderData}
       loadingMessage="Loading teams..."
       noDataMessage="No teams found"
       fillHeight
