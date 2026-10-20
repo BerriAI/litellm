@@ -83,6 +83,24 @@ def http2_enabled() -> bool:
     return litellm.http2 is True or str_to_bool(os.getenv("LITELLM_HTTP2", "False")) is True
 
 
+def http2_disabled() -> bool:
+    from litellm.secret_managers.main import str_to_bool
+
+    return litellm.http2 is False or str_to_bool(os.getenv("LITELLM_HTTP2")) is False
+
+
+def _resolve_http2(provider_default: bool, ssl_verify: VerifyTypes | None) -> bool:
+    if http2_enabled():
+        return True
+    return provider_default and not http2_disabled() and not isinstance(ssl_verify, ssl.SSLContext)
+
+
+def _aiohttp_env_proxies_disabled() -> bool:
+    from litellm.secret_managers.main import str_to_bool
+
+    return litellm.disable_aiohttp_trust_env or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False")) is True
+
+
 def _environment_proxy_mounts(
     build_proxy_transport: Callable[[str], _HttpxTransportT],
 ) -> Mapping[str, _HttpxTransportT | None]:
@@ -686,7 +704,7 @@ class AsyncHTTPHandler:
                 follow_redirects=self.follow_redirects,
                 trust_env=False,
             )
-        use_http2: Final = self.http2 or http2_enabled()
+        use_http2: Final = _resolve_http2(self.http2, ssl_verify)
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration(ssl_verify, http2=use_http2)
 
@@ -703,14 +721,18 @@ class AsyncHTTPHandler:
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
             http2=use_http2,
+            cert=cert,
         )
 
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers()
+        trust_env: Final = not (use_http2 and _aiohttp_env_proxies_disabled())
 
         return httpx.AsyncClient(
             transport=transport,
-            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert, http2=use_http2),
+            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert, http2=use_http2)
+            if trust_env
+            else None,
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
@@ -719,6 +741,7 @@ class AsyncHTTPHandler:
             cookies=blocked_cookie_jar(),
             follow_redirects=self.follow_redirects,
             http2=use_http2,
+            trust_env=trust_env,
         )
 
     async def close(self):
@@ -1209,6 +1232,7 @@ class AsyncHTTPHandler:
         ssl_verify: bool | None = None,
         shared_session: Optional["ClientSession"] = None,
         http2: bool = False,
+        cert: CertTypes | None = None,
     ) -> LiteLLMAiohttpTransport | AsyncHTTPTransport | None:
         """
         - Creates a transport for httpx.AsyncClient
@@ -1237,7 +1261,11 @@ class AsyncHTTPHandler:
         #########################################################
         # HTTPX TRANSPORT is used when aiohttp is not installed
         #########################################################
-        return AsyncHTTPHandler._create_httpx_transport(http2=http2)
+        return AsyncHTTPHandler._create_httpx_transport(
+            http2=http2,
+            verify=ssl_context if ssl_context is not None else ssl_verify is not False,
+            cert=cert,
+        )
 
     _create_async_transport = create_async_transport
 
@@ -1384,7 +1412,11 @@ class AsyncHTTPHandler:
     _create_aiohttp_transport = create_aiohttp_transport
 
     @staticmethod
-    def _create_httpx_transport(http2: bool = False) -> AsyncHTTPTransport | None:
+    def _create_httpx_transport(
+        http2: bool = False,
+        verify: ssl.SSLContext | bool = True,
+        cert: CertTypes | None = None,
+    ) -> AsyncHTTPTransport | None:
         """
         Creates an AsyncHTTPTransport
 
@@ -1392,7 +1424,9 @@ class AsyncHTTPHandler:
         - [Default] If force_ipv4 is False, it will return None
         """
         if litellm.force_ipv4:
-            return AsyncHTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, http2=http2 or http2_enabled())
+            return AsyncHTTPTransport(
+                local_address=_IPV4_LOCAL_ADDRESS, verify=verify, cert=cert, http2=http2 or http2_enabled()
+            )
         else:
             return None
 
@@ -1436,7 +1470,7 @@ class HTTPHandler:
         self._client = self.create_client() if client is None else client
 
     def create_client(self) -> httpx.Client:
-        use_http2: Final = self.http2 or http2_enabled()
+        use_http2: Final = _resolve_http2(self.http2, self.ssl_verify)
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration(self.ssl_verify, http2=use_http2)
 
@@ -1449,7 +1483,7 @@ class HTTPHandler:
 
         # Create a client with a connection pool
         return httpx.Client(
-            transport=self._create_sync_transport(http2=use_http2),
+            transport=self._create_sync_transport(verify=ssl_config, cert=cert, http2=use_http2),
             mounts=self._create_sync_proxy_mounts(verify=ssl_config, cert=cert, http2=use_http2),
             timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
             verify=ssl_config,
@@ -1733,7 +1767,7 @@ class HTTPHandler:
             pass
 
     @staticmethod
-    def _create_sync_transport(http2: bool) -> HTTPTransport | None:
+    def _create_sync_transport(verify: VerifyTypes, cert: CertTypes | None, http2: bool) -> HTTPTransport | None:
         """
         Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
         Otherwise, return None.
@@ -1741,7 +1775,7 @@ class HTTPHandler:
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         if litellm.force_ipv4:
-            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, http2=http2)
+            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, verify=verify, cert=cert, http2=http2)
         else:
             return getattr(litellm, "sync_transport", None)
 

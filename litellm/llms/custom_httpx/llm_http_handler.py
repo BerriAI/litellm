@@ -340,6 +340,20 @@ class _SignedBodyKwargs(TypedDict, total=False):
     json: ReadOnly[dict[str, object]]
 
 
+async def _asend_idempotent(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
+    try:
+        return await send()
+    except httpx.RemoteProtocolError:
+        return await send()
+
+
+def _send_idempotent(send: Callable[[], httpx.Response]) -> httpx.Response:
+    try:
+        return send()
+    except httpx.RemoteProtocolError:
+        return send()
+
+
 def _signed_body_kwargs(*, signed_body: bytes | None, data: dict[str, object]) -> _SignedBodyKwargs:
     if signed_body is not None:
         return {"data": signed_body}
@@ -10391,11 +10405,8 @@ class BaseLLMHTTPHandler:
         request_data: Final = json.dumps(request_body) if signed_json_body is None else signed_json_body
 
         try:
-            response: Final = await async_httpx_client.post(
-                url=url,
-                headers=headers,
-                data=request_data,
-                timeout=timeout,
+            response: Final = await _asend_idempotent(
+                partial(async_httpx_client.post, url=url, headers=headers, data=request_data, timeout=timeout)
             )
         except httpx.TimeoutException:
             raise vector_store_provider_config.get_error_class(
@@ -10533,11 +10544,8 @@ class BaseLLMHTTPHandler:
         request_data: Final = json.dumps(request_body) if signed_json_body is None else signed_json_body
 
         try:
-            response: Final = sync_httpx_client.post(
-                url=url,
-                headers=headers,
-                data=request_data,
-                timeout=timeout,
+            response: Final = _send_idempotent(
+                partial(sync_httpx_client.post, url=url, headers=headers, data=request_data, timeout=timeout)
             )
         except httpx.TimeoutException:
             raise vector_store_provider_config.get_error_class(

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import ipaddress
+import itertools
 import json
 import socket
+import ssl
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -17,6 +21,9 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+from h2.config import H2Configuration
+from h2.connection import H2Connection
+from h2.events import StreamEnded
 from hypercorn.asyncio import (
     serve,  # pyright: ignore[reportUnknownVariableType]  # hypercorn's serve signature passes through untyped worker hooks
 )
@@ -35,6 +42,7 @@ VERTEX_SERVING_CONFIG_PATH: Final = (
 class TlsPeer:
     url: str
     cert_file: Path
+    key_file: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,7 +150,7 @@ def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer
             time.sleep(0.05)
     else:
         pytest.fail("hypercorn peer did not start")
-    yield TlsPeer(url=f"https://127.0.0.1:{port}", cert_file=cert_file)
+    yield TlsPeer(url=f"https://127.0.0.1:{port}", cert_file=cert_file, key_file=key_file)
     shutdown.set()
     thread.join(timeout=10)
 
@@ -211,7 +219,9 @@ def test_async_handler_negotiates_http2_only_when_enabled(
 
 
 @pytest.mark.covers("other.sdk_wire.http2.sync_handler_negotiates_h2_only_when_enabled")
-def test_sync_handler_negotiates_http2_only_when_enabled(monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer) -> None:
+def test_sync_handler_negotiates_http2_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
     for enabled in (False, True):
         _set_http2(monkeypatch, enabled)
         _assert_negotiated(_sync_exchange(http2_tls_peer.url), enabled)
@@ -227,31 +237,37 @@ def _trust_peer_without_global_http2(monkeypatch: pytest.MonkeyPatch, peer: TlsP
     litellm.in_memory_llm_clients_cache.flush_cache()
 
 
-def _vertex_search_file_ids(peer: TlsPeer) -> list[str | None]:
+def _vertex_search_file_ids(
+    peer: TlsPeer, search_url: str | None = None, ssl_verify: ssl.SSLContext | None = None
+) -> list[str | None]:
     import litellm
 
     response: Final = litellm.vector_stores.search(
         vector_store_id="default_search",
         query="ping",
         custom_llm_provider="vertex_ai/search_api",
-        api_base=f"{peer.url}{VERTEX_SERVING_CONFIG_PATH}",
+        api_base=f"{search_url or peer.url}{VERTEX_SERVING_CONFIG_PATH}",
         vertex_credentials=service_account_json("p", peer.url),
         vertex_project="p",
+        ssl_verify=ssl_verify,
     )
     assert isinstance(response, dict)
     return [result.get("file_id") for result in response.get("data") or ()]
 
 
-async def _avertex_search_file_ids(peer: TlsPeer) -> list[str | None]:
+async def _avertex_search_file_ids(
+    peer: TlsPeer, search_url: str | None = None, ssl_verify: ssl.SSLContext | None = None
+) -> list[str | None]:
     import litellm
 
     response: Final = await litellm.vector_stores.asearch(
         vector_store_id="default_search",
         query="ping",
         custom_llm_provider="vertex_ai/search_api",
-        api_base=f"{peer.url}{VERTEX_SERVING_CONFIG_PATH}",
+        api_base=f"{search_url or peer.url}{VERTEX_SERVING_CONFIG_PATH}",
         vertex_credentials=service_account_json("p", peer.url),
         vertex_project="p",
+        ssl_verify=ssl_verify,
     )
     return [result.get("file_id") for result in response.get("data") or ()]
 
@@ -287,3 +303,142 @@ def test_default_async_client_stays_http1_after_vertex_search_used_http2(
             await handler.close()
 
     assert asyncio.run(_run()) == (["http/2"], "1.1")
+
+
+def test_vertex_search_over_forced_ipv4_trusts_the_configured_ca(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    import litellm
+
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    monkeypatch.setattr(litellm, "force_ipv4", True)
+
+    assert _vertex_search_file_ids(http2_tls_peer) == ["http/2"]
+    assert asyncio.run(_avertex_search_file_ids(http2_tls_peer)) == ["http/2"]
+
+
+def test_explicit_http2_off_keeps_vertex_search_on_http1(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    import litellm
+
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    monkeypatch.setenv("LITELLM_HTTP2", "False")
+    assert _vertex_search_file_ids(http2_tls_peer) == ["http/1.1"]
+    assert asyncio.run(_avertex_search_file_ids(http2_tls_peer)) == ["http/1.1"]
+
+    monkeypatch.delenv("LITELLM_HTTP2")
+    monkeypatch.setattr(litellm, "http2", False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    assert _vertex_search_file_ids(http2_tls_peer) == ["http/1.1"]
+    assert asyncio.run(_avertex_search_file_ids(http2_tls_peer)) == ["http/1.1"]
+
+
+def _alpn_offered_by(context: ssl.SSLContext, peer: TlsPeer) -> str | None:
+    host, port = peer.url.removeprefix("https://").split(":")
+    with (
+        socket.create_connection((host, int(port)), timeout=5) as raw,
+        context.wrap_socket(raw, server_hostname=host) as tls,
+    ):
+        return tls.selected_alpn_protocol()
+
+
+def test_vertex_search_leaves_a_caller_ssl_context_on_http1(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    sync_context: Final = ssl.create_default_context(cafile=str(http2_tls_peer.cert_file))
+    async_context: Final = ssl.create_default_context(cafile=str(http2_tls_peer.cert_file))
+
+    assert _vertex_search_file_ids(http2_tls_peer, ssl_verify=sync_context) == ["http/1.1"]
+    assert asyncio.run(_avertex_search_file_ids(http2_tls_peer, ssl_verify=async_context)) == ["http/1.1"]
+    assert _alpn_offered_by(sync_context, http2_tls_peer) != "h2"
+    assert _alpn_offered_by(async_context, http2_tls_peer) != "h2"
+
+
+def test_http2_client_skips_env_proxies_when_aiohttp_trust_env_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    _set_http2(monkeypatch, False)
+    for name in ("https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", f"http://127.0.0.1:{allocate_port()}")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRUST_ENV", "True")
+
+    async def _peer_http_version() -> str:
+        handler: Final = AsyncHTTPHandler(ssl_verify=str(http2_tls_peer.cert_file), http2=True)
+        try:
+            response: Final = await handler.client.post(f"{http2_tls_peer.url}/echo", json={"ping": "pong"})
+            return response.http_version
+        finally:
+            await handler.close()
+
+    for force_ipv4 in (False, True):
+        monkeypatch.setattr(litellm, "force_ipv4", force_ipv4)
+        assert asyncio.run(_peer_http_version()) == "HTTP/2"
+
+
+def _answer_or_drain(connection: H2Connection, stream_id: int, drain: bool) -> None:
+    if drain:
+        connection.close_connection(last_stream_id=stream_id)
+        return
+    connection.send_headers(stream_id, [(":status", "200"), ("content-type", "application/json")])
+    connection.send_data(stream_id, json.dumps({"results": [{"id": "after-goaway"}]}).encode(), end_stream=True)
+
+
+def _reply_to_ended_streams(connection: H2Connection, tls: ssl.SSLSocket, data: bytes, drain: bool) -> bool:
+    ended: Final = tuple(event.stream_id for event in connection.receive_data(data) if isinstance(event, StreamEnded))
+    for stream_id in ended:
+        _answer_or_drain(connection, stream_id, drain)
+    tls.sendall(connection.data_to_send())
+    return bool(ended)
+
+
+def _serve_h2(context: ssl.SSLContext, raw: socket.socket, drain: bool) -> None:
+    with contextlib.suppress(OSError), raw, context.wrap_socket(raw, server_side=True) as tls:
+        connection: Final = H2Connection(config=H2Configuration(client_side=False))
+        connection.initiate_connection()
+        tls.sendall(connection.data_to_send())
+        while data := tls.recv(65535):
+            if _reply_to_ended_streams(connection, tls, data, drain) and drain:
+                return
+
+
+@contextmanager
+def _goaway_peer(peer: TlsPeer) -> Generator[str]:
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(peer.cert_file, peer.key_file)
+    context.set_alpn_protocols(["h2"])
+    stop: Final = threading.Event()
+    connections: Final = itertools.count(1)
+
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        listener.settimeout(0.1)
+
+        def _accept() -> None:
+            while not stop.is_set():
+                with contextlib.suppress(TimeoutError):
+                    threading.Thread(
+                        target=_serve_h2, args=(context, listener.accept()[0], next(connections) % 2 == 1), daemon=True
+                    ).start()
+
+        acceptor: Final = threading.Thread(target=_accept, daemon=True)
+        acceptor.start()
+        try:
+            yield f"https://127.0.0.1:{listener.getsockname()[1]}"
+        finally:
+            stop.set()
+            acceptor.join(timeout=5)
+
+
+def test_vertex_search_retries_a_connection_the_server_drains_with_goaway(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+
+    with _goaway_peer(http2_tls_peer) as search_url:
+        assert _vertex_search_file_ids(http2_tls_peer, search_url=search_url) == ["after-goaway"]
+        assert asyncio.run(_avertex_search_file_ids(http2_tls_peer, search_url=search_url)) == ["after-goaway"]
