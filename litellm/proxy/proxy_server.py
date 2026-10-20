@@ -4243,10 +4243,10 @@ def update_cache_read_keys(
 ) -> tuple[str, ...]:
     if response_cost is None:
         return ()
-    user_keys: tuple[str, ...] = (user_id, GLOBAL_PROXY_SPEND_CACHE_KEY) if user_id is not None else ()
+    global_proxy_keys: tuple[str, ...] = (GLOBAL_PROXY_SPEND_CACHE_KEY,) if user_id is not None else ()
     end_user_keys: tuple[str, ...] = (end_user_cache_key(end_user_id),) if end_user_id is not None else ()
     tag_keys: tuple[str, ...] = tuple(tag_cache_key(tag) for tag in tags or () if isinstance(tag, str) and tag)
-    return user_keys + end_user_keys + tag_keys
+    return global_proxy_keys + end_user_keys + tag_keys
 
 
 _UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
@@ -4379,46 +4379,34 @@ async def update_cache(
             # set cooldown on alert
 
     ### UPDATE USER SPEND ###
-    async def _update_user_cache():
+    def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
         if response_cost is None:
             return
-        user_ids: Final = [user_id]
         try:
-            for _id in user_ids:
-                # Fetch the existing cost for the given user
-                if _id is None:
-                    continue
-                cached_user = cached_values.get(_id)
-                if cached_user is None:
-                    # do nothing if there is no cache value
-                    return
-                existing_spend_obj = CacheCodec.deserialize(cached_user, LiteLLM_UserTable)
-                if existing_spend_obj is None:
-                    return
-                verbose_proxy_logger.debug(
-                    "_update_user_db: existing spend: %s; response_cost: %s", existing_spend_obj, response_cost
+            if user_id is not None:
+                current_user: Final = CacheCodec.deserialize(
+                    user_api_key_cache.get_cache(key=user_id, local_only=True), LiteLLM_UserTable
                 )
-
-                existing_spend = existing_spend_obj.spend or 0.0
-                # Calculate the new cost by adding the existing cost and response_cost
-                new_spend = existing_spend + response_cost
-
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append(
-                    (
-                        _id,
-                        CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_UserTable),
+                if current_user is not None:
+                    user_api_key_cache.set_cache(
+                        key=user_id,
+                        value=CacheCodec.serialize(
+                            current_user.model_copy(update={"spend": (current_user.spend or 0.0) + response_cost}),
+                            model_type=LiteLLM_UserTable,
+                        ),
+                        local_only=True,
+                        ttl=get_management_object_ttl(user_api_key_cache),
                     )
+                verbose_proxy_logger.debug(
+                    "_update_user_db: existing spend: %s; response_cost: %s", current_user, response_cost
                 )
-            ## UPDATE GLOBAL PROXY ##
             global_proxy_spend: Final = cached_values.get(GLOBAL_PROXY_SPEND_CACHE_KEY)
             if not isinstance(global_proxy_spend, (int, float)):
                 # do nothing if not in cache
                 return
-            elif response_cost is not None:
-                increment: Final = global_proxy_spend + response_cost
-                values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
+            increment: Final = global_proxy_spend + response_cost
+            values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update user spend in cache. "
@@ -4565,7 +4553,7 @@ async def update_cache(
             await _update_key_cache(token=token, response_cost=response_cost)
 
         if user_id is not None:
-            await _update_user_cache()
+            _update_user_cache()
 
         if end_user_id is not None:
             await _update_end_user_cache()

@@ -31,6 +31,7 @@ import pytest
 
 import litellm.proxy.proxy_server as ps
 from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
+from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_local
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
@@ -1577,7 +1578,6 @@ async def test_update_cache_no_cached_entities_schedules_pipeline_flush(monkeypa
     assert fake_user_cache.async_get_cache.await_count == 0
     fake_user_cache.async_batch_get_cache.assert_awaited_once()
     assert fake_user_cache.async_batch_get_cache.await_args.kwargs["keys"] == [
-        "u1",
         f"{ps.litellm_proxy_admin_name}:spend",
         "end_user_id:eu1",
         "tag:x",
@@ -1620,6 +1620,108 @@ async def _update_team_spend(team_id: str, response_cost: float) -> None:
         response_cost=response_cost,
         parent_otel_span=None,
     )
+
+
+def _narrow_cached_user(cache: UserApiKeyCache, user_id: str) -> None:
+    cache.set_cache(
+        key=user_id,
+        value=LiteLLM_UserTable(user_id=user_id, models=["no-default-models"], spend=5.0),
+    )
+
+
+def _evict_cached_user(cache: UserApiKeyCache, user_id: str) -> None:
+    evict_local(cache_keys=(user_id,), user_api_key_cache=cache)
+
+
+async def _update_user_spend_during_key_cache_read(
+    cache: UserApiKeyCache,
+    user_id: str,
+    response_cost: float,
+    management_write: Callable[[UserApiKeyCache, str], None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _read_key_cache(**kwargs: object) -> None:
+        management_write(cache, user_id)
+
+    monkeypatch.setattr(cache, "async_get_cache", AsyncMock(side_effect=_read_key_cache))
+    await ps.update_cache(
+        token="in-flight-key",
+        user_id=user_id,
+        end_user_id=None,
+        team_id=None,
+        response_cost=response_cost,
+        parent_otel_span=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("management_write", "expected_models"),
+    [(_narrow_cached_user, ["no-default-models"]), (_evict_cached_user, None)],
+)
+async def test_update_cache_does_not_restore_a_user_after_a_management_write(
+    management_write: Callable[[UserApiKeyCache, str], None],
+    expected_models: list[str] | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id: Final = "in-flight-user"
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key=user_id, value=LiteLLM_UserTable(user_id=user_id, models=["original"]))
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await _update_user_spend_during_key_cache_read(
+        cache=cache,
+        user_id=user_id,
+        response_cost=1.0,
+        management_write=management_write,
+        monkeypatch=monkeypatch,
+    )
+    await _drain_spend_cache_writes()
+
+    seen_by_auth: Final = cache.get_cache(key=user_id, model_type=LiteLLM_UserTable)
+    assert (seen_by_auth.models if seen_by_auth is not None else None) == expected_models
+
+
+@pytest.mark.asyncio
+async def test_update_cache_adds_spend_to_the_current_cached_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    user_id: Final = "in-flight-user-spend"
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key=user_id, value=LiteLLM_UserTable(user_id=user_id, models=["original"], spend=5.0))
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await _update_user_spend_during_key_cache_read(
+        cache=cache,
+        user_id=user_id,
+        response_cost=2.5,
+        management_write=_narrow_cached_user,
+        monkeypatch=monkeypatch,
+    )
+    await _drain_spend_cache_writes()
+
+    current: Final = cache.get_cache(key=user_id, model_type=LiteLLM_UserTable)
+    assert current is not None
+    assert (current.models, current.spend) == (["no-default-models"], 7.5)
+
+
+@pytest.mark.asyncio
+async def test_update_cache_increments_global_proxy_spend_without_a_cached_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY, value=5.0)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await ps.update_cache(
+        token=None,
+        user_id="cold-user",
+        end_user_id=None,
+        team_id=None,
+        response_cost=2.5,
+        parent_otel_span=None,
+    )
+    await _drain_spend_cache_writes()
+
+    assert cache.get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY) == 7.5
 
 
 @pytest.mark.asyncio
