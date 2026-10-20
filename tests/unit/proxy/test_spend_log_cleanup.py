@@ -21,6 +21,7 @@ from litellm.constants import (
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SizeCleanupState,
+    SpendLogStorage,
     StorageProbe,
     advance_size_state,
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
@@ -1757,3 +1758,75 @@ def test_advance_size_state_tracks_free_space_through_vacuum_inserts_and_other_d
 
     assert advanced.reclaimable_bytes == reclaimable_expected, name
     assert 0 <= probe["allocated_bytes"] - advanced.reclaimable_bytes <= probe["allocated_bytes"], name
+
+
+def test_after_deleting_counts_the_rows_and_any_file_growth_as_reclaimable_and_to_state_keeps_the_counters():
+    storage = SpendLogStorage(allocated_bytes=32_030_720, reclaimable_bytes=0, bytes_per_row=1601.0, live_rows=20_000)
+
+    after = storage.after_deleting(15_000, 32_030_720 + 8192)
+
+    assert (after.reclaimable_bytes, after.live_rows, after.estimated_live_bytes) == (24_023_192, 5000, 8_015_720)
+    assert after.to_state(inserted_total=20_000, deleted_total=15_000) == SizeCleanupState(
+        allocated_bytes=32_038_912,
+        reclaimable_bytes=24_023_192,
+        bytes_per_row=1601.0,
+        inserted_total=20_000,
+        deleted_total=15_000,
+    )
+    assert StorageProbe(
+        allocated_bytes=8192, live_rows=0, dead_rows=0, inserted_total=0, deleted_total=0
+    ).stats_are_stale
+
+
+@pytest.mark.asyncio
+async def test_probe_storage_reads_the_catalog_row_for_both_tables_and_a_failed_probe_is_none(caplog):
+    prisma_client = MagicMock()
+    _wire_tx(prisma_client.db)
+    prisma_client.db.query_raw = AsyncMock(return_value=[_storage(32_030_720, 20_000, 0)])
+    cleaner = SpendLogCleanup(general_settings={})
+
+    probe = await cleaner._probe_storage(prisma_client, _far_deadline())
+
+    assert probe is not None
+    assert (probe.allocated_bytes, probe.live_rows, probe.dead_rows, probe.inserted_total, probe.deleted_total) == (
+        32_030_720,
+        20_000,
+        0,
+        20_000,
+        0,
+    )
+    assert prisma_client.db.query_raw.call_args.args[1] == ["LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"]
+
+    prisma_client.db.query_raw = AsyncMock(side_effect=RuntimeError("pg_stat_user_tables unavailable"))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        assert await cleaner._probe_storage(prisma_client, _far_deadline()) is None
+    assert any("Could not measure spend-log storage" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_size_state_round_trips_through_its_litellm_config_row_and_a_lost_save_is_only_a_warning(caplog):
+    saved = {}
+    prisma_client = MagicMock()
+    _wire_tx(prisma_client.db)
+
+    async def execute_raw(sql, *args):
+        saved[args[0]] = args[1]
+        return 1
+
+    prisma_client.db.execute_raw = execute_raw
+    prisma_client.db.query_raw = AsyncMock(
+        side_effect=lambda sql, param: [{"state_json": saved[param]}] if param in saved else []
+    )
+    cleaner = SpendLogCleanup(general_settings={})
+
+    assert await cleaner._load_size_state(prisma_client, _far_deadline()) is None
+    await cleaner._save_size_state(prisma_client, _far_deadline(), _RUN_STATE)
+    assert list(saved) == ["spend_logs_size_cleanup_state"]
+    loaded = await cleaner._load_size_state(prisma_client, _far_deadline())
+    assert loaded is not None
+    assert loaded.model_dump() == _RUN_STATE.model_dump()
+
+    prisma_client.db.execute_raw = AsyncMock(side_effect=RuntimeError("LiteLLM_Config is read only"))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await cleaner._save_size_state(prisma_client, _far_deadline(), _RUN_STATE)
+    assert any("Could not save the spend-log size cleanup state" in record.getMessage() for record in caplog.records)
