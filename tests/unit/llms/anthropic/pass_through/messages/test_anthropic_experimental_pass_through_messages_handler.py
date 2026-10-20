@@ -1,3 +1,4 @@
+import copy
 import asyncio
 import json
 import os
