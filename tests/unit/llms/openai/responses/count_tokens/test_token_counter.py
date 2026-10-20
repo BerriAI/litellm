@@ -1,3 +1,4 @@
+import copy
 import json
 import operator
 from collections.abc import Mapping
@@ -9,6 +10,7 @@ import respx
 from pydantic import JsonValue, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
@@ -521,3 +523,122 @@ async def test_count_sends_the_global_key_only_to_the_global_api_base(monkeypatc
     assert result is not None
     assert result.total_tokens == 4
     assert route.calls.last.request.headers["authorization"] == "Bearer sk-private-gateway"
+
+
+_KEEP_ALL: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+_ANSWER_FORMAT: Final[dict[str, object]] = {
+    "format": {"type": "json_schema", "name": "answer", "schema": {"type": "object", "properties": {}}}
+}
+_STORED_PROMPT: Final[dict[str, object]] = {"id": "pmpt_abc", "variables": {"city": "Paris"}}
+_CALLER_BODY: Final[dict[str, object]] = {
+    "model": "my-gpt",
+    "input": "hi",
+    "text": _ANSWER_FORMAT,
+    "prompt": _STORED_PROMPT,
+    "max_output_tokens": "lots",
+    "metadata": {"run": "nightly"},
+    "drop_params": False,
+    "additional_drop_params": [],
+    "timeout": 30,
+    "extra_headers": {"x-trace": "1"},
+    "disable_fallbacks": True,
+    "spend_logs_metadata": {"team": "search"},
+    "mock_testing_fallbacks": True,
+}
+
+
+async def _native_count(
+    monkeypatch: pytest.MonkeyPatch, request: Mapping[str, object], policy: DropPolicy, response: httpx.Response
+) -> tuple[TokenCountResponse | None, object]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=response)
+        result: Final = await OpenAITokenCounter().count_responses_request(
+            model_to_use="gpt-4o",
+            request=request,
+            policy=policy,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="my-gpt",
+        )
+        return result, json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "expected_sent"),
+    [
+        pytest.param(
+            _KEEP_ALL,
+            {
+                "model": "gpt-4o",
+                "input": "hi",
+                "text": _ANSWER_FORMAT,
+                "prompt": _STORED_PROMPT,
+                "max_output_tokens": "lots",
+            },
+            id="keeps-responses-fields",
+        ),
+        pytest.param(
+            DropPolicy(drop_params=True, additional_drop_params=frozenset()),
+            {"model": "gpt-4o", "input": "hi", "text": _ANSWER_FORMAT, "prompt": _STORED_PROMPT},
+            id="drop-params-keeps-count-fields",
+        ),
+        pytest.param(
+            DropPolicy(drop_params=False, additional_drop_params=frozenset({"text"})),
+            {"model": "gpt-4o", "input": "hi", "prompt": _STORED_PROMPT, "max_output_tokens": "lots"},
+            id="additional-drop-params",
+        ),
+    ],
+)
+async def test_native_count_sends_the_callers_body_without_litellm_fields(
+    monkeypatch: pytest.MonkeyPatch, policy: DropPolicy, expected_sent: dict[str, object]
+) -> None:
+    result, sent = await _native_count(
+        monkeypatch, _CALLER_BODY, policy, httpx.Response(200, json={"input_tokens": 76})
+    )
+
+    assert sent == expected_sent
+    assert result is not None
+    assert (result.total_tokens, result.model_used, result.error) == (76, "gpt-4o", False)
+
+
+@pytest.mark.asyncio
+async def test_native_count_restores_provider_ids_on_a_copy_of_the_callers_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapped: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAoriginal", "deployment-1")
+    request: Final[dict[str, object]] = {
+        "model": "my-gpt",
+        "previous_response_id": ResponsesAPIRequestUtils._build_responses_api_response_id(
+            "openai", "deployment-1", "resp_original"
+        ),
+        "input": [
+            {"type": "reasoning", "summary": [], "encrypted_content": wrapped},
+            {"role": "user", "content": "again"},
+        ],
+    }
+    before: Final = copy.deepcopy(request)
+
+    _, sent = await _native_count(monkeypatch, request, _KEEP_ALL, httpx.Response(200, json={"input_tokens": 1}))
+
+    assert sent == {
+        "model": "gpt-4o",
+        "previous_response_id": "resp_original",
+        "input": [
+            {"type": "reasoning", "summary": [], "encrypted_content": "gAAAAoriginal"},
+            {"role": "user", "content": "again"},
+        ],
+    }
+    assert request == before
+
+
+@pytest.mark.asyncio
+async def test_native_count_answers_openais_rejection_with_its_status_and_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rejection: Final = json.dumps({"error": {"message": "Unknown parameter: 'max_output_tokens'."}})
+
+    result, _ = await _native_count(monkeypatch, _CALLER_BODY, _KEEP_ALL, httpx.Response(400, text=rejection))
+
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message) == (True, 400, rejection)

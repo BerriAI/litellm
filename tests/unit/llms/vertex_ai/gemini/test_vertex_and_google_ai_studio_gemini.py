@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -2118,6 +2118,207 @@ def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
     assert request_params["tools"] == [
         {"function_declarations": [{"name": "lookup", "parameters": {"type": "object"}}]}
     ]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-3.8-flash", {"type": "integer", "enum": ["1", "2", "5"]}),
+        ("gemini-2.5-flash", {"type": "integer"}),
+    ],
+)
+def test_gemini_tool_mapping_sends_integer_enums_to_gemini_3_and_keeps_caller_tools(
+    model: str, expected_level: dict[str, object]
+) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_priority",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                    "required": ["level"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    caller_tools: Final = deepcopy(tools)
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": tools},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    sent_level: Final = request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["level"]
+    assert sent_level == expected_level
+    assert tools == caller_tools
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-flash-latest", {"type": "integer", "enum": ["1", "2", "5"]}),
+        ("gemini-1.5-pro", {"type": "integer"}),
+    ],
+)
+def test_gemini_response_schema_sends_integer_enums_to_gemini_3(model: str, expected_level: dict[str, object]) -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "task",
+            "schema": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                "required": ["level"],
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert request_params["response_schema"]["properties"]["level"] == expected_level
+
+
+def test_gemini_mapping_drops_integer_enums_when_the_caller_disallows_them() -> None:
+    level_schema: Final = {"type": "object", "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}}}
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [{"type": "function", "function": {"name": "set_priority", "parameters": level_schema}}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "task", "schema": level_schema}},
+        },
+        optional_params={},
+        model="gemini-flash-latest",
+        drop_params=False,
+        allow_integer_enums=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["level"] == {
+        "type": "integer"
+    }
+    assert request_params["response_schema"]["properties"]["level"] == {"type": "integer"}
+
+
+_TEN_DIGIT_VALUES_IN_BUDGET: Final = GEMINI_MAX_ENUM_CHARACTERS // 10
+
+
+def _ten_digit_integer_enum_tool(name: str, value_count: int) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "parameters": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [10**9 + n for n in range(value_count)]}},
+                "required": ["level"],
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("value_counts", "integer_enums_sent"),
+    [
+        ((_TEN_DIGIT_VALUES_IN_BUDGET,), True),
+        ((_TEN_DIGIT_VALUES_IN_BUDGET + 1,), False),
+        ((_TEN_DIGIT_VALUES_IN_BUDGET // 2, _TEN_DIGIT_VALUES_IN_BUDGET - _TEN_DIGIT_VALUES_IN_BUDGET // 2), True),
+        ((_TEN_DIGIT_VALUES_IN_BUDGET // 2, _TEN_DIGIT_VALUES_IN_BUDGET - _TEN_DIGIT_VALUES_IN_BUDGET // 2 + 1), False),
+    ],
+    ids=["one-tool-at-budget", "one-tool-over-budget", "two-tools-at-budget", "two-tools-over-budget"],
+)
+def test_gemini_tool_mapping_drops_every_integer_enum_when_the_request_exceeds_the_enum_budget(
+    value_counts: tuple[int, ...], integer_enums_sent: bool
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [_ten_digit_integer_enum_tool(f"tool_{i}", count) for i, count in enumerate(value_counts)]
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    sent_levels: Final = [
+        declaration["parameters"]["properties"]["level"]
+        for declaration in request_params["tools"][0]["function_declarations"]
+    ]
+    assert sent_levels == [
+        (
+            {"type": "integer", "enum": [str(10**9 + n) for n in range(count)]}
+            if integer_enums_sent
+            else {"type": "integer"}
+        )
+        for count in value_counts
+    ]
+
+
+def test_gemini_tool_mapping_counts_string_enums_toward_the_enum_budget() -> None:
+    names: Final = [f"name{n:06d}" for n in range(GEMINI_MAX_ENUM_CHARACTERS // 10)]
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "set_priority",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "enum": names},
+                    "level": {"type": "integer", "enum": [1, 2, 5]},
+                },
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": [tool]}, optional_params={}, model="gemini-3.8-flash", drop_params=False
+    )
+
+    sent_properties: Final = request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]
+    assert sent_properties["level"] == {"type": "integer"}
+    assert sent_properties["name"]["enum"] == names
+
+
+@pytest.mark.parametrize(
+    ("value_count", "expected_level"),
+    [
+        (
+            _TEN_DIGIT_VALUES_IN_BUDGET,
+            {"type": "integer", "enum": [str(10**9 + n) for n in range(_TEN_DIGIT_VALUES_IN_BUDGET)]},
+        ),
+        (_TEN_DIGIT_VALUES_IN_BUDGET + 1, {"type": "integer"}),
+    ],
+)
+def test_gemini_response_schema_drops_integer_enums_past_the_enum_budget(
+    value_count: int, expected_level: dict[str, object]
+) -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "task",
+            "schema": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [10**9 + n for n in range(value_count)]}},
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="gemini-flash-latest",
+        drop_params=False,
+    )
+
+    assert request_params["response_schema"]["properties"]["level"] == expected_level
 
 
 def test_vertex_ai_transform_parts():

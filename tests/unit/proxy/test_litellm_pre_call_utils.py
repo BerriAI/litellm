@@ -3330,9 +3330,7 @@ def test_x_litellm_trace_id_keeps_the_body_session_beside_it_whatever_the_log_se
     assert data["litellm_trace_id"] == "req-trace-1"
 
 
-@pytest.mark.parametrize(
-    "session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"]
-)
+@pytest.mark.parametrize("session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"])
 @pytest.mark.parametrize("with_trace_header", [False, True], ids=["session-header-only", "beside-trace-header"])
 def test_session_headers_still_beat_the_body_session_with_correlation_logging(
     monkeypatch: pytest.MonkeyPatch, session_header: str, with_trace_header: bool
@@ -8282,6 +8280,7 @@ _PLANTED_STAMPS = {
     "attempted_fallbacks": 99,
     "original_model_group": "spoofed-group",
     "request_retry_count": -100,
+    "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 10**9,
     "client_key": "client_value",
@@ -8316,6 +8315,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "original_model_group" not in updated["metadata"]
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
+    assert "previous_models" not in updated["metadata"]
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
