@@ -19,6 +19,7 @@ from litellm.interactions import streaming_iterator as interactions_streaming_it
 from litellm.interactions.streaming_iterator import InteractionsAPIStreamingIterator
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
 from litellm.types.interactions import InteractionsAPIStreamingResponse
 
 
@@ -102,17 +103,14 @@ async def test_custom_logger_only_never_submits_sync_success_handler(monkeypatch
     assert recording_executor.submitted_for(logging_obj) == []
 
 
-class _EchoInteractionsConfig:
-    def transform_streaming_response(self, model, parsed_chunk, logging_obj) -> InteractionsAPIStreamingResponse:
-        return InteractionsAPIStreamingResponse(**parsed_chunk)
-
-
 class _SuccessRecorder(CustomLogger):
     def __init__(self):
         super().__init__()
         self.logged: list[tuple[datetime, object]] = []
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self.logged.append((start_time, kwargs.get("completion_start_time")))
 
 
@@ -138,7 +136,7 @@ async def test_stream_logs_its_first_event_time_measured_from_the_call_start():
     iterator: Final = InteractionsAPIStreamingIterator(
         response=response,
         model="gemini/gemini-3-pro-preview",
-        interactions_api_config=_EchoInteractionsConfig(),
+        interactions_api_config=GoogleAIStudioInteractionsConfig(),
         logging_obj=logging_obj,
     )
     tasks_before: Final = asyncio.all_tasks()

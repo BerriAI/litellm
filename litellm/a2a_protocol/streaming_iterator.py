@@ -41,7 +41,7 @@ class A2AStreamingIterator:
         self.request = request
         self.logging_obj = logging_obj
         self.agent_name = agent_name
-        self.start_time = datetime.now()
+        self.start_time = logging_obj.start_time
 
         # Collect chunks for token counting
         self.chunks: list[SendStreamingMessageResponse] = []

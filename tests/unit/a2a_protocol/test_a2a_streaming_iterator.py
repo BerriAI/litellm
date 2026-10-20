@@ -139,27 +139,32 @@ async def test_stream_completion_counts_tokens_off_the_event_loop(monkeypatch):
     assert_loop_stayed_free(took, lags)
 
 
-class _CompletionStartRecorder(CustomLogger):
+class _SuccessRecorder(CustomLogger):
     def __init__(self):
         super().__init__()
-        self.completion_starts: list[object] = []
+        self.logged: list[tuple[datetime, object]] = []
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.completion_starts.append(kwargs.get("completion_start_time"))
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged.append((start_time, kwargs.get("completion_start_time")))
 
-    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        self.completion_starts.append(kwargs.get("completion_start_time"))
+    async def async_log_stream_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged.append((start_time, kwargs.get("completion_start_time")))
 
 
 @pytest.mark.asyncio
-async def test_stream_logs_when_its_first_chunk_arrived():
-    recorder: Final = _CompletionStartRecorder()
+async def test_stream_logs_its_first_chunk_time_measured_from_the_call_start():
+    call_start: Final = datetime(2026, 10, 9, 12, 0, 0)
+    recorder: Final = _SuccessRecorder()
     logging_obj: Final = LitellmLogging(
         model="a2a/test-agent",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="a2a_send_message_streaming",
-        start_time=datetime(2026, 10, 9, 12, 0, 0),
+        start_time=call_start,
         litellm_call_id="a2a-first-chunk",
         function_id="a2a-first-chunk",
         dynamic_async_success_callbacks=[recorder],
@@ -183,4 +188,4 @@ async def test_stream_logs_when_its_first_chunk_arrived():
     await asyncio.gather(*(asyncio.all_tasks() - tasks_before))
 
     assert first_chunk_at is not None
-    assert recorder.completion_starts == [first_chunk_at]
+    assert recorder.logged == [(call_start, first_chunk_at)]

@@ -21,14 +21,16 @@ class _SuccessRecorder(CustomLogger):
         super().__init__()
         self.logged: list[tuple[datetime, object]] = []
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self.logged.append((start_time, kwargs.get("completion_start_time")))
 
 
 def _logging_obj(
     start_time: datetime = datetime(2026, 10, 9, 12, 0, 0), recorder: _SuccessRecorder | None = None
 ) -> LiteLLMLoggingObj:
-    logging_obj = LiteLLMLoggingObj(
+    logging_obj: Final = LiteLLMLoggingObj(
         model="gemini-3.1-flash",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,

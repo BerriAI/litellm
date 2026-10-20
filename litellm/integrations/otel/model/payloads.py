@@ -429,7 +429,6 @@ class LLMCallSpanData:
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
     time_to_first_chunk_seconds: float | None = None
-    # litellm's completion_start_time in epoch seconds: the first chunk, or the end time of a call that did not stream
     completion_start_seconds: float | None = None
     # The requested output modality, set only on the routes that pin one (image
     # generation, speech, transcription, OCR), and the litellm route itself, which
