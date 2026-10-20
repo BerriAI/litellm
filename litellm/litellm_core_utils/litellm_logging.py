@@ -4398,9 +4398,21 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         selected: Final = async_callbacks if asynchronous else sync_callbacks
         other: Final = sync_callbacks if asynchronous else async_callbacks
+        manager: Final = litellm.logging_callback_manager
+        get_logger_key: Final = (
+            manager._get_custom_logger_key  # pyright: ignore[reportPrivateUsage]  # preserve registry identity
+        )
+        selected_logger_keys: Final = frozenset(
+            get_logger_key(callback) for callback in selected if isinstance(callback, CustomLogger)
+        )
+        other_callbacks: Final = [
+            callback
+            for callback in other
+            if not isinstance(callback, CustomLogger) or get_logger_key(callback) not in selected_logger_keys
+        ]
         return tuple(
             callback
-            for callback in self.get_combined_callback_list(selected, other)
+            for callback in self.get_combined_callback_list(selected, other_callbacks)
             if (
                 (
                     (

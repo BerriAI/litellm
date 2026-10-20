@@ -2462,7 +2462,7 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("registration", ["sync", "async", "overlapping"])
+@pytest.mark.parametrize("registration", ["sync", "async", "overlapping", "equivalent", "distinct"])
 @pytest.mark.parametrize("kind", ["sync", "async", "dual"])
 @pytest.mark.parametrize("compatibility_first", [False, True])
 async def test_completed_success_selects_one_implemented_hook(
@@ -2517,9 +2517,15 @@ async def test_completed_success_selects_one_implemented_hook(
         ) -> None:
             record("async", kwargs, response_obj)
 
-    callback: Final = {"sync": SyncRecorder, "async": AsyncRecorder, "dual": DualRecorder}[kind]()
+    recorder: Final = {"sync": SyncRecorder, "async": AsyncRecorder, "dual": DualRecorder}[kind]
+    callback: Final = recorder()
+    async_callback: Final = (
+        recorder(turn_off_message_logging=registration == "distinct")
+        if registration in ("equivalent", "distinct")
+        else callback
+    )
     monkeypatch.setattr(litellm, "success_callback", [callback] if registration != "async" else [])
-    monkeypatch.setattr(litellm, "_async_success_callback", [callback] if registration != "sync" else [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [async_callback] if registration != "sync" else [])
     logging_obj: Final = _async_request_logging_obj("completed-hook", [])
     response: Final = ModelResponse(id="chatcmpl-completed-hook")
     now: Final = datetime.datetime.now()
@@ -2531,20 +2537,26 @@ async def test_completed_success_selects_one_implemented_hook(
         await logging_obj.async_success_handler(response, now, now)
         logging_obj.handle_sync_success_callbacks_for_async_calls(response, now, now)
 
-    assert events.qsize() == 1
-    hook, response_id, cost, thread_id = events.get_nowait()
-    assert hook == ("sync" if kind == "sync" else "async")
-    assert response_id == response.id
-    assert cost == logging_obj.model_call_details["response_cost"]
-    assert (thread_id == loop_thread) is (kind != "sync")
+    expected_count: Final = 2 if registration == "distinct" else 1
+    assert events.qsize() == expected_count
+    for _ in range(expected_count):
+        hook, response_id, cost, thread_id = events.get_nowait()
+        assert hook == ("sync" if kind == "sync" else "async")
+        assert response_id == response.id
+        assert cost == logging_obj.model_call_details["response_cost"]
+        assert (thread_id == loop_thread) is (kind != "sync")
 
 
 
-@pytest.mark.parametrize("for_async_request", [False, True])
+@pytest.mark.parametrize("for_async_request,split_registries", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("private_first", [False, True])
 @pytest.mark.parametrize("response_kind", ["responses", "completion"])
 def test_sync_success_redacts_only_opted_out_loggers(
-    monkeypatch: pytest.MonkeyPatch, for_async_request: bool, private_first: bool, response_kind: str
+    monkeypatch: pytest.MonkeyPatch,
+    for_async_request: bool,
+    split_registries: bool,
+    private_first: bool,
+    response_kind: str,
 ) -> None:
     from queue import SimpleQueue
 
@@ -2563,8 +2575,8 @@ def test_sync_success_redacts_only_opted_out_loggers(
     private_logger: Final = PayloadRecorder(turn_off_message_logging=True)
     public_logger: Final = PayloadRecorder()
     callbacks: Final = [private_logger, public_logger] if private_first else [public_logger, private_logger]
-    monkeypatch.setattr(litellm, "success_callback", callbacks)
-    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", callbacks[:1] if split_registries else callbacks)
+    monkeypatch.setattr(litellm, "_async_success_callback", callbacks[1:] if split_registries else [])
     monkeypatch.setattr(litellm, "turn_off_message_logging", False)
     logging_obj: Final = LitellmLogging(
         model="openai/gpt-6.1-sol",
