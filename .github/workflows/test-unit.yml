@@ -266,6 +266,7 @@ jobs:
               tests/unit/llms/featherless_ai
               tests/unit/llms/firecrawl
               tests/unit/llms/fireworks_ai
+              tests/unit/llms/friendliai
               tests/unit/llms/gdc
               tests/unit/llms/gemini
               tests/unit/llms/gigachat
@@ -321,6 +322,7 @@ jobs:
               tests/unit/llms/pass_through
               tests/unit/llms/perplexity
               tests/unit/llms/pg_vector
+              tests/unit/llms/pi
               tests/unit/llms/publicai
               tests/unit/llms/ragflow
               tests/unit/llms/recraft
@@ -410,6 +412,7 @@ jobs:
               tests/unit/embeddings
               tests/unit/endpoints
               tests/unit/files
+              tests/unit/fine_tuning
               tests/unit/images
               tests/unit/interactions
               tests/unit/messages
