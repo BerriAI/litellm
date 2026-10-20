@@ -39,8 +39,6 @@ class DailyActivityScope:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
-    # One team's tag spend (the Team view's Spend Per Tag card). Only the tag table records the
-    # sending team, and a team-scoped tag read leaves out the automatic User-Agent tags.
     team_id: str | None = None
 
     def __post_init__(self) -> None:

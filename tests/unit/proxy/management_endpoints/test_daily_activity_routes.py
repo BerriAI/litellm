@@ -1270,15 +1270,15 @@ def test_team_scope_applies_membership_and_user_key_filter(
     assert repository.aggregated.call_args.kwargs["include_entity_breakdown"] is True
 
 
+@pytest.mark.parametrize("team_ids", ["team-a", "team-a,", ",team-a"])
 def test_team_group_by_tag_reads_one_teams_tag_rows_with_the_members_key_filter(
     daily_activity_client: tuple[TestClient, _FakeRepository],
+    team_ids: str,
 ) -> None:
-    """group_by=tag keeps every team-route permission (membership, the member's own keys) and
-    only swaps the source to the tag table, scoped to that one team and bucketed by tag."""
     client, repository = daily_activity_client
     response: Final = client.get(
         "/team/daily/activity/aggregated",
-        params={**_entity_params("team_ids", "team-a"), "group_by": "tag"},
+        params={**_entity_params("team_ids", team_ids), "group_by": "tag"},
         headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
     )
     assert response.status_code == 200, response.text
@@ -1303,8 +1303,6 @@ def test_team_group_by_tag_needs_exactly_one_named_team_for_every_caller(
     expected_count: int,
     role: LitellmUserRoles,
 ) -> None:
-    """Answered before any permission lookup, which would otherwise fill in every team a
-    non-admin belongs to and quietly turn "no team" into "all of my teams"."""
     client, repository = daily_activity_client
     response: Final = client.get(
         "/team/daily/activity/aggregated",
@@ -1322,8 +1320,6 @@ def test_team_group_by_tag_carries_no_ptu_hours(
     daily_activity_client: tuple[TestClient, _FakeRepository],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PTU hours are a whole-team figure; the same sized team that reports them by team reports
-    none per tag."""
     client, _ = daily_activity_client
     monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
     _inject_llm_router(client, _ptu_sized_router("rare-group"))
