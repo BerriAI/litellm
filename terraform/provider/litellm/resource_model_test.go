@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/go-cty/cty"
@@ -619,5 +620,263 @@ func TestResourceLiteLLMModelSchemaRejectsSecretInStateAndWriteOnly(t *testing.T
 				t.Fatalf("wantErr=%v, got diags %v", tc.wantErr, diags)
 			}
 		})
+	}
+}
+
+func TestCoerceStringMap(t *testing.T) {
+	got := coerceStringMap(map[string]interface{}{
+		"object":  `{"nested": {"value": 42}}`,
+		"list":    `["a", "b"]`,
+		"yes":     "true",
+		"no":      "false",
+		"integer": "16384",
+		"float":   "0.75",
+		"text":    "for testing",
+		"broken":  "{not json",
+	})
+	want := map[string]interface{}{
+		"object":  map[string]interface{}{"nested": map[string]interface{}{"value": float64(42)}},
+		"list":    []interface{}{"a", "b"},
+		"yes":     true,
+		"no":      false,
+		"integer": 16384,
+		"float":   0.75,
+		"text":    "for testing",
+		"broken":  "{not json",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("coerceStringMap = %#v, want %#v", got, want)
+	}
+}
+
+func TestResourceLiteLLMModelCreateSendsAdditionalModelInfo(t *testing.T) {
+	var createPayload map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/model/new":
+			if err := json.NewDecoder(r.Body).Decode(&createPayload); err != nil {
+				t.Errorf("failed to decode create payload: %v", err)
+			}
+			w.Write([]byte(modelInfoBody("")))
+		case "/model/info":
+			w.Write([]byte(modelInfoBody("")))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	nested, _ := json.Marshal(map[string]interface{}{"owner": "platform", "tags": []string{"a", "b"}, "limits": map[string]int{"rpm": 5}})
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMModel().Schema, map[string]interface{}{
+		"model_name":          "sonnet-4-5-anthropic",
+		"custom_llm_provider": "anthropic",
+		"base_model":          "claude-sonnet-4-5",
+		"mode":                "chat",
+		"display_name":        "Claude Sonnet 4.5",
+		"additional_model_info": map[string]interface{}{
+			"mixpanel":   string(nested),
+			"supports_x": "true",
+			"max_items":  "12",
+			"label":      "plain",
+		},
+		"additional_litellm_params": map[string]interface{}{"additional_drop_params": `["store"]`, "max_context": "16384"},
+	})
+	if err := resourceLiteLLMModelCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	modelInfo := createPayload["model_info"].(map[string]interface{})
+	want := map[string]interface{}{
+		"mixpanel":     map[string]interface{}{"owner": "platform", "tags": []interface{}{"a", "b"}, "limits": map[string]interface{}{"rpm": float64(5)}},
+		"supports_x":   true,
+		"max_items":    float64(12),
+		"label":        "plain",
+		"base_model":   "claude-sonnet-4-5",
+		"mode":         "chat",
+		"tier":         "free",
+		"db_model":     true,
+		"display_name": "Claude Sonnet 4.5",
+	}
+	for key, wantValue := range want {
+		if !reflect.DeepEqual(modelInfo[key], wantValue) {
+			t.Errorf("model_info[%q] = %#v, want %#v", key, modelInfo[key], wantValue)
+		}
+	}
+	if modelInfo["id"] == "" || modelInfo["id"] == nil {
+		t.Errorf("expected model_info.id to be set, got %v", modelInfo["id"])
+	}
+
+	litellmParams := createPayload["litellm_params"].(map[string]interface{})
+	if !reflect.DeepEqual(litellmParams["additional_drop_params"], []interface{}{"store"}) {
+		t.Errorf("additional_drop_params = %#v", litellmParams["additional_drop_params"])
+	}
+	if litellmParams["max_context"] != float64(16384) {
+		t.Errorf("max_context = %#v, want 16384", litellmParams["max_context"])
+	}
+	if _, leaked := litellmParams["mixpanel"]; leaked {
+		t.Error("additional_model_info entry leaked into litellm_params")
+	}
+}
+
+func TestModelInfoMarshalKeepsTypedFieldsOverAdditionalInfo(t *testing.T) {
+	body, err := json.Marshal(ModelInfo{ID: "real", Tier: "free", AdditionalInfo: map[string]interface{}{"id": "spoofed", "extra": 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["id"] != "real" || got["extra"] != float64(1) {
+		t.Errorf("unexpected marshaled model_info: %s", body)
+	}
+}
+
+func updateResourceDataWithModelInfo(t *testing.T, oldInfo, newInfo map[string]interface{}) *schema.ResourceData {
+	t.Helper()
+	res := resourceLiteLLMModel()
+	attrs := map[string]string{
+		"model_name":          "sonnet-4-5-anthropic",
+		"custom_llm_provider": "anthropic",
+		"base_model":          "claude-sonnet-4-5",
+	}
+	for key, value := range oldInfo {
+		attrs["additional_model_info."+key] = value.(string)
+	}
+	state := &terraform.InstanceState{ID: "model-123", Attributes: attrs}
+	config := map[string]interface{}{
+		"model_name":          "sonnet-4-5-anthropic",
+		"custom_llm_provider": "anthropic",
+		"base_model":          "claude-sonnet-4-5",
+	}
+	if newInfo != nil {
+		config["additional_model_info"] = newInfo
+	}
+	diff, err := res.Diff(context.Background(), state, &terraform.ResourceConfig{Config: config}, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(state, diff)
+	if err != nil {
+		t.Fatalf("data failed: %v", err)
+	}
+	return d
+}
+
+func TestResourceLiteLLMModelUpdatePatchesChangedAdditionalModelInfo(t *testing.T) {
+	oldNested := `{"owner":"platform"}`
+	newNested := `{"owner":"data"}`
+	cases := map[string]struct {
+		oldInfo   map[string]interface{}
+		newInfo   map[string]interface{}
+		wantPatch map[string]interface{}
+	}{
+		"changed nested value is sent whole": {
+			oldInfo:   map[string]interface{}{"mixpanel": oldNested, "label": "a"},
+			newInfo:   map[string]interface{}{"mixpanel": newNested, "label": "a"},
+			wantPatch: map[string]interface{}{"mixpanel": map[string]interface{}{"owner": "data"}},
+		},
+		"added key is sent with converted type": {
+			oldInfo:   map[string]interface{}{"label": "a"},
+			newInfo:   map[string]interface{}{"label": "a", "supports_x": "true"},
+			wantPatch: map[string]interface{}{"supports_x": true},
+		},
+		"removed key sends nothing": {
+			oldInfo: map[string]interface{}{"label": "a", "extra": "b"},
+			newInfo: map[string]interface{}{"label": "a"},
+		},
+		"unchanged map sends nothing": {
+			oldInfo: map[string]interface{}{"mixpanel": oldNested},
+			newInfo: map[string]interface{}{"mixpanel": oldNested},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var patchPayload map[string]interface{}
+			var patchPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/model/update":
+					w.Write([]byte(modelInfoBody("")))
+				case r.Method == http.MethodPatch:
+					patchPath = r.URL.Path
+					if err := json.NewDecoder(r.Body).Decode(&patchPayload); err != nil {
+						t.Errorf("failed to decode patch payload: %v", err)
+					}
+					w.Write([]byte(modelInfoBody("")))
+				case r.URL.Path == "/model/info":
+					w.Write([]byte(modelInfoDataEnvelope("")))
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			d := updateResourceDataWithModelInfo(t, tc.oldInfo, tc.newInfo)
+			if err := resourceLiteLLMModelUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+				t.Fatalf("update failed: %v", err)
+			}
+			if tc.wantPatch == nil {
+				if patchPayload != nil {
+					t.Errorf("expected no PATCH, got %v", patchPayload)
+				}
+				return
+			}
+			if patchPath != "/model/model-123/update" {
+				t.Fatalf("expected PATCH /model/model-123/update, got %q", patchPath)
+			}
+			wantInfo := map[string]interface{}{"id": "model-123"}
+			maps.Copy(wantInfo, tc.wantPatch)
+			if got := patchPayload["model_info"]; !reflect.DeepEqual(got, wantInfo) {
+				t.Errorf("patched model_info = %#v, want %#v", got, wantInfo)
+			}
+		})
+	}
+}
+
+func TestResourceLiteLLMModelRejectsReservedAdditionalModelInfoKeys(t *testing.T) {
+	cases := map[string]string{
+		"id":           "",
+		"db_model":     "",
+		"base_model":   "pricing_base_model",
+		"tier":         "tier",
+		"mode":         "mode",
+		"team_id":      "team_id",
+		"display_name": "display_name",
+	}
+	for key, argument := range cases {
+		t.Run(key, func(t *testing.T) {
+			config := terraform.NewResourceConfigRaw(map[string]interface{}{
+				"model_name":            "sonnet-4-5-anthropic",
+				"custom_llm_provider":   "anthropic",
+				"base_model":            "claude-sonnet-4-5",
+				"additional_model_info": map[string]interface{}{key: "x", "allowed": "y"},
+			})
+			diags := resourceLiteLLMModel().Validate(config)
+			if !diags.HasError() {
+				t.Fatalf("expected validation error for key %q", key)
+			}
+			message := diags[0].Summary + diags[0].Detail
+			if !strings.Contains(message, `"`+key+`"`) || (argument != "" && !strings.Contains(message, argument)) {
+				t.Errorf("error should name key %q and argument %q, got %q", key, argument, message)
+			}
+			if strings.Contains(message, `"allowed"`) {
+				t.Errorf("error should not flag the allowed key: %q", message)
+			}
+		})
+	}
+}
+
+func TestResourceLiteLLMModelAcceptsUnreservedAdditionalModelInfoKeys(t *testing.T) {
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"model_name":            "sonnet-4-5-anthropic",
+		"custom_llm_provider":   "anthropic",
+		"base_model":            "claude-sonnet-4-5",
+		"additional_model_info": map[string]interface{}{"mixpanel": `{"a":1}`, "supports_x": "true"},
+	})
+	if diags := resourceLiteLLMModel().Validate(config); diags.HasError() {
+		t.Errorf("unexpected validation error: %v", diags)
 	}
 }

@@ -161,7 +161,15 @@ func refreshAdditionalDropParams(d *schema.ResourceData, stored interface{}) {
 	d.Set("additional_litellm_params", refreshed)
 }
 
-func coerceAdditionalParamValue(strValue string) interface{} {
+func coerceStringMap(raw map[string]interface{}) map[string]interface{} {
+	coerced := make(map[string]interface{}, len(raw))
+	for key, value := range raw {
+		coerced[key] = coerceStringValue(value.(string))
+	}
+	return coerced
+}
+
+func coerceStringValue(strValue string) interface{} {
 	trimmedValue := strings.TrimSpace(strValue)
 	if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
 		var parsedValue interface{}
@@ -292,16 +300,16 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	}
 
 	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
-		for key, value := range additionalParams.(map[string]interface{}) {
-			if key != additionalDropParamsKey {
-				litellmParams[key] = coerceAdditionalParamValue(value.(string))
-				continue
-			}
-			dropParams, err := parseAdditionalDropParams(value.(string))
+		rawParams := maps.Clone(additionalParams.(map[string]interface{}))
+		rawDropParams, hasDropParams := rawParams[additionalDropParamsKey]
+		delete(rawParams, additionalDropParamsKey)
+		maps.Copy(litellmParams, coerceStringMap(rawParams))
+		if hasDropParams {
+			dropParams, err := parseAdditionalDropParams(rawDropParams.(string))
 			if err != nil {
 				return err
 			}
-			litellmParams[key] = dropParams
+			litellmParams[additionalDropParamsKey] = dropParams
 		}
 	}
 
@@ -321,6 +329,8 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 			Mode:        d.Get("mode").(string),
 			TeamID:      d.Get("team_id").(string),
 			DisplayName: d.Get("display_name").(string),
+
+			AdditionalInfo: coerceStringMap(d.Get("additional_model_info").(map[string]interface{})),
 		},
 		Additional: make(map[string]interface{}),
 	}
@@ -344,9 +354,11 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		return fmt.Errorf("failed to %s model: %w", map[bool]string{true: "update", false: "create"}[isUpdate], err)
 	}
 
-	if isUpdate && d.HasChange("display_name") {
-		if err := patchModelDisplayName(client, modelID, d.Get("display_name").(string)); err != nil {
-			return fmt.Errorf("failed to update model display_name: %w", err)
+	if isUpdate {
+		if patchFields := changedModelInfoFields(d); len(patchFields) > 0 {
+			if err := patchModelInfo(client, modelID, patchFields); err != nil {
+				return fmt.Errorf("failed to update model_info: %w", err)
+			}
 		}
 	}
 
@@ -358,9 +370,11 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 }
 
 // /model/update only merges litellm_params, so model_info changes go through the PATCH endpoint.
-func patchModelDisplayName(client *Client, modelID, displayName string) error {
-	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(modelID)), ModelInfoPatch{
-		ModelInfo: ModelInfoPatchFields{ID: modelID, DisplayName: displayName},
+func patchModelInfo(client *Client, modelID string, fields map[string]interface{}) error {
+	modelInfo := maps.Clone(fields)
+	modelInfo["id"] = modelID
+	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(modelID)), map[string]interface{}{
+		"model_info": modelInfo,
 	})
 	if err != nil {
 		return err
@@ -368,6 +382,24 @@ func patchModelDisplayName(client *Client, modelID, displayName string) error {
 	defer resp.Body.Close()
 	_, err = handleAPIResponse(resp, nil, client)
 	return err
+}
+
+// display_name is included even when empty so it can be cleared. Keys removed from
+// additional_model_info are not sent, since the proxy merges model_info rather than replacing it.
+func changedModelInfoFields(d *schema.ResourceData) map[string]interface{} {
+	fields := map[string]interface{}{}
+	if d.HasChange("display_name") {
+		fields["display_name"] = d.Get("display_name").(string)
+	}
+	oldInfo, newInfo := d.GetChange("additional_model_info")
+	oldEntries := oldInfo.(map[string]interface{})
+	for key, value := range newInfo.(map[string]interface{}) {
+		if oldValue, existed := oldEntries[key]; existed && oldValue == value {
+			continue
+		}
+		fields[key] = coerceStringValue(value.(string))
+	}
+	return fields
 }
 
 func resourceLiteLLMModelCreate(d *schema.ResourceData, m interface{}) error {

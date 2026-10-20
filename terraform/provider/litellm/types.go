@@ -1,5 +1,10 @@
 package litellm
 
+import (
+	"encoding/json"
+	"maps"
+)
+
 // ProviderConfig holds the configuration for the LiteLLM provider.
 type ProviderConfig struct {
 	APIBase            string
@@ -23,16 +28,6 @@ type ModelResponse struct {
 	LiteLLMParams LiteLLMParams          `json:"litellm_params"`
 	ModelInfo     ModelInfo              `json:"model_info"`
 	Additional    map[string]interface{} `json:"additional"`
-}
-
-// ModelInfoPatch is the body for PATCH /model/{id}/update; display_name is sent even when empty so it can be cleared.
-type ModelInfoPatch struct {
-	ModelInfo ModelInfoPatchFields `json:"model_info"`
-}
-
-type ModelInfoPatchFields struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
 }
 
 // ModelRequest represents a request to create or update a model.
@@ -132,6 +127,26 @@ type ModelInfo struct {
 	Mode        string `json:"mode"`
 	TeamID      string `json:"team_id,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
+
+	AdditionalInfo map[string]interface{} `json:"-"`
+}
+
+type modelInfoFields ModelInfo
+
+// MarshalJSON merges AdditionalInfo into the object; the typed fields win on a key clash.
+func (m ModelInfo) MarshalJSON() ([]byte, error) {
+	typed, err := json.Marshal(modelInfoFields(m))
+	if err != nil {
+		return nil, err
+	}
+	if len(m.AdditionalInfo) == 0 {
+		return typed, nil
+	}
+	merged := maps.Clone(m.AdditionalInfo)
+	if err := json.Unmarshal(typed, &merged); err != nil {
+		return nil, err
+	}
+	return json.Marshal(merged)
 }
 
 // Key represents a LiteLLM API key.
