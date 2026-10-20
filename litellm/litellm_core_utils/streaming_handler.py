@@ -24,7 +24,12 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, stored_attribute
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR,
+    get_hidden_params,
+    set_hidden_param,
+    stored_attribute,
+)
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -43,6 +48,8 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
+    TextCompletionResponse,
+    UnreportedUsage,
     Usage,
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -62,6 +69,7 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 _SYNC_ITER_EXHAUSTED: Final = object()
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
+_CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
@@ -339,7 +347,8 @@ class CustomStreamWrapper:
             and getattr(logging_obj, "stream_usage_injected", False) is not True
         )
         self.tool_call = False
-        self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.chunks: list[ModelResponseStream] = []
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
@@ -548,7 +557,7 @@ class CustomStreamWrapper:
         last_content: Final = self.chunks[-1].choices[0].delta.content
 
         if (
-            last_content is None or not isinstance(last_content, str) or len(last_content) <= 2
+            not isinstance(last_content, str) or len(last_content) <= 2
         ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
             self._repeated_messages_count = 1
             return
@@ -1931,6 +1940,51 @@ class CustomStreamWrapper:
                 response.hidden_params["additional_headers"] = {}
             response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
+    def _builder_failure_response(self, error: Exception) -> ModelResponseStream | None:
+        verbose_logger.warning(
+            "stream_chunk_builder raised at end-of-stream (%s); logging best-effort usage from chunks.",
+            str(error),
+        )
+        try:
+            return self.model_response_creator(chunk={"usage": calculate_total_usage(chunks=self.chunks)})
+        except Exception:
+            return None
+
+    def _build_complete_streaming_response(self) -> _CompleteStreamingResponse:
+        try:
+            return litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages,
+                logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
+            )
+        except Exception as e:
+            return self._builder_failure_response(e)
+
+    async def _async_build_complete_streaming_response(self) -> _CompleteStreamingResponse:
+        try:
+            return await asyncify(litellm.stream_chunk_builder)(
+                chunks=self.chunks,
+                messages=self.messages,
+                logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
+            )
+        except Exception as e:
+            return self._builder_failure_response(e)
+
+    def _set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
+        reported_usage: Final = _reported_total_usage(chunks=self.chunks)
+        set_hidden_param(
+            chunk,
+            "usage",
+            UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+            if reported_usage is None
+            else reported_usage,
+        )
+        self._last_returned_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
+            dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
+        )
+
     def __next__(self) -> "ModelResponseStream":
         if self._closed:
             raise StopIteration
@@ -2011,12 +2065,7 @@ class CustomStreamWrapper:
                             continue
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
-                        usage = calculate_total_usage(chunks=self.chunks)
-                        response_hidden_params_for_final_chunk = cast(  # cast-ok: preserve dynamic mapping behavior
-                            dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
-                        )
-                        response_hidden_params_for_final_chunk["usage"] = usage
-                        self._last_returned_hidden_params = response_hidden_params_for_final_chunk
+                        self._set_final_chunk_usage(response)
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -2024,30 +2073,7 @@ class CustomStreamWrapper:
 
         except StopIteration:
             if self.sent_last_chunk is True:
-                try:
-                    complete_streaming_response = litellm.stream_chunk_builder(
-                        chunks=self.chunks,
-                        messages=self.messages,
-                        logging_obj=self.logging_obj,
-                        count_prompt_tokens=self.count_prompt_tokens,
-                    )
-                except Exception as e:
-                    # stream_chunk_builder can re-raise (as APIError) on large agentic
-                    # streams. The raise originates inside this except-StopIteration block,
-                    # so the sibling `except Exception` below does not catch it; it would
-                    # escape __next__ and drop the request from SpendLogs. Recover
-                    # best-effort usage from the raw chunks so cost is still tracked
-                    verbose_logger.warning(
-                        "stream_chunk_builder raised at end-of-stream (%s); logging best-effort usage from chunks.",
-                        str(e),
-                    )
-                    try:
-                        complete_streaming_response = self.model_response_creator(
-                            chunk={"usage": calculate_total_usage(chunks=self.chunks)}
-                        )
-                    except Exception:
-                        complete_streaming_response = None
-
+                complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
@@ -2111,9 +2137,8 @@ class CustomStreamWrapper:
                 # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
                 if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                     self.chunks.append(processed_chunk)
-                if self.stream_options is None:  # add usage as hidden param
-                    usage = calculate_total_usage(chunks=self.chunks)
-                    processed_chunk.hidden_params["usage"] = usage
+                if self.stream_options is None:
+                    self._set_final_chunk_usage(processed_chunk)
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2211,12 +2236,7 @@ class CustomStreamWrapper:
 
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
-                        usage = calculate_total_usage(chunks=self.chunks)
-                        processed_chunk_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
-                            dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
-                        )
-                        processed_chunk_hidden_params["usage"] = usage
-                        self._last_returned_hidden_params = processed_chunk_hidden_params
+                        self._set_final_chunk_usage(processed_chunk)
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2277,29 +2297,7 @@ class CustomStreamWrapper:
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
-            # log the final chunk with accurate streaming values
-            try:
-                complete_streaming_response = await asyncify(litellm.stream_chunk_builder)(
-                    chunks=self.chunks,
-                    messages=self.messages,
-                    logging_obj=self.logging_obj,
-                    count_prompt_tokens=self.count_prompt_tokens,
-                )
-            except Exception as e:
-                # see sync __next__: a raise from stream_chunk_builder inside this
-                # except handler escapes __anext__ and drops the request from SpendLogs.
-                # Recover best-effort usage from the raw chunks so cost is still tracked
-                verbose_logger.warning(
-                    "stream_chunk_builder raised at end-of-stream (%s); logging best-effort usage from chunks.",
-                    str(e),
-                )
-                try:
-                    complete_streaming_response = self.model_response_creator(
-                        chunk={"usage": calculate_total_usage(chunks=self.chunks)}
-                    )
-                except Exception:
-                    complete_streaming_response = None
-
+            complete_streaming_response: Final = await self._async_build_complete_streaming_response()
             response: Final = self._new_usage_chunk()
             if complete_streaming_response is not None:
                 self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
@@ -2376,11 +2374,7 @@ class CustomStreamWrapper:
             if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                 self.chunks.append(processed_chunk)
             if self.stream_options is None:
-                usage: Final = calculate_total_usage(chunks=self.chunks)
-                processed_chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
-                    dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
-                )
-                processed_chunk_hidden_params["usage"] = usage
+                self._set_final_chunk_usage(processed_chunk)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -2667,7 +2661,13 @@ def _coerce_token_details(
     return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
 
 
-def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
+def _reported_total_usage(chunks: Sequence[ModelResponse | ModelResponseStream]) -> Usage | None:
+    if not any("usage" in chunk and chunk["usage"] is not None for chunk in chunks):
+        return None
+    return calculate_total_usage(chunks=chunks)
+
+
+def calculate_total_usage(chunks: Sequence[ModelResponse | ModelResponseStream]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
         attach_cache_creation_token_details,
