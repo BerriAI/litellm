@@ -24,8 +24,12 @@ RFC_9659_ZSTD_WINDOW_LOG_MAX: Final = 23
 GZIP_MAGIC: Final = b"\x1f\x8b"
 ZSTD_FRAME_MAGIC: Final = b"\x28\xb5\x2f\xfd"
 ZSTD_SKIPPABLE_FRAME_MAGIC_HIGH_BYTES: Final = b"\x2a\x4d\x18"
+SIGNATURE_LENGTH: Final = len(ZSTD_FRAME_MAGIC)
+GZIP_HEADER_AND_TRAILER_LENGTH: Final = 18
 RAW_BODY_ROUTE_PREFIXES: Final = ("/plugin-proxy/",)
+CODING_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"x-gzip": "gzip"})
 _REPLACED_REQUEST_HEADERS: Final = frozenset({b"content-encoding", b"content-length", b"transfer-encoding"})
+_CONTENT_ENCODING_HEADER: Final = frozenset({b"content-encoding"})
 
 
 class _Decompressor(Protocol):
@@ -43,19 +47,29 @@ class Codec:
     name: str
     new_decompressor: Callable[[], _Decompressor]
     error: type[Exception]
-    is_encoded: Callable[[bytes], bool]
+    declared_size: Callable[[bytes], int | None]
 
 
 def _new_gzip_decompressor() -> _Decompressor:
     return zlib.decompressobj(wbits=31)
 
 
+def _gzip_declared_size(data: bytes) -> int | None:
+    if len(data) < GZIP_HEADER_AND_TRAILER_LENGTH:
+        return None
+    return int.from_bytes(data[-4:], "little")
+
+
 GZIP: Final = Codec(
     name="gzip",
     new_decompressor=_new_gzip_decompressor,
     error=zlib.error,
-    is_encoded=lambda data: data.startswith(GZIP_MAGIC),
+    declared_size=_gzip_declared_size,
 )
+
+
+def _starts_a_gzip_member(data: bytes) -> bool:
+    return data.startswith(GZIP_MAGIC)
 
 
 def _starts_a_zstd_frame(data: bytes) -> bool:
@@ -67,42 +81,46 @@ def _starts_a_zstd_frame(data: bytes) -> bool:
 def load_zstd_codec() -> Codec | None:
     try:
         if sys.version_info >= (3, 14):
-            from compression.zstd import DecompressionParameter, ZstdDecompressor, ZstdError
+            from compression.zstd import DecompressionParameter, ZstdDecompressor, ZstdError, get_frame_info
         else:
-            from backports.zstd import DecompressionParameter, ZstdDecompressor, ZstdError
+            from backports.zstd import DecompressionParameter, ZstdDecompressor, ZstdError, get_frame_info
     except ImportError:
         return None
 
     def new_zstd_decompressor() -> _Decompressor:
         return ZstdDecompressor(options={DecompressionParameter.window_log_max: RFC_9659_ZSTD_WINDOW_LOG_MAX})
 
+    def zstd_declared_size(data: bytes) -> int | None:
+        try:
+            return get_frame_info(data).decompressed_size
+        except ZstdError:
+            return None
+
     return Codec(
         name="zstd",
         new_decompressor=new_zstd_decompressor,
         error=ZstdError,
-        is_encoded=_starts_a_zstd_frame,
+        declared_size=zstd_declared_size,
     )
 
 
 _ZSTD: Final = load_zstd_codec()
-DECODABLE_CODINGS: Final = frozenset({"gzip", "zstd"})
+CODING_SIGNATURES: Final[Mapping[str, Callable[[bytes], bool]]] = MappingProxyType(
+    {"gzip": _starts_a_gzip_member, "zstd": _starts_a_zstd_frame}
+)
 AVAILABLE_CODECS: Final[Mapping[str, Codec]] = MappingProxyType(
     {codec.name: codec for codec in (GZIP, _ZSTD) if codec is not None}
 )
 
 
 @dataclass(frozen=True, slots=True)
-class _Unsupported:
-    coding: str
+class _Prefix:
+    data: bytes
+    more_body: bool
 
 
 @dataclass(frozen=True, slots=True)
 class _Body:
-    data: bytes
-
-
-@dataclass(frozen=True, slots=True)
-class _NotEncoded:
     data: bytes
 
 
@@ -141,9 +159,8 @@ class _Limits:
         return int(self.max_mb * 1024 * 1024)
 
 
-_Coding: TypeAlias = Codec | _Unsupported | None
 _ReceivedBody: TypeAlias = _Body | _TooLarge | _ClientDisconnected
-_DecodedBody: TypeAlias = _Body | _NotEncoded | _DecodedTooLarge | _OverRatio | _Undecodable
+_DecodedBody: TypeAlias = _Body | _DecodedTooLarge | _OverRatio | _Undecodable
 
 
 class _DecodedBodyBudget:
@@ -164,22 +181,53 @@ class _DecodedBodyBudget:
         self.reserved_bytes -= size
 
 
-def _coding_for(scope: Scope, codecs: Mapping[str, Codec]) -> _Coding:
+def _coding_for(scope: Scope) -> str | None:
     if scope["type"] != "http":
         return None
     content_encodings: Final = Headers(scope=scope).getlist("content-encoding")
     if len(content_encodings) != 1:
         return None
-    coding: Final = content_encodings[0].strip().lower()
-    if coding not in DECODABLE_CODINGS:
+    named_coding: Final = content_encodings[0].strip().lower()
+    coding: Final = CODING_ALIASES.get(named_coding, named_coding)
+    if coding not in CODING_SIGNATURES:
         return None
     if get_request_route(Request(scope)).startswith(RAW_BODY_ROUTE_PREFIXES):
         return None
-    return codecs.get(coding) or _Unsupported(coding)
+    return coding
 
 
-async def _receive_body(scope: Scope, receive: Receive, max_bytes: int) -> _ReceivedBody:
+def _request_chunk(message: Message) -> _Prefix | _ClientDisconnected:
+    match message:
+        case {"type": "http.disconnect"}:
+            return _ClientDisconnected()
+        case {"body": bytes() as body, "more_body": True}:
+            return _Prefix(body, more_body=True)
+        case {"body": bytes() as body}:
+            return _Prefix(body, more_body=False)
+        case {"more_body": True}:
+            return _Prefix(b"", more_body=True)
+        case _:
+            return _Prefix(b"", more_body=False)
+
+
+async def _receive_prefix(receive: Receive, received: bytes = b"") -> _Prefix | _ClientDisconnected:
+    match _request_chunk(await receive()):
+        case _ClientDisconnected() as disconnected:
+            return disconnected
+        case _Prefix(data=data, more_body=more_body):
+            prefix: Final = _Prefix(received + data, more_body)
+            if len(prefix.data) >= SIGNATURE_LENGTH or not more_body:
+                return prefix
+            return await _receive_prefix(receive, prefix.data)
+
+
+async def _receive_body(scope: Scope, receive: Receive, prefix: _Prefix, max_bytes: int) -> _ReceivedBody:
+    if len(prefix.data) > max_bytes:
+        return _TooLarge()
+    if not prefix.more_body:
+        return _Body(prefix.data)
     buffer: Final = io.BytesIO()
+    buffer.write(prefix.data)
     try:
         async for chunk in Request(scope, receive).stream():
             buffer.write(chunk)
@@ -190,17 +238,16 @@ async def _receive_body(scope: Scope, receive: Receive, max_bytes: int) -> _Rece
     return _Body(buffer.getvalue())
 
 
-def _max_decoded_length(data: bytes, limits: _Limits) -> int:
-    return min(limits.max_bytes, len(data) * limits.max_ratio)
+def _max_decoded_length(codec: Codec, data: bytes, limits: _Limits) -> int:
+    max_by_limits: Final = min(limits.max_bytes, len(data) * limits.max_ratio)
+    declared: Final = codec.declared_size(data)
+    return max_by_limits if declared is None else min(max_by_limits, declared)
 
 
 def _decode(codec: Codec, data: bytes, limits: _Limits) -> _DecodedBody:
-    if not data:
-        return _Body(b"")
-    if not codec.is_encoded(data):
-        return _NotEncoded(data)
     max_by_ratio: Final = len(data) * limits.max_ratio
-    max_length: Final = _max_decoded_length(data, limits)
+    declared: Final = codec.declared_size(data)
+    max_length: Final = _max_decoded_length(codec, data, limits)
     decompressor: Final = codec.new_decompressor()
     try:
         decoded: Final = decompressor.decompress(data, max_length=max_length + 1)
@@ -210,6 +257,8 @@ def _decode(codec: Codec, data: bytes, limits: _Limits) -> _DecodedBody:
         return _DecodedTooLarge()
     if len(decoded) > max_by_ratio:
         return _OverRatio()
+    if declared is not None and len(decoded) > declared:
+        return _Undecodable(f"Request body decodes past the size its {codec.name} data declares")
     if not decompressor.eof:
         return _Undecodable(f"Request body ends before the end of its {codec.name} stream")
     if decompressor.unused_data:
@@ -217,15 +266,17 @@ def _decode(codec: Codec, data: bytes, limits: _Limits) -> _DecodedBody:
     return _Body(decoded)
 
 
+def _headers_without(scope: Scope, dropped: frozenset[bytes]) -> tuple[tuple[bytes, bytes], ...]:
+    return tuple((name, value) for name, value in Headers(scope=scope).raw if name.lower() not in dropped)
+
+
 def _identity_scope(scope: Scope, body_length: int) -> Scope:
-    kept_headers: Final = [
-        (name, value) for name, value in Headers(scope=scope).raw if name.lower() not in _REPLACED_REQUEST_HEADERS
-    ]
+    kept_headers: Final = _headers_without(scope, _REPLACED_REQUEST_HEADERS)
     return {**scope, "headers": [*kept_headers, (b"content-length", str(body_length).encode("latin-1"))]}
 
 
-def _replay_body(body: bytes, receive: Receive) -> Receive:
-    body_message: Final[Message] = {"type": "http.request", "body": body, "more_body": False}
+def _replay_body(body: bytes, receive: Receive, more_body: bool = False) -> Receive:
+    body_message: Final[Message] = {"type": "http.request", "body": body, "more_body": more_body}
     pending: Final = iter((body_message,))
 
     async def replay() -> Message:
@@ -279,24 +330,40 @@ class RequestBodyDecompressionMiddleware:
         self.codecs: Final = codecs
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        match _coding_for(scope, self.codecs):
-            case None:
-                await self.app(scope, receive, send)
-            case _Unsupported(coding=coding):
-                supported: Final = ", ".join(sorted(self.codecs))
-                response: Final = _error_response(
-                    f"This proxy cannot decode {coding} request bodies. Supported encodings: {supported}",
-                    415,
-                    headers={"accept-encoding": supported},
-                )
-                await response(scope, receive, send)
-            case Codec() as codec:
-                await self._decode_then_call(scope, receive, send, codec)
+        coding: Final = _coding_for(scope)
+        if coding is None:
+            await self.app(scope, receive, send)
+            return
+        match await _receive_prefix(receive):
+            case _ClientDisconnected():
+                return
+            case _Prefix() as prefix:
+                await self._decode_if_encoded(scope, receive, send, coding, prefix)
 
-    async def _decode_then_call(self, scope: Scope, receive: Receive, send: Send, codec: Codec) -> None:
+    async def _decode_if_encoded(
+        self, scope: Scope, receive: Receive, send: Send, coding: str, prefix: _Prefix
+    ) -> None:
+        if not CODING_SIGNATURES[coding](prefix.data):
+            sent_as_is: Final = {**scope, "headers": [*_headers_without(scope, _CONTENT_ENCODING_HEADER)]}
+            await self.app(sent_as_is, _replay_body(prefix.data, receive, more_body=prefix.more_body), send)
+            return
+        codec: Final = self.codecs.get(coding)
+        if codec is None:
+            supported: Final = ", ".join(sorted(self.codecs))
+            await _error_response(
+                f"This proxy cannot decode {coding} request bodies. Supported encodings: {supported}",
+                415,
+                headers={"accept-encoding": supported},
+            )(scope, receive, send)
+            return
+        await self._decode_then_call(scope, receive, send, codec, prefix)
+
+    async def _decode_then_call(
+        self, scope: Scope, receive: Receive, send: Send, codec: Codec, prefix: _Prefix
+    ) -> None:
         max_mb: Final = _effective_max_mb(self.max_decompressed_body_size_mb, self.get_max_request_size_mb())
         limits: Final = _Limits(max_mb=max_mb, max_ratio=self.max_decompression_ratio)
-        match await _receive_body(scope, receive, limits.max_bytes):
+        match await _receive_body(scope, receive, prefix, limits.max_bytes):
             case _Body(data=data):
                 await self._decode_within_budget(scope, receive, send, codec, data, limits)
             case _TooLarge():
@@ -307,7 +374,7 @@ class RequestBodyDecompressionMiddleware:
     async def _decode_within_budget(
         self, scope: Scope, receive: Receive, send: Send, codec: Codec, data: bytes, limits: _Limits
     ) -> None:
-        reservation: Final = _max_decoded_length(data, limits)
+        reservation: Final = _max_decoded_length(codec, data, limits)
         if not self.budget.try_reserve(reservation):
             await _error_response(
                 "The proxy is decoding too many compressed request bodies right now. "
@@ -332,7 +399,7 @@ class RequestBodyDecompressionMiddleware:
         self, scope: Scope, receive: Receive, send: Send, decoded: _DecodedBody, limits: _Limits
     ) -> None:
         match decoded:
-            case _Body(data=body) | _NotEncoded(data=body):
+            case _Body(data=body):
                 await self.app(_identity_scope(scope, len(body)), _replay_body(body, receive), send)
             case _DecodedTooLarge():
                 await _error_response(f"Request body is larger than {limits.max_mb:g} MB when decoded", 413)(
