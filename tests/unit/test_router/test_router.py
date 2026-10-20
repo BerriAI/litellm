@@ -16726,7 +16726,7 @@ class _AnthropicMessagesFakeByteStream:
         self._hidden_params = {"additional_headers": {"x-amzn-requestid": "req-1"}}
         self.closed = False
         self.closed_as_superseded = False
-        self.close_contexts: list[bool] = []
+        self.close_contexts: tuple[bool, ...] = ()
 
     def __aiter__(self):
         return self
@@ -16737,7 +16737,7 @@ class _AnthropicMessagesFakeByteStream:
         return self._chunks.pop(0)
 
     async def aclose(self) -> None:
-        self.close_contexts.append(closing_superseded_attempt())
+        self.close_contexts = (*self.close_contexts, closing_superseded_attempt())
         self.closed_as_superseded = self.closed_as_superseded or closing_superseded_attempt()
         self.closed = True
 
@@ -17984,31 +17984,31 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
 @pytest.mark.asyncio
 async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_partial_usage() -> None:
     """The dropped attempt's usage stays available for terminal billing without reaching the retry's success log."""
-    router = _anthropic_messages_retry_router(num_retries=1)
-    logging_obj = LiteLLMLogging(
+    router: Final = _anthropic_messages_retry_router(num_retries=1)
+    logging_obj: Final = LiteLLMLogging(
         model="glm",
         messages=[{"role": "user", "content": "ping"}],
         stream=True,
         call_type="anthropic_messages",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id="retry-own-usage",
         function_id="retry-own-usage",
     )
     partial_usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
     logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
-    stash_when_retry_opened: list[object] = []
 
-    def retry_stream():
-        stash_when_retry_opened.append(logging_obj.model_call_details.get("combined_usage_object"))
+    def retry_stream() -> _AnthropicMessagesFakeByteStream:
+        assert "combined_usage_object" not in logging_obj.model_call_details
         return _anthropic_messages_retried_stream()
 
-    provider = _AnthropicMessagesScriptedProvider(_anthropic_messages_dropped_before_content, retry_stream)
+    provider: Final = _AnthropicMessagesScriptedProvider(_anthropic_messages_dropped_before_content, retry_stream)
 
-    stream = await _anthropic_messages_stream_through_router(router, provider, litellm_logging_obj=logging_obj)
-    body = [chunk async for chunk in stream]
+    stream: Final = await _anthropic_messages_stream_through_router(
+        router, provider, litellm_logging_obj=logging_obj
+    )
+    body: Final = tuple([chunk async for chunk in stream])
 
-    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
-    assert stash_when_retry_opened == [None]
+    assert body == (_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong"))
     assert "response_cost" not in logging_obj.model_call_details
     assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
 

@@ -164,20 +164,20 @@ def _request_logging_obj() -> Logging:
 class _SuccessRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.logged: list[tuple[int, float]] = []
+        self.logged: tuple[tuple[int, float], ...] = ()
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
-        self.logged.append((payload["completion_tokens"], payload["response_cost"]))
+        self.logged = (*self.logged, (payload["completion_tokens"], payload["response_cost"]))
 
 
 class HopLoggingItsOwnSuccessRouter(FakeRouter):
     async def async_function_with_fallbacks(self, *args: object, **kwargs: object) -> StreamingWrapper:
         hop_response: Final = ModelResponse(
             id="chatcmpl-hop",
-            model="gpt-4o-mini",
+            model="gpt-5.6",
             choices=[Choices(index=0, message=Message(role="assistant", content="served by the hop"))],
             usage=Usage(prompt_tokens=52, completion_tokens=7, total_tokens=59),
         )
@@ -189,12 +189,12 @@ class HopLoggingItsOwnSuccessRouter(FakeRouter):
 
 
 @pytest.mark.asyncio
-async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_partial_usage():
+async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_partial_usage() -> None:
     """A stream the failed attempt dropped stashed the usage it consumed on the request's logging object. The
     hop that replaces it logs its own usage, so the integrations see the hop's tokens and cost, not the stash."""
     recorder: Final = _SuccessRecorder()
     logging_obj: Final = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5.6",
         messages=[{"role": "user", "content": "ping"}],
         stream=False,
         call_type="completion",
@@ -220,7 +220,7 @@ async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_
         litellm_logging_obj=logging_obj,
     )
 
-    assert [tokens for tokens, _ in recorder.logged] == [7]
+    assert tuple(tokens for tokens, _ in recorder.logged) == (7,)
     assert recorder.logged[0][1] != 0.01
     assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
     assert logging_obj.model_call_details["current_attempt_api_call_start_time"] is None
@@ -258,7 +258,7 @@ def _two_deployment_router() -> Router:
         model_list=[
             {
                 "model_name": "fallback-model",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
                 "model_info": {"id": f"fallback-dep-{index}"},
             }
             for index in (1, 2)
@@ -269,7 +269,7 @@ def _two_deployment_router() -> Router:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_already_logged", [False, True])
-async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_logged: bool):
+async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_logged: bool) -> None:
     """The manual cooldown stands in for the failure callbacks the logging object blocks once a failure has
     been logged. A hop whose own failure was the first one logged already ran them, so only a hop that failed
     with the flag already set gets the manual cooldown."""

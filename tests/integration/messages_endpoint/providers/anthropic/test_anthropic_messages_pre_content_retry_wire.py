@@ -9,6 +9,7 @@ from typing import Final, Literal
 
 import anthropic
 import httpx
+from pydantic import JsonValue, TypeAdapter
 import pytest
 import yaml
 from integration._support.anthropic_sse import (
@@ -32,12 +33,12 @@ from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
-from pydantic import JsonValue
 from redis import Redis
 
-_MODEL: Final = "claude-sonnet-4-5-20250929"
+_MODEL: Final = "claude-sonnet-5"
 _API_KEY: Final = "synthetic-anthropic-key"
 _TEXT: Final = "Hello"
+_SINK_EVENT_BATCH_ADAPTER: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 FirstAttempt = Literal[
     "drop_after_headers",
@@ -484,8 +485,18 @@ def test_retried_stream_spend_row_records_the_attempt_count(gateway: Gateway) ->
 
 
 def _proxy_with_callback_sink(gateway: Gateway, tmp_path: Path, sink: Wire) -> AbstractContextManager[Gateway]:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["litellm_settings"].update({"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1})
+    loaded_config: Final = TypeAdapter(dict[str, object]).validate_python(
+        yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    )
+    litellm_settings: Final = TypeAdapter(dict[str, object]).validate_python(loaded_config["litellm_settings"])
+    config: Final = {
+        **loaded_config,
+        "litellm_settings": {
+            **litellm_settings,
+            "callbacks": ["generic_api"],
+            "DEFAULT_FLUSH_INTERVAL_SECONDS": 1,
+        },
+    }
     path: Final = tmp_path / "callbacks.yaml"
     path.write_text(yaml.safe_dump(config))
     return owned_proxy(
@@ -498,7 +509,7 @@ def _proxy_with_callback_sink(gateway: Gateway, tmp_path: Path, sink: Wire) -> A
 
 def _sink_events(batches: Sequence[Request]) -> Iterator[dict[str, JsonValue]]:
     for batch in batches:
-        yield from json.loads(batch.body)
+        yield from _SINK_EVENT_BATCH_ADAPTER.validate_python(json.loads(batch.body))
 
 
 class _SinkReader:

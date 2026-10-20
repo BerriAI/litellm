@@ -1,5 +1,6 @@
 import datetime as real_datetime
 import smtplib
+import traceback
 from typing import Final
 
 import httpx
@@ -11,8 +12,15 @@ from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.bug_report import ISSUE_URL_BASE
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
+from litellm.proxy.utils import (
+    PrismaClient,
+    ProxyLogging,
+    _failure_fields_to_lift,
+    handle_exception_on_proxy,
+)
+from litellm.router_utils.fallback_event_handlers import carry_superseded_attempt_usage
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -2253,14 +2261,8 @@ def test_attempts_already_summed_into_the_final_row_are_not_lifted_again():
     assert "billed_failed_attempts" not in lifted
 
 
-def test_carry_superseded_attempt_usage_without_stashed_usage_preserves_failure_estimate():
-    import traceback
-
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.proxy.utils import _failure_fields_to_lift
-    from litellm.router_utils.fallback_event_handlers import carry_superseded_attempt_usage
-
-    request_start: Final = real_datetime.datetime.now()
+def test_carry_superseded_attempt_usage_without_stashed_usage_preserves_failure_estimate() -> None:
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
     logging_obj: Final = Logging(
         model=FAILURE_USAGE_MODEL,
         messages=ONE_USER_MESSAGE,
@@ -2284,7 +2286,7 @@ def test_carry_superseded_attempt_usage_without_stashed_usage_preserves_failure_
             timeout,
             traceback.format_exc(),
             request_start,
-            real_datetime.datetime.now(),
+            request_start + real_datetime.timedelta(seconds=1),
         )
 
     assert "combined_usage_object" not in logging_obj.model_call_details
