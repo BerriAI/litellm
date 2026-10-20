@@ -15,6 +15,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import litellm  # noqa: E402
 from litellm.caching.dual_cache import DualCache  # noqa: E402
+from litellm.integrations.custom_logger import CustomLogger  # noqa: E402
 from litellm.integrations.otel.langfuse_logger import LangfuseContentOpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger  # noqa: E402
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config, is_otel_v2_enabled  # noqa: E402
@@ -311,6 +312,50 @@ def test_openinference_logger_keeps_the_pre_call_hook_that_seeds_metadata_baggag
     monkeypatch.setattr(litellm, "callbacks", [logger])
 
     assert ProxyLogging._callback_capabilities().has_pre_call_override is True
+
+
+class _MasksReply(CustomLogger):
+    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+        async for chunk in response:
+            choice = chunk.choices[0]
+            yield _chat_chunk("<PERSON>" if choice.delta.content else None, finish_reason=choice.finish_reason)
+
+
+async def _serve(chunks: Sequence[ModelResponseStream], data: dict) -> list[object]:
+    async def source() -> AsyncIterator[ModelResponseStream]:
+        for chunk in chunks:
+            yield chunk
+
+    return [
+        chunk
+        async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+            response=source(),
+            user_api_key_dict=UserAPIKeyAuth(request_route="/chat/completions"),
+            request_data=data,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mappers", "output_key"),
+    [(OPENINFERENCE, "output.value"), (("genai", "langfuse"), "langfuse.observation.output")],
+    ids=["arize-phoenix", "langfuse"],
+)
+def test_stream_root_output_is_what_a_later_masking_hook_served(
+    monkeypatch: pytest.MonkeyPatch, mappers: tuple[str, ...], output_key: str
+) -> None:
+    logger, exporter = _logger(mappers=mappers)
+    monkeypatch.setattr(litellm, "callbacks", [logger, _MasksReply()])
+    root = _start_root(logger)
+
+    served: Final = asyncio.run(
+        _serve((_chat_chunk("John Smith"), _chat_chunk(None, finish_reason="stop")), {**CHAT_DATA})
+    )
+    root.end()
+
+    assert [chunk.choices[0].delta.content for chunk in served] == ["<PERSON>", None]
+    output: Final = json.loads(_root_attrs(exporter)[output_key])
+    assert [(turn["role"], turn["content"]) for turn in output] == [("assistant", "<PERSON>")], output
 
 
 @pytest.mark.parametrize(

@@ -34,6 +34,8 @@ class RootIOOpenTelemetryV2(OpenTelemetryV2):
     only through a callback whose own class defines that hook.
     """
 
+    relays_served_stream: bool = True
+
     async def async_post_call_success_hook(
         self,
         data: Mapping[str, object],

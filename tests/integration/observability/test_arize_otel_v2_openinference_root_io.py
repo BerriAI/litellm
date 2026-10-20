@@ -29,9 +29,10 @@ from _openinference_support import (
     _sse_json_values,
 )
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, Wire
+from integration._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from pydantic import JsonValue
+from test_presidio_streaming_output import MASK, PERSON, analyzer, anonymizer, openai_frame
 
 _ROOT_IO_KEYS: Final = frozenset(
     {"openinference.span.kind", "input.value", "input.mime_type", "output.value", "output.mime_type"}
@@ -305,3 +306,45 @@ def test_root_is_left_alone_when_the_request_messages_are_redacted(
 
     _assert_root_left_alone(root)
     assert _json_messages(llm.attributes["input.value"]) == [{"role": "user", "content": "redacted-by-litellm"}], llm
+
+
+def test_phoenix_stream_root_carries_the_reply_a_later_masking_guardrail_served(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "root-io-masked-stream-" + uuid.uuid4().hex
+    reply: Final = Reply(
+        content_type="text/event-stream",
+        chunks=(
+            openai_frame(marker, {"role": "assistant", "content": f"{PERSON} says hi"}),
+            openai_frame(marker, {}, "stop"),
+            b"data: [DONE]\n\n",
+        ),
+    )
+
+    with wire_server(analyzer) as analyze_sink, wire_server(anonymizer) as anonymize_sink:
+        guardrail: Final[Mapping[str, JsonValue]] = {
+            "guardrail_name": "presidio-" + marker,
+            "litellm_params": {
+                "guardrail": "presidio",
+                "mode": "post_call",
+                "default_on": True,
+                "presidio_analyzer_api_base": analyze_sink.url,
+                "presidio_anonymizer_api_base": anonymize_sink.url,
+                "presidio_filter_scope": "output",
+            },
+        }
+        with _rig(
+            gateway,
+            tmp_path,
+            lambda _request: reply,
+            callbacks=("arize_phoenix",),
+            callback_settings=_COLLECTOR,
+            guardrails=(guardrail,),
+        ) as rig:
+            response: Final = _chat_request(rig.proxy, rig.model, marker, stream=True)
+            assert response.status_code == 200, response.text
+            assert PERSON not in response.text and MASK in response.text, response.text
+            root, _ = _request_trace(rig.destination, marker)
+
+    output: Final = _json_messages(root.attributes["output.value"])
+    assert [(turn["role"], turn["content"]) for turn in output] == [("assistant", f"{MASK} says hi")], root.attributes

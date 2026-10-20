@@ -85,6 +85,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
     """
 
+    relays_served_stream: bool = False
+    """
+    Whether this callback's ``async_post_call_streaming_iterator_hook`` reads the stream as the caller is served it.
+
+    The proxy chains the streaming iterator hooks in callback order, so a hook otherwise reads the chunks before a
+    later hook or post-call policy rewrites them, as a guardrail that masks the reply does. A callback with this set to
+    True is chained after all of them, and its hook must yield every chunk unchanged.
+    """
+
     def __init__(
         self,
         turn_off_message_logging: bool = False,

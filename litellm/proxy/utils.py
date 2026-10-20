@@ -28,7 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import partial
-from itertools import takewhile
+from itertools import accumulate, takewhile
 from operator import attrgetter
 from types import MappingProxyType
 from typing import (
@@ -4058,7 +4058,10 @@ class ProxyLogging:
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
-        for resolved_callback, kind in caps.iterator_overrides:
+        stream_rewriters: Final = tuple(
+            override for override in caps.iterator_overrides if not override[0].relays_served_stream
+        )
+        for resolved_callback, kind in stream_rewriters:
             if isinstance(resolved_callback, CustomGuardrail):
                 if resolved_callback.guardrail_name in pipeline_gated_names:
                     continue
@@ -4120,9 +4123,18 @@ class ProxyLogging:
             )
             guarded_layers.append(current_response)
 
+        served_streams: Final = tuple(
+            accumulate(
+                (callback for callback, _ in caps.iterator_overrides if callback.relays_served_stream),
+                partial(self._relay_served_stream, user_api_key_dict=user_api_key_dict, request_data=request_data),
+                initial=current_response,
+            )
+        )
+        guarded_layers.extend(served_streams[1:])
+
         served_chunks: Final[list[object]] = []  # mutable-ok: accumulates while yielding to the client
         try:
-            async for chunk in current_response:
+            async for chunk in served_streams[-1]:
                 served_chunks.append(chunk)
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
@@ -4141,6 +4153,26 @@ class ProxyLogging:
         # we reach this point the metadata is fully populated.
         await ProxyLogging._record_served_stream_output(request_data, served_chunks)
         ProxyLogging.fire_deferred_stream_logging(request_data)
+
+    def _relay_served_stream(
+        self,
+        stream: AsyncIterable[object],
+        relay: CustomLogger,
+        *,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict[str, object],  # mutable-ok: the streaming iterator hook contract hands over the request body
+    ) -> AsyncGenerator[object, None]:
+        """``stream`` relayed through ``relay``'s streaming iterator hook."""
+        return self._wrap_streaming_iterator_with_enrichment(
+            relay,
+            stream,
+            partial(
+                relay.async_post_call_streaming_iterator_hook,  # pyright: ignore[reportUnknownMemberType]  # CustomLogger types the hook's request body as a bare dict
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+            ),
+            request_data=request_data,
+        )
 
     async def _pipeline_gated_stream(
         self,
