@@ -279,17 +279,13 @@ def test_sync_completion_request_projects_public_arguments() -> None:
 
 @pytest.mark.asyncio
 async def test_async_completion_falls_back_after_native_declines() -> None:
-    from litellm.rust_bridge.bindings import native_exception_types
+    from litellm.rust_bridge._native import RustBridgeDeclined
 
-    native_types: Final = native_exception_types()
-    if native_types is None:
-        pytest.skip("native bridge is unavailable")
-    declined, _ = native_types
     expected: Final = ModelResponse()
     rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_OPT_OUT),)
 
     async def native(request: NativeCall) -> ModelResponse:
-        raise declined("unsupported")
+        raise RustBridgeDeclined("unsupported")
 
     async def python(*args: object, **kwargs: object) -> ModelResponse:
         return expected
