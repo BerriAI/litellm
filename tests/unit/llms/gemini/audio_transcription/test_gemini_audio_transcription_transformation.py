@@ -121,6 +121,33 @@ class TestGetCompleteUrl:
         )
         assert url == "http://localhost:8080/v1beta/interactions"
 
+    @pytest.mark.parametrize(
+        "api_base, expected",
+        [
+            (None, "https://generativelanguage.googleapis.com/v1beta/interactions"),
+            ("http://localhost:8080", "http://localhost:8080/v1beta/interactions"),
+            ("http://localhost:8080/v1beta", "http://localhost:8080/v1beta/interactions"),
+            ("http://localhost:8080/v1beta/", "http://localhost:8080/v1beta/interactions"),
+            ("http://localhost:8080/v1alpha", "http://localhost:8080/v1alpha/interactions"),
+            ("http://localhost:8080/v1", "http://localhost:8080/v1/interactions"),
+            ("http://localhost:8080/v2", "http://localhost:8080/v2/v1beta/interactions"),
+        ],
+    )
+    def test_versioned_api_base_not_duplicated(self, config, api_base, expected):
+        """
+        #44549: a deployment api_base that already carries a version segment
+        (/v1beta, /v1alpha or /v1) must not get the version appended again -
+        otherwise the request goes to /v1beta/v1beta/interactions and 404s.
+        """
+        url = config.get_complete_url(
+            api_base=api_base,
+            api_key=None,
+            model="gemini-3.5-transcribe",
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == expected
+
 
 class TestTransformRequest:
     def test_builds_json_interaction_request(self, config):
