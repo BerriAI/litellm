@@ -337,6 +337,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
@@ -997,12 +998,15 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def get_router_pricing_provider(self) -> str | None:
         """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""
-        if not hasattr(self, "litellm_params"):
+        litellm_params: Final = cast(  # cast-ok: callback metadata is caller-provided
+            Mapping[str, object] | None, getattr(self, "litellm_params", None)
+        )
+        if not litellm_params:
             return None
         for key in ("litellm_metadata", "metadata"):
-            meta = self.litellm_params.get(key, {}) or {}
-            info = meta.get("model_info", {}) or {}
-            pricing_provider = info.get("pricing_provider")
+            meta: Final = _METADATA_MAPPING.validate_python(litellm_params.get(key) or {})
+            info: Final = _METADATA_MAPPING.validate_python(meta.get("model_info") or {})
+            pricing_provider: Final = info.get("pricing_provider")
             if isinstance(pricing_provider, str) and pricing_provider:
                 return pricing_provider
         return None

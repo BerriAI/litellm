@@ -50133,6 +50133,8 @@ export interface components {
             output_cost_per_character?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Pricing Provider */
+            pricing_provider?: string | null;
             /** Ptu Count */
             ptu_count?: number | null;
             /** Ptu Effective From */
