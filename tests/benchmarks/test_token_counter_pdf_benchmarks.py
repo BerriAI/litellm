@@ -48,6 +48,22 @@ def test_pdf_inline_image_scan_repeated_bi_without_id():  # test-quality-ok: Cod
 
 
 @pytest.mark.benchmark
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"BT " * 1_000_000,
+        b"BT (" * 1_000_000,
+        b"BT " + b"(ET) " * 1_000_000,
+    ],
+    ids=["repeated-bt", "repeated-open-literal", "repeated-et-literal"],
+)
+def test_pdf_text_object_scan(content: bytes):  # test-quality-ok: CodSpeed performance benchmark
+    page: Final = _pdf_page(content)
+
+    _price_pdf_pages((page,), len)
+
+
+@pytest.mark.benchmark
 @pytest.mark.parametrize("repetitions", [100_000, 1_000_000], ids=["100k", "1m"])
 def test_pdf_inline_image_scan_no_ei(repetitions: int):  # test-quality-ok: CodSpeed performance benchmark
     page: Final = _pdf_page(b"BI /W 1 " + b" ID x" * repetitions)
