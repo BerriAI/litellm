@@ -59,6 +59,7 @@ from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_K
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import (
+    CredentialItem,
     ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
@@ -114,10 +115,22 @@ from litellm.utils import (
 )
 
 
-def test_get_base_model_from_metadata_returns_unvalidated_root_value():
+@pytest.mark.parametrize("root_base_model", [42, ["gemini-3.5-flash"], {"model": "gemini-3.5-flash"}])
+def test_get_base_model_from_metadata_ignores_a_non_string_root_value(root_base_model: object):
     from litellm.utils import get_base_model_from_metadata
 
-    assert get_base_model_from_metadata({"litellm_params": {"base_model": 42}}) == 42
+    assert get_base_model_from_metadata({"litellm_params": {"base_model": root_base_model}}) is None
+    assert (
+        get_base_model_from_metadata(
+            {
+                "litellm_params": {
+                    "base_model": root_base_model,
+                    "metadata": {"model_info": {"base_model": "vertex_ai/gemini-3.5-flash"}},
+                }
+            }
+        )
+        == "vertex_ai/gemini-3.5-flash"
+    )
 
 
 def _reject_short_post_call_response(input: str, model: str | None = None) -> dict[str, object]:
@@ -853,6 +866,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_token_cost",
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
+        "explicit_cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
         "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
@@ -951,6 +965,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
@@ -1451,8 +1466,6 @@ def test_get_model_info_bedrock_inference_profile_arn_keeps_regional_row(local_m
     bare = litellm.get_model_info(model=f"{route}{arn_prefix}amazon.nova-pro-v1:0")
     assert bare["key"] == "amazon.nova-pro-v1:0"
     assert bare["input_cost_per_token"] == base["input_cost_per_token"]
-
-
 
 
 @pytest.mark.parametrize(
@@ -2290,9 +2303,7 @@ def test_add_known_models_skips_region_scoped_bedrock_pricing_keys(monkeypatch: 
 def test_utils_defines_tests_without_invoking_them_at_module_scope() -> None:
     tree: Final = ast.parse(Path(__file__).read_text())
     defined: Final = frozenset(
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     )
     invoked: Final = tuple(
         node.value.func.id
@@ -3607,9 +3618,7 @@ class TestExtraBodyCannotOverrideModel:
                 }
             ]
 
-        untouched = litellm.get_optional_params(
-            model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools()
-        )
+        untouched = litellm.get_optional_params(model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools())
         assert untouched["tools"][0]["function"]["custom_marker"] == "LEAK", untouched
 
         result = litellm.get_optional_params(
@@ -4649,7 +4658,9 @@ def test_is_prompt_caching_valid_prompt_stops_counting_once_the_minimum_is_reach
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=1024) is True
     assert sum(counted_messages) < len(long_prompt), sum(counted_messages)
 
-    full_count = litellm.token_counter(model="claude-opus-4-8", messages=long_prompt, use_default_image_token_count=True)
+    full_count = litellm.token_counter(
+        model="claude-opus-4-8", messages=long_prompt, use_default_image_token_count=True
+    )
     assert (
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=full_count)
         is True
@@ -4965,7 +4976,9 @@ class _EntryReadDuringARegistration(dict[str, object]):
 
 
 @pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5", "case-insensitive scan"])
-def test_request_path_cost_map_walks_survive_a_registration_mid_walk(monkeypatch: pytest.MonkeyPatch, walk: str) -> None:
+def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
+    monkeypatch: pytest.MonkeyPatch, walk: str
+) -> None:
     from litellm.llms.fal_ai.cost_calculator import _keyed_rows
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
@@ -5214,7 +5227,13 @@ _SUCCESS_RESPONSES_BY_CALL_TYPE: Final = (
     pytest.param(EmbeddingResponse(model="text-embedding-3-small"), CallTypes.aembedding, id="embedding"),
     pytest.param(
         ResponsesAPIResponse(
-            id="resp_abc", created_at=1, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[], model="gpt-5.6"
+            id="resp_abc",
+            created_at=1,
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            model="gpt-5.6",
         ),
         CallTypes.aresponses,
         id="responses",
@@ -5242,7 +5261,9 @@ async def test_success_deployment_hook_raising_keeps_response_and_runs_later_hoo
 
     assert result is response
     assert second_hook.seen_responses == (response,)
-    failure_logs: Final = tuple(r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message)
+    failure_logs: Final = tuple(
+        r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message
+    )
     assert len(failure_logs) == 1
     assert "_ChatShapedSuccessDeploymentHook" in failure_logs[0].message
     assert str(call_type) in failure_logs[0].message
@@ -5379,17 +5400,13 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
         ({"metadata": None}, True, False),
     ],
 )
-def test_is_litellm_router_call_is_async_aware(
-    kwargs: Mapping[str, object], is_async: bool, expected: bool
-) -> None:
+def test_is_litellm_router_call_is_async_aware(kwargs: Mapping[str, object], is_async: bool, expected: bool) -> None:
     assert _is_litellm_router_call(kwargs, is_async=is_async) is expected
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
-async def test_router_aresponses_does_not_run_sdk_retries(
-    monkeypatch: pytest.MonkeyPatch, stream: bool
-) -> None:
+async def test_router_aresponses_does_not_run_sdk_retries(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     model_list: Final = [
@@ -5403,9 +5420,7 @@ async def test_router_aresponses_does_not_run_sdk_retries(
             },
         }
     ]
-    router: Final = litellm.Router(
-        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
-    )
+    router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
 
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
@@ -5441,9 +5456,7 @@ def test_router_responses_keeps_sdk_retries_for_sync_router_call(
             },
         }
     ]
-    router: Final = litellm.Router(
-        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
-    )
+    router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
 
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
@@ -6994,6 +7007,555 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     assert _credential_warnings(caplog) == []
 
 
+_MISTRAL_CHAT_URL: Final = "https://api.mistral.ai/v1/chat/completions"
+_MISTRAL_REPLY: Final = {
+    "id": "chatcmpl-oidc",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "devstral-latest",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _allowed_token_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str) -> Path:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text(content)
+    return token
+
+
+def _mistral_credential(api_key: str) -> CredentialItem:
+    return CredentialItem(credential_name="mistral-sa", credential_values={"api_key": api_key}, credential_info={})
+
+
+_PING: Final = [{"role": "user", "content": "ping"}]
+
+
+def _ping_mistral_through(credential_name: str) -> None:
+    litellm.completion(model="mistral/devstral-latest", messages=_PING, litellm_credential_name=credential_name)
+
+
+def test_named_credential_oidc_file_api_key_sends_the_token_read_on_each_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "token-before-rotation")
+    reference: Final = f"oidc/file/{token}"
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        _ping_mistral_through("mistral-sa")
+        token.write_text("token-after-rotation")
+        _ping_mistral_through("mistral-sa")
+        sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+
+    assert sent == ["Bearer token-before-rotation", "Bearer token-after-rotation"]
+    assert litellm.credential_list[0].credential_values["api_key"] == reference
+
+
+@pytest.mark.asyncio
+async def test_deployment_oidc_env_api_key_resolves_per_call_and_the_router_keeps_the_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token-one")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "oidc/env/MISTRAL_SA_TOKEN"},
+            }
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        await router.acompletion(model="devstral", messages=[{"role": "user", "content": "ping"}])
+        monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token-two")
+        await router.acompletion(model="devstral", messages=[{"role": "user", "content": "ping"}])
+        sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+
+    assert sent == ["Bearer env-token-one", "Bearer env-token-two"]
+    assert router.get_model_list(model_name="devstral")[0]["litellm_params"]["api_key"] == "oidc/env/MISTRAL_SA_TOKEN"
+
+
+def test_explicit_api_key_wins_over_a_named_credential_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(f"oidc/file/{tmp_path / 'absent'}")])
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(
+            model="mistral/devstral-latest",
+            messages=_PING,
+            litellm_credential_name="mistral-sa",
+            api_key="sk-explicit",
+        )
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == "Bearer sk-explicit"
+
+
+@pytest.mark.parametrize(
+    ("make_reference", "reason"),
+    [
+        (lambda tmp_path: f"oidc/file/{tmp_path / 'absent'}", "No such file or directory"),
+        (lambda tmp_path: f"oidc/file/{tmp_path.parent}/outside", "outside the allowed credential directories"),
+        (lambda tmp_path: "oidc/file//run/secrets/lit-absent-token", "outside the allowed credential directories"),
+        (lambda tmp_path: "oidc/file/relative/token", "must be absolute"),
+        (lambda tmp_path: "oidc/env/LIT_UNSET_SA_TOKEN", "environment variable is not set"),
+        (lambda tmp_path: f"oidc/file/{tmp_path / 'empty'}", "empty value"),
+        (lambda tmp_path: f"oidc/file/{tmp_path / 'binary'}", "not UTF-8 text"),
+    ],
+)
+def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_target_or_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    make_reference: Callable[[Path], str],
+    reason: str,
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    monkeypatch.delenv("LIT_UNSET_SA_TOKEN", raising=False)
+    (tmp_path / "empty").write_text("")
+    (tmp_path / "binary").write_bytes(b"\xffFILE-CONTENT")
+    (tmp_path.parent / "outside").write_text("FILE-CONTENT")
+    reference: Final = make_reference(tmp_path)
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(litellm.AuthenticationError) as excinfo:
+            _ping_mistral_through("mistral-sa")
+
+    assert not route.called
+    assert excinfo.value.status_code == 401
+    assert reason in excinfo.value.message
+    assert reference.split("/", 2)[2] not in excinfo.value.message
+    assert reference in caplog.text
+    assert "FILE-CONTENT" not in excinfo.value.message
+    assert "0xff" not in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    ("reference", "kind"),
+    [
+        ("oidc/env_path/MISTRAL_SA_TOKEN_PATH", "oidc/env_path"),
+        ("oidc/google/https://api.mistral.ai", "oidc/google"),
+        ("oidc/github/mistral", "oidc/github"),
+        ("oidc/env_MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
+        ("oidc/LIT-UNKNOWN-KIND/MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
+    ],
+)
+def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authentication_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: str, kind: str
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "must-not-be-sent")
+    monkeypatch.setenv("MISTRAL_SA_TOKEN_PATH", str(token))
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            _ping_mistral_through("mistral-sa")
+
+    assert not route.called
+    assert excinfo.value.status_code == 401
+    assert f"{kind} secret reference" in excinfo.value.message
+    assert reference.removeprefix(kind).lstrip("/") not in excinfo.value.message
+    assert "MISTRAL_SA_TOKEN_PATH" not in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_router_fails_over_from_a_deployment_whose_oidc_api_key_kind_cannot_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {
+                    "model": "mistral/devstral-latest",
+                    "api_key": "oidc/google/https://api.mistral.ai",
+                    "order": 1,
+                },
+            },
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "sk-healthy", "order": 2},
+            },
+        ],
+        num_retries=1,
+        retry_after=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+            response: Final = await router.acompletion(model="devstral", messages=_PING)
+            sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+    finally:
+        router.discard()
+
+    assert response.choices[0].message.content == "pong"
+    assert sent == ["Bearer sk-healthy"]
+
+
+def test_an_oidc_api_key_sent_with_the_call_goes_upstream_as_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "server-secret")
+    reference: Final = f"oidc/file/{token}"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(model="mistral/devstral-latest", messages=_PING, api_key=reference)
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == f"Bearer {reference}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "expected"),
+    [({}, "Bearer env-token"), ({"team_id": "team-1"}, "Bearer oidc/env/MISTRAL_SA_TOKEN")],
+    ids=["proxy-level deployment", "team-scoped deployment"],
+)
+async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
+    monkeypatch: pytest.MonkeyPatch, model_info: Mapping[str, str], expected: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "oidc/env/MISTRAL_SA_TOKEN"},
+                "model_info": dict(model_info),
+            }
+        ]
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+            await router.acompletion(
+                model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
+            )
+            sent: Final = upstream.calls.last.request.headers["Authorization"]
+    finally:
+        router.discard()
+
+    assert sent == expected
+
+
+_DEPLOYMENT_HOST_REFERENCE_REFUSAL: Final = "goes only to the host its deployment configures"
+_BEDROCK_RUNTIME: Final = "https://bedrock-runtime.us-east-1.amazonaws.com"
+_BEDROCK_CLAUDE: Final = "us.anthropic.claude-sonnet-5-5"
+_BEDROCK_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "pong"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+}
+
+
+def _bedrock_router(api_key: str, endpoint: str | None) -> litellm.Router:
+    params: Final = {"model": f"bedrock/converse/{_BEDROCK_CLAUDE}", "aws_region_name": "us-east-1", "api_key": api_key}
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {**params, "aws_bedrock_runtime_endpoint": endpoint} if endpoint else params,
+            }
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_endpoint", "call_endpoint"),
+    [(None, "https://caller.example"), (_BEDROCK_RUNTIME, f"{_BEDROCK_RUNTIME}:8443")],
+    ids=["deployment without an endpoint", "endpoint on another port"],
+)
+async def test_an_inline_oidc_api_key_is_refused_before_its_file_is_read_when_the_call_picks_another_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deployment_endpoint: str | None, call_endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    router: Final = _bedrock_router("oidc/file//run/secrets/lit-missing-token", deployment_endpoint)
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_BEDROCK_REPLY)
+            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL) as excinfo:
+                await router.acompletion(model="claude", messages=_PING, aws_bedrock_runtime_endpoint=call_endpoint)
+    finally:
+        router.discard()
+
+    assert upstream.calls.call_count == 0
+    assert "/run/secrets" not in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_configures_when_the_call_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    router: Final = _bedrock_router(f"oidc/file/{token}", _BEDROCK_RUNTIME)
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_BEDROCK_REPLY)
+            await router.acompletion(
+                model="claude", messages=_PING, aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com"
+            )
+            sent: Final = tuple(
+                (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
+            )
+    finally:
+        router.discard()
+
+    assert sent == (("bedrock-runtime.us-east-1.amazonaws.com", "Bearer file-token"),)
+
+
+_HUGGINGFACE_EMBEDDING: Final = [[0.1, 0.2]]
+
+
+def _authorizations(calls: respx.models.CallList) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (call.request.url.host, call.request.headers["Authorization"])
+        for call in calls
+        if "Authorization" in call.request.headers
+    )
+
+
+def _huggingface_router(model: str, api_key: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": model, "litellm_params": {"model": model, "api_key": api_key}}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_is_refused_when_a_wildcard_call_names_its_own_url_as_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    router: Final = _huggingface_router("huggingface/*", f"oidc/file/{token}")
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
+            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL):
+                await router.aembedding(
+                    model="huggingface/https://caller.example/embed", input=["hello"], input_type="feature-extraction"
+                )
+    finally:
+        router.discard()
+
+    assert _authorizations(upstream.calls) == ()
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_reaches_the_url_its_deployment_names_as_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    model: Final = "huggingface/https://endpoint.example/embed"
+    router: Final = _huggingface_router(model, f"oidc/file/{token}")
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
+            await router.aembedding(model=model, input=["hello"], input_type="feature-extraction")
+            sent: Final = _authorizations(upstream.calls)
+    finally:
+        router.discard()
+
+    assert sent == (("endpoint.example", "Bearer file-token"),)
+
+
+_CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own api_base"
+
+
+@pytest.mark.parametrize(
+    ("credential_api_base", "call_api_base"),
+    [
+        ("https://api.mistral.ai/v1", "https://caller.example/v1"),
+        (None, "https://caller.example/v1"),
+        ("https://api.mistral.ai/v1", "http://api.mistral.ai/v1"),
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai@caller.example/v1"),
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai:8443/v1"),
+        ("https://api.mistral.ai/v1", "http://[api.mistral.ai/v1"),
+        ("https://mistral-gateway.example/v1", None),
+    ],
+    ids=[
+        "another host",
+        "credential without api_base",
+        "another scheme",
+        "userinfo trick",
+        "another port",
+        "unparseable",
+        "call clears the api_base",
+    ],
+)
+def test_a_named_credentials_oidc_api_key_never_goes_to_an_api_base_the_credential_does_not_set(
+    monkeypatch: pytest.MonkeyPatch, credential_api_base: str | None, call_api_base: str | None
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    credential_values: Final = {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": credential_api_base}
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route().respond(200, json=_MISTRAL_REPLY)
+        with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
+            litellm.completion(
+                model="mistral/devstral-latest",
+                messages=_PING,
+                litellm_credential_name="mistral-sa",
+                api_base=call_api_base,
+            )
+
+    assert upstream.calls.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("credential_api_base", "call_api_base"),
+    [
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai:443/v1"),
+        ("https://api.mistral.ai:443/v1", "https://API.mistral.ai./v1"),
+    ],
+    ids=["explicit default port on the call", "explicit default port on the credential"],
+)
+def test_a_named_credentials_oidc_api_key_reaches_an_api_base_on_the_same_origin(
+    monkeypatch: pytest.MonkeyPatch, credential_api_base: str, call_api_base: str
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    credential_values: Final = {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": credential_api_base}
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route().respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(
+            model="mistral/devstral-latest",
+            messages=_PING,
+            litellm_credential_name="mistral-sa",
+            api_base=call_api_base,
+        )
+        sent: Final = tuple(authorization for _, authorization in _authorizations(upstream.calls))
+
+    assert sent == ("Bearer env-token",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row_api_base", "refused"),
+    [(None, False), ("https://API.mistral.ai/v1/", False), ("https://team-admin-host.example/v1", True)],
+    ids=["row without api_base", "row on the credential's host", "row on another host"],
+)
+async def test_a_team_row_naming_an_oidc_credential_reaches_only_the_credentials_host(
+    monkeypatch: pytest.MonkeyPatch, row_api_base: str | None, refused: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="mistral-sa",
+                credential_values={"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": "https://api.mistral.ai"},
+                credential_info={},
+            )
+        ],
+    )
+    row_params: Final = {"model": "mistral/devstral-latest", "litellm_credential_name": "mistral-sa"}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {**row_params, "api_base": row_api_base} if row_api_base else row_params,
+                "model_info": {"team_id": "team-1"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_MISTRAL_REPLY)
+            if refused:
+                with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
+                    await router.acompletion(
+                        model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
+                    )
+            else:
+                await router.acompletion(model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"})
+            sent: Final = tuple(
+                (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
+            )
+    finally:
+        router.discard()
+
+    assert sent == (() if refused else (("api.mistral.ai", "Bearer env-token"),))
+
+
+@pytest.mark.parametrize(
+    ("listing_params", "expected"),
+    [
+        (
+            lambda reference: LiteLLM_Params(
+                **litellm.Router(
+                    model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}]
+                ).get_model_list(model_name="openai/*")[0]["litellm_params"]
+            ),
+            lambda reference: "Bearer listing-token",
+        ),
+        (
+            lambda reference: LiteLLM_Params(model="openai/*", api_key=reference),
+            lambda reference: f"Bearer {reference}",
+        ),
+    ],
+    ids=["proxy-level deployment", "caller-built params"],
+)
+def test_provider_model_listing_sends_the_token_only_behind_a_deployment_oidc_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listing_params: Callable[[str], LiteLLM_Params],
+    expected: Callable[[str], str],
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "listing-token")
+    reference: Final = f"oidc/file/{token}"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://api.openai.com/v1/models").respond(
+            200, json={"object": "list", "data": [{"id": "gpt-listed", "object": "model"}]}
+        )
+        listed: Final = get_valid_models(
+            check_provider_endpoint=True, custom_llm_provider="openai", litellm_params=listing_params(reference)
+        )
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == expected(reference)
+    assert any(model.endswith("gpt-listed") for model in listed)
+
+
 _MOCK_STREAM_ID: Final = "chatcmpl-mock-stream"
 _ChunkSnapshot = tuple[str, tuple[str | None, ...], Usage | None]
 
@@ -7196,7 +7758,9 @@ def test_get_model_info_gemini(monkeypatch):
             assert info.get("rpm") is not None, f"{model} does not have rpm"
 
 
-def test_register_model_without_a_provider_never_inherits_another_providers_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_register_model_without_a_provider_never_inherits_another_providers_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.utils import _invalidate_model_cost_lowercase_map
 
     key: Final = "azure/claude-sonnet-4-6"
@@ -7211,6 +7775,51 @@ def test_register_model_without_a_provider_never_inherits_another_providers_entr
         assert info["litellm_provider"] == "azure"
         assert info["input_cost_per_token"] == 1e-07
         assert info["output_cost_per_token"] == 4e-07
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
+    "registered_prices, billed_cache_read_rate",
+    [
+        pytest.param({"input_cost_per_token": 2e-06}, 2.5e-07, id="inherits-builtin-explicit-rate"),
+        pytest.param({"cache_read_input_token_cost": 1e-07}, 1e-07, id="own-cache-read-price-wins"),
+        pytest.param(
+            {"cache_read_input_token_cost": 1e-07, "explicit_cache_read_input_token_cost": 5e-08},
+            5e-08,
+            id="own-explicit-price-wins",
+        ),
+    ],
+)
+def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
+    monkeypatch: pytest.MonkeyPatch, registered_prices: dict[str, float], billed_cache_read_rate: float
+) -> None:
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    key: Final = "dashscope/qwen-register-explicit-cache-test"
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.model_cost[key] = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "explicit_cache_read_input_token_cost": 2.5e-07,
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        litellm.register_model({key: registered_prices}, persist_across_reloads=False)
+        explicit_hit: Final = ModelResponse(
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                prompt_tokens_details={"cached_tokens": 1000, "cache_type": "ephemeral"},
+            )
+        )
+
+        assert litellm.completion_cost(completion_response=explicit_hit, model=key) == pytest.approx(
+            1000 * billed_cache_read_rate
+        )
     finally:
         _invalidate_model_cost_lowercase_map()
 
@@ -7347,7 +7956,9 @@ def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summa
 
 
 @pytest.mark.parametrize("original_function", ("atext_completion", "text_completion"))
-def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(original_function: str) -> None:
+def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(
+    original_function: str,
+) -> None:
     assert _logged_request_messages(original_function, model="gpt-4o") is None
 
 
@@ -7389,6 +8000,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -7402,6 +8014,7 @@ def setup_and_teardown():
     loop.close()
     asyncio.set_event_loop(None)
 
+
 MODEL: Final = "anthropic/claude-haiku-4-5"
 
 
@@ -7411,12 +8024,14 @@ def test_validate_tool_choice_none():
     result = validate_chat_completion_tool_choice(None, model=MODEL)
     assert result is None
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_string():
     """Test that string values are returned as-is."""
     assert validate_chat_completion_tool_choice("auto", model=MODEL) == "auto"
     assert validate_chat_completion_tool_choice("none", model=MODEL) == "none"
     assert validate_chat_completion_tool_choice("required", model=MODEL) == "required"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_standard_dict():
@@ -7425,12 +8040,14 @@ def test_validate_tool_choice_standard_dict():
     result = validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert result == tool_choice
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_cursor_format():
     """Cursor IDE format {"type": "auto"} is unwrapped to the bare string."""
     assert validate_chat_completion_tool_choice({"type": "auto"}, model=MODEL) == "auto"
     assert validate_chat_completion_tool_choice({"type": "none"}, model=MODEL) == "none"
     assert validate_chat_completion_tool_choice({"type": "required"}, model=MODEL) == "required"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
@@ -7453,6 +8070,7 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("tool_choice", [123, []])
 def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
@@ -7463,6 +8081,7 @@ def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
         validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert exc_info.value.status_code == 400
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_without_model_is_still_a_400():
     """Callers that predate the model argument keep getting a 400, with an empty model on the error."""
@@ -7471,11 +8090,13 @@ def test_validate_tool_choice_without_model_is_still_a_400():
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == ""
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_local_testing(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -7529,6 +8150,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -7572,6 +8194,7 @@ def setup_and_teardown_local_testing():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -7597,6 +8220,7 @@ def test_vertex_projects():
     assert "vertex_ai_project" in optional_params
     assert "vertex_ai_location" in optional_params
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -7611,6 +8235,7 @@ def test_bedrock_embed_v2_regular():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params == {"dimensions": 512}
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7629,6 +8254,7 @@ def test_bedrock_embed_v2_with_drop_params():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params == {"dimensions": 512, "embeddingTypes": ["binary"]}
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7650,6 +8276,7 @@ def test_openai_non_text_embedding_3_with_allowed_openai_params():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params.get("dimensions") == 1024
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7676,6 +8303,7 @@ def test_openai_non_text_embedding_3_without_allowed_openai_params_raises():
             )
     finally:
         litellm.drop_params = prev_drop_params
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7705,6 +8333,7 @@ def test_openai_non_text_embedding_3_drop_params_per_call():
     finally:
         litellm.drop_params = prev_drop_params
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -7732,11 +8361,13 @@ def test_openai_non_text_embedding_3_drop_params_global():
     finally:
         litellm.drop_params = prev_drop_params
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_search_tests(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_search_tests")
 def test_search_tool_name_in_all_litellm_params():
@@ -7746,6 +8377,7 @@ def test_search_tool_name_in_all_litellm_params():
     If missing, it gets passed to provider APIs causing errors.
     """
     assert "search_tool_name" in all_litellm_params
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_search_tests")
 def test_filter_out_search_tool_name():
@@ -7772,6 +8404,7 @@ def test_filter_out_search_tool_name():
     assert "scrapeOptions" in filtered
     assert filtered["query"] == "latest ai developments"
     assert filtered["max_results"] == 5
+
 
 @pytest.mark.asyncio
 async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -7925,9 +8558,7 @@ def test_trimming_with_system_message_within_max_tokens():
             "content": "This is a medium normal message, let's say litellm is awesome.",
         },
     ]
-    trimmed_messages = trim_messages(
-        messages, max_tokens=30, model="gpt-4-0613"
-    )
+    trimmed_messages = trim_messages(messages, max_tokens=30, model="gpt-4-0613")
     assert len(trimmed_messages) == 2
     assert trimmed_messages[0]["content"] == "This is a short system message"
 
@@ -8110,9 +8741,7 @@ def test_aget_valid_models():
         print(valid_models)
 
         # list of openai supported llms on litellm
-        expected_models = (
-            litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
-        )
+        expected_models = litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
 
         assert set(valid_models) == set(expected_models)
 
@@ -8201,9 +8830,7 @@ def test_get_chat_completion_prompt():
         prompt_variables=None,
     )
 
-    assert litellm_logging_obj.messages == [
-        {"role": "user", "content": updated_message}
-    ]
+    assert litellm_logging_obj.messages == [{"role": "user", "content": updated_message}]
 
 
 def test_redact_msgs_from_logs():
@@ -8275,9 +8902,7 @@ def test_redact_embedding_response():
     litellm.turn_off_message_logging = True
 
     # Create a test EmbeddingResponse with usage data
-    original_usage = litellm.Usage(
-        prompt_tokens=10, completion_tokens=0, total_tokens=10
-    )
+    original_usage = litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
     original_data = [
         {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]},
         {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]},
@@ -8313,9 +8938,7 @@ def test_redact_embedding_response():
 
     # Assert the redacted response preserves critical metadata
     assert _redacted_response_obj.usage == original_usage  # usage should be preserved
-    assert (
-        _redacted_response_obj.model == "text-embedding-3-small"
-    )  # model should be preserved
+    assert _redacted_response_obj.model == "text-embedding-3-small"  # model should be preserved
     assert _redacted_response_obj.object == "list"  # object should be preserved
 
     # Assert sensitive data is cleared
@@ -8369,12 +8992,8 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     )
 
     # Test Case 1: standard_callback_dynamic_params = False (or not set)
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        turn_off_message_logging=False
-    )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(turn_off_message_logging=False)
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -8383,12 +9002,8 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     assert _redacted_response_obj.choices[0].message.content == test_content
 
     # Test Case 2: standard_callback_dynamic_params = True
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        turn_off_message_logging=True
-    )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(turn_off_message_logging=True)
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -8399,9 +9014,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     # Test Case 3: standard_callback_dynamic_params does not set turn_off_message_logging
     # since litellm.turn_off_message_logging is True redaction should occur
     standard_callback_dynamic_params = StandardCallbackDynamicParams()
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -8743,10 +9356,7 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
-        elif (
-            v["litellm_provider"] == "sagemaker"
-            or v["litellm_provider"] == "bedrock_converse"
-        ):
+        elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock_converse":
             continue
         elif v.get("mode") in ("search", "decisions", "evaluation"):
             continue
@@ -8754,9 +9364,7 @@ def test_models_by_provider():
             providers.add(v["litellm_provider"])
 
     for provider in providers:
-        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(
-            provider
-        )
+        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(provider)
 
 
 @pytest.fixture
@@ -8778,16 +9386,11 @@ def restore_end_user_cost_tracking_flags(monkeypatch: pytest.MonkeyPatch) -> Non
         ({"user_api_key_end_user_id": "123"}, True, None),
     ],
 )
-def test_get_end_user_id_for_cost_tracking(
-    litellm_params, disable_end_user_cost_tracking, expected_end_user_id
-):
+def test_get_end_user_id_for_cost_tracking(litellm_params, disable_end_user_cost_tracking, expected_end_user_id):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
     litellm.disable_end_user_cost_tracking = disable_end_user_cost_tracking
-    assert (
-        get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
-        == expected_end_user_id
-    )
+    assert get_end_user_id_for_cost_tracking(litellm_params=litellm_params) == expected_end_user_id
 
 
 @pytest.mark.usefixtures("restore_end_user_cost_tracking_flags")
@@ -8804,13 +9407,9 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
 ):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
-    litellm.enable_end_user_cost_tracking_prometheus_only = (
-        enable_end_user_cost_tracking_prometheus_only
-    )
+    litellm.enable_end_user_cost_tracking_prometheus_only = enable_end_user_cost_tracking_prometheus_only
     assert (
-        get_end_user_id_for_cost_tracking(
-            litellm_params=litellm_params, service_type="prometheus"
-        )
+        get_end_user_id_for_cost_tracking(litellm_params=litellm_params, service_type="prometheus")
         == expected_end_user_id
     )
 
@@ -8825,20 +9424,14 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         ),
         # Test with only litellm_metadata field (new behavior)
         (
-            {
-                "litellm_metadata": {
-                    "user_api_key_end_user_id": "user_from_litellm_metadata"
-                }
-            },
+            {"litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}},
             "user_from_litellm_metadata",
         ),
         # Test with both fields - metadata should take precedence for user_api_key fields
         (
             {
                 "metadata": {"user_api_key_end_user_id": "user_from_metadata"},
-                "litellm_metadata": {
-                    "user_api_key_end_user_id": "user_from_litellm_metadata"
-                },
+                "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"},
             },
             "user_from_metadata",
         ),
@@ -8854,9 +9447,7 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         (
             {
                 "metadata": {},
-                "litellm_metadata": {
-                    "user_api_key_end_user_id": "user_from_litellm_metadata"
-                },
+                "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"},
             },
             "user_from_litellm_metadata",
         ),
@@ -8864,9 +9455,7 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         ({}, None),
     ],
 )
-def test_get_end_user_id_for_cost_tracking_metadata_handling(
-    litellm_params, expected_end_user_id
-):
+def test_get_end_user_id_for_cost_tracking_metadata_handling(litellm_params, expected_end_user_id):
     """
     Test that get_end_user_id_for_cost_tracking correctly handles both metadata and litellm_metadata
     fields using the get_litellm_metadata_from_kwargs helper function.
@@ -9124,9 +9713,7 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
     assert len(litellm.success_callback) == curr_len_success_callback
     assert len(litellm.failure_callback) == curr_len_failure_callback
 
-    assert any(
-        isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback
-    )
+    assert any(isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback)
 
 
 @pytest.mark.asyncio
@@ -9223,20 +9810,14 @@ def test_validate_user_messages_invalid_content_type():
     [
         {
             "name": "default_on_guardrail",
-            "callbacks": [
-                CustomGuardrail(guardrail_name="test_guardrail", default_on=True)
-            ],
+            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=True)],
             "kwargs": {"metadata": {"requester_metadata": {"guardrails": []}}},
             "expected": ["test_guardrail"],
         },
         {
             "name": "request_specific_guardrail",
-            "callbacks": [
-                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
-            ],
-            "kwargs": {
-                "metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}
-            },
+            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=False)],
+            "kwargs": {"metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}},
             "expected": ["test_guardrail"],
         },
         {
@@ -9245,18 +9826,12 @@ def test_validate_user_messages_invalid_content_type():
                 CustomGuardrail(guardrail_name="default_guardrail", default_on=True),
                 CustomGuardrail(guardrail_name="request_guardrail", default_on=False),
             ],
-            "kwargs": {
-                "metadata": {
-                    "requester_metadata": {"guardrails": ["request_guardrail"]}
-                }
-            },
+            "kwargs": {"metadata": {"requester_metadata": {"guardrails": ["request_guardrail"]}}},
             "expected": ["default_guardrail", "request_guardrail"],
         },
         {
             "name": "empty_metadata",
-            "callbacks": [
-                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
-            ],
+            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=False)],
             "kwargs": {},
             "expected": [],
         },
@@ -10062,9 +10637,7 @@ def test_pre_call_rules_see_messages_passed_positionally(monkeypatch: pytest.Mon
     )
 
     with pytest.raises(litellm.APIResponseValidationError, match="failed post-call-rule check"):
-        litellm.completion(
-            "gpt-4o-mini", [{"role": "user", "content": "say something forbidden"}], api_key="sk-test"
-        )
+        litellm.completion("gpt-4o-mini", [{"role": "user", "content": "say something forbidden"}], api_key="sk-test")
     allowed: Final = litellm.completion("gpt-4o-mini", [{"role": "user", "content": "say hi"}], api_key="sk-test")
 
     assert route.call_count == 1
@@ -10082,3 +10655,18 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
         prefixed_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
         assert litellm.get_model_info(model=short_name, custom_llm_provider="vertex_ai") == prefixed_info, model
         assert prefixed_info["key"] == f"vertex_ai/{model}", model
+
+
+def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
+    """LIT-9880: the hook hands a tool_config point on for the provider step, and OpenAI has no
+    step that consumes it, so it must not ride along in extra_body and 400 at OpenAI."""
+    optional_params = litellm.utils.get_optional_params(
+        model="gpt-4.1",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True}
+    assert "cache_control_injection_points" not in optional_params

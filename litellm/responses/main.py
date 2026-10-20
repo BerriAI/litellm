@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -49,7 +49,13 @@ from litellm.responses.mcp.round_billing import (
     first_round_billed_on_failure,
     summed_cost_breakdown,
 )
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.reasoning_effort_capability import (
+    deployment_reasoning_effort_levels,
+    model_group_from_metadata,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -73,7 +79,7 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, all_litellm_params
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypes, all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -1220,11 +1226,7 @@ def _responses_try_dispatch_mcp_gateway(
     | None
 ):
     """Return a response when MCP gateway handles the call; otherwise None."""
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-        LiteLLM_Proxy_MCP_Handler,
-    )
-
-    if skip_mcp_handler or not LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
+    if skip_mcp_handler or not may_name_litellm_mcp_gateway(tools):
         return None
     mcp_call_kwargs: Final = {
         "model": model,
@@ -1560,9 +1562,22 @@ def responses(
             if current_reasoning is None and reasoning_effort is not None
             else current_reasoning
         )
+        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        deployment_reasoning: Final = cast(  # cast-ok: the resolver hands a Reasoning back in the shape it was given
+            Reasoning | None,
+            resolve_deployment_reasoning_effort(
+                request_reasoning,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
+                model_group=model_group_from_metadata(routing_kwargs.get("litellm_metadata")),
+                drop_params=litellm.drop_params is True
+                or normalize_drop_params(routing_kwargs.get("drop_params")) is True,
+            ).value,
+        )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
-                {k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"}
+                {k: v for k, v in {**local_vars, "reasoning": deployment_reasoning}.items() if k != "reasoning_effort"}
             )
         )
 
@@ -1579,7 +1594,7 @@ def responses(
             metadata=metadata,
             parallel_tool_calls=parallel_tool_calls,
             previous_response_id=previous_response_id,
-            reasoning=request_reasoning,
+            reasoning=deployment_reasoning,
             store=store,
             background=background,
             stream=stream,
@@ -1629,6 +1644,7 @@ def responses(
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=allowed_openai_params,
             drop_params=normalize_drop_params(request_drop_params),
+            declared_reasoning_efforts=deployment_reasoning_effort_levels(deployment_model_info) or (),
         )
 
         litellm_logging_obj.update_from_kwargs(
@@ -2609,6 +2625,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
+    turn_admission: Callable[[], Awaitable[None]] | None = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:
@@ -2624,7 +2641,7 @@ async def _aresponses_websocket(
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     user: Final = kwargs.get("user", None)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = {**get_litellm_params(**kwargs), CallTypes.aresponses_websocket.value: True}
 
     (
         provider_model,
@@ -2702,6 +2719,7 @@ async def _aresponses_websocket(
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
+        turn_admission=turn_admission,
         frame_guard=responses_ws_frame_guard,
         **remaining_kwargs,
     )

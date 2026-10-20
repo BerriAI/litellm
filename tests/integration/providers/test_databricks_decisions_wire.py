@@ -106,6 +106,11 @@ def _observed(gateway: Gateway) -> tuple[dict[str, JsonValue], ...]:
         return tuple(map(object_value, upstream.get("/__observations").json()["requests"]))
 
 
+def _reset_observations(gateway: Gateway) -> None:
+    with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+        upstream.delete("/__observations").raise_for_status()
+
+
 def _calls_to(requests: Sequence[dict[str, JsonValue]], handle: ScenarioHandle) -> list[dict[str, JsonValue]]:
     return [request for request in requests if string_value(request["path"]).startswith(f"/{handle.scenario_id}/")]
 
@@ -545,6 +550,7 @@ def test_the_environment_key_and_base_serve_a_deployment_a_classifier_and_a_team
                 _spend_row(decided[1].headers["x-litellm-call-id"])["api_base"]
                 == f"{handle.api_base()}/environment-workspace{_ROUTE}"
             )
+            _reset_observations(candidate)
 
             router: Final = _router(scenario, _environment_classifier())
             routed: Final = _chat(candidate, router)
@@ -556,6 +562,7 @@ def test_the_environment_key_and_base_serve_a_deployment_a_classifier_and_a_team
                 authorization=f"Bearer {_ENV_KEY}",
                 prompt_marker="design a distributed cache",
             )
+            _reset_observations(candidate)
 
             team: Final = scenario.team(team_member_permissions=["/auto_router/manage"])
             member: Final = scenario.member(team)
@@ -623,6 +630,7 @@ def test_the_environment_token_serves_a_deployment_and_a_classifier_when_no_envi
             (decision_call,) = _upstream_calls(candidate, handle)
             assert (decision_call["path"], decision_call["authorization"]) == (environment_path, f"Bearer {_ENV_TOKEN}")
             assert _spend_row(decided.headers["x-litellm-call-id"])["status"] == "success"
+            _reset_observations(candidate)
             router: Final = _router(scenario, _environment_classifier())
             routed: Final = _chat(candidate, router)
             _assert_classified_by_the_complex_tier(routed, router)

@@ -50,6 +50,7 @@ from typing import (
 )
 
 import anyio
+import httpx
 from typing_extensions import Never, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
@@ -57,6 +58,7 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
     LITELLM_CONFIG_CACHE_TTL_SECONDS,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -88,7 +90,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
+from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, CostPerToken, ModelInfo, Usage
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -155,7 +157,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging, deployment_pricing_model_info
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -278,6 +280,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionRe
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 from litellm.utils import (
     add_configured_callback_to_specific_event,
+    get_base_model_from_metadata,
 )
 
 if TYPE_CHECKING:
@@ -1013,12 +1016,22 @@ def _failure_usage_to_lift(
     model_call_details: Mapping[str, object],
     request_body: Mapping[str, object],
     dispatched: bool,
+    provider_billed: bool = False,
+    deployment_id: str | None = None,
+    base_model: str | None = None,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
     cost in model_call_details, so prefer it. Otherwise a request that was
     dispatched to a provider and failed without upstream usage gets an
-    estimated input-side Usage with zero cost. The raw request body backfills
+    estimated input-side Usage. When the failure is one the provider bills
+    anyway (``provider_billed``: a read timeout or a client disconnect, where
+    the provider had the prompt and kept working after LiteLLM hung up) that
+    usage is priced at the model's input rate, the way the success path prices it:
+    at the rate the router registered under ``deployment_id`` (``Logging.get_router_model_id``)
+    when the deployment declares one, else the cost map's rate for ``base_model`` (an Azure
+    deployment's ``model_info.base_model``) or the deployment model; any other post-dispatch
+    failure stays at zero cost. The raw request body backfills
     the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
     chat-completions provider) without filling optional_params. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
@@ -1028,7 +1041,11 @@ def _failure_usage_to_lift(
         return _billed_across_attempts(failed_attempts, recovered_usage, model_call_details.get("response_cost"))
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
-    if not dispatched or model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
+    if not dispatched:
+        return None
+    if model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL) and not provider_billed:
+        # The proxy-only error handler stamps this flag on a client disconnect too, even though the
+        # request had already reached the provider, so a billed failure keeps its estimate.
         return None
     if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
@@ -1046,7 +1063,52 @@ def _failure_usage_to_lift(
     )
     if estimated_usage is None:
         return None
-    return estimated_usage, 0.0
+    if not provider_billed:
+        return estimated_usage, 0.0
+    return estimated_usage, _estimated_input_cost(
+        model_call_details, estimated_usage.prompt_tokens, deployment_id=deployment_id, base_model=base_model
+    )
+
+
+def _deployment_cost_per_token(deployment_id: str | None, model: str) -> CostPerToken | None:
+    """The pricing the router registered for this deployment under its ``model_info.id``, read
+    through ``deployment_pricing_model_info`` exactly as the success path does; None means the
+    public cost map. The id is ``Logging.get_router_model_id()`` (the logging object's own
+    ``litellm_params``), never the flattened ``model_call_details`` copy a request body key can
+    overwrite."""
+    model_info: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=model)
+    if model_info is None:
+        return None
+    return CostPerToken(
+        input_cost_per_token=model_info["input_cost_per_token"] or 0.0,
+        output_cost_per_token=model_info["output_cost_per_token"] or 0.0,
+    )
+
+
+def _estimated_input_cost(
+    model_call_details: Mapping[str, object],
+    prompt_tokens: int,
+    deployment_id: str | None,
+    base_model: str | None,
+) -> float:
+    """Input price for the estimated prompt: the deployment's registered rate when it has one, else
+    the cost map's rate for ``base_model`` or the deployment model (an Azure deployment name is not
+    in the cost map, its ``base_model`` is). An unpriceable model keeps the row at $0 rather than
+    dropping the failure row."""
+    try:
+        model: Final = str(model_call_details.get("model") or "")
+        estimated_input_cost, _ = litellm.cost_per_token(
+            model=base_model or model,
+            custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
+            prompt_tokens=prompt_tokens,
+            custom_cost_per_token=_deployment_cost_per_token(deployment_id, model),
+        )
+    except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
+        verbose_proxy_logger.debug(
+            "failure spend estimate: could not price %s: %s", model_call_details.get("model"), exc
+        )
+        return 0.0
+    return estimated_input_cost
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})
@@ -1161,7 +1223,37 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
+_EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
+
+
+def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
+    chain: Final[list[BaseException]] = [exception]  # mutable-ok: built once, returned frozen
+    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
+        following = chain[-1].__cause__ or chain[-1].__context__
+        if following is None or following in chain:
+            break
+        chain.append(following)
+    return tuple(chain)
+
+
+def _timed_out_reading_from_provider(exception: Exception) -> bool:
+    """A read timeout means the request was sent and the provider was working on it; a connect
+    timeout (``httpx.ConnectTimeout``) never reached the provider, so it is not billed."""
+    return isinstance(exception, litellm.Timeout) and any(
+        isinstance(cause, httpx.ReadTimeout) for cause in _exception_chain(exception)
+    )
+
+
+def _client_disconnected(exception: Exception) -> bool:
+    """The 499 the proxy raises when the caller hung up while the provider was still working on the request."""
+    return getattr(exception, "status_code", None) == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+
+
+def _provider_billed_the_failure(exception: Exception) -> bool:
+    return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
+
+
+def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1177,6 +1269,9 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
         model_call_details=_model_call_details,
         request_body=request_data,
         dispatched=_first_handoff is not None,
+        provider_billed=provider_billed,
+        deployment_id=_logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None,
+        base_model=get_base_model_from_metadata(model_call_details=_model_call_details),
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
@@ -3400,7 +3495,11 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        request_data.update(await offload_token_count(_failure_fields_to_lift)(request_data))
+        request_data.update(
+            await offload_token_count(_failure_fields_to_lift)(
+                request_data, provider_billed=_provider_billed_the_failure(original_exception)
+            )
+        )
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
