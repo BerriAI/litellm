@@ -23,6 +23,7 @@ import respx
 from openai import APITimeoutError, AsyncOpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm import (
@@ -9639,6 +9640,17 @@ def _pdf_messages() -> list[dict[str, object]]:
     return [{"role": "user", "content": [_SUMMARIZE_TEXT_PART, _PDF_FILE_PART]}]
 
 
+class _SentChatRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    messages: list[dict[str, object]]
+
+
+def _sent_messages(respx_mock: respx.MockRouter) -> list[dict[str, object]]:
+    request: Final[httpx.Request] = respx_mock.calls[0].request
+    return _SentChatRequest.model_validate_json(request.content).messages
+
+
 def _mock_pdf_chat_route(respx_mock: respx.MockRouter, api_base: str) -> respx.Route:
     return respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
         return_value=httpx.Response(
@@ -9668,8 +9680,7 @@ def test_drop_params_drops_a_pdf_the_model_cannot_read(respx_mock: respx.MockRou
         drop_params=True,
     )
 
-    sent: Final = json.loads(respx_mock.calls[0].request.content)
-    assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
 
 
 @pytest.mark.parametrize(
@@ -9696,8 +9707,7 @@ def test_drop_params_drops_a_pdf_file_part_without_a_data_url(
         drop_params=True,
     )
 
-    sent: Final = json.loads(respx_mock.calls[0].request.content)
-    assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
 
 
 def test_drop_params_drops_a_user_turn_that_held_only_a_pdf(respx_mock: respx.MockRouter) -> None:
@@ -9716,8 +9726,31 @@ def test_drop_params_drops_a_user_turn_that_held_only_a_pdf(respx_mock: respx.Mo
         drop_params=True,
     )
 
-    sent: Final = json.loads(respx_mock.calls[0].request.content)
-    assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
+def test_drop_params_keeps_roles_alternating_after_dropping_a_pdf_only_turn(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12353/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[
+            {"role": "user", "content": [_SUMMARIZE_TEXT_PART]},
+            {"role": "assistant", "content": "Send the file."},
+            {"role": "user", "content": [_PDF_FILE_PART]},
+            {"role": "assistant", "content": "Got it."},
+            {"role": "user", "content": [_SUMMARIZE_TEXT_PART]},
+        ],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+        ensure_alternating_roles=True,
+    )
+
+    sent_roles: Final = [message["role"] for message in _sent_messages(respx_mock)]
+    assert sent_roles == ["user", "assistant", "user", "assistant", "user"]
 
 
 def test_drop_params_keeps_an_image_data_url_whose_filename_says_pdf(respx_mock: respx.MockRouter) -> None:
@@ -9737,8 +9770,7 @@ def test_drop_params_keeps_an_image_data_url_whose_filename_says_pdf(respx_mock:
         drop_params=True,
     )
 
-    sent: Final = json.loads(respx_mock.calls[0].request.content)
-    assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART, image_part]}]
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART, image_part]}]
 
 
 def test_pdf_to_a_model_that_cannot_read_it_is_rejected_without_drop_params(respx_mock: respx.MockRouter) -> None:
@@ -9769,8 +9801,7 @@ def test_pdf_to_a_model_with_unknown_pdf_support_is_sent_even_with_drop_params(r
         drop_params=True,
     )
 
-    sent: Final = json.loads(respx_mock.calls[0].request.content)
-    assert sent["messages"] == _pdf_messages()
+    assert _sent_messages(respx_mock) == _pdf_messages()
 
 
 def test_pdf_to_ollama_is_rejected_without_drop_params() -> None:
@@ -9810,8 +9841,7 @@ def test_drop_params_drops_a_pdf_a_deployments_base_model_cannot_read(respx_mock
         drop_params=True,
     )
 
-    sent: Final = json.loads(respx_mock.calls[0].request.content)
-    assert sent["messages"] == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
 
 
 def _azure_ai_model_with_pdf_input() -> str:
@@ -9846,8 +9876,7 @@ def test_drop_params_keeps_a_pdf_a_deployments_base_model_param_reads(respx_mock
         drop_params=True,
     )
 
-    sent: Final = json.loads(respx_mock.calls[0].request.content)
-    assert sent["messages"] == _pdf_messages()
+    assert _sent_messages(respx_mock) == _pdf_messages()
 
 
 def test_drop_params_rejects_a_request_whose_only_user_turn_was_a_pdf(respx_mock: respx.MockRouter) -> None:
@@ -9884,8 +9913,7 @@ def test_drop_params_drops_a_pdf_an_unlisted_azure_ai_model_never_declared_it_re
         drop_params=True,
     )
 
-    sent: Final = json.loads(respx_mock.calls[0].request.content)
-    assert sent["messages"] == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
 
 
 def test_drop_params_keeps_a_pdf_an_azure_ai_deployment_declares_it_reads(respx_mock: respx.MockRouter) -> None:
@@ -9901,8 +9929,7 @@ def test_drop_params_keeps_a_pdf_an_azure_ai_deployment_declares_it_reads(respx_
         drop_params=True,
     )
 
-    sent: Final = json.loads(respx_mock.calls[0].request.content)
-    assert sent["messages"] == _pdf_messages()
+    assert _sent_messages(respx_mock) == _pdf_messages()
 
 
 @pytest.mark.parametrize("stream", (False, True))

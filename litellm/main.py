@@ -5603,9 +5603,15 @@ def completion(
     )
     headers = kwargs.get("headers", None) or extra_headers
 
-    ensure_alternating_roles: Final[bool | None] = kwargs.get("ensure_alternating_roles", None)
-    user_continue_message: Final[ChatCompletionUserMessage | None] = kwargs.get("user_continue_message", None)
-    assistant_continue_message: ChatCompletionAssistantMessage | None = kwargs.get("assistant_continue_message", None)
+    ensure_alternating_roles: Final = cast(  # cast-ok: read from untyped kwargs
+        bool | None, kwargs.get("ensure_alternating_roles", None)
+    )
+    user_continue_message: Final = cast(  # cast-ok: read from untyped kwargs
+        ChatCompletionUserMessage | None, kwargs.get("user_continue_message", None)
+    )
+    assistant_continue_message: Final = cast(  # cast-ok: read from untyped kwargs
+        ChatCompletionAssistantMessage | None, kwargs.get("assistant_continue_message", None)
+    )
     headers = {} if headers is None else dict(headers)
     if extra_headers is not None:
         headers.update(extra_headers)
@@ -6019,7 +6025,12 @@ def completion(
             or normalize_drop_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")) is True,
         )
         if pdf_free_messages is not None:
-            messages = list(pdf_free_messages)  # rebind-ok: completion() rewrites messages step by step
+            messages = get_completion_messages(  # rebind-ok: completion() rewrites messages step by step
+                messages=list(pdf_free_messages),
+                ensure_alternating_roles=ensure_alternating_roles or False,
+                user_continue_message=user_continue_message,
+                assistant_continue_message=assistant_continue_message,
+            )
 
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
