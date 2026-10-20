@@ -107,10 +107,10 @@ class ManagedObjectCreatorAttribution:
     user's alias, because a resolvable name is more useful on the spend row than a null.
     user_api_key_org_id is resolved too: the spend update writer reads it off this metadata
     to increment organization spend, so leaving it out drops the cost from org accounting.
-    A background response also carries its end user, the creating key's project, and the key,
-    team, and user budgets and per-model budgets, the way the read that billed it before did,
-    and never names a key-scoped creator as its user. A key that sets no budget of its own
-    takes its budget tier's, the same rule auth applies.
+    A background response also carries its end user, the creating key's project and its alias,
+    and the key, team, and user budgets and per-model budgets, the way the read that billed it
+    before did, and never names a key-scoped creator as its user. A key that sets no budget of
+    its own takes its budget tier's, the same rule auth applies.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -129,6 +129,9 @@ class ManagedObjectCreatorAttribution:
             **_shared_metadata(job, rows),
             **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
             "user_api_key_project_id": getattr(rows.key, "project_id", None),
+            "user_api_key_project_alias": getattr(
+                getattr(rows.key, "litellm_project_table", None), "project_alias", None
+            ),
             **_key_budget_fields(rows.key),
             **_budget_fields(
                 rows.team,
@@ -169,7 +172,7 @@ class ManagedObjectCreatorAttribution:
             return None
         try:
             return await _token_table(self._prisma_client).find_unique(
-                where={"token": api_key}, include={"litellm_budget_table": True}
+                where={"token": api_key}, include={"litellm_budget_table": True, "litellm_project_table": True}
             )
         except Exception as e:
             verbose_proxy_logger.error(f"{self._poller_name}: could not look up the creating key for {object_id}: {e}")

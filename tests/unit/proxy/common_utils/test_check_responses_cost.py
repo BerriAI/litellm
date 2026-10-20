@@ -1518,6 +1518,7 @@ async def test_the_billing_event_carries_the_creating_keys_project_and_every_cre
             spend=0.0,
             max_budget=None,
             project_id="project-1",
+            litellm_project_table=SimpleNamespace(project_alias="project-one"),
             model_max_budget=key_budget,
         )
     )
@@ -1539,12 +1540,14 @@ async def test_the_billing_event_carries_the_creating_keys_project_and_every_cre
         field: billed.metadata.get(field)
         for field in (
             "user_api_key_project_id",
+            "user_api_key_project_alias",
             "user_api_key_model_max_budget",
             "user_api_key_team_model_max_budget",
             "user_api_key_user_model_max_budget",
         )
     } == {
         "user_api_key_project_id": "project-1",
+        "user_api_key_project_alias": "project-one",
         "user_api_key_model_max_budget": key_budget,
         "user_api_key_team_model_max_budget": team_budget,
         "user_api_key_user_model_max_budget": user_budget,
@@ -1710,6 +1713,10 @@ async def _bill_through_a_priced_deployment(
     read: ResponsesAPIResponse,
     litellm_params: Mapping[str, object] = _PRICED_LITELLM_PARAMS,
     model_info: Mapping[str, object] = MappingProxyType({}),
+    model_name: str = "priced-gpt",
+    requested_model: str = "priced-gpt",
+    model_group_alias: Mapping[str, str] = MappingProxyType({}),
+    team_id: str | None = None,
 ) -> _PricedBilling:
     import litellm
     from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
@@ -1721,7 +1728,16 @@ async def _bill_through_a_priced_deployment(
         custom_llm_provider="openai", model_id="deployment-custom", response_id="resp_upstream"
     )
     table: Final = _InMemoryManagedObjectTable(
-        rows=(_StoredResponse(id="job-priced", unified_object_id=response_id, status="queued", api_key="hash-alice"),)
+        rows=(
+            _StoredResponse(
+                id="job-priced",
+                unified_object_id=response_id,
+                status="queued",
+                api_key="hash-alice",
+                file_object={"model": requested_model},
+                team_id=team_id,
+            ),
+        )
     )
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_managedobjecttable = table
@@ -1731,11 +1747,12 @@ async def _bill_through_a_priced_deployment(
     router: Final = litellm.Router(
         model_list=[
             {
-                "model_name": "priced-gpt",
+                "model_name": model_name,
                 "litellm_params": dict(litellm_params),
                 "model_info": {"id": "deployment-custom", **model_info},
             }
-        ]
+        ],
+        model_group_alias=dict(model_group_alias),
     )
     charge: Final = await CheckResponsesCost(
         proxy_logging_obj=MagicMock(), prisma_client=prisma_client, llm_router=router
@@ -1766,6 +1783,52 @@ async def test_the_billing_event_prices_the_fetched_usage_at_the_deployment_rate
     assert payload["metadata"]["user_api_key_hash"] == "hash-alice"
     assert read.hidden_params == {"response_cost": 0.0}
     assert billing.table.statuses == {"job-priced": "completed"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model", "requested_model", "model_group_alias", "model_info", "model_group"),
+    [
+        ("openai/*", "openai/*", "openai/gpt-5.6", {}, {}, "openai/gpt-5.6"),
+        ("priced-gpt", "openai/gpt-5.6", "priced-alias", {"priced-alias": "priced-gpt"}, {}, "priced-alias"),
+        ("priced-gpt", "openai/gpt-5.6", "gpt-5.6-2026-01-01", {}, {}, "priced-gpt"),
+        (
+            "model_name_team-1_abc",
+            "openai/gpt-5.6",
+            "team-gpt",
+            {},
+            {"team_id": "team-1", "team_public_model_name": "team-gpt"},
+            "model_name_team-1_abc",
+        ),
+    ],
+    ids=["wildcard_route", "model_group_alias", "fallback_kept_the_provider_model_name", "team_model"],
+)
+async def test_the_billing_event_names_the_requested_model_as_its_model_group_only_while_it_routes_to_the_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    model_name: str,
+    deployment_model: str,
+    requested_model: str,
+    model_group_alias: Mapping[str, str],
+    model_info: Mapping[str, object],
+    model_group: str,
+):
+    import litellm
+
+    capture: Final = _spend_capture_logger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+
+    await _bill_through_a_priced_deployment(
+        _terminal_response(),
+        litellm_params={**_PRICED_LITELLM_PARAMS, "model": deployment_model},
+        model_info=model_info,
+        model_name=model_name,
+        requested_model=requested_model,
+        model_group_alias=model_group_alias,
+        team_id="team-1",
+    )
+
+    (payload,) = capture.payloads
+    assert payload["model_group"] == model_group
 
 
 @pytest.mark.asyncio

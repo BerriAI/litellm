@@ -59,6 +59,19 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 _STORED_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+
+
+class _RoutedModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: str | None = None
+
+
+class _RoutedDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    model_info: _RoutedModelInfo = _RoutedModelInfo()
+
+
+_ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
 _RETRIEVE_RESPONSE_CALL_TYPE: Final = "aget_responses"
 
 
@@ -314,8 +327,19 @@ class CheckResponsesCost:
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                     **target.model_metadata,
                     **(_deployment_metadata(deployment) if deployment is not None else {}),
+                    **self._requested_model_group(target),
                 }
             ),
+        )
+
+    def _requested_model_group(self, target: _PollTarget) -> Mapping[str, object]:
+        requested: Final = target.model_metadata.get("model_group")
+        if target.deployment is None or not isinstance(requested, str):
+            return MappingProxyType({})
+        routed: Final = _ROUTED_DEPLOYMENTS.validate_python(self.llm_router.get_model_list(model_name=requested) or ())
+        serving_id: Final = target.deployment.model_info.id
+        return MappingProxyType(
+            {"model_group": requested} if any(row.model_info.id == serving_id for row in routed) else {}
         )
 
     async def _bill_once(
