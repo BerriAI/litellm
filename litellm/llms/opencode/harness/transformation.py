@@ -11,19 +11,25 @@ DB outlives a session for resume. Verified against opencode 1.14.41.
 
 opencode files each session under the folder it ran in and only streams a resumed session's
 events from that folder, so resuming one filed elsewhere (by an older LiteLLM that left PWD
-unset, or from another sandbox) hangs. Resume first runs `opencode export` and `opencode import`
-in the sandbox, which files the session under the sandbox folder, and raises HarnessError if that
-fails or times out instead of hanging. Verified against opencode 1.19.3.
+unset, or from another sandbox) hangs. Resume runs `opencode export` in the sandbox, and when
+the session is filed elsewhere it imports a copy under fresh ids, filed under the sandbox folder,
+and continues the copy. Import overwrites the folder of a session id it already has, so reusing
+the ids would break the original wherever it was saved. A failed or timed-out export or import
+fails the next turn instead of hanging. Verified against opencode 1.19.3.
 """
 
 from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Mapping, Sequence
+import secrets
+import string
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsMismatch
 from litellm.harness.options import OpenCodeOptions
@@ -39,6 +45,7 @@ from litellm.harness.types import (
 )
 from litellm.llms.base_llm.harness.transformation import (
     BaseCLIHarnessConfig,
+    HarnessSessionCopy,
     HarnessSessionSetup,
     HarnessTurnError,
     HarnessTurnRequest,
@@ -63,8 +70,10 @@ OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
 # A fixed title skips opencode's extra title-generation model call on the first turn.
 OPENCODE_SESSION_TITLE: Final = "litellm-harness"
 TOKEN_FILENAME: Final = "token"
-RESUME_EXPORT_FILENAME: Final = "resume-session.json"
-REHOME_SESSION_SCRIPT: Final = '"$1" --pure export "$3" > "$2" && "$1" --pure import "$2"'
+RESUME_COPY_FILENAME: Final = "resume-session.json"
+ID_ORDERED_PREFIX_LENGTH: Final = 16
+ID_RANDOM_LENGTH: Final = 14
+ID_RANDOM_ALPHABET: Final = string.ascii_letters + string.digits
 INSTRUCTIONS_FILENAME: Final = "instructions.md"
 XDG_DIRNAME: Final = "xdg"
 XDG_SUBDIRS: Final = ("config", "data", "state", "cache")
@@ -168,6 +177,86 @@ class OpenCodeStreamState:
     final_text: str = ""
     error: str | None = None
     step_texts: Sequence[str] = ()
+
+
+class ExportedPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class ExportedMessageInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class ExportedMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    info: ExportedMessageInfo
+    parts: tuple[ExportedPart, ...]
+
+
+class ExportedSessionInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    directory: str
+
+
+class ExportedSession(BaseModel):
+    """The ids and folder of an `opencode export`; every other field is copied as is."""
+
+    model_config = ConfigDict(frozen=True)
+
+    info: ExportedSessionInfo
+    messages: tuple[ExportedMessage, ...]
+
+    def ids(self) -> Iterator[str]:
+        yield self.info.id
+        for message in self.messages:
+            yield message.info.id
+            yield from (part.id for part in message.parts)
+
+
+EXPORT_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def fresh_id(old: str) -> str:
+    """Keeps the type prefix and time-ordered part of an opencode id, so the copy sorts like the original."""
+    suffix: Final = "".join(secrets.choice(ID_RANDOM_ALPHABET) for _ in range(ID_RANDOM_LENGTH))
+    return f"{old[:ID_ORDERED_PREFIX_LENGTH]}{suffix}"
+
+
+def with_ids_replaced(value: JsonValue, fresh: Mapping[str, str]) -> JsonValue:
+    match value:
+        case str():
+            return fresh.get(value, value)
+        case list():
+            return [with_ids_replaced(item, fresh) for item in value]
+        case dict():
+            return {key: with_ids_replaced(item, fresh) for key, item in value.items()}
+        case _:
+            return value
+
+
+def session_copy(exported: str, path: str, workdir: str) -> HarnessSessionCopy | None:
+    """A copy of an exported session filed under workdir, or None when the session is already filed there."""
+    try:
+        raw: Final = EXPORT_JSON.validate_json(exported)
+        session: Final = ExportedSession.model_validate(raw)
+    except ValidationError as exc:
+        raise HarnessError(f"opencode export did not print a session: {exc.errors()[0]['msg']}") from exc
+    if session.info.directory == workdir:
+        return None
+    fresh: Final = MappingProxyType({old: fresh_id(old) for old in session.ids()})
+    return HarnessSessionCopy(
+        session_id=fresh[session.info.id],
+        path=path,
+        data=json.dumps(with_ids_replaced(raw, fresh)).encode("utf-8"),
+        import_command=(OPENCODE_BINARY, "--pure", "import", path),
+    )
 
 
 def _as_dict(value: object) -> Mapping[str, Any]:
@@ -370,9 +459,11 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
         # The prompt goes on stdin; opencode appends non-TTY stdin to the message.
         return HarnessTurnRequest(argv=argv, env=setup.env, stdin=turn_prompt(ctx, prompt), cwd=ctx.sandbox.workdir)
 
-    def transform_resume_command(self, private_dir: str, native_session_id: str) -> Sequence[str]:
-        export_path: Final = f"{private_dir}/{RESUME_EXPORT_FILENAME}"
-        return ("sh", "-c", REHOME_SESSION_SCRIPT, "sh", OPENCODE_BINARY, export_path, native_session_id)
+    def transform_resume_export_command(self, native_session_id: str) -> Sequence[str]:
+        return (OPENCODE_BINARY, "--pure", "export", native_session_id)
+
+    def transform_resume_copy(self, exported: str, private_dir: str, workdir: str) -> HarnessSessionCopy | None:
+        return session_copy(exported, f"{private_dir}/{RESUME_COPY_FILENAME}", workdir)
 
     def create_stream_state(self) -> OpenCodeStreamState:
         return OpenCodeStreamState()

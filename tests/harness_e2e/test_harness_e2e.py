@@ -119,10 +119,13 @@ def test_agent_detach_and_resume(harness: Harness, workspace: Path) -> None:
     assert "4817" in r.text
 
 
-@pytest.mark.skipif(
+requires_opencode = pytest.mark.skipif(
     not harness_available(Harness.OPENCODE), reason="opencode runtime not installed"
 )
-def test_opencode_session_resumes_inside_a_different_sandbox(
+
+
+@requires_opencode
+def test_opencode_session_resumed_in_another_sandbox_keeps_working_in_both(
     workspace: Path, tmp_path: Path
 ) -> None:
     model = model_for(Harness.OPENCODE)
@@ -138,14 +141,45 @@ def test_opencode_session_resumes_inside_a_different_sandbox(
     moved.mkdir()
 
     with litellm.agent_resume(
-        State.loads(raw), sandbox=sandbox.local(moved), model=model, timeout=TURN_TIMEOUT
-    ) as resumed:
-        resumed.run(
-            "Create a file named hello.txt whose only content is the number I asked "
+        State.loads(raw), sandbox=sandbox.local(workspace), model=model, timeout=TURN_TIMEOUT
+    ) as original:
+        original.run("Reply with just OK.")
+        with litellm.agent_resume(
+            State.loads(raw), sandbox=sandbox.local(moved), model=model, timeout=TURN_TIMEOUT
+        ) as resumed:
+            resumed.run(
+                "Create a file named hello.txt whose only content is the number I asked "
+                "you to remember."
+            )
+        original.run(
+            "Create a file named again.txt whose only content is the number I asked "
             "you to remember."
         )
+
     assert (moved / "hello.txt").read_text().strip() == "4817"
+    assert (workspace / "again.txt").read_text().strip() == "4817"
     assert not (workspace / "hello.txt").exists()
+
+
+@requires_opencode
+def test_opencode_resume_of_a_missing_session_ends_with_a_runtime_error(
+    workspace: Path,
+) -> None:
+    model = model_for(Harness.OPENCODE)
+    missing = State(
+        harness=Harness.OPENCODE,
+        native_session_id="ses_0000000000000000000missing",
+        workdir=str(workspace),
+        model=model,
+    )
+
+    with litellm.agent_resume(
+        missing, sandbox=sandbox.local(workspace), model=model, timeout=TURN_TIMEOUT
+    ) as resumed:
+        result = resumed.run("Reply with just OK.")
+
+    assert result.stop_reason == "runtime_error"
+    assert "ses_0000000000000000000missing" in result.text
 
 
 @pytest.mark.parametrize("harness", harness_params())

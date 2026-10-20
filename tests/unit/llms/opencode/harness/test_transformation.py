@@ -28,7 +28,6 @@ from litellm.llms.opencode.harness.transformation import (
     INSTRUCTIONS_FILENAME,
     OPENCODE_ISOLATION_ENV,
     OPENCODE_SESSION_TITLE,
-    REHOME_SESSION_SCRIPT,
     TOKEN_FILENAME,
     XDG_DIRNAME,
     OpenCodeHarnessConfig,
@@ -117,6 +116,8 @@ class FakeSandbox:
     files: dict = field(default_factory=dict)
     execs: list = field(default_factory=list)
     stall_runs: bool = False
+    failing_subcommand: str | None = None
+    run_stdout: str = ""
     runs: list[Sequence[str]] = field(default_factory=list)
     run_envs: list[dict[str, str]] = field(default_factory=list)
     tempdirs: int = 0
@@ -130,9 +131,9 @@ class FakeSandbox:
         self.run_envs.append(dict(env or {}))
         if self.stall_runs:
             return await stall_until_timeout(cmd, timeout)
-        if self.persist_ok:
-            return CompletedRun("", "", 0)
-        return CompletedRun("", "read-only fs", 1)
+        if not self.persist_ok or self.failing_subcommand in cmd:
+            return CompletedRun("", "read-only fs", 1)
+        return CompletedRun(self.run_stdout, "", 0)
 
     async def read(self, path):
         return self.files[path]
@@ -609,40 +610,112 @@ async def test_prompt_is_sent_on_stdin_not_argv():
     assert "secret prompt text" not in sandbox.execs[0]["cmd"]
 
 
-async def test_resume_files_the_session_under_the_sandbox_then_continues_it() -> None:
+SAVED: Final = "ses_ea6d348fdffe9pu36Y2YN6YobB"
+SAVED_USER_MSG: Final = "msg_1592cb71a001307YHyO7ReafRb"
+SAVED_REPLY_MSG: Final = "msg_1592cb7f4001KgUDK3Sj79XDT4"
+SAVED_PARTS: Final = ("prt_1592cb71c0013NJaqSsv4dNiSR", "prt_1592cbe0f001oKdE9pRy38AduM")
+COPY_PATH: Final = "/tmp/oc-1/resume-session.json"
+
+
+def exported_session(directory: str) -> str:
+    user_part: Final = {"id": SAVED_PARTS[0], "sessionID": SAVED, "messageID": SAVED_USER_MSG, "type": "text"}
+    reply_part: Final = {"id": SAVED_PARTS[1], "sessionID": SAVED, "messageID": SAVED_REPLY_MSG, "type": "text"}
+    user: Final = {"id": SAVED_USER_MSG, "sessionID": SAVED, "role": "user"}
+    reply: Final = {"id": SAVED_REPLY_MSG, "sessionID": SAVED, "parentID": SAVED_USER_MSG, "role": "assistant"}
+    return json.dumps(
+        {
+            "info": {"id": SAVED, "directory": directory, "title": "litellm-harness"},
+            "messages": [
+                {"info": user, "parts": [{**user_part, "text": "Remember 4817"}]},
+                {"info": reply, "parts": [{**reply_part, "text": "OK"}]},
+            ],
+        }
+    )
+
+
+async def resumed(saved_in: str) -> tuple[CLIHarnessHandler, SessionContext, FakeSandbox]:
     handler, ctx, sandbox = await started()
-    await handler.resume(ctx, "ses_prev")
+    sandbox.run_stdout = exported_session(saved_in)
+    await handler.resume(ctx, SAVED)
     sandbox.outputs.append(fixture_proc("turn2_session_skill.jsonl"))
     await collect(handler, ctx, "hi")
+    return handler, ctx, sandbox
 
-    assert tuple(sandbox.runs[-1]) == (
-        "sh",
-        "-c",
-        REHOME_SESSION_SCRIPT,
-        "sh",
-        "opencode",
-        "/tmp/oc-1/resume-session.json",
-        "ses_prev",
-    )
-    assert sandbox.run_envs[-1]["XDG_DATA_HOME"] == "/tmp/oc-1/xdg/data"
+
+def resumed_session_arg(sandbox: FakeSandbox) -> str:
     cmd: Final = sandbox.execs[0]["cmd"]
-    assert cmd[cmd.index("--session") + 1] == "ses_prev"
+    return cmd[cmd.index("--session") + 1]
 
 
-@pytest.mark.parametrize("rehome", ["exits_1", "stalls"])
-async def test_resume_fails_when_the_session_cannot_be_filed_under_the_sandbox(
-    rehome: str,
+async def test_resume_elsewhere_continues_a_copy_filed_under_the_sandbox() -> None:
+    _, _, sandbox = await resumed("/other")
+
+    copy: Final = json.loads(sandbox.files[COPY_PATH])
+    copy_id: Final = resumed_session_arg(sandbox)
+    assert copy["info"]["id"] == copy_id != SAVED
+    assert tuple(sandbox.runs[-1]) == ("opencode", "--pure", "import", COPY_PATH)
+    assert sandbox.run_envs[-1]["XDG_DATA_HOME"] == "/tmp/oc-1/xdg/data"
+    assert sandbox.run_envs[-2]["XDG_DATA_HOME"] == "/tmp/oc-1/xdg/data"
+
+
+async def test_resume_copy_gets_fresh_ids_that_keep_their_links_and_order() -> None:
+    _, _, sandbox = await resumed("/other")
+
+    raw_copy: Final = sandbox.files[COPY_PATH].decode()
+    user, reply = json.loads(raw_copy)["messages"]
+    copy_id: Final = resumed_session_arg(sandbox)
+    assert all(old not in raw_copy for old in (SAVED, SAVED_USER_MSG, SAVED_REPLY_MSG, *SAVED_PARTS))
+    assert {user["info"]["sessionID"], reply["info"]["sessionID"]} == {copy_id}
+    assert reply["info"]["parentID"] == user["info"]["id"]
+    assert user["parts"][0]["messageID"] == user["info"]["id"]
+    assert reply["parts"][0]["messageID"] == reply["info"]["id"]
+    assert {user["parts"][0]["sessionID"], reply["parts"][0]["sessionID"]} == {copy_id}
+    assert (user["parts"][0]["text"], reply["parts"][0]["text"]) == ("Remember 4817", "OK")
+
+
+def test_resume_copy_keeps_the_message_order() -> None:
+    message_ids: Final = tuple(f"msg_1592cb71a{n:03x}307YHyO7ReafRb" for n in range(10))
+    messages: Final = [{"info": {"id": message_id}, "parts": []} for message_id in message_ids]
+    exported: Final = json.dumps({"info": {"id": SAVED, "directory": "/other"}, "messages": messages})
+
+    copy: Final = CONFIG.transform_resume_copy(exported, PRIVATE, "/work")
+
+    assert copy is not None
+    copied_ids: Final = [message["info"]["id"] for message in json.loads(copy.data)["messages"]]
+    assert sorted(copied_ids) == copied_ids
+
+
+async def test_each_resume_elsewhere_makes_its_own_copy() -> None:
+    _, _, first = await resumed("/other")
+    _, _, second = await resumed("/other")
+
+    assert resumed_session_arg(first) != resumed_session_arg(second)
+
+
+async def test_resume_in_the_folder_it_was_saved_in_continues_the_original() -> None:
+    _, _, sandbox = await resumed("/work")
+
+    assert resumed_session_arg(sandbox) == SAVED
+    assert COPY_PATH not in sandbox.files
+    assert all("import" not in run for run in sandbox.runs)
+
+
+@pytest.mark.parametrize("failure", ["export_exits_1", "import_exits_1", "export_stalls", "export_unreadable"])
+async def test_resume_that_cannot_be_prepared_fails_the_turn_without_running_opencode(
+    failure: str,
 ) -> None:
     handler, ctx, sandbox = await started()
-    sandbox.persist_ok = rehome != "exits_1"
-    sandbox.stall_runs = rehome == "stalls"
+    sandbox.run_stdout = "Error: not a session" if failure == "export_unreadable" else exported_session("/other")
+    sandbox.failing_subcommand = failure.split("_")[0] if failure.endswith("exits_1") else None
+    sandbox.stall_runs = failure == "export_stalls"
 
-    with pytest.raises(HarnessError, match="ses_prev"):
-        await asyncio.wait_for(handler.resume(ctx, "ses_prev"), 5)
-    assert handler.native_session_id() is None
+    await asyncio.wait_for(handler.resume(ctx, SAVED), 5)
+    with pytest.raises(HarnessTurnError, match=SAVED):
+        await collect(handler, ctx, "hi")
+    assert sandbox.execs == []
 
 
-async def test_restart_resumes_its_own_session_without_filing_it_again() -> None:
+async def test_restart_resumes_its_own_session_without_exporting_it() -> None:
     handler, ctx, sandbox = await started()
     sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
     await collect(handler, ctx, "first")
@@ -655,7 +728,7 @@ async def test_restart_resumes_its_own_session_without_filing_it_again() -> None
     sandbox.outputs.append(fixture_proc("turn2_session_skill.jsonl"))
     await collect(handler, ctx, "again")
 
-    assert all(REHOME_SESSION_SCRIPT not in run for run in sandbox.runs[runs_before_restart:])
+    assert all("export" not in run for run in sandbox.runs[runs_before_restart:])
     cmd: Final = sandbox.execs[1]["cmd"]
     assert cmd[cmd.index("--session") + 1] == native_id
 

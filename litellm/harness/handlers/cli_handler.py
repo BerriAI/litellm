@@ -13,6 +13,7 @@ import asyncio
 import os
 from collections import deque
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -24,9 +25,14 @@ from litellm.constants import (
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import HarnessError, HarnessInstallFailed, SandboxError
 from litellm.harness.handlers.base import BaseHarnessHandler
-from litellm.harness.sandbox.base import Process, Sandbox
+from litellm.harness.sandbox.base import CompletedRun, Process, Sandbox
 from litellm.harness.types import Event
-from litellm.llms.base_llm.harness.transformation import BaseCLIHarnessConfig, HarnessSessionSetup
+from litellm.llms.base_llm.harness.transformation import (
+    BaseCLIHarnessConfig,
+    HarnessSessionCopy,
+    HarnessSessionSetup,
+    HarnessTurnError,
+)
 from litellm.llms.base_llm.harness.utils import decode_json_line, read_skill_files
 
 # Link <private_dir>/<dir> to a LiteLLM-owned cache dir so a later session can resume.
@@ -85,12 +91,50 @@ async def persist_dir(sandbox: Sandbox, link_path: str, cache_subpath: str) -> N
         )
 
 
-async def resume_command_failure(sandbox: Sandbox, cmd: Sequence[str], env: Mapping[str, str]) -> str | None:
+@dataclass(frozen=True, slots=True)
+class ResumeFailed:
+    reason: str
+
+
+async def bounded_resume_run(
+    sandbox: Sandbox, cmd: Sequence[str], env: Mapping[str, str]
+) -> CompletedRun | ResumeFailed:
     try:
         run: Final = await sandbox.run(cmd, env=env, timeout=HARNESS_RESUME_COMMAND_TIMEOUT_SECONDS)
     except SandboxError as exc:
-        return str(exc)
-    return None if run.exit_code == 0 else run.stderr.strip()
+        return ResumeFailed(str(exc))
+    return run if run.exit_code == 0 else ResumeFailed(run.stderr.strip() or f"exit code {run.exit_code}")
+
+
+async def import_session_copy(sandbox: Sandbox, copy: HarnessSessionCopy, env: Mapping[str, str]) -> str | ResumeFailed:
+    try:
+        await sandbox.write(copy.path, copy.data)
+    except SandboxError as exc:
+        return ResumeFailed(str(exc))
+    imported: Final = await bounded_resume_run(sandbox, copy.import_command, env)
+    return imported if isinstance(imported, ResumeFailed) else copy.session_id
+
+
+async def resumable_session_id(
+    config: BaseCLIHarnessConfig[object, object],
+    sandbox: Sandbox,
+    setup_env: Mapping[str, str],
+    private_dir: str,
+    native_session_id: str,
+) -> str | ResumeFailed:
+    export_cmd: Final = config.transform_resume_export_command(native_session_id)
+    if export_cmd is None:
+        return native_session_id
+    exported: Final = await bounded_resume_run(sandbox, export_cmd, setup_env)
+    if isinstance(exported, ResumeFailed):
+        return exported
+    try:
+        copy: Final = config.transform_resume_copy(exported.stdout, private_dir, sandbox.workdir)
+    except HarnessError as exc:
+        return ResumeFailed(str(exc))
+    if copy is None:
+        return native_session_id
+    return await import_session_copy(sandbox, copy, setup_env)
 
 
 async def copy_skills(sandbox: Sandbox, skills: Sequence[str], skills_root: str) -> None:
@@ -108,6 +152,7 @@ class CLIHarnessHandler(BaseHarnessHandler):
         self._private_dir: str | None = None
         self._setup: HarnessSessionSetup | None = None
         self._native_id: str | None = None
+        self._resume_failure: str | None = None
         self._proc: Process | None = None
 
     async def start(self, ctx: SessionContext) -> None:
@@ -131,6 +176,8 @@ class CLIHarnessHandler(BaseHarnessHandler):
     async def turn(self, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
         if self._setup is None or self._private_dir is None:
             raise RuntimeError("CLIHarnessHandler.turn() called before start()")
+        if self._resume_failure is not None:
+            raise HarnessTurnError(self._resume_failure)
         request = self.config.transform_turn_request(ctx, self._setup, self._private_dir, prompt, self._native_id)
         argv: Final = list(request.argv)  # mutable-ok: Sandbox.exec takes list[str]
         proc = await ctx.sandbox.exec(argv, env=request.env, cwd=request.cwd)
@@ -174,8 +221,13 @@ class CLIHarnessHandler(BaseHarnessHandler):
             raise RuntimeError("CLIHarnessHandler.resume() called before start()")
         if native_session_id == self._native_id:
             return
-        cmd: Final = self.config.transform_resume_command(self._private_dir, native_session_id)
-        failure: Final = None if cmd is None else await resume_command_failure(ctx.sandbox, cmd, self._setup.env)
-        if failure is not None:
-            raise HarnessError(f"could not prepare session {native_session_id} for resume: {failure}")
-        self._native_id = native_session_id
+        target: Final = await resumable_session_id(
+            self.config, ctx.sandbox, self._setup.env, self._private_dir, native_session_id
+        )
+        match target:
+            case ResumeFailed(reason=reason):
+                self._resume_failure = f"could not prepare session {native_session_id} for resume: {reason}"
+                self._native_id = native_session_id
+            case session_id:
+                self._resume_failure = None
+                self._native_id = session_id
