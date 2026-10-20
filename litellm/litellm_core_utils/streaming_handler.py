@@ -321,7 +321,7 @@ class CustomStreamWrapper:
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
         self._last_returned_hidden_params: dict[str, object] | None = None
-        self._complete_streaming_response_cache: tuple[int, _CompleteStreamingResponse] | None = None
+        self._unreported_usage: Final = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
         _cached_logging_provider: Final = self.logging_obj.model_call_details.get("custom_llm_provider", None)
         self._cached_logging_llm_provider: str | None = _cached_logging_provider
@@ -1845,10 +1845,21 @@ class CustomStreamWrapper:
         except Exception:
             return None
 
+    def _without_unreported_usage(self, chunk: ModelResponseStream) -> ModelResponseStream:
+        hidden_params: Final = get_hidden_params(chunk) or {}
+        if hidden_params.get("usage") is not self._unreported_usage:
+            return chunk
+        stripped: Final = chunk.model_copy()
+        set_hidden_params(stripped, {key: value for key, value in hidden_params.items() if key != "usage"})
+        return stripped
+
+    def _chunks_for_builder(self) -> list[ModelResponseStream]:
+        return [self._without_unreported_usage(chunk) for chunk in self.chunks]
+
     def _build_complete_streaming_response(self) -> _CompleteStreamingResponse:
         try:
             return litellm.stream_chunk_builder(
-                chunks=self.chunks,
+                chunks=self._chunks_for_builder(),
                 messages=self.messages,
                 logging_obj=self.logging_obj,
                 count_prompt_tokens=self.count_prompt_tokens,
@@ -1859,7 +1870,7 @@ class CustomStreamWrapper:
     async def _async_build_complete_streaming_response(self) -> _CompleteStreamingResponse:
         try:
             return await asyncify(litellm.stream_chunk_builder)(
-                chunks=self.chunks,
+                chunks=self._chunks_for_builder(),
                 messages=self.messages,
                 logging_obj=self.logging_obj,
                 count_prompt_tokens=self.count_prompt_tokens,
@@ -1867,52 +1878,12 @@ class CustomStreamWrapper:
         except Exception as e:
             return self._builder_failure_response(e)
 
-    def _complete_streaming_response(self) -> _CompleteStreamingResponse:
-        cached: Final = self._complete_streaming_response_cache
-        if cached is not None and cached[0] == len(self.chunks):
-            return cached[1]
-        complete_streaming_response: Final = self._build_complete_streaming_response()
-        self._complete_streaming_response_cache = (len(self.chunks), complete_streaming_response)
-        return complete_streaming_response
-
-    async def _async_complete_streaming_response(self) -> _CompleteStreamingResponse:
-        cached: Final = self._complete_streaming_response_cache
-        if cached is not None and cached[0] == len(self.chunks):
-            return cached[1]
-        complete_streaming_response: Final = await self._async_build_complete_streaming_response()
-        self._complete_streaming_response_cache = (len(self.chunks), complete_streaming_response)
-        return complete_streaming_response
-
-    def _estimated_usage(self) -> Usage | None:
-        usage: Final[Usage | None] = getattr(self._complete_streaming_response(), "usage", None)
-        return usage
-
-    async def _async_estimated_usage(self) -> Usage | None:
-        usage: Final[Usage | None] = getattr(await self._async_complete_streaming_response(), "usage", None)
-        return usage
-
-    def _finish_chunk_with_estimate(self, chunk: ModelResponseStream, usage: Usage | None) -> ModelResponseStream:
-        outgoing: Final = chunk if usage is None else chunk.model_copy()
-        if usage is not None:
-            set_hidden_params(outgoing, {**(get_hidden_params(chunk) or {}), "usage": usage})
+    def _set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
+        reported_usage: Final = _reported_total_usage(chunks=self.chunks)
+        set_hidden_param(chunk, "usage", self._unreported_usage if reported_usage is None else reported_usage)
         self._last_returned_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
-            dict[str, object], getattr(outgoing, HIDDEN_PARAMS_ATTR)
+            dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
         )
-        return outgoing
-
-    def _finish_chunk_with_usage(self, chunk: ModelResponseStream) -> ModelResponseStream:
-        reported_usage: Final = _reported_total_usage(chunks=self.chunks)
-        if reported_usage is None:
-            return self._finish_chunk_with_estimate(chunk, self._estimated_usage())
-        set_hidden_param(chunk, "usage", reported_usage)
-        return chunk
-
-    async def _async_finish_chunk_with_usage(self, chunk: ModelResponseStream) -> ModelResponseStream:
-        reported_usage: Final = _reported_total_usage(chunks=self.chunks)
-        if reported_usage is None:
-            return self._finish_chunk_with_estimate(chunk, await self._async_estimated_usage())
-        set_hidden_param(chunk, "usage", reported_usage)
-        return chunk
 
     def __next__(self) -> "ModelResponseStream":
         if self._closed:
@@ -1994,10 +1965,7 @@ class CustomStreamWrapper:
                             continue
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
-                        response = self._finish_chunk_with_usage(response)
-                        self._last_returned_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
-                            dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
-                        )
+                        self._set_final_chunk_usage(response)
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -2005,7 +1973,7 @@ class CustomStreamWrapper:
 
         except StopIteration:
             if self.sent_last_chunk is True:
-                complete_streaming_response: Final = self._complete_streaming_response()
+                complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
@@ -2064,14 +2032,13 @@ class CustomStreamWrapper:
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
-                finish_chunk: Final = self.finish_reason_handler()
+                processed_chunk: Final = self.finish_reason_handler()
                 # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
                 # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
                 if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
-                    self.chunks.append(finish_chunk)
-                processed_chunk: Final = (
-                    finish_chunk if self.stream_options is not None else self._finish_chunk_with_usage(finish_chunk)
-                )
+                    self.chunks.append(processed_chunk)
+                if self.stream_options is None:
+                    self._set_final_chunk_usage(processed_chunk)
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2186,10 +2153,7 @@ class CustomStreamWrapper:
 
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
-                        processed_chunk = await self._async_finish_chunk_with_usage(processed_chunk)
-                        self._last_returned_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
-                            dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
-                        )
+                        self._set_final_chunk_usage(processed_chunk)
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2245,7 +2209,7 @@ class CustomStreamWrapper:
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
-            complete_streaming_response: Final = await self._async_complete_streaming_response()
+            complete_streaming_response: Final = await self._async_build_complete_streaming_response()
             response: Final = self.model_response_creator()
             if complete_streaming_response is not None:
                 self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
@@ -2316,16 +2280,13 @@ class CustomStreamWrapper:
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
             self.sent_last_chunk = True
-            finish_chunk: Final = self.finish_reason_handler()
+            processed_chunk: Final = self.finish_reason_handler()
             # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
             # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
             if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
-                self.chunks.append(finish_chunk)
-            processed_chunk: Final = (
-                finish_chunk
-                if self.stream_options is not None
-                else await self._async_finish_chunk_with_usage(finish_chunk)
-            )
+                self.chunks.append(processed_chunk)
+            if self.stream_options is None:
+                self._set_final_chunk_usage(processed_chunk)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log

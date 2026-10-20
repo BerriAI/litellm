@@ -13,6 +13,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
@@ -21,6 +22,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
@@ -2870,7 +2872,6 @@ async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
     assert (assembled.usage.prompt_tokens, assembled.usage.completion_tokens) == expected
     last_chunk, usage_when_yielded = yielded[-1]
     assert usage_when_yielded is not None
-    assert (usage_when_yielded.prompt_tokens, usage_when_yielded.completion_tokens) == expected
     usage_after_drain: Final = last_chunk._hidden_params["usage"]
     assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == expected
 
@@ -2938,9 +2939,10 @@ async def test_stream_with_empty_provider_usage_falls_back_to_the_token_estimate
     assembled: Final = litellm.stream_chunk_builder(chunks=[chunk for chunk, _ in yielded], messages=messages)
     assert assembled is not None
     assert (assembled.usage.prompt_tokens, assembled.usage.completion_tokens) == expected
-    usage_when_yielded: Final = yielded[-1][1]
+    last_chunk, usage_when_yielded = yielded[-1]
     assert usage_when_yielded is not None
-    assert (usage_when_yielded.prompt_tokens, usage_when_yielded.completion_tokens) == expected
+    usage_after_drain: Final = last_chunk._hidden_params["usage"]
+    assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == expected
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -2983,6 +2985,77 @@ async def test_stream_with_usage_after_the_finish_chunk_bills_only_the_reported_
     rates: Final = litellm.model_cost[model]
     spend: Final = reported[0] * rates["input_cost_per_token"] + reported[1] * rates["output_cost_per_token"]
     assert litellm.completion_cost(completion_response=assembled) == pytest.approx(spend)
+
+
+class _LoggedResponseRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.responses: list[object] = []
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.responses.append(response_obj)
+
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.responses.append(response_obj)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_without_provider_usage_logs_the_estimate_with_the_final_chunk_mcp_metadata(
+    sync_mode: bool,
+) -> None:
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    tool_calls: Final = [{"name": "lookup_fox", "arguments": "{}"}]
+    recorder: Final = _LoggedResponseRecorder()
+    logging_obj: Final = Logging(
+        model=model,
+        messages=messages,
+        stream=True,
+        call_type="completion" if sync_mode else "acompletion",
+        start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+        litellm_call_id="mcp-no-usage-call",
+        function_id="mcp-no-usage-fn",
+        dynamic_success_callbacks=[recorder],
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "mcp-no-usage-call"}
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                ModelResponseStream(id="chatcmpl-mcp", created=1741037890, model=model, choices=choices)
+                for choices in (
+                    [StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                    [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                )
+            ]
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options=None,
+    )
+    _add_mcp_metadata_to_response(wrapper, openai_tools=None, tool_calls=tool_calls)
+
+    _ = [chunk for chunk in wrapper] if sync_mode else [chunk async for chunk in wrapper]
+    for _attempt in range(50):
+        if recorder.responses:
+            break
+        await asyncio.sleep(0.1)
+
+    assert len(recorder.responses) == 1
+    logged: Final = recorder.responses[0]
+    assert isinstance(logged, ModelResponse)
+    assert logged.choices[0].message.provider_specific_fields == {"mcp_tool_calls": tool_calls}
+    assert (logged.usage.prompt_tokens, logged.usage.completion_tokens) == (
+        litellm.token_counter(model=model, messages=messages),
+        litellm.token_counter(model=model, text=text, count_response_tokens=True),
+    )
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
