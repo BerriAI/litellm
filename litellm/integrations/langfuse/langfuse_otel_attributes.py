@@ -7,9 +7,9 @@ Relevant Issue: https://github.com/BerriAI/litellm/issues/13764
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel
 from typing_extensions import override
 
 from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
@@ -28,8 +28,6 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
-
-_OBJECT_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def serialize_langfuse_datetime(value: datetime) -> str:
@@ -89,15 +87,15 @@ def get_output_content_by_type(
 class LangfuseLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: Mapping[str, object]):
-        optional_params: Final = _OBJECT_DICT.validate_python(kwargs.get("optional_params", {}), strict=True)
+    def set_messages(span: "Span", kwargs: dict[str, Any]):
+        prompt: Final = {"messages": kwargs.get("messages")}
+        optional_params: Final = kwargs.get("optional_params", {})
         functions: Final = optional_params.get("functions")
         tools: Final = optional_params.get("tools")
-        prompt: Final = {
-            "messages": kwargs.get("messages"),
-            **({"functions": functions} if functions is not None else {}),
-            **({"tools": tools} if tools is not None else {}),
-        }
+        if functions is not None:
+            prompt["functions"] = functions
+        if tools is not None:
+            prompt["tools"] = tools
 
         input: Final = prompt
         safe_set_attribute(span, "langfuse.observation.input", json.dumps(input))
