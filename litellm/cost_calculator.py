@@ -911,15 +911,10 @@ def _declares_rates(model_info: ModelInfo | None) -> bool:
     return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
-def cost_map_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
-    """Whether the cost map prices ``model`` at all, so a capability-rule-only or unmapped name is False"""
-    return _declares_rates(_cost_map_model_info(model, custom_llm_provider))
-
-
 def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
     """The provider to price an explicit base_model under, when the deployment's own provider has
     no rates for it (e.g. chatgpt/ subscription rows) but the base model's own row does"""
-    if custom_llm_provider is None or cost_map_declares_rates(base_model, custom_llm_provider):
+    if custom_llm_provider is None or _declares_rates(_cost_map_model_info(base_model, custom_llm_provider)):
         return None
     own_model_info: Final = _cost_map_model_info(base_model, None)
     if own_model_info is None or not _declares_rates(own_model_info):
