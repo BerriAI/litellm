@@ -1599,6 +1599,8 @@ async def _bill_through_a_priced_deployment(
     read: ResponsesAPIResponse,
     litellm_params: Mapping[str, object] = _PRICED_LITELLM_PARAMS,
     model_info: Mapping[str, object] = MappingProxyType({}),
+    key_row: object = None,
+    team_row: object = None,
 ) -> _PricedBilling:
     import litellm
     from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
@@ -1610,13 +1612,21 @@ async def _bill_through_a_priced_deployment(
         custom_llm_provider="openai", model_id="deployment-custom", response_id="resp_upstream"
     )
     table: Final = _InMemoryManagedObjectTable(
-        rows=(_StoredResponse(id="job-priced", unified_object_id=response_id, status="queued", api_key="hash-alice"),)
+        rows=(
+            _StoredResponse(
+                id="job-priced",
+                unified_object_id=response_id,
+                status="queued",
+                api_key="hash-alice",
+                team_id="team-alpha" if team_row is not None else None,
+            ),
+        )
     )
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_managedobjecttable = table
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_row)
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     router: Final = litellm.Router(
         model_list=[
             {
@@ -1748,3 +1758,73 @@ async def test_the_billing_event_keys_its_spend_row_apart_from_the_read_it_bills
     assert billed_request_id != billing.response_id
     assert billed_request_id.startswith(billing.response_id)
 
+
+_CREATOR_LANGFUSE_VARS: Final = MappingProxyType(
+    {
+        "langfuse_public_key": "pk-lf-creator",
+        "langfuse_secret_key": "sk-lf-creator",
+        "langfuse_host": "http://127.0.0.1:9",
+    }
+)
+
+
+def _creator_rows(logging_on: str) -> tuple[object, object]:
+    from types import SimpleNamespace
+
+    key_logging: Final = [
+        {"callback_name": "langfuse", "callback_type": "success", "callback_vars": dict(_CREATOR_LANGFUSE_VARS)}
+    ]
+    team_callback_settings: Final = {"success_callback": ["langfuse"], "callback_vars": dict(_CREATOR_LANGFUSE_VARS)}
+    return (
+        SimpleNamespace(
+            key_alias=None,
+            organization_id=None,
+            spend=0.0,
+            max_budget=None,
+            metadata=({"logging": key_logging} if logging_on == "key" else {}),
+        ),
+        SimpleNamespace(
+            team_alias=None,
+            organization_id=None,
+            spend=0.0,
+            max_budget=None,
+            metadata=({"callback_settings": team_callback_settings} if logging_on == "team" else {}),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("logging_on", ["key", "team"])
+async def test_the_billing_event_reaches_the_creating_keys_or_teams_own_langfuse_project(
+    monkeypatch: pytest.MonkeyPatch, logging_on: str
+):
+    """A key or team that logs to its own Langfuse project must see the billed charge there, with that
+    project's credentials, the way it sees the free reads, or the charge only shows in the proxy's spend logs."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
+    from litellm.litellm_core_utils import litellm_logging
+
+    class _RecordingLangfuse(LangfusePromptManagement):
+        def __init__(self) -> None:
+            CustomLogger.__init__(self)
+            self.events: tuple[tuple[object, object], ...] = ()
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            params: Final = kwargs["standard_callback_dynamic_params"]
+            assert isinstance(params, Mapping)
+            self.events = (*self.events, (kwargs.get("response_cost"), params.get("langfuse_public_key")))
+
+    langfuse: Final = _RecordingLangfuse()
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [langfuse])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    key_row, team_row = _creator_rows(logging_on)
+
+    await _bill_through_a_priced_deployment(_terminal_response(), key_row=key_row, team_row=team_row)
+
+    (event,) = langfuse.events
+    assert event[0] == pytest.approx(_PRICED_COST)
+    assert event[1] == _CREATOR_LANGFUSE_VARS["langfuse_public_key"]
