@@ -58,6 +58,7 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
     LITELLM_CONFIG_CACHE_TTL_SECONDS,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -1021,8 +1022,8 @@ def _failure_usage_to_lift(
     cost in model_call_details, so prefer it. Otherwise a request that was
     dispatched to a provider and failed without upstream usage gets an
     estimated input-side Usage. When the failure is one the provider bills
-    anyway (``provider_billed``: a read timeout, where the provider had the
-    prompt and kept working after LiteLLM hung up) that
+    anyway (``provider_billed``: a read timeout or a client disconnect, where
+    the provider had the prompt and kept working after LiteLLM hung up) that
     usage is priced at the model's input rate; any other post-dispatch failure
     stays at zero cost. The raw request body backfills
     the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
@@ -1034,7 +1035,11 @@ def _failure_usage_to_lift(
         return _billed_across_attempts(failed_attempts, recovered_usage, model_call_details.get("response_cost"))
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
-    if not dispatched or model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
+    if not dispatched:
+        return None
+    if model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL) and not provider_billed:
+        # The proxy-only error handler stamps this flag on a client disconnect too, even though the
+        # request had already reached the provider, so a billed failure keeps its estimate.
         return None
     if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
@@ -1206,6 +1211,15 @@ def _timed_out_reading_from_provider(exception: Exception) -> bool:
     return isinstance(exception, litellm.Timeout) and any(
         isinstance(cause, httpx.ReadTimeout) for cause in _exception_chain(exception)
     )
+
+
+def _client_disconnected(exception: Exception) -> bool:
+    """The 499 the proxy raises when the caller hung up while the provider was still working on the request."""
+    return getattr(exception, "status_code", None) == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+
+
+def _provider_billed_the_failure(exception: Exception) -> bool:
+    return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
 
 
 def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
@@ -3450,7 +3464,7 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data, provider_billed=_timed_out_reading_from_provider(original_exception)
+                request_data, provider_billed=_provider_billed_the_failure(original_exception)
             )
         )
 
