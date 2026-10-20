@@ -1057,6 +1057,18 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
     )
 
 
+def _chat_gate_refuses_reasoning_effort_none(model: str, custom_llm_provider: str) -> bool:
+    from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
+
+    match custom_llm_provider:
+        case "azure":
+            return litellm.AzureOpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
+        case "azure_ai":
+            return AzureAIGPT5Config.refuses_reasoning_effort_level(model, "none")
+        case _:
+            return OpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -1129,10 +1141,13 @@ def responses_api_bridge_check(
         )
         for tool in (tools or ())
     )
-    if isinstance(reasoning_effort, dict):
-        reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
-    else:
-        reasoning_active = reasoning_effort != "none"
+    requested_effort: Final = reasoning_effort.get("effort") if isinstance(reasoning_effort, dict) else reasoning_effort
+    requested_summary: Final = reasoning_effort.get("summary") if isinstance(reasoning_effort, dict) else None
+    reasoning_active: Final = (
+        requested_effort != "none"
+        or requested_summary is not None
+        or _chat_gate_refuses_reasoning_effort_none(model, custom_llm_provider)
+    )
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
     # by Azure OpenAI through the azure provider. Resolve the effective OpenAI base arg>global>env>default
