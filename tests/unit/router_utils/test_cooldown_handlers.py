@@ -3010,7 +3010,7 @@ async def _complete_like_the_proxy(router: Router, model: str) -> str:
     logging_obj, request = litellm.utils.function_setup(
         original_function="acompletion",
         rules_obj=litellm.utils.Rules(),
-        start_time=datetime.datetime.now(),
+        start_time=datetime.datetime(2026, 1, 1),
         model=model,
         messages=[{"role": "user", "content": "hi"}],
         litellm_call_id=str(uuid.uuid4()),
