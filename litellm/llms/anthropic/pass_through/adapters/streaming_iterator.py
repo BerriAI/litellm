@@ -190,6 +190,10 @@ class _CombinedChunkSplitter:
         self._live_call_index: int | None = None
 
     @property
+    def has_dispatched_failure_logging(self) -> bool:
+        return getattr(self._stream, "has_dispatched_failure_logging", False) is True
+
+    @property
     def chunks(self) -> "list[ModelResponseStream] | None":
         return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
             "list[ModelResponseStream] | None", getattr(self._stream, "chunks", None)
@@ -1244,7 +1248,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if provider_error is e:
                     raise
                 raise provider_error from e
-            if logging_obj is not None:
+            stream_has_dispatched_failure_logging: Final = (
+                getattr(self.completion_stream, "has_dispatched_failure_logging", False) is True
+            )
+            if logging_obj is not None and not stream_has_dispatched_failure_logging:
                 try:
                     await logging_obj.dispatch_failure_handlers(
                         exception=provider_error,
