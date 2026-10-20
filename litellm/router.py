@@ -1056,6 +1056,9 @@ def _replay_live_router_model_cost() -> None:
 set_live_deployment_replay(_replay_live_router_model_cost)
 
 
+RETRY_BREADCRUMB_LIMIT: Final = 4
+
+
 class FallbackAwareStreamWrapper(CustomStreamWrapper):
     """Base for the Router's chat-completion stream wrappers, which are built around the
     attempt the Router picked first and have to repoint themselves when a fallback takes over."""
@@ -9498,9 +9501,7 @@ class Router:
         from litellm.types.router import RetryAttemptRecord
 
         _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-        request_metadata: Final = cast(
-            "Mapping[str, object]", kwargs[_metadata_var]
-        )  # cast-ok: untyped request kwargs, the metadata bucket is read with .get
+        request_metadata: Final = cast("Mapping[str, object]", kwargs[_metadata_var])  # cast-ok: untyped kwargs
         model_group: Final = kwargs.get("model")
         model_info: Final = request_metadata.get("model_info")
         deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
@@ -9518,7 +9519,9 @@ class Router:
         }
         earlier_breadcrumbs: Final = request_metadata.get("previous_models")
         kept_breadcrumbs: Final[tuple[object, ...]] = (
-            tuple(earlier_breadcrumbs) if isinstance(earlier_breadcrumbs, (list, tuple)) else ()
+            tuple(earlier_breadcrumbs)[-(RETRY_BREADCRUMB_LIMIT - 1) :]
+            if isinstance(earlier_breadcrumbs, (list, tuple))
+            else ()
         )
         breadcrumbs: Final = (*kept_breadcrumbs, attempt_record)
         earlier: Final = request_metadata.get("request_retry_count")
