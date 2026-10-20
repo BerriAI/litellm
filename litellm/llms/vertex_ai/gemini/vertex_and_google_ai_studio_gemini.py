@@ -196,7 +196,7 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
     )
 
 
-_SAMPLING_DEPRECATION_WARNED_MODELS_MAX: Final = 64
+_SAMPLING_DEPRECATION_UNMAPPED_MODELS: Final = "models outside litellm's model map"
 _sampling_deprecation_lock: Final = threading.Lock()
 
 
@@ -208,10 +208,14 @@ def _log_gemini_sampling_params_deprecated(model: str) -> None:
     )
 
 
+def _sampling_deprecation_notice_key(model: str) -> str:
+    is_mapped: Final = any(name in litellm.model_cost for name in (model, f"vertex_ai/{model}", f"gemini/{model}"))  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+    return model if is_mapped else _SAMPLING_DEPRECATION_UNMAPPED_MODELS
+
+
 def _warn_gemini_sampling_params_deprecated(model: str) -> None:
     with _sampling_deprecation_lock:
-        if _log_gemini_sampling_params_deprecated.cache_info().currsize < _SAMPLING_DEPRECATION_WARNED_MODELS_MAX:
-            _log_gemini_sampling_params_deprecated(model)
+        _log_gemini_sampling_params_deprecated(_sampling_deprecation_notice_key(model))
 
 
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:

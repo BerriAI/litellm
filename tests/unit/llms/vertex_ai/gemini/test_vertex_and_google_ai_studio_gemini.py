@@ -23,7 +23,6 @@ from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    _SAMPLING_DEPRECATION_WARNED_MODELS_MAX,
     VertexGeminiConfig,
     _log_gemini_sampling_params_deprecated,
 )
@@ -6501,33 +6500,40 @@ def fresh_sampling_deprecation_cache() -> Iterator[None]:
     _log_gemini_sampling_params_deprecated.cache_clear()
 
 
+def _mapped_gemini_3_models() -> tuple[str, ...]:
+    return tuple(sorted(name for name in litellm.model_cost if name.startswith("gemini-3")))
+
+
+def _deprecation_messages(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(r.getMessage() for r in caplog.records if "DeprecationWarning" in r.getMessage())
+
+
+@pytest.mark.parametrize(("param", "value"), (("temperature", 0.2), ("top_p", 0.9), ("top_k", 5)))
 @pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
-def test_gemini_3_sampling_deprecation_is_logged_once_per_model(caplog: pytest.LogCaptureFixture) -> None:
-    flash_lite: Final = f"gemini-3.1-flash-lite-{uuid.uuid4().hex}"
-    pro: Final = f"gemini-3-pro-{uuid.uuid4().hex}"
+def test_gemini_3_sampling_deprecation_is_logged_once_per_model(
+    param: str, value: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    first, second = _mapped_gemini_3_models()[:2]
     config: Final = VertexGeminiConfig()
 
     with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
         mapped: Final = tuple(
             config.map_openai_params(
-                non_default_params={"temperature": 0.2, "top_p": 0.9, "top_k": 5},
-                optional_params={},
-                model=model,
-                drop_params=True,
+                non_default_params={param: value}, optional_params={}, model=model, drop_params=True
             )
-            for model in (flash_lite, flash_lite, flash_lite, pro)
+            for model in (first, first, first, second)
         )
 
-    deprecations: Final = tuple(r.getMessage() for r in caplog.records if "DeprecationWarning" in r.getMessage())
+    deprecations: Final = _deprecation_messages(caplog)
     assert len(deprecations) == 2
-    assert flash_lite in deprecations[0]
-    assert pro in deprecations[1]
-    assert all((m["temperature"], m["top_p"], m["top_k"]) == (0.2, 0.9, 5) for m in mapped)
+    assert f"({first})" in deprecations[0]
+    assert f"({second})" in deprecations[1]
+    assert all(m[param] == value for m in mapped)
 
 
 @pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
 def test_gemini_3_sampling_deprecation_is_logged_once_when_first_calls_race(caplog: pytest.LogCaptureFixture) -> None:
-    model: Final = f"gemini-3.1-flash-lite-{uuid.uuid4().hex}"
+    model: Final = _mapped_gemini_3_models()[0]
 
     def map_sampling_params() -> None:
         VertexGeminiConfig().map_openai_params(
@@ -6550,24 +6556,27 @@ def test_gemini_3_sampling_deprecation_is_logged_once_when_first_calls_race(capl
     finally:
         verbose_logger.removeFilter(start_racing_call_while_first_warning_logs)
 
-    assert sum("DeprecationWarning" in r.getMessage() for r in caplog.records) == 1
+    assert len(_deprecation_messages(caplog)) == 1
 
 
 @pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
-def test_gemini_3_sampling_deprecation_stays_bounded_past_the_model_cap(caplog: pytest.LogCaptureFixture) -> None:
-    models: Final = tuple(
-        f"gemini-3.1-flash-lite-{uuid.uuid4().hex}" for _ in range(_SAMPLING_DEPRECATION_WARNED_MODELS_MAX + 1)
-    )
+def test_gemini_3_sampling_deprecation_for_unmapped_names_does_not_hide_mapped_models(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    unmapped: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(100))
+    mapped: Final = _mapped_gemini_3_models()[0]
     config: Final = VertexGeminiConfig()
 
     with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
-        for model in models * 3:
+        for model in (*unmapped, mapped) * 2:
             config.map_openai_params(
                 non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
             )
 
-    deprecations: Final = sum("DeprecationWarning" in r.getMessage() for r in caplog.records)
-    assert deprecations == _SAMPLING_DEPRECATION_WARNED_MODELS_MAX
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 2
+    assert all(name not in deprecations[0] for name in unmapped)
+    assert f"({mapped})" in deprecations[1]
 
 
 @pytest.mark.parametrize(("param", "value"), (("temperature", 0.5), ("top_p", 0.9), ("top_k", 5)))
