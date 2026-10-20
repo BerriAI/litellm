@@ -3105,6 +3105,151 @@ class TestMultiPodBatchCostClaim:
             yield logging_obj
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure_phase", ("before_write", "after_write", "external"))
+    @pytest.mark.parametrize("collector_enabled", (False, True))
+    async def test_builtin_accounting_retries_only_before_a_possible_charge(
+        self, failure_phase: str, collector_enabled: bool
+    ) -> None:
+        import base64
+        from datetime import datetime
+
+        import httpx
+        import litellm
+        import respx
+
+        from litellm.caching.caching import DualCache
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+        from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.utils import PrismaClient
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+        from litellm.types.utils import SpecialEnums
+
+        class AccountingDependency:
+            def __init__(self) -> None:
+                self.failure_phase = failure_phase
+                self.writer: Final = DBSpendUpdateWriter()
+                self.failed_tracking_alert = AsyncMock()
+                self.slack_alerting_instance = MagicMock()
+                self.slack_alerting_instance.customer_spend_alert = AsyncMock(
+                    side_effect=ConnectionError("Alert destination unavailable after charge")
+                    if failure_phase == "after_write"
+                    else None
+                )
+
+            @property
+            def db_spend_update_writer(self) -> DBSpendUpdateWriter:
+                if self.failure_phase == "before_write":
+                    raise ConnectionError("Accounting dependency temporarily unavailable")
+                return self.writer
+
+        class ExternalCallback(CustomLogger):
+            async def async_log_success_event(
+                self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+            ) -> None:
+                if failure_phase == "external":
+                    raise ConnectionError("External destination unavailable")
+
+        budget_cache: Final = DualCache()
+        RouterBudgetLimiting(
+            dual_cache=budget_cache,
+            provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+            model_list=[
+                {
+                    "model_name": "batch-alias",
+                    "litellm_params": {"model": "openai/batch-test-model", "max_budget": 100, "budget_duration": "1d"},
+                    "model_info": {"id": "model-123"},
+                }
+            ],
+        )
+        dependency: Final = AccountingDependency()
+        spend_prisma: Final = PrismaClient(
+            database_url="postgresql://unused:unused@localhost:5432/unused", proxy_logging_obj=dependency
+        )
+        create_spend_rows: Final = AsyncMock(return_value=1)
+        input_rate: Final = 0.000002
+        litellm.register_model(
+            {
+                "batch-test-model": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token_batches": input_rate,
+                    "output_cost_per_token_batches": 0.000006,
+                }
+            }
+        )
+        content: Final = json.dumps(
+            {
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "model": "batch-test-model",
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 0, "total_tokens": 100},
+                    },
+                },
+                "error": None,
+            }
+        ).encode()
+        row: Final = _FakeManagedObjectRow()
+        original_status: Final = row.status
+        original_file_object: Final = row.file_object
+        row.unified_object_id = (
+            base64.urlsafe_b64encode(
+                SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format("model-123", "batch-456").encode()
+            )
+            .decode()
+            .rstrip("=")
+        )
+        prisma: Final = self._prisma(row, [])
+        router: Final = self._router()
+        router.get_deployment.return_value = Deployment(
+            model_name="batch-alias",
+            litellm_params=LiteLLM_Params(model="openai/batch-test-model"),
+            model_info=ModelInfo(id="model-123"),
+        )
+        from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer
+
+        producer: Final = MagicMock(spec=SpendEventProducer) if collector_enabled else None
+        litellm.logging_callback_manager.add_litellm_async_success_callback(
+            ProxyDBLogger(spend_event_producer=producer)
+        )
+        litellm.logging_callback_manager.add_litellm_async_success_callback(ExternalCallback())
+        with (
+            respx.mock,
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency),
+            patch("litellm.proxy.proxy_server.prisma_client", spend_prisma),
+            patch.object(
+                spend_prisma.writer_db._original_prisma,
+                "litellm_spendlogs",
+                MagicMock(create_many=create_spend_rows),
+            ),
+        ):
+            respx.get(f"https://api.openai.com/v1/files/{_CLAIM_OUTPUT_FILE_ID}/content").mock(
+                return_value=httpx.Response(200, content=content)
+            )
+            worker: Final = self._instance(prisma, router)
+            await worker.check_batch_cost()
+            assert row.batch_processed is (failure_phase != "before_write")
+            if failure_phase == "before_write":
+                assert row.status == original_status
+                assert json.loads(row.file_object) == original_file_object
+            assert create_spend_rows.await_count == (0 if failure_phase == "before_write" else 1)
+            dependency.failure_phase = "recovered"
+            await worker.check_batch_cost()
+            await worker.check_batch_cost()
+
+        assert row.batch_processed is True
+        assert await budget_cache.async_get_cache("provider_spend:openai:1d") == pytest.approx(100 * input_rate)
+        assert await budget_cache.async_get_cache("deployment_spend:model-123:1d") == pytest.approx(100 * input_rate)
+        create_spend_rows.assert_awaited_once()
+        assert create_spend_rows.call_args.kwargs["data"][0]["spend"] == pytest.approx(100 * input_rate)
+        if producer is not None:
+            assert all(
+                json.loads(call.args[0])["call_type"] != "aretrieve_batch" for call in producer.publish.call_args_list
+            )
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("deployment_model", "successes", "failures", "expected_model"),
         (
@@ -3389,30 +3534,23 @@ class TestMultiPodBatchCostClaim:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("stored_as_json_string", (True, False))
-    async def test_a_failed_spend_log_write_releases_the_claim(self, stored_as_json_string: bool) -> None:
-        """A transient failure while billing a claimed batch must hand the row back, or its
-        spend is silently lost instead of being retried on the next cycle."""
-        row = _FakeManagedObjectRow()
-        original_file_object: Final = row.file_object if stored_as_json_string else json.loads(row.file_object)
-        row.file_object = original_file_object
-        journal = []
-        prisma = self._prisma(row, journal)
+    async def test_an_unclassified_logging_failure_keeps_the_claim(self, stored_as_json_string: bool) -> None:
+        row: Final = _FakeManagedObjectRow()
+        row.file_object = row.file_object if stored_as_json_string else json.loads(row.file_object)
+        journal: Final = []
+        prisma: Final = self._prisma(row, journal)
 
-        with self._billing_patches(journal, bill_error=Exception("spend log write failed")):
+        with self._billing_patches(journal, bill_error=Exception("Accounting outcome unknown")):
             await self._instance(prisma, self._router()).check_batch_cost()
 
-        assert journal == ["fetch", "claim", "bill", "release"]
-        assert row.batch_processed is False
-        assert row.status == "in_progress"
-        assert json.loads(row.file_object) == original_file_object
+        assert journal == ["fetch", "claim", "bill"]
+        assert row.batch_processed is True
 
         with self._billing_patches(journal) as logging_obj:
             await self._instance(prisma, self._router()).check_batch_cost()
             await self._instance(prisma, self._router()).check_batch_cost()
 
-        assert row.batch_processed is True
-        assert row.status == "complete"
-        logging_obj.async_success_handler.assert_awaited_once()
+        logging_obj.async_success_handler.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_worker_interrupted_mid_costing_leaves_the_batch_billable(self):
