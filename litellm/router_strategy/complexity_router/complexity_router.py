@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in
 from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -122,6 +123,7 @@ from .jev_classifier import (
     HttpJevClassifierClient,
     JevClassifierClient,
     JevVerdict,
+    RouterJevClassifierClient,
     build_jev_request,
     jev_classifier_cost,
 )
@@ -1330,8 +1332,9 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
-    @staticmethod
-    def _build_jev_client(config: OpenSourceClassifierConfig) -> JevClassifierClient:
+    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient:
+        if config.deployment_name is not None:
+            return RouterJevClassifierClient(self.litellm_router_instance, config.deployment_name)
         if config.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import oss_connection
 
@@ -1341,6 +1344,14 @@ class ComplexityRouter(CustomLogger):
                 api_base=connection.api_base,
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider=config.provider,
+            )
+        if config.provider == "databricks":
+            databricks: Final = DATABRICKS_DECISIONS_CONFIG.connection(config.api_base, config.api_key)
+            return HttpJevClassifierClient(
+                api_key=databricks.api_key,
+                api_base=databricks.api_base,
+                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+                provider="databricks",
             )
         api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
         if not api_key:
@@ -1941,9 +1952,9 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None = None,
-        request_kwargs: dict[str, Any] | None = None,
+        request_kwargs: dict[str, object] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
-        raw_messages: list[dict[str, Any]] | None = None,  # mutable-ok: same shape _run_routing_plugins receives
+        raw_messages: list[dict[str, object]] | None = None,  # mutable-ok: same shape _run_routing_plugins receives
     ) -> ClassificationOutcome:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
@@ -2309,13 +2320,23 @@ class ComplexityRouter(CustomLogger):
             if not self._tier_pools().get(tier_name):
                 raise ValueError(f"Jev classifier returned tier {tier_name!r}, which has no models configured")
             model: Final = response.model or config.model
-            accounting_provider: Final = "typesafe" if config.provider == "jev" else config.provider
+            accounting_provider: Final = (
+                response.classifier_provider
+                if config.deployment_name and response.classifier_provider
+                else "typesafe"
+                if config.provider == "jev"
+                else config.provider
+            )
             verdict: Final = JevVerdict(
                 label=answer.choice,
                 probabilities=answer.probabilities,
                 confidence=answer.confidence,
                 model=model,
-                cost=jev_classifier_cost(response, config.model, accounting_provider),
+                cost=response.classifier_cost
+                if config.deployment_name
+                else jev_classifier_cost(
+                    response, config.model, "typesafe" if config.provider == "jev" else config.provider
+                ),
                 provider=accounting_provider,
             )
             if breaker is not None and permit is not None:
@@ -4310,7 +4331,7 @@ class ComplexityRouter(CustomLogger):
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:

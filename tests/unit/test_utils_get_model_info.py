@@ -6,6 +6,7 @@ from typing import Final, Literal, cast
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import get_model_info
@@ -223,9 +224,20 @@ def test_regional_bedrock_alias_requires_canonical_converse_metadata(
     _enforce_bedrock_converse_models(model_cost, ())
 
 
+GOVCLOUD_LAGGING_CAPABILITIES: Final = frozenset({"supports_bedrock_native_structured_output"})
+
+
+def _govcloud_may_lag(model_key: str, capability: str) -> bool:
+    is_govcloud: Final = model_key.startswith("us-gov.") or any(
+        part.startswith("us-gov-") for part in model_key.split("/")
+    )
+    return is_govcloud and capability in GOVCLOUD_LAGGING_CAPABILITIES
+
+
 def test_get_model_info_bedrock_models():
     """
     Check for drift in base model info for bedrock models and regional model info for bedrock models.
+    GovCloud regions may lag their commercial base on Bedrock native structured output, never lead it.
     """
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
@@ -260,6 +272,9 @@ def test_get_model_info_bedrock_models():
                     assert (
                         base_model_key in v
                     ), f"{base_model_key} is not in model cost map for {k}"
+                    if _govcloud_may_lag(k, base_model_key):
+                        assert base_model_value or not v[base_model_key], f"{base_model_key} is on {k} but not its base"
+                        continue
                     assert (
                         v[base_model_key] == base_model_value
                     ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
@@ -296,6 +311,8 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
     """
     Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
     regional drift check above (which filters on "bedrock") never reaches them.
+    GovCloud is a separate AWS partition that gets features later, so a us-gov profile
+    may lack Bedrock native structured output its commercial base has, never the reverse.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -317,6 +334,9 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             if not cap.startswith("supports_"):
                 continue
             assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
+            if _govcloud_may_lag(k, cap):
+                assert base_value or not v[cap], f"{cap} is on {k} but not on {base_model_key}"
+                continue
             assert (
                 v[cap] == base_value
             ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
@@ -501,3 +521,33 @@ def test_get_model_info_custom_provider():
     get_model_info(
         model="my-custom-llm/my-fake-model"
     )  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
+
+
+def test_get_model_info_huggingface_models(monkeypatch):
+    from litellm import Router
+    from litellm.types.router import ModelGroupInfo
+
+    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_abc123")
+
+    with respx.mock(assert_all_called=False) as huggingface:
+        huggingface.get(host="huggingface.co").mock(side_effect=httpx.ConnectError("huggingface.co is unreachable"))
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "meta-llama/Meta-Llama-3-8B-Instruct",
+                    "litellm_params": {
+                        "model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct",
+                        "api_base": "https://router.huggingface.co/hf-inference/models/meta-llama/Meta-Llama-3-8B-Instruct",
+                        "api_key": os.environ["HUGGINGFACE_API_KEY"],
+                    },
+                }
+            ]
+        )
+        info = litellm.get_model_info("huggingface/meta-llama/Meta-Llama-3-8B-Instruct")
+    assert info is not None
+
+    ModelGroupInfo(
+        model_group="meta-llama/Meta-Llama-3-8B-Instruct",
+        providers=["huggingface"],
+        **info,
+    )

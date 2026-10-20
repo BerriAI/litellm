@@ -22,12 +22,14 @@ Reminders:
       - database.writer.{host,port,dbname}                     (writer connection pieces)
       - database.writer.passwordSecret.{name,usernameKey,passwordKey}
                                                                (Secret holding the writer DB username + password)
+      - database.writer.passwordSecret.{hostKey,urlKey}        (optional, read writer host or full URL from that Secret)
       - database.writer.useIAMAuth: true                       (optional — chart sets IAM_TOKEN_DB_AUTH=true and
                                                                 omits DATABASE_PASSWORD / DATABASE_URL so the proxy
                                                                 mints the URL from an IAM token at startup)
-      - database.reader.host                                   (optional — enables read-replica routing; reader
-                                                                .passwordSecret.name is required when set, unless
-                                                                .useIAMAuth is true)
+      - database.reader.host / database.reader.passwordSecret.{hostKey,urlKey}
+                                                                (optional, enables read-replica routing. The Secret
+                                                                name is required for hostKey, urlKey, and for host
+                                                                with password auth)
       - database.reader.useIAMAuth: true                       (optional, requires database.writer.useIAMAuth: true —
                                                                 chart emits DATABASE_*_READ_REPLICA env vars and
                                                                 omits DATABASE_PASSWORD_READ_REPLICA /
@@ -35,6 +37,8 @@ Reminders:
                                                                 reader URL from an IAM token at startup)
       - redis.passwordSecret.name                              (optional — set when redis.host is provided and the
                                                                 cache requires auth)
+      - redis.passwordSecret.{hostKey,urlKey}                  (optional, read Redis host or full URL from that Secret)
+                                                                (the Secret name is required when either key is set)
       - redis.cluster: true                                    (optional — chart sets REDIS_CLUSTER_NODES from
                                                                 redis.host / redis.port so the proxy's Cache()
                                                                 constructs a RedisClusterCache; the cluster client

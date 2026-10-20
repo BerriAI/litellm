@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import signal
 import threading
 import uuid
 import zlib
@@ -20,6 +18,8 @@ from integration._support.database import read_rows
 from integration._support.process import group_members, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 BACKEND: Final = "gemini-embedding-001"
 TARGET: Final = f"/models/{BACKEND}:batchEmbedContents"
@@ -192,15 +192,17 @@ def test_block_embeddings_survive_a_worker_kill(gateway: Gateway, tmp_path: Path
             victim: Final = min(workers)
             assert outcome(candidate, name, 0).startswith("ok:")
 
-            def attempt_around_the_kill(index: int) -> str:
-                if index == 2:
-                    os.kill(victim, signal.SIGKILL)
-                return outcome(candidate, name, index)
+            with owned.replacing_worker(victim) as kill:
 
-            with ThreadPoolExecutor(max_workers=BURST) as pool:
-                outcomes: Final = tuple(pool.map(attempt_around_the_kill, range(1, BURST + 1)))
-            assert outcomes.count("ok") == 0 and any(item.startswith("ok:") for item in outcomes), outcomes
-            assert all(item.startswith("ok:") or item.startswith("transport:") for item in outcomes), outcomes
+                def attempt_around_the_kill(index: int) -> str:
+                    if index == 2:
+                        kill()
+                    return outcome(candidate, name, index)
+
+                with ThreadPoolExecutor(max_workers=BURST) as pool:
+                    outcomes: Final = tuple(pool.map(attempt_around_the_kill, range(1, BURST + 1)))
+                assert outcomes.count("ok") == 0 and any(item.startswith("ok:") for item in outcomes), outcomes
+                assert all(item.startswith("ok:") or item.startswith("transport:") for item in outcomes), outcomes
             respawned: Final = eventually(
                 lambda: worker_pids(owned.process.pid),
                 lambda pids: len(pids) == 2 and victim not in pids,

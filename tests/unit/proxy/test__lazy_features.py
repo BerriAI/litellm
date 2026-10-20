@@ -15,7 +15,9 @@ from litellm.proxy._lazy_features import (
     attach_lazy_features,
     lazy_tag_to_prefix,
     loaded_lazy_modules,
+    reserve_lazy_slot,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 
 FLAG: Final = "LITELLM_DISABLE_LAZY_ROUTES"
 WARMUP_PATH: Final = "/lazy/warm/{name}"
@@ -160,6 +162,155 @@ def test_flag_lets_a_route_added_during_startup_beat_an_overlapping_feature_rout
         )
 
 
+def test_configured_pass_through_added_after_attach_beats_a_reserved_slot_feature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    zeta: Final = _feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}")
+    features: Final = (LazyFeature(name="zeta", module_path=zeta.module_path, path_prefixes=("/zeta",)),)
+
+    async def early() -> dict[str, str]:
+        return {"feature": "early"}
+
+    async def late() -> dict[str, str]:
+        return {"feature": "late"}
+
+    async def configured() -> dict[str, str]:
+        return {"feature": "configured"}
+
+    setattr(configured, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+
+    app: Final = FastAPI()
+    app.add_api_route("/early", early, methods=["GET"])
+    reserve_lazy_slot(app, "zeta", features=features)
+    app.add_api_route("/late", late, methods=["GET"])
+    attach_lazy_features(app, features)
+    app.add_api_route("/zeta/{subpath:path}", configured, methods=["GET"])
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "configured"}, (
+            "a deployment's own pass-through endpoint must outrank the built-in provider route"
+        )
+
+
+def test_flag_configured_pass_through_added_during_startup_beats_a_reserved_slot_feature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(FLAG, "true")
+    features: Final = (_feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}"),)
+
+    async def early() -> dict[str, str]:
+        return {"feature": "early"}
+
+    async def late() -> dict[str, str]:
+        return {"feature": "late"}
+
+    async def configured() -> dict[str, str]:
+        return {"feature": "configured"}
+
+    setattr(configured, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+
+    @asynccontextmanager
+    async def adds_a_pass_through(app_: FastAPI) -> AsyncGenerator[None]:
+        app_.add_api_route("/zeta/{subpath:path}", configured, methods=["GET"])
+        yield
+
+    app: Final = FastAPI(lifespan=adds_a_pass_through)
+    app.add_api_route("/early", early, methods=["GET"])
+    reserve_lazy_slot(app, "zeta", features=features)
+    app.add_api_route("/late", late, methods=["GET"])
+    attach_lazy_features(app, features)
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "configured"}, (
+            "a deployment's own pass-through endpoint must outrank the built-in provider route"
+        )
+
+
+def test_builtin_routes_first_flag_keeps_a_reserved_slot_feature_ahead_of_a_configured_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    monkeypatch.setenv("LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST", "true")
+    zeta: Final = _feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}")
+    features: Final = (LazyFeature(name="zeta", module_path=zeta.module_path, path_prefixes=("/zeta",)),)
+
+    async def early() -> dict[str, str]:
+        return {"feature": "early"}
+
+    async def configured() -> dict[str, str]:
+        return {"feature": "configured"}
+
+    setattr(configured, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+
+    app: Final = FastAPI()
+    app.add_api_route("/early", early, methods=["GET"])
+    reserve_lazy_slot(app, "zeta", features=features)
+    attach_lazy_features(app, features)
+    app.add_api_route("/zeta/{subpath:path}", configured, methods=["GET"])
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "zeta"}, (
+            "LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST restores the old built-in-first order"
+        )
+
+
+def test_late_route_without_the_marker_still_loses_to_a_reserved_slot_feature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    zeta: Final = _feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}")
+    features: Final = (LazyFeature(name="zeta", module_path=zeta.module_path, path_prefixes=("/zeta",)),)
+
+    async def early() -> dict[str, str]:
+        return {"feature": "early"}
+
+    async def late() -> dict[str, str]:
+        return {"feature": "late"}
+
+    app: Final = FastAPI()
+    app.add_api_route("/early", early, methods=["GET"])
+    reserve_lazy_slot(app, "zeta", features=features)
+    app.add_api_route("/late", late, methods=["GET"])
+    attach_lazy_features(app, features)
+    app.add_api_route("/zeta/{subpath:path}", late, methods=["GET"])
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "zeta"}, (
+            "only configured pass-through routes are promoted; ordinary late routes keep losing"
+        )
+
+
+def test_configured_pass_through_under_a_different_segment_is_not_moved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    zeta: Final = _feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}")
+    features: Final = (LazyFeature(name="zeta", module_path=zeta.module_path, path_prefixes=("/zeta",)),)
+
+    async def configured() -> dict[str, str]:
+        return {"feature": "configured"}
+
+    setattr(configured, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+
+    app: Final = FastAPI()
+    reserve_lazy_slot(app, "zeta", features=features)
+    attach_lazy_features(app, features)
+    app.add_api_route("/omega/{subpath:path}", configured, methods=["GET"])
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "zeta"}
+
+    routes: Final = app.router.routes
+    omega_index: Final = next(
+        i for i, route in enumerate(routes) if getattr(route, "path", "") == "/omega/{subpath:path}"
+    )
+    zeta_index: Final = next(
+        i for i, route in enumerate(routes) if getattr(route, "path", "") == "/zeta/{endpoint:path}"
+    )
+    assert omega_index > zeta_index, "an unrelated configured route keeps its position after the feature routes"
+
+
 def test_flag_does_not_bring_back_a_feature_route_removed_during_startup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FLAG, "true")
     features: Final = (
@@ -250,3 +401,25 @@ def test_without_the_flag_the_warmup_route_registers_a_feature_and_returns_its_p
         assert body.paths["/alpha/list"]["get"].tags == ("alpha",)
         assert loaded_lazy_modules(app) == {features[0].module_path}
         assert "/alpha/list" in _paths(app) and "/beta/list" not in _paths(app)
+
+
+def test_root_authorization_server_metadata_is_the_gateways_not_the_byok_connector_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two features claim the root ``/.well-known/oauth-authorization-server``. The one a client
+    gets must be the gateway's own authorization server metadata, whose ``/token`` serves the
+    gateway's grants, not the BYOK connector form flow whose token endpoint is
+    ``/v1/mcp/oauth/token``; the connector keeps its path-appended document."""
+    monkeypatch.setenv(FLAG, "false")
+    app: Final = FastAPI()
+    attach_lazy_features(app)
+
+    with TestClient(app, base_url="https://gateway.example.com") as client:
+        root: Final = client.get("/.well-known/oauth-authorization-server")
+        connector: Final = client.get("/.well-known/oauth-authorization-server/v1/mcp/oauth")
+
+    assert root.status_code == 200
+    assert root.json()["issuer"] == "https://gateway.example.com"
+    assert root.json()["token_endpoint"] == "https://gateway.example.com/token"
+    assert connector.status_code == 200
+    assert connector.json()["token_endpoint"] == "https://gateway.example.com/v1/mcp/oauth/token"

@@ -20,7 +20,7 @@ const decisionQuestionSchema = z.discriminatedUnion("type", [
       criteria: z.partialRecord(z.enum(["true", "false"]), decisionsJson.nullable()).nullish(),
     })
     .refine((value) => value.instructions != null || value.criteria != null, {
-      message: "A noul question requires instructions or criteria.",
+      message: "A yes / no question requires instructions or criteria.",
     }),
   z.looseObject({
     type: z.literal("score"),
