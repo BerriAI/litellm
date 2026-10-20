@@ -1116,8 +1116,14 @@ def _calculate_input_cost(
 ) -> float:
     """
     Calculates the input cost for a given model, prompt tokens, and completion tokens.
+
+    A model priced per character (`input_cost_per_character`) bills the reported character count
+    in place of its text tokens, so the same prompt is never charged under both units.
     """
-    prompt_cost = float(prompt_tokens_details["text_tokens"]) * prompt_base_cost
+    bills_characters: Final = (
+        prompt_tokens_details["character_count"] > 0 and model_info.get("input_cost_per_character") is not None
+    )
+    prompt_cost = 0.0 if bills_characters else float(prompt_tokens_details["text_tokens"]) * prompt_base_cost
 
     ### CACHE READ COST - Now uses tiered pricing
     cache_hit_audio_tokens: Final = prompt_tokens_details["cache_hit_audio_tokens"]
