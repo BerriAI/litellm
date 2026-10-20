@@ -1067,12 +1067,14 @@ class BaseResponsesAPIStreamingIterator:
         the same shape the success handler assembles for a natural end of stream.
         Its response is the response.created payload (it carries the served
         service_tier) plus the text and tool arguments relayed so far, with counted
-        usage since the provider never sent any. None when nothing was relayed yet
-        or the stream already reached its terminal event and billed itself.
+        usage since the provider never sent any. None when nothing was relayed yet,
+        the stream already reached its terminal event and billed itself, its failure
+        log already billed the relayed output, or it runs in the background, where
+        retrieving it bills the whole run.
         """
         created: Final = self._created_response
         generated: Final = self._generated_content + self._generated_tool_arguments
-        if self.completed_response is not None or created is None or not generated:
+        if created is None or not generated or self._billed_without_disconnect():
             return None
         usage: Final = _estimate_usage_safely(
             self.model or "",
@@ -1092,6 +1094,11 @@ class BaseResponsesAPIStreamingIterator:
         )
         stamp_responses_usage_cost(partial, self.logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
+
+    def _billed_without_disconnect(self) -> bool:
+        return (
+            self.completed_response is not None or self._failure_handled or self.request_data.get("background") is True
+        )
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True

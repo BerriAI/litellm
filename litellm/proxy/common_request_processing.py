@@ -4,6 +4,7 @@ import json
 import logging
 import math
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -1960,6 +1961,43 @@ async def _team_member_within_fallback_model_budget(
 
 def _content_text(fields: Mapping[str, object]) -> str:
     return str(fields.get("content", ""))
+
+
+async def _no_stream_failure_to_release() -> None:
+    return None
+
+
+@dataclass(slots=True)
+class _ClientStreamFailureReport:
+    logging_obj: LiteLLMLoggingObj
+    report: Callable[[Exception], Awaitable[None]]
+    held: Exception | None = None
+
+    @classmethod
+    def hold_while_streaming(cls, logging_obj: LiteLLMLoggingObj | None) -> Callable[[], Awaitable[None]]:
+        if logging_obj is None or logging_obj.on_detached_stream_failure is None:
+            return _no_stream_failure_to_release
+        return cls(logging_obj, logging_obj.on_detached_stream_failure)._start_holding()
+
+    def _start_holding(self) -> Callable[[], Awaitable[None]]:
+        self.logging_obj.on_detached_stream_failure = self.hold
+        return self.release
+
+    async def hold(self, failure: Exception) -> None:
+        if self.held is None:
+            self.held = failure
+
+    async def release(self) -> None:
+        self.logging_obj.on_detached_stream_failure = self.report
+        if self.held is None:
+            return
+        try:
+            with anyio.CancelScope(shield=True):
+                await self.report(self.held)
+        except Exception as hook_failure:  # noqa: BLE001  # a failing failure hook must not skip the stream cleanup
+            verbose_proxy_logger.warning(
+                "Stream failure hook raised: %s(%s)", type(hook_failure).__name__, sanitize_for_log(hook_failure)
+            )
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -4404,6 +4442,9 @@ class ProxyBaseLLMRequestProcessing:
             response=response,
             request_data=request_data,
         )
+        release_stream_failure: Final = _ClientStreamFailureReport.hold_while_streaming(
+            stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
+        )
         try:
             str_so_far = ""
             async for chunk in guarded_stream:
@@ -4508,6 +4549,7 @@ class ProxyBaseLLMRequestProcessing:
             seal: Final = "" if seal_open_frame is None else seal_open_frame(recent_tail)
             yield seal + error_frame if seal else error_frame
         finally:
+            await release_stream_failure()
             await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
                 request=request,
                 request_data=request_data,

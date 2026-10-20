@@ -440,15 +440,26 @@ def _completed_after(text: str) -> Mapping[str, object]:
     }
 
 
-def _live_iterator(logging_obj: LitellmLogging) -> ResponsesAPIStreamingIterator:
+def _live_iterator(
+    logging_obj: LitellmLogging, upstream: object = None, background: bool = False
+) -> ResponsesAPIStreamingIterator:
     return ResponsesAPIStreamingIterator(
-        response=httpx.Response(200),
+        response=cast(httpx.Response, upstream or httpx.Response(200)),
         model="gpt-5.4-nano",
         responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=logging_obj,
-        request_data={"model": "gpt-5.4-nano", "input": "tell me a story"},
+        request_data={"model": "gpt-5.4-nano", "input": "tell me a story", "background": background},
         custom_llm_provider="openai",
     )
+
+
+class _UpstreamThatTimesOutAfterRelayingText:
+    headers: dict[str, str] = {}
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time", 1)):
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
 
 
 def test_partial_response_on_disconnect_bills_the_relayed_text_at_the_served_service_tier():
@@ -492,3 +503,22 @@ async def test_partial_response_on_disconnect_is_none_when_there_is_nothing_to_b
 
     assert iterator.partial_response_on_disconnect() is None
     await iterator._await_pending_logging()
+
+
+@pytest.mark.asyncio
+async def test_partial_response_on_disconnect_is_none_once_the_failure_log_billed_the_relayed_text():
+    iterator: Final = _live_iterator(_make_logging_obj(), upstream=_UpstreamThatTimesOutAfterRelayingText())
+
+    with pytest.raises(litellm.Timeout):
+        await _ChunkRecorder().drain(iterator)
+
+    assert iterator.partial_response_on_disconnect() is None
+    await iterator._await_pending_logging()
+
+
+def test_partial_response_on_disconnect_is_none_for_a_background_response():
+    iterator: Final = _live_iterator(_make_logging_obj(), background=True)
+    for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time", 1)):
+        iterator._process_chunk(json.dumps(event))
+
+    assert iterator.partial_response_on_disconnect() is None
