@@ -394,7 +394,8 @@ def test_deployment_riva_offline_reaches_the_handler_through_transcription(mock_
 
 
 @pytest.mark.parametrize(
-    ("timeout", "waited_for"), [("7.5", 7.5), (httpx.Timeout(30.0, read=7.5), 7.5), (None, None)]
+    ("timeout", "waited_for"),
+    [("7.5", 7.5), (httpx.Timeout(30.0, read=7.5), 7.5), (httpx.Timeout(5.0, read=None), 600.0), (None, None)],
 )
 def test_offline_recognition_waits_the_timeout_in_seconds_whatever_its_form(
     mock_riva: SimpleNamespace, timeout: str | httpx.Timeout | None, waited_for: float | None
@@ -413,6 +414,60 @@ def test_offline_recognition_waits_the_timeout_in_seconds_whatever_its_form(
 
     assert response.text == "offline"
     assert mock_riva.offline_calls["timeout"] == waited_for
+
+
+@pytest.mark.parametrize("timeout", ["abc", "30s"])
+def test_malformed_timeout_on_offline_call_is_a_400_before_any_rpc(
+    mock_riva: SimpleNamespace, timeout: str
+) -> None:
+    with pytest.raises(NvidiaRivaException) as excinfo:
+        litellm.transcription(
+            model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
+            file=("clip.wav", _make_wav_bytes(), "audio/wav"),
+            api_base="localhost:50051",
+            riva_offline=True,
+            timeout=timeout,
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "timeout" in excinfo.value.message
+    assert "audio_bytes" not in mock_riva.offline_calls
+
+
+def test_malformed_timeout_on_offline_call_waits_the_default_under_drop_params(
+    mock_riva: SimpleNamespace,
+) -> None:
+    mock_riva.offline_response["value"] = _fake_response(
+        results=[SimpleNamespace(alternatives=[_fake_alternative("offline")])]
+    )
+
+    response = litellm.transcription(
+        model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
+        file=("clip.wav", _make_wav_bytes(), "audio/wav"),
+        api_base="localhost:50051",
+        riva_offline=True,
+        timeout="abc",
+        drop_params=True,
+    )
+
+    assert response.text == "offline"
+    assert mock_riva.offline_calls["timeout"] == 600.0
+
+
+def test_malformed_timeout_still_streams_when_the_client_takes_no_timeout(mock_riva: SimpleNamespace) -> None:
+    mock_riva.responses["value"] = [
+        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
+    ]
+
+    response = litellm.transcription(
+        model="nvidia_riva/nvidia/parakeet-ctc-1.1b",
+        file=("clip.wav", _make_wav_bytes(), "audio/wav"),
+        api_base="localhost:50051",
+        timeout="abc",
+    )
+
+    assert response.text == "streamed"
+    assert len(mock_riva.streaming_calls) == 1
 
 
 def test_oversized_offline_audio_is_a_non_retryable_413(mock_riva: SimpleNamespace, logging_obj: MagicMock) -> None:

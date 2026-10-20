@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 import httpx
 
 import litellm
+from litellm.constants import COMPLETION_HTTP_FALLBACK_SECONDS
 from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_name,
     process_audio_file,
@@ -163,11 +164,19 @@ def _parse_riva_offline(value: object, drop_params: bool) -> bool:
             )
 
 
-def _deadline_seconds(timeout: float | str | httpx.Timeout | None) -> float | None:
-    if timeout is None:
-        return None
-    limit: Final = CompletionTimeout.as_limit(timeout)
-    return limit.read if isinstance(limit, httpx.Timeout) else limit
+def _deadline_seconds(timeout: float | str | httpx.Timeout, drop_params: bool) -> float:
+    try:
+        limit: Final = CompletionTimeout.as_limit(timeout)
+    except ValueError:
+        if drop_params:
+            return COMPLETION_HTTP_FALLBACK_SECONDS
+        raise NvidiaRivaException(
+            status_code=400,
+            message=f"timeout must be a number of seconds, got {timeout!r}. Set drop_params to ignore it.",
+        ) from None
+    if not isinstance(limit, httpx.Timeout):
+        return limit
+    return COMPLETION_HTTP_FALLBACK_SECONDS if limit.read is None else limit.read
 
 
 class NvidiaRivaAudioTranscription:
@@ -301,13 +310,10 @@ class NvidiaRivaAudioTranscription:
 
         response_format: Final = request_payload.get("response_format") or "json"
         timestamp_granularities: Final = request_payload.get("timestamp_granularities")
-        riva_offline: Final = _parse_riva_offline(
-            optional_params.get("riva_offline"),
-            drop_params=("drop_params" in litellm_params and litellm_params["drop_params"] is True)
-            or litellm.drop_params is True,
-        )
-
-        deadline: Final = _deadline_seconds(timeout)
+        drop_params: Final = (
+            "drop_params" in litellm_params and litellm_params["drop_params"] is True
+        ) or litellm.drop_params is True
+        riva_offline: Final = _parse_riva_offline(optional_params.get("riva_offline"), drop_params=drop_params)
 
         riva_module, riva_asr_module = _import_riva()
         auth_obj: Final = self._construct_auth(
@@ -343,7 +349,7 @@ class NvidiaRivaAudioTranscription:
                     asr_service=asr_service,
                     pcm_bytes=resampled.pcm_bytes,
                     recognition_config=recognition_config,
-                    timeout=deadline,
+                    timeout=None if timeout is None else _deadline_seconds(timeout, drop_params),
                 )
                 if riva_offline
                 else self._streaming_responses(
@@ -351,7 +357,8 @@ class NvidiaRivaAudioTranscription:
                     riva_asr_module=riva_asr_module,
                     pcm_bytes=resampled.pcm_bytes,
                     recognition_config=recognition_config,
-                    timeout=deadline,
+                    timeout=timeout,
+                    drop_params=drop_params,
                 )
             )
             final_results: Final = self._collect_final_results(responses, require_final=not riva_offline)
@@ -466,7 +473,8 @@ class NvidiaRivaAudioTranscription:
         riva_asr_module: _RivaAsrModule,
         pcm_bytes: bytes,
         recognition_config: _RecognitionConfig,
-        timeout: float | None,
+        timeout: float | str | httpx.Timeout | None,
+        drop_params: bool,
     ) -> Iterable[object]:
         streaming_config: Final[_StreamingRecognitionConfig] = riva_asr_module.StreamingRecognitionConfig(
             config=recognition_config, interim_results=False
@@ -474,7 +482,7 @@ class NvidiaRivaAudioTranscription:
         return asr_service.streaming_response_generator(
             audio_chunks=self._iter_audio_chunks(pcm_bytes),
             streaming_config=streaming_config,
-            **self._timeout_kwargs(asr_service.streaming_response_generator, timeout),
+            **self._timeout_kwargs(asr_service.streaming_response_generator, timeout, drop_params),
         )
 
     def _offline_responses(
@@ -497,13 +505,15 @@ class NvidiaRivaAudioTranscription:
             ) from e
 
     @classmethod
-    def _timeout_kwargs(cls, rpc: Callable[..., object], timeout: float | None) -> Mapping[str, float]:
+    def _timeout_kwargs(
+        cls, rpc: Callable[..., object], timeout: float | str | httpx.Timeout | None, drop_params: bool
+    ) -> Mapping[str, float]:
         # Forward the deadline so the call cannot block forever if the
         # server stalls. Older riva-client versions do not accept a
         # ``timeout`` kwarg, so pass it only when supported.
         if timeout is None or not cls._supports_timeout_kwarg(rpc):
             return MappingProxyType({})
-        return MappingProxyType({"timeout": float(timeout)})
+        return MappingProxyType({"timeout": _deadline_seconds(timeout, drop_params)})
 
     @staticmethod
     def _supports_timeout_kwarg(callable_obj: Callable[..., object]) -> bool:
