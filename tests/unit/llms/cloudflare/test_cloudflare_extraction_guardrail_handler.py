@@ -287,6 +287,33 @@ async def test_a_response_guardrail_does_not_scan_the_fraction_digits_of_an_esti
     assert result.answers["days_late"].model_dump(mode="json") == days_late
 
 
+@pytest.mark.asyncio
+async def test_a_response_guardrail_sees_the_decimal_text_of_a_fractional_number_answer() -> None:
+    response: Final = ExtractionResponse.model_validate(
+        {
+            "model": "invoice-reader",
+            "answers": {
+                "unit_price": {"type": "number", "value": 14.5, "guess": 14.5, "span": [30, 36]},
+                "prices": {"type": "list", "value": [14.5, 2.25], "spans": [[30, 36], [40, 45]]},
+            },
+            "truncated": False,
+            "usage": {"input_tokens": 52, "output_tokens": 0},
+        }
+    )
+
+    result: Final = await ExtractionHandler().process_output_response(
+        response,
+        _MaskingGuardrail("14.5", "[PRICE]"),
+        request_data={"fields": {"unit_price": {"type": "number"}, "prices": {"type": "list", "items": "number"}}},
+    )
+
+    assert isinstance(result, ExtractionResponse)
+    assert {name: answer.model_dump(mode="json") for name, answer in result.answers.items()} == {
+        "unit_price": {"type": "number", "value": None},
+        "prices": {"type": "list", "value": None},
+    }
+
+
 _MANY_FIELDS: Final = 20_000
 
 

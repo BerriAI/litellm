@@ -31,6 +31,7 @@ _IMAGES_ADAPTER: Final[TypeAdapter[tuple[ExtractionBase64Image | JsonValue, ...]
 
 
 _AnswerKey: TypeAlias = Literal["value", "guess", "mean", "median"]
+_STATISTIC_KEYS: Final[frozenset[_AnswerKey]] = frozenset(("mean", "median"))
 _NULLED_ANSWER: Final[Mapping[str, None]] = MappingProxyType(
     dict.fromkeys(("value", "guess", "mean", "median", "p10", "p90", "quantiles", "steps", "span", "spans"), None)
 )
@@ -97,22 +98,25 @@ def _image_urls(images: object) -> tuple[str, ...]:
     )
 
 
-def _scalar_text(value: JsonValue) -> str | None:
+def _scalar_text(value: JsonValue, whole: bool) -> str | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, float):
+    if isinstance(value, float) and whole:
         return format(value, ".0f")
-    return str(value) if isinstance(value, (str, int)) else None
+    return str(value) if isinstance(value, (str, int, float)) else None
 
 
-def _item_texts(items: Sequence[JsonValue]) -> tuple[tuple[int, str], ...]:
-    return tuple((index, text) for index, item in enumerate(items) if (text := _scalar_text(item)) is not None)
+def _item_texts(items: Sequence[JsonValue], whole: bool) -> tuple[tuple[int, str], ...]:
+    return tuple((index, text) for index, item in enumerate(items) if (text := _scalar_text(item, whole)) is not None)
 
 
 def _value_texts(name: str, key: _AnswerKey, value: JsonValue) -> tuple[_AnswerText, ...]:
+    whole: Final = key in _STATISTIC_KEYS
     if isinstance(value, list):
-        return tuple(_AnswerText(name=name, key=key, item=index, text=text) for index, text in _item_texts(value))
-    text: Final = _scalar_text(value)
+        return tuple(
+            _AnswerText(name=name, key=key, item=index, text=text) for index, text in _item_texts(value, whole)
+        )
+    text: Final = _scalar_text(value, whole)
     return () if text is None else (_AnswerText(name=name, key=key, item=None, text=text),)
 
 
