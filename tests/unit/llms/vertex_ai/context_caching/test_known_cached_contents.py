@@ -16,18 +16,15 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching import vertex_ai_context_caching
 from litellm.llms.vertex_ai.context_caching.known_cached_contents import KnownCachedContents, parse_expire_time
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import ContextCachingEndpoints
+from litellm.utils import get_prompt_cache_min_tokens
 
-_MODULE: Final = "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching"
 _REGISTRY_MODULE: Final = "litellm.llms.vertex_ai.context_caching.known_cached_contents"
 _SCOPE: Final = ("https://vertex.test/v1/projects/p/locations/us/cachedContents", "")
 _NOW: Final = datetime(2026, 10, 14, 18, 0, tzinfo=timezone.utc).timestamp()
 _FAR_FUTURE: Final = "2100-01-01T00:00:00.123456789Z"
-
-
-@pytest.fixture(autouse=True)
-def _cacheable_prompt():
-    with patch(f"{_MODULE}.is_prompt_caching_valid_prompt", return_value=True):
-        yield
+_PREFIX_REPEATS: Final = max(
+    get_prompt_cache_min_tokens(model=f"{provider}/gemini-3.1-pro") for provider in ("vertex_ai", "gemini")
+)
 
 
 @pytest.fixture
@@ -45,9 +42,10 @@ def _expire_time(seconds_from_now: float) -> str:
     return expires.strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z"
 
 
-def _messages(prefix: str = "cacheable prefix ") -> list:
+def _messages(label: str = "shared") -> list:
+    text: Final = f"{label} cacheable prefix " * _PREFIX_REPEATS
     return [
-        {"role": "system", "content": [{"type": "text", "text": prefix * 50, "cache_control": {"type": "ephemeral"}}]},
+        {"role": "system", "content": [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]},
         {"role": "user", "content": "question"},
     ]
 
@@ -216,8 +214,8 @@ def test_different_prefixes_do_not_share_a_cache(endpoints: ContextCachingEndpoi
         _response(_created("cachedContents/b", _expire_time(60))),
     ]
 
-    assert _sync_call(endpoints, client, messages=_messages("first "))[2] == "cachedContents/a"
-    assert _sync_call(endpoints, client, messages=_messages("second "))[2] == "cachedContents/b"
+    assert _sync_call(endpoints, client, messages=_messages("first"))[2] == "cachedContents/a"
+    assert _sync_call(endpoints, client, messages=_messages("second"))[2] == "cachedContents/b"
 
 
 @pytest.mark.asyncio
