@@ -75,6 +75,15 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     )
 
 
+def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = message.get("content")
+    match content:
+        case [{"type": "text", "text": str() as text}] if content == [{"type": "text", "text": text}]:
+            return {**message, "content": text}
+        case _:
+            return message
+
+
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
     """
     Remove or filter content so empty text blocks are not sent.
@@ -462,6 +471,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks does not support:
         - 'name' in user message.
         - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
+        - non-Claude json_object "json" checks read only string content, so a single text block is sent as a string.
         """
         new_messages = []
         for idx, message in enumerate(messages):
@@ -477,7 +487,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             _sanitize_empty_content(cast(dict[str, Any], _message))
             if _is_bare_assistant_message(_message):
                 continue
-            new_messages.append(_message)
+            new_messages.append(_collapse_single_text_block(_message) if "claude" not in model else _message)
 
         if "claude" not in model:
             new_messages = _split_parallel_tool_calls(
