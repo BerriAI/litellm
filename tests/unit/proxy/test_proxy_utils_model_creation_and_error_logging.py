@@ -736,7 +736,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
     post-dispatch failures keep zero spend.
     """
 
-    async def _run(self, request_data, original_exception: Exception | None = None):
+    async def _run(self, request_data, original_exception: Exception | None = None, request_route=None):
         from unittest.mock import AsyncMock, patch
 
         from litellm.proxy._types import UserAPIKeyAuth
@@ -747,7 +747,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
             await proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
                 original_exception=original_exception or Exception("boom"),
-                user_api_key_dict=UserAPIKeyAuth(),
+                user_api_key_dict=UserAPIKeyAuth(request_route=request_route),
             )
 
     def _timeout(self, model: str, cause: Exception) -> Exception:
@@ -763,6 +763,32 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         logging_obj = MagicMock()
         logging_obj.model_call_details = model_call_details
         return logging_obj
+
+    @pytest.mark.asyncio
+    async def test_a_failed_responses_request_counts_its_input_from_the_newest_compaction_item(self):
+        from datetime import datetime
+
+        async def prompt_tokens(request_input):
+            request_data = {
+                "litellm_logging_obj": self._logging_obj(
+                    {
+                        "first_api_call_start_time": datetime.now(),
+                        "model": FAILURE_USAGE_MODEL,
+                        "messages": request_input,
+                        "call_type": "aresponses",
+                    }
+                ),
+                "metadata": {},
+            }
+            await self._run(request_data, request_route="/v1/responses")
+            return request_data["combined_usage_object"].prompt_tokens
+
+        resent = await prompt_tokens(
+            [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+        )
+
+        assert resent == await prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
+        assert resent < await prompt_tokens([COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, TURN_AFTER_COMPACTION])
 
     @pytest.mark.asyncio
     async def test_timed_out_request_estimates_input_tokens_priced_at_input_rate(self):
@@ -2263,38 +2289,36 @@ COMPACTION_ITEM = {
 TURN_AFTER_COMPACTION = {"role": "user", "content": "what is the cat's name?"}
 
 
-def _failed_call_prompt_tokens(call_type, request_input):
+def _failed_call_prompt_tokens(call_type, client_route, request_input):
     from litellm.proxy.utils import _failure_usage_to_lift
 
     lifted = _failure_usage_to_lift(
         model_call_details={"call_type": call_type, "model": FAILURE_USAGE_MODEL, "messages": request_input},
         request_body={},
         dispatched=True,
+        client_route=client_route,
     )
     assert lifted is not None
     return lifted[0].prompt_tokens
 
 
-def test_a_failed_responses_call_counts_its_input_from_the_newest_compaction_item():
-    resent = _failed_call_prompt_tokens(
-        "aresponses", [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
-    )
+@pytest.mark.parametrize(
+    "call_type, client_route",
+    [
+        ("acompletion", "/v1/chat/completions"),
+        ("aanthropic_messages", "/v1/messages"),
+        ("responses", "/v1/chat/completions"),
+    ],
+)
+def test_a_failed_call_off_the_responses_route_counts_the_history_before_a_compaction_typed_message(
+    call_type, client_route
+):
+    def prompt_tokens(request_input):
+        return _failed_call_prompt_tokens(call_type, client_route, request_input)
 
-    assert resent == _failed_call_prompt_tokens(
-        "aresponses", [COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
-    )
-    assert resent < _failed_call_prompt_tokens(
-        "aresponses", [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, TURN_AFTER_COMPACTION]
-    )
+    sent = prompt_tokens([COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
 
-
-@pytest.mark.parametrize("call_type", ["acompletion", "aanthropic_messages"])
-def test_a_failed_chat_or_messages_call_counts_the_history_before_a_compaction_typed_message(call_type):
-    sent = _failed_call_prompt_tokens(
-        call_type, [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
-    )
-
-    assert sent > _failed_call_prompt_tokens(call_type, [COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
+    assert sent > prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
 
 
 @pytest.mark.parametrize(

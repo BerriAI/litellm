@@ -1022,6 +1022,7 @@ def _failure_usage_to_lift(
     provider_billed: bool = False,
     deployment_id: str | None = None,
     base_model: str | None = None,
+    client_route: str | None = None,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -1050,8 +1051,7 @@ def _failure_usage_to_lift(
         # The proxy-only error handler stamps this flag on a client disconnect too, even though the
         # request had already reached the provider, so a billed failure keeps its estimate.
         return None
-    call_type: Final = str(model_call_details.get("call_type"))
-    if call_type not in _INPUT_ESTIMABLE_CALL_TYPES:
+    if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
     dispatched_input: Final = model_call_details.get("messages")
     optional_params: Final = model_call_details.get("optional_params")
@@ -1065,7 +1065,7 @@ def _failure_usage_to_lift(
         model=str(model_call_details.get("model") or ""),
         request_input=(
             messages_since_newest_compaction(dispatched_input)
-            if call_type in _RESPONSES_CALL_TYPES
+            if _call_type_for_route(client_route) in _RESPONSES_CALL_TYPES
             else dispatched_input
         ),
         system_input=system_input,
@@ -1262,7 +1262,9 @@ def _provider_billed_the_failure(exception: Exception) -> bool:
     return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
+def _failure_fields_to_lift(
+    request_data: Mapping[str, object], provider_billed: bool = False, client_route: str | None = None
+) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1281,6 +1283,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         provider_billed=provider_billed,
         deployment_id=_logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None,
         base_model=get_base_model_from_metadata(model_call_details=_model_call_details),
+        client_route=client_route,
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
@@ -3506,7 +3509,9 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data, provider_billed=_provider_billed_the_failure(original_exception)
+                request_data,
+                provider_billed=_provider_billed_the_failure(original_exception),
+                client_route=user_api_key_dict.request_route,
             )
         )
 
