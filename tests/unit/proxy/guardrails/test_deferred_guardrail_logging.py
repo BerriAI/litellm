@@ -16,7 +16,7 @@ Streaming: CSW.__anext__ stores args on logging_obj at stream end.
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from datetime import datetime
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1460,11 +1460,16 @@ class TestResponsesIteratorDeferredLogging:
 
         from litellm.responses import streaming_iterator
 
-        created = []
-        real_spawn_logging_task = streaming_iterator.spawn_logging_task
+        created: Final[list[asyncio.Task[object]]] = []
+        real_spawn_logging_task: Final = streaming_iterator.spawn_logging_task
 
-        def tracking_spawn_logging_task(*args, **kwargs):
-            task = real_spawn_logging_task(*args, **kwargs)
+        def tracking_spawn_logging_task(
+            running_loop: asyncio.AbstractEventLoop,
+            coroutine: Coroutine[object, object, object],
+            *,
+            task_name: str,
+        ) -> asyncio.Task[object]:
+            task: Final = real_spawn_logging_task(running_loop, coroutine, task_name=task_name)
             created.append(task)
             return task
 
