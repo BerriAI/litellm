@@ -6,6 +6,7 @@ from typing import Final, TypeVar
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import RequestBody
 from litellm.utils import is_cached_message
 
@@ -15,19 +16,13 @@ Built: Final = TypeVar("Built")
 Sent: Final = TypeVar("Sent")
 
 
-def cache_rebuild(build: Callable[..., Built], transform_params: dict) -> Callable[[], Built] | None:
+def cache_rebuild(
+    build: Callable[..., Built], messages: list[AllMessageValues], optional_params: dict
+) -> Callable[[], Built] | None:
     """Copies the inputs before the first transform, which pops keys from ``optional_params`` and ``messages``."""
-    if not any(map(is_cached_message, transform_params["messages"])):
+    if not any(map(is_cached_message, messages)):
         return None
-    return partial(
-        build,
-        **{
-            **transform_params,
-            **deepcopy(
-                {"messages": transform_params["messages"], "optional_params": transform_params["optional_params"]}
-            ),
-        },
-    )
+    return partial(build, **deepcopy({"messages": messages, "optional_params": optional_params}))
 
 
 def _status_code(error: httpx.HTTPStatusError | BaseLLMException) -> int:

@@ -77,8 +77,9 @@ class ContextCachingEndpoints(VertexBase):
     v0: covers Google AI Studio
     """
 
-    def __init__(self) -> None:
+    def __init__(self, known_caches: KnownCachedContents = known_cached_contents) -> None:
         super().__init__()
+        self._known_caches: Final = known_caches
 
     def _get_token_and_url_context_caching(
         self,
@@ -163,7 +164,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
         )
         scope: Final = KnownCachedContents.scope(base_url, custom_llm_provider, headers)
-        known_name: Final = known_cached_contents.get(scope, cache_key)
+        known_name: Final = self._known_caches.get(scope, cache_key)
         if known_name is not None:
             return known_name
 
@@ -211,10 +212,10 @@ class ContextCachingEndpoints(VertexBase):
                 if display_name is None or display_name != cache_key:
                     continue
                 expire_time = cached_item.get("expireTime")
-                if not KnownCachedContents.is_usable(expire_time):
+                if not self._known_caches.is_usable(expire_time):
                     continue
                 name = cached_item.get("name")
-                known_cached_contents.remember(scope, cache_key, name, expire_time)
+                self._known_caches.remember(scope, cache_key, name, expire_time)
                 return name
 
             # Check if there are more pages
@@ -260,7 +261,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
         )
         scope: Final = KnownCachedContents.scope(base_url, custom_llm_provider, headers)
-        known_name: Final = known_cached_contents.get(scope, cache_key)
+        known_name: Final = self._known_caches.get(scope, cache_key)
         if known_name is not None:
             return known_name
 
@@ -308,10 +309,10 @@ class ContextCachingEndpoints(VertexBase):
                 if display_name is None or display_name != cache_key:
                     continue
                 expire_time = cached_item.get("expireTime")
-                if not KnownCachedContents.is_usable(expire_time):
+                if not self._known_caches.is_usable(expire_time):
                     continue
                 name = cached_item.get("name")
-                known_cached_contents.remember(scope, cache_key, name, expire_time)
+                self._known_caches.remember(scope, cache_key, name, expire_time)
                 return name
 
             # Check if there are more pages
@@ -474,7 +475,7 @@ class ContextCachingEndpoints(VertexBase):
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
-        known_cached_contents.remember(
+        self._known_caches.remember(
             KnownCachedContents.scope(url, custom_llm_provider, headers),
             generated_cache_key,
             raw_response_cached.get("name"),
@@ -637,12 +638,12 @@ class ContextCachingEndpoints(VertexBase):
 
             raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
             _record_cache_creation_tokens(logging_obj, raw_response_cached)
-            known_cached_contents.remember(
+            self._known_caches.remember(
                 scope, generated_cache_key, raw_response_cached.get("name"), raw_response_cached.get("expireTime")
             )
             return raw_response_cached.get("name")
 
-        cache_name: Final = await known_cached_contents.single_flight(scope, generated_cache_key, lookup_or_create)
+        cache_name: Final = await self._known_caches.single_flight(scope, generated_cache_key, lookup_or_create)
         return non_cached_messages, optional_params, cache_name
 
     def get_cache(self):

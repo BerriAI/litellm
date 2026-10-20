@@ -3047,11 +3047,13 @@ class VertexLLM(VertexBase):
         rebuild: Final = cache_rebuild(
             partial(
                 async_transform_request_body,
+                **data,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
                 vertex_auth_header=auth_header,
             ),
-            data,
+            messages,
+            optional_params,
         )
         request_body: Final = await async_transform_request_body(
             **data,
@@ -3164,11 +3166,13 @@ class VertexLLM(VertexBase):
         rebuild: Final = cache_rebuild(
             partial(
                 async_transform_request_body,
+                **data,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
                 vertex_auth_header=auth_header,
             ),
-            data,
+            messages,
+            optional_params,
         )
         request_body: Final = await async_transform_request_body(
             **data,
@@ -3358,11 +3362,13 @@ class VertexLLM(VertexBase):
         rebuild: Final = cache_rebuild(
             partial(
                 sync_transform_request_body,
+                **transform_request_params,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
                 vertex_auth_header=auth_header,
             ),
-            transform_request_params,
+            messages,
+            optional_params,
         )
         data: Final = sync_transform_request_body(
             **transform_request_params,

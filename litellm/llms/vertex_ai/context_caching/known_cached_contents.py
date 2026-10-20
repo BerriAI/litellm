@@ -7,8 +7,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Final, Literal
 
-# A remembered cache stops being reused this long before Vertex expires it, so a request
-# resolved just before expiry does not reach generateContent with an expired cache.
 KNOWN_CACHE_EXPIRY_MARGIN_SECONDS: Final = 10.0
 MAX_KNOWN_CACHED_CONTENTS: Final = 10_000
 CACHE_REJECTED_STATUS_CODES: Final = frozenset({400, 403, 404})
@@ -39,7 +37,8 @@ class KnownCachedContents:
     ``KNOWN_CACHE_EXPIRY_MARGIN_SECONDS`` of it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self._clock: Final = clock
         self._entries: dict[tuple[tuple[str, str], str], tuple[str, float]] = {}  # mutable-ok: guarded by _lock
         self._lock: Final = threading.Lock()
         self._inflight: weakref.WeakKeyDictionary[  # mutable-ok: private, guarded by _lock
@@ -62,10 +61,9 @@ class KnownCachedContents:
         sent_keys: Final = [value for name, value in headers.items() if name.lower() == "x-goog-api-key"]
         return (base_url, sent_keys[-1] if sent_keys else "")
 
-    @staticmethod
-    def is_usable(expire_time: object) -> bool:
+    def is_usable(self, expire_time: object) -> bool:
         expires_at: Final = parse_expire_time(expire_time)
-        return expires_at is None or expires_at - KNOWN_CACHE_EXPIRY_MARGIN_SECONDS > time.time()
+        return expires_at is None or expires_at - KNOWN_CACHE_EXPIRY_MARGIN_SECONDS > self._clock()
 
     def get(self, scope: tuple[str, str], cache_key: str) -> str | None:
         with self._lock:
@@ -73,7 +71,7 @@ class KnownCachedContents:
             if entry is None:
                 return None
             name, reuse_until = entry
-            if reuse_until > time.time():
+            if reuse_until > self._clock():
                 return name
             del self._entries[(scope, cache_key)]
             return None
@@ -83,7 +81,7 @@ class KnownCachedContents:
         if not name or expires_at is None:
             return
         reuse_until: Final = expires_at - KNOWN_CACHE_EXPIRY_MARGIN_SECONDS
-        now: Final = time.time()
+        now: Final = self._clock()
         if reuse_until <= now:
             return
         with self._lock:

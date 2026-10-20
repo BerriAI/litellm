@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,32 +14,34 @@ import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching import vertex_ai_context_caching
-from litellm.llms.vertex_ai.context_caching.known_cached_contents import known_cached_contents, parse_expire_time
+from litellm.llms.vertex_ai.context_caching.known_cached_contents import KnownCachedContents, parse_expire_time
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
 _MODULE: Final = "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching"
 _REGISTRY_MODULE: Final = "litellm.llms.vertex_ai.context_caching.known_cached_contents"
 _SCOPE: Final = ("https://vertex.test/v1/projects/p/locations/us/cachedContents", "")
-
-
-def _token_and_url(gemini_api_key=None, custom_llm_provider="vertex_ai", **_):
-    url: Final = "https://vertex.test/v1/projects/p/locations/us/cachedContents"
-    if custom_llm_provider == "gemini":
-        return {"x-goog-api-key": gemini_api_key}, url
-    return "token", url
+_NOW: Final = datetime(2026, 10, 14, 18, 0, tzinfo=timezone.utc).timestamp()
+_FAR_FUTURE: Final = "2100-01-01T00:00:00.123456789Z"
 
 
 @pytest.fixture(autouse=True)
-def _cacheable_prompt_and_fixed_url():
-    with (
-        patch(f"{_MODULE}.is_prompt_caching_valid_prompt", return_value=True),
-        patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", side_effect=_token_and_url),
-    ):
+def _cacheable_prompt():
+    with patch(f"{_MODULE}.is_prompt_caching_valid_prompt", return_value=True):
         yield
 
 
+@pytest.fixture
+def clock() -> MagicMock:
+    return MagicMock(return_value=_NOW)
+
+
+@pytest.fixture
+def endpoints(clock: MagicMock) -> ContextCachingEndpoints:
+    return ContextCachingEndpoints(known_caches=KnownCachedContents(clock=clock))
+
+
 def _expire_time(seconds_from_now: float) -> str:
-    expires: Final = datetime.now(timezone.utc) + timedelta(seconds=seconds_from_now)
+    expires: Final = datetime.fromtimestamp(_NOW + seconds_from_now, timezone.utc)
     return expires.strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z"
 
 
@@ -60,13 +62,14 @@ def _created(name: str, expire_time: str | None) -> dict:
 
 
 def _sync_call(
+    endpoints: ContextCachingEndpoints,
     client: HTTPHandler,
     api_key: str = "k",
     custom_llm_provider: str = "vertex_ai",
     messages=None,
     extra_headers: dict | None = None,
 ):
-    return ContextCachingEndpoints().check_and_create_cache(
+    return endpoints.check_and_create_cache(
         extra_headers=extra_headers,
         messages=messages or _messages(),
         optional_params={},
@@ -79,12 +82,12 @@ def _sync_call(
         custom_llm_provider=custom_llm_provider,
         vertex_project="p",
         vertex_location="us",
-        vertex_auth_header=None,
+        vertex_auth_header="token",
     )
 
 
-async def _async_call(client: AsyncHTTPHandler):
-    return await ContextCachingEndpoints().async_check_and_create_cache(
+async def _async_call(endpoints: ContextCachingEndpoints, client: AsyncHTTPHandler):
+    return await endpoints.async_check_and_create_cache(
         messages=_messages(),
         optional_params={},
         api_key="k",
@@ -96,23 +99,23 @@ async def _async_call(client: AsyncHTTPHandler):
         custom_llm_provider="vertex_ai",
         vertex_project="p",
         vertex_location="us",
-        vertex_auth_header=None,
+        vertex_auth_header="token",
     )
 
 
-def test_created_cache_is_reused_without_listing():
+def test_created_cache_is_reused_without_listing(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=HTTPHandler)
     client.get.return_value = _response({})
     client.post.return_value = _response(_created("cachedContents/1", _expire_time(60)))
 
-    assert _sync_call(client)[2] == "cachedContents/1"
-    assert _sync_call(client)[2] == "cachedContents/1"
+    assert _sync_call(endpoints, client)[2] == "cachedContents/1"
+    assert _sync_call(endpoints, client)[2] == "cachedContents/1"
 
     assert client.get.call_count == 1
     assert client.post.call_count == 1
 
 
-def test_listed_cache_is_reused_without_listing_again():
+def test_listed_cache_is_reused_without_listing_again(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=HTTPHandler)
     key: Final = vertex_ai_context_caching.local_cache_obj.get_cache_key(
         messages=_messages()[:1], tools=None, tool_choice=None, model="gemini-3.1-pro"
@@ -121,14 +124,14 @@ def test_listed_cache_is_reused_without_listing_again():
         {"cachedContents": [{"name": "cachedContents/listed", "displayName": key, "expireTime": _expire_time(60)}]}
     )
 
-    assert _sync_call(client)[2] == "cachedContents/listed"
-    assert _sync_call(client)[2] == "cachedContents/listed"
+    assert _sync_call(endpoints, client)[2] == "cachedContents/listed"
+    assert _sync_call(endpoints, client)[2] == "cachedContents/listed"
 
     assert client.get.call_count == 1
     client.post.assert_not_called()
 
 
-def test_listed_cache_about_to_expire_is_not_used():
+def test_listed_cache_about_to_expire_is_not_used(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=HTTPHandler)
     key: Final = vertex_ai_context_caching.local_cache_obj.get_cache_key(
         messages=_messages()[:1], tools=None, tool_choice=None, model="gemini-3.1-pro"
@@ -138,21 +141,23 @@ def test_listed_cache_about_to_expire_is_not_used():
     )
     client.post.return_value = _response(_created("cachedContents/fresh", _expire_time(60)))
 
-    assert _sync_call(client)[2] == "cachedContents/fresh"
+    assert _sync_call(endpoints, client)[2] == "cachedContents/fresh"
 
 
-def test_cache_without_expire_time_is_not_remembered():
+def test_cache_without_expire_time_is_not_remembered(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=HTTPHandler)
     client.get.return_value = _response({})
     client.post.return_value = _response(_created("cachedContents/1", None))
 
-    _sync_call(client)
-    _sync_call(client)
+    _sync_call(endpoints, client)
+    _sync_call(endpoints, client)
 
     assert client.get.call_count == 2
 
 
-def test_remembered_cache_is_listed_again_once_its_reuse_window_closes():
+def test_remembered_cache_is_listed_again_once_its_reuse_window_closes(
+    endpoints: ContextCachingEndpoints, clock: MagicMock
+):
     client: Final = MagicMock(spec=HTTPHandler)
     key: Final = vertex_ai_context_caching.local_cache_obj.get_cache_key(
         messages=_messages()[:1], tools=None, tool_choice=None, model="gemini-3.1-pro"
@@ -164,24 +169,26 @@ def test_remembered_cache_is_listed_again_once_its_reuse_window_closes():
         ),
     ]
     client.post.return_value = _response(_created("cachedContents/1", _expire_time(60)))
-    assert _sync_call(client)[2] == "cachedContents/1"
+    assert _sync_call(endpoints, client)[2] == "cachedContents/1"
 
-    with patch(f"{_REGISTRY_MODULE}.time.time", return_value=datetime.now(timezone.utc).timestamp() + 55):
-        assert _sync_call(client)[2] == "cachedContents/listed"
+    clock.return_value = _NOW + 55
+    assert _sync_call(endpoints, client)[2] == "cachedContents/listed"
 
 
-def test_gemini_caches_are_not_shared_across_api_keys():
+def test_gemini_caches_are_not_shared_across_api_keys(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=HTTPHandler)
     client.get.return_value = _response({})
     client.post.return_value = _response(_created("cachedContents/1", _expire_time(60)))
 
-    _sync_call(client, api_key="key-a", custom_llm_provider="gemini")
-    _sync_call(client, api_key="key-b", custom_llm_provider="gemini")
+    _sync_call(endpoints, client, api_key="key-a", custom_llm_provider="gemini")
+    _sync_call(endpoints, client, api_key="key-b", custom_llm_provider="gemini")
 
     assert client.post.call_count == 2
 
 
-def test_gemini_cache_created_with_an_overridden_api_key_is_not_reused_with_the_configured_key():
+def test_gemini_cache_created_with_an_overridden_api_key_is_not_reused_with_the_configured_key(
+    endpoints: ContextCachingEndpoints,
+):
     client: Final = MagicMock(spec=HTTPHandler)
     client.get.return_value = _response({})
     client.post.side_effect = [
@@ -190,14 +197,18 @@ def test_gemini_cache_created_with_an_overridden_api_key_is_not_reused_with_the_
     ]
 
     caller: Final = _sync_call(
-        client, api_key="deployment-key", custom_llm_provider="gemini", extra_headers={"X-Goog-Api-Key": "caller-key"}
+        endpoints,
+        client,
+        api_key="deployment-key",
+        custom_llm_provider="gemini",
+        extra_headers={"X-Goog-Api-Key": "caller-key"},
     )
-    configured: Final = _sync_call(client, api_key="deployment-key", custom_llm_provider="gemini")
+    configured: Final = _sync_call(endpoints, client, api_key="deployment-key", custom_llm_provider="gemini")
 
     assert (caller[2], configured[2]) == ("cachedContents/caller-project", "cachedContents/deployment-project")
 
 
-def test_different_prefixes_do_not_share_a_cache():
+def test_different_prefixes_do_not_share_a_cache(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=HTTPHandler)
     client.get.return_value = _response({})
     client.post.side_effect = [
@@ -205,12 +216,12 @@ def test_different_prefixes_do_not_share_a_cache():
         _response(_created("cachedContents/b", _expire_time(60))),
     ]
 
-    assert _sync_call(client, messages=_messages("first "))[2] == "cachedContents/a"
-    assert _sync_call(client, messages=_messages("second "))[2] == "cachedContents/b"
+    assert _sync_call(endpoints, client, messages=_messages("first "))[2] == "cachedContents/a"
+    assert _sync_call(endpoints, client, messages=_messages("second "))[2] == "cachedContents/b"
 
 
 @pytest.mark.asyncio
-async def test_concurrent_requests_for_one_prefix_list_and_create_once():
+async def test_concurrent_requests_for_one_prefix_list_and_create_once(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=AsyncHTTPHandler)
 
     async def slow_list(**_):
@@ -220,7 +231,7 @@ async def test_concurrent_requests_for_one_prefix_list_and_create_once():
     client.get = AsyncMock(side_effect=slow_list)
     client.post = AsyncMock(return_value=_response(_created("cachedContents/1", _expire_time(60))))
 
-    results: Final = await asyncio.gather(*(_async_call(client) for _ in range(5)))
+    results: Final = await asyncio.gather(*(_async_call(endpoints, client) for _ in range(5)))
 
     assert {result[2] for result in results} == {"cachedContents/1"}
     assert client.get.await_count == 1
@@ -228,20 +239,20 @@ async def test_concurrent_requests_for_one_prefix_list_and_create_once():
 
 
 @pytest.mark.asyncio
-async def test_async_created_cache_is_reused_by_a_later_request():
+async def test_async_created_cache_is_reused_by_a_later_request(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=AsyncHTTPHandler)
     client.get = AsyncMock(return_value=_response({}))
     client.post = AsyncMock(return_value=_response(_created("cachedContents/1", _expire_time(60))))
 
-    first: Final = await _async_call(client)
+    first: Final = await _async_call(endpoints, client)
     client.get = AsyncMock(side_effect=AssertionError("a known cache must not be listed again"))
-    second: Final = await _async_call(client)
+    second: Final = await _async_call(endpoints, client)
 
     assert (first[2], second[2]) == ("cachedContents/1", "cachedContents/1")
 
 
 @pytest.mark.asyncio
-async def test_async_listed_cache_about_to_expire_is_not_used():
+async def test_async_listed_cache_about_to_expire_is_not_used(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=AsyncHTTPHandler)
     key: Final = vertex_ai_context_caching.local_cache_obj.get_cache_key(
         messages=_messages()[:1], tools=None, tool_choice=None, model="gemini-3.1-pro"
@@ -253,11 +264,11 @@ async def test_async_listed_cache_about_to_expire_is_not_used():
     )
     client.post = AsyncMock(return_value=_response(_created("cachedContents/fresh", _expire_time(60))))
 
-    assert (await _async_call(client))[2] == "cachedContents/fresh"
+    assert (await _async_call(endpoints, client))[2] == "cachedContents/fresh"
 
 
 @pytest.mark.asyncio
-async def test_async_create_http_error_surfaces_its_status_code():
+async def test_async_create_http_error_surfaces_its_status_code(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=AsyncHTTPHandler)
     client.get = AsyncMock(return_value=_response({}))
     request: Final = httpx.Request("POST", "https://vertex.test/v1/projects/p/locations/us/cachedContents")
@@ -265,13 +276,13 @@ async def test_async_create_http_error_surfaces_its_status_code():
     client.post = AsyncMock(return_value=failed)
 
     with pytest.raises(VertexAIError) as raised:
-        await _async_call(client)
+        await _async_call(endpoints, client)
 
     assert raised.value.status_code == 429
 
 
 @pytest.mark.asyncio
-async def test_waiters_resolve_on_their_own_when_the_first_request_fails():
+async def test_waiters_resolve_on_their_own_when_the_first_request_fails(endpoints: ContextCachingEndpoints):
     client: Final = MagicMock(spec=AsyncHTTPHandler)
 
     async def slow_list(**_):
@@ -286,7 +297,9 @@ async def test_waiters_resolve_on_their_own_when_the_first_request_fails():
         ]
     )
 
-    results: Final = await asyncio.gather(_async_call(client), _async_call(client), return_exceptions=True)
+    results: Final = await asyncio.gather(
+        _async_call(endpoints, client), _async_call(endpoints, client), return_exceptions=True
+    )
 
     assert isinstance(results[0], VertexAIError)
     assert results[1][2] == "cachedContents/2"
@@ -304,22 +317,26 @@ def test_parse_expire_time_accepts_nanosecond_precision():
 
 
 def test_parse_expire_time_reads_a_missing_offset_as_utc():
-    assert parse_expire_time("2026-10-14T18:06:21") == datetime(2026, 10, 14, 18, 6, 21, tzinfo=timezone.utc).timestamp()
+    assert (
+        parse_expire_time("2026-10-14T18:06:21") == datetime(2026, 10, 14, 18, 6, 21, tzinfo=timezone.utc).timestamp()
+    )
 
 
 def test_cache_expiring_within_the_margin_is_not_remembered():
-    known_cached_contents.remember(_SCOPE, "key", "cachedContents/soon", _expire_time(3))
+    known: Final = KnownCachedContents(clock=lambda: _NOW)
+    known.remember(_SCOPE, "key", "cachedContents/soon", _expire_time(3))
 
-    assert known_cached_contents.get(_SCOPE, "key") is None
+    assert known.get(_SCOPE, "key") is None
 
 
 def test_registry_is_bounded():
+    known: Final = KnownCachedContents(clock=lambda: _NOW)
     with patch(f"{_REGISTRY_MODULE}.MAX_KNOWN_CACHED_CONTENTS", 3):
         for index in range(5):
-            known_cached_contents.remember(_SCOPE, f"key-{index}", f"cachedContents/{index}", _expire_time(60))
+            known.remember(_SCOPE, f"key-{index}", f"cachedContents/{index}", _expire_time(60))
 
-    assert known_cached_contents.get(_SCOPE, "key-0") is None
-    assert known_cached_contents.get(_SCOPE, "key-4") == "cachedContents/4"
+    assert known.get(_SCOPE, "key-0") is None
+    assert known.get(_SCOPE, "key-4") == "cachedContents/4"
 
 
 def _generated(stream: bool) -> httpx.Response:
@@ -371,8 +388,8 @@ async def test_remembered_cache_rejected_by_generate_content_is_replaced_within_
     )
     respx_mock.post(url__regex=r".*/cachedContents$").mock(
         side_effect=[
-            httpx.Response(200, json=_created("cachedContents/deleted", _expire_time(300))),
-            httpx.Response(200, json=_created("cachedContents/fresh", _expire_time(300))),
+            httpx.Response(200, json=_created("cachedContents/deleted", _FAR_FUTURE)),
+            httpx.Response(200, json=_created("cachedContents/fresh", _FAR_FUTURE)),
         ]
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
