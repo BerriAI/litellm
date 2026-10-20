@@ -354,6 +354,9 @@ _STORAGE_SQL: Final = """
       )
     """
 
+# The age job and the size job are scheduled on separate SpendLogCleanup instances, so the lock is per process.
+_PASS_LOCK: Final = asyncio.Lock()
+
 SPEND_LOG_CLEANUP_BOUND_SETTINGS: Final = (
     "maximum_spend_logs_cleanup_batch_size",
     "maximum_spend_logs_cleanup_max_batches",
@@ -1363,6 +1366,17 @@ class SpendLogCleanup:
         await self._run(prisma_client, age_rules=False, size_rule=True)
 
     async def _run(self, prisma_client: PrismaClient, age_rules: bool, size_rule: bool) -> None:
+        """
+        One pass at a time per pod. The age job and the size job fire from separate schedules, and the pod
+        lock only exists with Redis, so this is what keeps them apart in a pod without it. The later one waits
+        rather than skips, because the other job applies a different rule and would not do its work for it.
+        """
+        if _PASS_LOCK.locked():
+            verbose_proxy_logger.info("Another cleanup pass is running in this pod; waiting for it to finish")
+        async with _PASS_LOCK:
+            await self._run_passes(prisma_client, age_rules, size_rule)
+
+    async def _run_passes(self, prisma_client: PrismaClient, age_rules: bool, size_rule: bool) -> None:
         lock_acquired = False
         run_started_at: Final = time.monotonic()
         progress: Final = _RunProgress()
