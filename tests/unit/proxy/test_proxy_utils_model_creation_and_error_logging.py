@@ -2084,6 +2084,31 @@ def test_usage_the_stream_already_recovered_beats_an_estimate():
     assert lifted == (recovered, 0.25)
 
 
+def test_a_failed_request_counts_its_instructions_even_after_logging_redacted_them():
+    from litellm.constants import REDACTED_BY_LITELLM
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    instructions: Final = "Review every changed line and explain each risk you find. " * 40
+    call: Final[dict[str, object]] = {
+        "call_type": "aresponses",
+        "model": FAILURE_USAGE_MODEL,
+        "messages": ONE_USER_MESSAGE,
+    }
+
+    def estimated_prompt_tokens(dispatched_instructions: str) -> int:
+        lifted: Final = _failure_usage_to_lift(
+            model_call_details={**call, "optional_params": {"instructions": dispatched_instructions}},
+            request_body={"instructions": instructions},
+            dispatched=True,
+        )
+        assert lifted is not None
+        usage: Final = lifted[0]
+        assert isinstance(usage, Usage)
+        return usage.prompt_tokens
+
+    assert estimated_prompt_tokens(REDACTED_BY_LITELLM) == estimated_prompt_tokens(instructions)
+
+
 def test_a_timed_out_request_on_an_unmapped_model_keeps_its_row_at_zero_cost():
     from litellm.proxy.utils import _failure_usage_to_lift
 

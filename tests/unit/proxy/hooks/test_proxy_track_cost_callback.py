@@ -3270,3 +3270,100 @@ async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when
     else:
         assert kwargs["response_cost"] == 1.0 and "discount_amount" not in breakdown
         assert counter.totals == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_accounting_failures_stay_with_their_originating_call() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+    logger: Final = ProxyDBLogger()
+    dependency: Final = SimpleNamespace(failed_tracking_alert=AsyncMock())
+
+    async def fail_before_accounting(call_id: str) -> None:
+        await logger.async_log_success_event(
+            kwargs={
+                "litellm_call_id": call_id,
+                "call_type": "aretrieve_batch",
+                "model": "batch-model",
+                "stream": False,
+                "response_cost": None,
+            },
+            response_obj=None,
+            start_time=_CALL_START,
+            end_time=_CALL_START,
+        )
+
+    async def independent_batch() -> bool:
+        with track_batch_accounting("independent") as outcome:
+            await fail_before_accounting("independent")
+        return outcome.retryable_failure
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency):
+        with track_batch_accounting("outer") as outer:
+            await fail_before_accounting("unrelated")
+            assert outer.retryable_failure is False
+            with track_batch_accounting("inner") as inner:
+                await fail_before_accounting("inner")
+            assert inner.retryable_failure is True
+            assert outer.retryable_failure is False
+            independent, _ = await asyncio.gather(independent_batch(), fail_before_accounting("outer"))
+            assert independent is True
+            assert outer.retryable_failure is True
+            with pytest.raises(asyncio.CancelledError):
+                with track_batch_accounting("cancelled") as cancelled:
+                    raise asyncio.CancelledError
+            await fail_before_accounting("cancelled")
+            assert cancelled.retryable_failure is False
+
+
+@pytest.mark.asyncio
+async def test_batch_accounting_does_not_retry_after_settling_a_budget_reservation() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": ()}
+    dependency: Final = SimpleNamespace(failed_tracking_alert=AsyncMock())
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency):
+        with track_batch_accounting("reserved") as outcome:
+            await ProxyDBLogger().async_log_success_event(
+                kwargs={
+                    "litellm_call_id": "reserved",
+                    "call_type": "aretrieve_batch",
+                    "model": "batch-model",
+                    "stream": False,
+                    "response_cost": None,
+                    "litellm_params": {"metadata": {"user_api_key_budget_reservation": reservation}},
+                },
+                response_obj=None,
+                start_time=_CALL_START,
+                end_time=_CALL_START,
+            )
+    assert reservation["finalized"] is True
+    assert outcome.retryable_failure is False
+
+
+@pytest.mark.asyncio
+async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+    monkeypatch.setattr(litellm, "apply_search_free_tier", True)
+    counter: Final = _SharedCounter()
+    dependency: Final = SimpleNamespace(
+        failed_tracking_alert=AsyncMock(),
+        internal_usage_cache=SimpleNamespace(dual_cache=SimpleNamespace(redis_cache=counter)),
+    )
+    kwargs: Final = {**_grounded_gemini_kwargs(response_cost=1.0), "litellm_call_id": "grounded-batch"}
+    response: Final = ModelResponse(
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=5),
+        )
+    )
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency):
+        with track_batch_accounting("grounded-batch") as outcome:
+            await ProxyDBLogger().async_log_success_event(kwargs, response, _CALL_START, _CALL_START)
+
+    assert sum(counter.totals.values()) == 5
+    assert outcome.failed is True
+    assert outcome.retryable_failure is False

@@ -361,7 +361,7 @@ def test_server_owned_registry_includes_anthropic_openai_and_oauth_token_exchang
         "token_exchange_profile",
         "token_exchange_scope",
     )
-    assert github_copilot_oauth_litellm_params == ("github_copilot_auth_type",)
+    assert github_copilot_oauth_litellm_params == ("github_copilot_auth_type", "github_copilot_host")
     assert server_owned_wif_litellm_params == (
         anthropic_wif_litellm_params
         + openai_wif_litellm_params
