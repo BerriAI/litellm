@@ -19,6 +19,7 @@ from aiohttp import ClientSession, TCPConnector
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
@@ -133,6 +134,47 @@ def test_sync_post_streaming_status_error_should_not_wait_forever_for_body(
         assert exc_info.value.response.status_code == 400
     finally:
         litellm_handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timeout", "expected"),
+    [
+        (600.0, {"connect": HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS, "read": 600.0, "write": 600.0, "pool": 600.0}),
+        (2.0, {"connect": 2.0, "read": 2.0, "write": 2.0, "pool": 2.0}),
+        (httpx.Timeout(600.0), {"connect": 600.0, "read": 600.0, "write": 600.0, "pool": 600.0}),
+    ],
+)
+async def test_async_post_numeric_timeout_keeps_bounded_connect_timeout(
+    timeout: float | httpx.Timeout, expected: Mapping[str, float]
+):
+    seen: Final[list[Mapping[str, float]]] = []
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200, json={})
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(capture))
+    await handler.post("http://upstream.invalid/v1/chat/completions", json={}, timeout=timeout)
+
+    assert seen == [expected]
+
+
+@pytest.mark.asyncio
+async def test_async_post_replay_after_connect_error_keeps_bounded_connect_timeout():
+    seen: Final[list[Mapping[str, float]]] = []
+
+    def refuse_then_capture(request: httpx.Request) -> httpx.Response:
+        if not seen:
+            seen.append({})
+            raise httpx.ConnectError("connection refused", request=request)
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200, json={})
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(refuse_then_capture))
+    await handler.post("http://upstream.invalid/v1/chat/completions", json={}, timeout=600.0)
+
+    assert seen[1]["connect"] == HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
