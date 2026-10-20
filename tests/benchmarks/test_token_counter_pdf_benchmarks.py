@@ -1,9 +1,16 @@
+from functools import reduce
 from types import SimpleNamespace
 from typing import Final
 
 import pytest
 
-from litellm.litellm_core_utils.token_counter import _price_pdf_pages
+from litellm.litellm_core_utils.token_counter import (
+    _PDF_EMPTY_RESOURCES,
+    PDF_TEXT_OBJECT,
+    _pdf_bounded_text_samples,
+    _PdfStreamMetrics,
+    _price_pdf_pages,
+)
 
 
 def _pdf_page(content: bytes) -> SimpleNamespace:
@@ -12,6 +19,27 @@ def _pdf_page(content: bytes) -> SimpleNamespace:
         get_contents=lambda: SimpleNamespace(get_data=lambda: content),
         extract_text=lambda: "",
         get=lambda key: {"/XObject": {}} if key == "/Resources" else None,
+    )
+
+
+def _pdf_doubling_form_metrics(depth: int, leaf_content: bytes) -> _PdfStreamMetrics:
+    leaf_metrics: Final = _PdfStreamMetrics(
+        content=leaf_content,
+        content_bytes=len(leaf_content),
+        operand_bytes=0,
+        resources=_PDF_EMPTY_RESOURCES,
+        forms=(),
+    )
+    return reduce(
+        lambda child, _: _PdfStreamMetrics(
+            content=b"/Fm Do\n/Fm Do\n",
+            content_bytes=0,
+            operand_bytes=0,
+            resources=_PDF_EMPTY_RESOURCES,
+            forms=(child, child),
+        ),
+        range(depth),
+        leaf_metrics,
     )
 
 
@@ -58,9 +86,21 @@ def test_pdf_inline_image_scan_repeated_bi_without_id():  # test-quality-ok: Cod
     ids=["repeated-bt", "repeated-open-literal", "repeated-et-literal"],
 )
 def test_pdf_text_object_scan(content: bytes):  # test-quality-ok: CodSpeed performance benchmark
-    page: Final = _pdf_page(content)
+    tuple(PDF_TEXT_OBJECT.finditer(content))
 
-    _price_pdf_pages((page,), len)
+
+@pytest.mark.benchmark
+def test_pdf_textless_doubling_form_tree_skips_subtrees():  # test-quality-ok: CodSpeed performance benchmark
+    metrics: Final = _pdf_doubling_form_metrics(30, b"q Q\n")
+
+    _pdf_bounded_text_samples(metrics)
+
+
+@pytest.mark.benchmark
+def test_pdf_text_leaf_doubling_form_tree_stays_within_sample_cap():  # test-quality-ok: CodSpeed performance benchmark
+    metrics: Final = _pdf_doubling_form_metrics(30, b"BT (x) Tj ET\n")
+
+    _pdf_bounded_text_samples(metrics)
 
 
 @pytest.mark.benchmark

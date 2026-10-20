@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, groupby, islice, takewhile, tee
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
 
 import anyio
 import anyio.lowlevel
@@ -358,12 +358,12 @@ PDF_STRING_OPERAND: Final = re.compile(PDF_LITERAL_STRING_OPERAND + rb"|<[0-9A-F
 PDF_LITERAL_ESCAPE: Final = re.compile(rb"\\([nrtbf()\\]|[0-7]{1,3}|\r\n?|\n|[\s\S])")
 PDF_INLINE_IMAGE: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND
-    + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|(?P<inline_image>(?<![^\s\]>)])BI(?=\s)"
+    + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|(?P<inline_image>(?<![^\s\]>)])BI(?=[\s/\[\]()<>{}%])"
     + rb"[\s\S]*?(?:(?<=\s)ID\s[\s\S]*?(?:(?P<image_end>\sEI(?![^\s\[/<(%]))|\Z)|\Z))"
 )
 PDF_TEXT_OBJECT: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND
-    + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|(?P<text_object>(?<![^\s\]>)])BT(?=\s)"
+    + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|(?P<text_object>(?<![^\s\]>)])BT(?=[\s/\[\]()<>{}%])"
     + rb"(?:(?:"
     + PDF_LITERAL_STRING_OPERAND
     + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|[\s\S])*?"
@@ -1099,19 +1099,65 @@ def _pdf_decoded_string_operands(content: bytes) -> Iterable[bytes]:
     )
 
 
+_PdfTextObjectSpans: TypeAlias = tuple[tuple[int, int], ...]
+_PdfTextTreeWalkItem: TypeAlias = tuple[_PdfStreamMetrics, bool]
+_PdfTextRecordWalkItem: TypeAlias = tuple[_PdfStreamMetrics, tuple[int, ...]]
+
+
 def _pdf_text_object_records(
     metrics: _PdfStreamMetrics,
     invocation_path: tuple[int, ...] = (),
 ) -> Iterable[_PdfTextObjectRecord]:
-    text_object_spans: Final = (
-        (match.start("text_object"), match.end("text_object"))
-        for match in PDF_TEXT_OBJECT.finditer(metrics.content)
-        if match.group("text_object") is not None
-    )
-    for index, (start, end) in enumerate(text_object_spans):
-        yield _PdfTextObjectRecord(metrics, invocation_path, start, end, index == 0)
-    for index, form_metrics in enumerate(metrics.forms):
-        yield from _pdf_text_object_records(form_metrics, invocation_path + (index,))
+    text_object_span_memo: Final[dict[int, _PdfTextObjectSpans]] = {}  # mutable-ok: page-local regex cache
+    subtree_text_memo: Final[dict[int, bool]] = {}  # mutable-ok: page-local subtree cache
+
+    def text_object_spans_for(stream_metrics: _PdfStreamMetrics) -> _PdfTextObjectSpans:
+        identity: Final = id(stream_metrics)
+        cached: Final = text_object_span_memo.get(identity)
+        if cached is not None:
+            return cached
+        spans: Final = tuple(
+            (match.start("text_object"), match.end("text_object"))
+            for match in PDF_TEXT_OBJECT.finditer(stream_metrics.content)
+            if match.group("text_object") is not None
+        )
+        text_object_span_memo[identity] = spans
+        return spans
+
+    def subtree_has_text(stream_metrics: _PdfStreamMetrics) -> bool:
+        identity: Final = id(stream_metrics)
+        if identity in subtree_text_memo:
+            return subtree_text_memo[identity]
+        pending: Final[list[_PdfTextTreeWalkItem]] = [(stream_metrics, False)]  # mutable-ok: DFS stack
+        while pending:
+            current_metrics, expanded = pending.pop()
+            current_identity = id(current_metrics)
+            if current_identity in subtree_text_memo:
+                continue
+            if expanded:
+                subtree_text_memo[current_identity] = any(
+                    subtree_text_memo.get(id(form_metrics), False) for form_metrics in current_metrics.forms
+                )
+                continue
+            if text_object_spans_for(current_metrics):
+                subtree_text_memo[current_identity] = True
+                continue
+            pending.append((current_metrics, True))
+            pending.extend((form_metrics, False) for form_metrics in current_metrics.forms)
+        return subtree_text_memo[identity]
+
+    if not subtree_has_text(metrics):
+        return
+    pending_records: Final[list[_PdfTextRecordWalkItem]] = [(metrics, invocation_path)]  # mutable-ok: DFS stack
+    while pending_records:
+        current_metrics, current_path = pending_records.pop()
+        for index, (start, end) in enumerate(text_object_spans_for(current_metrics)):
+            yield _PdfTextObjectRecord(current_metrics, current_path, start, end, index == 0)
+        pending_records.extend(
+            (form_metrics, current_path + (index,))
+            for index, form_metrics in reversed(tuple(enumerate(current_metrics.forms)))
+            if subtree_has_text(form_metrics)
+        )
 
 
 def _pdf_text_object_record_length(record: _PdfTextObjectRecord) -> int:
@@ -1149,31 +1195,43 @@ def _pdf_truncated_operand_closures(prefix: bytes) -> bytes:
     return b""
 
 
+def _pdf_truncated_text_show_closures(prefix: bytes) -> bytes:
+    operands: Final = tuple(PDF_STRING_OPERAND.finditer(prefix))
+    last_operand: Final = operands[-1] if operands else None
+    structural_content: Final = PDF_STRING_OPERAND.sub(b"", prefix)
+    open_array_count: Final = max(0, structural_content.count(b"[") - structural_content.count(b"]"))
+    if open_array_count:
+        return b"]" * open_array_count + b" TJ"
+    if last_operand is not None and last_operand.end() == len(prefix) and not last_operand.group(0).startswith(b"%"):
+        return b" Tj"
+    return b""
+
+
 def _pdf_truncated_text_object_prefix(
     content: bytes,
     start: int,
     prefix_length: int,
 ) -> bytes:
-    prefix: Final = content[start : start + prefix_length]
-    operand_closures: Final = _pdf_truncated_operand_closures(prefix)
-    if len(prefix) + len(operand_closures) + len(b"\nET") <= PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
-        return prefix + operand_closures + b"\nET"
-    reduced_prefix_length: Final = (
-        prefix_length + PDF_PAGE_MAX_EXACT_CONTENT_BYTES - len(operand_closures) - len(b"\nET")
-    ) // 2
-    return _pdf_truncated_text_object_prefix(content, start, reduced_prefix_length)
+    current_prefix_length: int = prefix_length  # rebind-ok: shrinks until the closures fit
+    while True:
+        prefix = content[start : start + current_prefix_length]
+        operand_closures = _pdf_truncated_operand_closures(prefix)
+        text_show_closures = _pdf_truncated_text_show_closures(prefix)
+        closures = operand_closures + text_show_closures + b"\nET"
+        if len(prefix) + len(closures) <= PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
+            return prefix + closures
+        current_prefix_length = (current_prefix_length + PDF_PAGE_MAX_EXACT_CONTENT_BYTES - len(closures)) // 2
 
 
 def _pdf_truncated_string_operand_prefix(operand: bytes, prefix_length: int) -> bytes:
-    def prefix_for_length(current_length: int) -> bytes:
-        prefix: Final = operand[:current_length]
-        operand_closures: Final = _pdf_truncated_operand_closures(prefix)
+    current_length: int = prefix_length  # rebind-ok: shrinks until the operand closure fits
+    while True:
+        prefix = operand[:current_length]
+        operand_closures = _pdf_truncated_operand_closures(prefix)
         if len(prefix) + len(operand_closures) <= prefix_length:
             return prefix + operand_closures
-        reduced_length: Final = (current_length + prefix_length - len(operand_closures)) // 2
-        return prefix_for_length(reduced_length)
-
-    return prefix_for_length(prefix_length)
+        reduced_length = (current_length + prefix_length - len(operand_closures)) // 2
+        current_length = reduced_length
 
 
 def _pdf_truncated_text_object(record: _PdfTextObjectRecord) -> bytes:

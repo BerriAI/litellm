@@ -1853,6 +1853,23 @@ def _pdf_data_url_with_xobjects(
     return PDF_DATA_URL_PREFIX + base64.b64encode(header + b"".join(object_chunks) + xref + trailer).decode()
 
 
+def _pdf_data_url_with_doubling_forms(depth: int, leaf_content: bytes) -> str:
+    form_objects: Final = tuple(
+        _pdf_stream(
+            leaf_content if index == depth - 1 else b"/Fm Do\n/Fm Do\n",
+            b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject "
+            + (
+                b"<< >>"
+                if index == depth - 1
+                else b"<< /Fm " + str(7 + index).encode() + b" 0 R >>"
+            )
+            + b" >>",
+        )
+        for index in range(depth)
+    )
+    return _pdf_data_url_with_xobjects(b"/Fm Do\n", b"<< /Fm 6 0 R >>", form_objects)
+
+
 def _pdf_data_url_with_identity_h_font(
     page_content: bytes,
     page_xobjects: bytes = b"<< >>",
@@ -2622,6 +2639,72 @@ def test_oversized_identity_h_pdf_counts_text_after_path_padding():
     assert priced is not None
     assert blank_price is not None
     assert priced - blank_price == len("Hello world")
+
+
+def test_depth_30_doubling_form_tree_prices_text_leaf_by_effective_draw_count():
+    repetitions: Final = 1 << 30
+    data_url: Final = _pdf_data_url_with_doubling_forms(31, b"BT /F1 12 Tf (x) Tj ET\n")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_x_tokens)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, count_x_tokens)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert repetitions * 3 // 4 <= priced - blank_price <= repetitions * 5 // 4
+
+
+def test_oversized_tj_array_truncation_keeps_its_text():
+    content: Final = b"BT /F1 12 Tf [" + b"(x) 0 " * 20_000 + b"] TJ ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(content, b"<< >>", ())
+    pdf_bytes: Final = base64.b64decode(data_url.removeprefix(PDF_DATA_URL_PREFIX))
+    exact_text: Final = _pdf_extracted_text(pdf_bytes)
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    exact_tokens: Final = count_x_tokens(exact_text)
+    priced: Final = _count_inline_pdf_tokens(data_url, count_x_tokens)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, count_x_tokens)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert exact_tokens > 10_000
+    assert exact_tokens * 3 // 4 <= priced - blank_price <= exact_tokens * 5 // 4
+
+
+def test_compact_bt_operator_keeps_oversized_page_text():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    content: Final = path_padding + b"BT/F1 12 Tf (Hello world) Tj ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(content, b"<< >>", ())
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == len("Hello world")
+
+
+def test_compact_bi_operator_strips_inline_image_before_pricing_text():
+    image_data: Final = random.Random(42).randbytes(270_000)
+    content: Final = b"BI/W 270000/H 1/BPC 8/CS /RGB ID " + image_data + b" EI\nBT /F1 9 Tf (Hello world) Tj ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(content, b"<< >>", ())
+    pdf_bytes: Final = base64.b64decode(data_url.removeprefix(PDF_DATA_URL_PREFIX))
+    page: Final = _pdf_text_page(pdf_bytes)
+    exact_tokens: Final = len(page.extract_text() or "")
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == exact_tokens
 
 
 def test_pdf_text_object_strings_containing_bt_and_et_do_not_split_sampling():
