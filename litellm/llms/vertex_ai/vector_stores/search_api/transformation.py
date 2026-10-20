@@ -461,3 +461,6 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         input_cost_per_query: Final = model_info.get("input_cost_per_query") or 0.0
         return input_cost_per_query, 0.0
+
+
+vertex_search_api_vector_store_config: Final = VertexSearchAPIVectorStoreConfig()

@@ -40,6 +40,7 @@ STREAM_CHUNKS: Final = 3
 HELD_SEARCHES: Final = 150
 HOLD_SECONDS: Final = 10.0
 _HOLD_ROOMS: Final = MappingProxyType({"hold-async": queue.SimpleQueue[int](), "hold-sync": queue.SimpleQueue[int]()})
+_TOKEN_REQUESTS: Final = queue.SimpleQueue[str]()
 VERTEX_SERVING_CONFIG_PATH: Final = (
     "/v1/projects/p/locations/global/collections/default_collection/engines/e/servingConfigs/default_search"
 )
@@ -108,7 +109,8 @@ async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallab
             send, {"results": [{"id": await _hold_until_all_arrive(hold_room, client[1] if client else 0)}]}
         )
         return
-    if scope["path"] == "/_oauth/token":
+    if scope["path"].endswith("/_oauth/token"):
+        _TOKEN_REQUESTS.put(scope["path"])
         await _send_json(send, {"access_token": "scripted", "expires_in": 3600, "token_type": "Bearer"})
         return
     if scope["path"].endswith(":search"):
@@ -325,6 +327,35 @@ def test_default_async_client_stays_http1_after_vertex_search_used_http2(
             await handler.close()
 
     assert asyncio.run(_run()) == (["http/2"], "1.1")
+
+
+def test_vertex_search_fetches_one_token_for_many_searches(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    import litellm
+
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    credentials: Final = service_account_json("p", f"{http2_tls_peer.url}/token-reuse")
+    search: Final = MappingProxyType(
+        {
+            "vector_store_id": "default_search",
+            "query": "ping",
+            "custom_llm_provider": "vertex_ai/search_api",
+            "api_base": f"{http2_tls_peer.url}{VERTEX_SERVING_CONFIG_PATH}",
+            "vertex_credentials": credentials,
+            "vertex_project": "p",
+        }
+    )
+
+    async def _searches() -> None:
+        await litellm.vector_stores.asearch(**search)
+        await asyncio.gather(*(litellm.vector_stores.asearch(**search) for _ in range(5)))
+
+    asyncio.run(_searches())
+    litellm.vector_stores.search(**search)
+
+    token_paths: Final = tuple(iter(lambda: None if _TOKEN_REQUESTS.empty() else _TOKEN_REQUESTS.get(), None))
+    assert token_paths.count("/token-reuse/_oauth/token") == 1
 
 
 def test_vertex_search_over_forced_ipv4_trusts_the_configured_ca(

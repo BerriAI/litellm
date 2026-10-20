@@ -10120,10 +10120,10 @@ class ProviderConfigManager:
                 return VertexVectorStoreConfig()
             elif api_type == "search_api":
                 from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
-                    VertexSearchAPIVectorStoreConfig,
+                    vertex_search_api_vector_store_config,
                 )
 
-                return VertexSearchAPIVectorStoreConfig()
+                return vertex_search_api_vector_store_config
         elif litellm.LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.vector_stores.transformation import (
                 BedrockVectorStoreConfig,
