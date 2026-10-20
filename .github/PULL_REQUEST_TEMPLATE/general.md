@@ -85,10 +85,9 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 ## Screenshots / Proof of Fix
 
-<!-- Include screenshots, screen recordings, or command (e.g., curl) + output demonstrating that your changes work as expected
-     The proof must be completely e2e with no mocks, using actual LLM calls costing real $$$ if applicable. `pytest` commands are not enough
-     Show ONLY the latest run: capture Before at the merge base and After at the PR's current tip, and when new commits change behavior, replace this whole section with the fresh run instead of stacking it on top of older ones. The run must be up to date. As soon as a new commit is made and it makes this PR description's after sha stale (it's no longer tip of PR), you must re-run the QA
-     Structure the section exactly as below: Before and After one heading level below this section, each naming the commit hash it was captured at, one lower-level heading per case inside each, the same case names in the same order on both sides, and numbered steps (command, observed output) under every case, never loose prose; shared setup (config, payloads) goes above Before, and with a single case, drop the case headings and number the steps directly
+<!-- Show end-to-end commands and observed output, screenshots, or recordings. Use real providers and paid LLM calls when applicable. Mocks and pytest output alone are insufficient
+     Show the latest applicable run, Before at the merge base and After at a commit containing the latest behavior change. A later tip may reuse proof only after reviewing the entire intervening diff and verifying tested behavior is unchanged, including behavior-neutral refactors. Keep the tested SHA and record the current tip, intervening changes, why proof remains valid, and focused checks. Docs, tests, or formatting alone need no live rerun, unless documentation is the product. Rerun affected QA for behavior, configuration, dependency, migration, or security changes, or uncertainty. Reuse Before only while its baseline remains valid. Never relabel old evidence as a new run
+     Use Before and After headings below this section, each naming the tested SHA. Use the same case names and order on both sides, with numbered command and observed-output steps under each. Put shared config and payloads above Before. For one case, omit the case headings and number steps directly
 
 ### Before (<hash>)
 
