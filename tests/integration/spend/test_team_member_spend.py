@@ -1,3 +1,4 @@
+import math
 import os
 import uuid
 from collections.abc import Callable, Iterator
@@ -219,6 +220,14 @@ def _member_update(gateway: Gateway, body: dict[str, JsonValue]) -> _MemberUpdat
     return _MemberUpdateResponse.model_validate_json(response.text)
 
 
+def _wait_for_settled_member_counter(cache: "Redis[bytes]", team_id: str, user_id: str, spend: float) -> None:
+    counter_key: Final = f"spend:team_member:{user_id}:{team_id}"
+    eventually(
+        lambda: cache.get(counter_key),
+        lambda value: value is not None and math.isclose(float(value), spend),
+    )
+
+
 def _budget_refused(response: httpx.Response) -> None:
     assert response.status_code == 422, response.text
     assert _ErrorResponse.model_validate_json(response.text).error.type == "budget_exceeded", response.text
@@ -298,9 +307,8 @@ def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gatewa
             seconds=70,
         )
         assert float(charged[0]["spend"]) == pytest.approx(0.06)
+        _wait_for_settled_member_counter(cache, team, user, 0.06)
         counter_key: Final = f"spend:team_member:{user}:{team}"
-        counted: Final = eventually(lambda: cache.get(counter_key), lambda value: value is not None, seconds=10)
-        assert float(counted) == pytest.approx(0.06), counted
         cache.set(counter_key, "0.01")
         upstream.delete("/__observations").raise_for_status()
         denied: Final = gateway.request(
@@ -317,7 +325,10 @@ def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gatewa
 def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
     gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
-    with gateway.scenario() as scenario:
+    with (
+        gateway.scenario() as scenario,
+        Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache,
+    ):
         model, provider_model = _priced_model(scenario)
         team: Final = scenario.team(models=[model])
         user: Final = scenario.user()
@@ -340,6 +351,7 @@ def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.06,
             seconds=70,
         )
+        _wait_for_settled_member_counter(cache, team, user, 0.06)
         peer_first: Final = _chat(peer, model, key, f"accrued member spend on peer {uuid.uuid4().hex}")
         assert peer_first.status_code == 200, peer_first.text
         observed_before_update: Final = _observed_models(upstream)
@@ -351,6 +363,7 @@ def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
             seconds=70,
         )
         assert accrued[0].spend == pytest.approx(0.12), accrued
+        _wait_for_settled_member_counter(cache, team, user, 0.12)
         cached_membership: Final = _member_me(gateway, team, key)
         assert cached_membership.litellm_budget_table is not None, repr(cached_membership)
         assert cached_membership.litellm_budget_table.max_budget == 1, repr(cached_membership)
@@ -936,7 +949,10 @@ def test_bulk_update_is_a_merge_patch_per_member(gateway: Gateway, upstream: htt
 def test_bulk_update_restores_team_default_when_last_member_limit_is_cleared(
     gateway: Gateway, upstream: httpx.Client
 ) -> None:
-    with gateway.scenario() as scenario:
+    with (
+        gateway.scenario() as scenario,
+        Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache,
+    ):
         model, provider_model = _priced_model(scenario)
         team: Final = scenario.team(models=[model], team_member_budget=0.0001)
         user: Final = scenario.user()
@@ -984,6 +1000,7 @@ def test_bulk_update_restores_team_default_when_last_member_limit_is_cleared(
             seconds=70,
         )
         assert accrued[0].spend == pytest.approx(0.06), accrued
+        _wait_for_settled_member_counter(cache, team, user, 0.06)
         second_chat: Final = _chat(gateway, model, key, f"member still under limit {uuid.uuid4().hex}")
         assert second_chat.status_code == 200, second_chat.text
         second_observations: Final = _observed_models(upstream)
