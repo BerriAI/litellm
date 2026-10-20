@@ -32,6 +32,18 @@ def _run(guard: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
 
 
+def test_clean_tracked_files_pass(tmp_path: Path) -> None:
+    guard: Final = _repo_with(
+        tmp_path,
+        {BUNDLE_CHUNK: 'api_key="test-key"\n', "docs/a.md": "clean\n"},
+    )
+
+    result: Final = _run(guard)
+
+    assert result.returncode == 0, result.stdout
+    assert BUNDLE_CHUNK not in result.stdout
+
+
 @pytest.mark.parametrize(
     "source_path",
     [
