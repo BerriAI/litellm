@@ -176,3 +176,32 @@ def test_gemini_4_argon_grounding_bills_tool_use_prompt_tokens_and_search_querie
     assert usage.prompt_tokens_details.text_tokens == 50 + 300
     assert usage.prompt_tokens_details.tool_use_tokens == 300
     assert usage.prompt_tokens_details.web_search_requests == 1
+
+    pre_gemini_4_response = VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+        completion_response={**completion_response, "modelVersion": "gemini-3.1-pro-preview"},
+        model_response=ModelResponse(),
+        model="gemini-3.1-pro-preview",
+        logging_obj=MagicMock(optional_params={}),
+        raw_response=raw_response,
+    )
+    assert pre_gemini_4_response.usage.prompt_tokens == 50
+    assert pre_gemini_4_response.usage.prompt_tokens_details.text_tokens == 50
+    assert pre_gemini_4_response.usage.prompt_tokens_details.tool_use_tokens == 300
+    assert pre_gemini_4_response.usage.prompt_tokens_details.web_search_requests == 1
+
+
+@pytest.mark.parametrize(
+    ("completion_response", "expected"),
+    [
+        ({"modelVersion": "gemini-4-argon"}, True),
+        ({"modelVersion": "gemini-4-argon-cyber-permissive"}, True),
+        ({"modelVersion": "gemini-3.1-pro-preview"}, False),
+        ({}, False),
+    ],
+)
+def test_response_bills_grounding_tool_use_tokens(
+    completion_response: dict[str, object],
+    expected: bool,
+) -> None:
+    assert VertexGeminiConfig._response_bills_grounding_tool_use_tokens(completion_response) is expected
+

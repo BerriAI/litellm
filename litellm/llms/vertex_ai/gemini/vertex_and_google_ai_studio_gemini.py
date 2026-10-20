@@ -2275,8 +2275,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _response_bills_grounding_tool_use_tokens(
-        completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
-        model: str | None = None,
+        completion_response: Mapping[str, object],
     ) -> bool:
         """
         Gemini 4+ bills every token the model processes, including internal tool system
@@ -2284,16 +2283,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         per-query search grounding fee).
         Source: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon#migrate-to-4-argon-from-31-pro
         """
-        resolved_model: Final = _served_model_name(completion_response.get("modelVersion")) or model
-        if not resolved_model:
-            return False
-        return VertexGeminiConfig._is_gemini_4_or_newer(resolved_model)
+        resolved_model: Final = _served_model_name(completion_response.get("modelVersion"))
+        return bool(resolved_model and VertexGeminiConfig._is_gemini_4_or_newer(resolved_model))
 
     @staticmethod
     def _calculate_usage(
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
         cache_creation_tokens: int = 0,
-        model: str | None = None,
     ) -> Usage:
         if completion_response is not None and "usageMetadata" not in completion_response:
             raise ValueError(f"usageMetadata not found in completion_response. Got={completion_response}")
@@ -2441,7 +2437,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             0
             if (
                 VertexGeminiConfig._response_has_search_grounding(completion_response)
-                and not VertexGeminiConfig._response_bills_grounding_tool_use_tokens(completion_response, model=model)
+                and not VertexGeminiConfig._response_bills_grounding_tool_use_tokens(completion_response)
             )
             else (tool_use_prompt_tokens or 0)
         )
@@ -2482,9 +2478,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
         cache_creation_tokens: int = 0,
-        model: str | None = None,
     ) -> Usage:
-        return cls._calculate_usage(completion_response, cache_creation_tokens, model=model)
+        return cls._calculate_usage(completion_response, cache_creation_tokens)
 
     @staticmethod
     def _check_finish_reason(
@@ -3087,7 +3082,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             usage: Final = VertexGeminiConfig._calculate_usage(
                 completion_response=completion_response,
                 cache_creation_tokens=_cache_creation_tokens(logging_obj),
-                model=model_response.model,
             )
 
             VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
@@ -4067,11 +4061,9 @@ class ModelResponseIterator:
         if "usageMetadata" not in processed_chunk:
             return None
 
-        logging_model: Final[object] = getattr(self.logging_obj, "model", None)
         usage: Final = VertexGeminiConfig.calculate_usage(
             completion_response=processed_chunk,
             cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
-            model=model_response.model or (logging_model if isinstance(logging_model, str) else None),
         )
 
         VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
