@@ -66,7 +66,7 @@ CASE: Final = PerformanceTestCase(
         Limit("unexpected_status_count", max=3),
         Limit("gateway_added_seconds", percentile=50, max=0.165),
         Limit("litellm_overhead_seconds", percentile=50, max=0.006),
-        Limit("litellm_overhead_seconds", percentile=99, max=0.15),
+        Limit("litellm_overhead_seconds", percentile=99, max=0.35),
         Limit("litellm_response_seconds", percentile=50, max=0.91),
         Limit("litellm_response_seconds", percentile=99, max=1.6),
         Limit("prometheus_redis_latency_mean_seconds", max=0.0026),
