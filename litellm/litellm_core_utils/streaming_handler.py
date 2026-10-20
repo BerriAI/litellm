@@ -26,7 +26,6 @@ from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
     set_hidden_param,
-    set_hidden_params,
 )
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
@@ -47,12 +46,13 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     StreamingChoices,
     TextCompletionResponse,
+    UnreportedUsage,
     Usage,
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..exceptions import OpenAIError, Timeout
-from .core_helpers import map_finish_reason, process_response_headers, usage_has_token_counts
+from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
@@ -321,7 +321,6 @@ class CustomStreamWrapper:
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
         self._last_returned_hidden_params: dict[str, object] | None = None
-        self._unreported_usage: Final = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
         _cached_logging_provider: Final = self.logging_obj.model_call_details.get("custom_llm_provider", None)
         self._cached_logging_llm_provider: str | None = _cached_logging_provider
@@ -1441,8 +1440,7 @@ class CustomStreamWrapper:
                 model_response.choices[0].logprobs = response_obj["logprobs"]
 
             if response_obj["usage"] is not None:
-                provider_usage: Final[object] = response_obj["usage"]
-                if usage_has_token_counts(provider_usage):
+                if isinstance(response_obj["usage"], dict):
                     setattr(
                         model_response,
                         "usage",
@@ -1458,10 +1456,12 @@ class CustomStreamWrapper:
                         "usage",
                         response_obj["usage"],
                     )
-                elif isinstance(provider_usage, BaseModel):
-                    provider_usage_fields: Final = provider_usage.model_dump()
-                    if usage_has_token_counts(provider_usage_fields):
-                        setattr(model_response, "usage", litellm.Usage(**provider_usage_fields))
+                elif isinstance(response_obj["usage"], BaseModel):
+                    setattr(
+                        model_response,
+                        "usage",
+                        litellm.Usage(**response_obj["usage"].model_dump()),
+                    )
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
@@ -1582,9 +1582,7 @@ class CustomStreamWrapper:
             if isinstance(chunk_usage, Usage):
                 model_response.usage = chunk_usage
             elif isinstance(chunk_usage, BaseModel):
-                chunk_usage_fields: Final = chunk_usage.model_dump()
-                if usage_has_token_counts(chunk_usage_fields):
-                    model_response.usage = Usage(**chunk_usage_fields)
+                model_response.usage = Usage(**chunk_usage.model_dump())
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
@@ -1845,21 +1843,10 @@ class CustomStreamWrapper:
         except Exception:
             return None
 
-    def _without_unreported_usage(self, chunk: ModelResponseStream) -> ModelResponseStream:
-        hidden_params: Final = get_hidden_params(chunk) or {}
-        if hidden_params.get("usage") is not self._unreported_usage:
-            return chunk
-        stripped: Final = chunk.model_copy()
-        set_hidden_params(stripped, {key: value for key, value in hidden_params.items() if key != "usage"})
-        return stripped
-
-    def _chunks_for_builder(self) -> list[ModelResponseStream]:
-        return [self._without_unreported_usage(chunk) for chunk in self.chunks]
-
     def _build_complete_streaming_response(self) -> _CompleteStreamingResponse:
         try:
             return litellm.stream_chunk_builder(
-                chunks=self._chunks_for_builder(),
+                chunks=self.chunks,
                 messages=self.messages,
                 logging_obj=self.logging_obj,
                 count_prompt_tokens=self.count_prompt_tokens,
@@ -1870,7 +1857,7 @@ class CustomStreamWrapper:
     async def _async_build_complete_streaming_response(self) -> _CompleteStreamingResponse:
         try:
             return await asyncify(litellm.stream_chunk_builder)(
-                chunks=self._chunks_for_builder(),
+                chunks=self.chunks,
                 messages=self.messages,
                 logging_obj=self.logging_obj,
                 count_prompt_tokens=self.count_prompt_tokens,
@@ -1880,7 +1867,13 @@ class CustomStreamWrapper:
 
     def _set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
         reported_usage: Final = _reported_total_usage(chunks=self.chunks)
-        set_hidden_param(chunk, "usage", self._unreported_usage if reported_usage is None else reported_usage)
+        set_hidden_param(
+            chunk,
+            "usage",
+            UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+            if reported_usage is None
+            else reported_usage,
+        )
         self._last_returned_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
             dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
         )

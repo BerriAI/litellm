@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
 )
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
-from litellm.types.utils import CachingDetails
+from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -76,6 +76,8 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.utils import ModelResponseListIterator
 from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
 
 
@@ -8592,6 +8594,63 @@ class TestStreamingClientDisconnectBilling:
         partial_response: Final = recorder.success_events[0]["response_obj"]
         assert getattr(partial_response, "service_tier") == "priority"
         assert partial_response.usage.total_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_after_finish_chunk_bills_the_estimate_when_the_provider_sent_no_usage(self):
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+        text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = LiteLLMLoggingObj(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id="no-usage-disconnect-call",
+            function_id="no-usage-disconnect-fn",
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_environment_variables(
+            model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "no-usage-disconnect-call"}
+        )
+        response: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-no-usage", created=1741037890, model=model, choices=choices)
+                    for choices in (
+                        [StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                        [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                    )
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        stream_iter: Final = response.__aiter__()
+        first_chunk: Final = await stream_iter.__anext__()
+        finish_chunk: Final = await stream_iter.__anext__()
+        assert first_chunk.choices[0].finish_reason is None
+        assert finish_chunk.choices[0].finish_reason == "stop"
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj},
+            response,
+        )
+        for _ in range(50):
+            if recorder.success_events:
+                break
+            await asyncio.sleep(0.1)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        usage: Final = recorder.success_events[0]["response_obj"].usage
+        assert (usage.prompt_tokens, usage.completion_tokens) == (
+            litellm.token_counter(model=model, messages=messages),
+            litellm.token_counter(model=model, text=text, count_response_tokens=True),
+        )
 
     @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):

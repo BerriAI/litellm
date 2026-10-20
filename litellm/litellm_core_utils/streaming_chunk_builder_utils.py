@@ -42,6 +42,7 @@ from litellm.types.utils import (
     ServerToolUse,
     StreamingChoices,
     TextCompletionResponse,
+    UnreportedUsage,
     Usage,
 )
 from litellm.utils import print_verbose, token_counter
@@ -870,6 +871,8 @@ class ChunkProcessor:
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
+        if isinstance(usage_chunk, UnreportedUsage):
+            return None
         if usage_chunk is None or isinstance(usage_chunk, Usage):
             return usage_chunk
         return Usage(**usage_chunk.model_dump())
