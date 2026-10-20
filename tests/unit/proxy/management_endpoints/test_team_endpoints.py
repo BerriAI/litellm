@@ -9686,21 +9686,26 @@ class _BroadcastPipeline:
         return self
 
     async def execute(self) -> None:
-        for message in self._messages:
-            await self._redis.publish("", message)
+        await self._redis.send(tuple(self._messages))
 
 
 class _BroadcastRecordingRedis:
     namespace = None
 
-    def __init__(self) -> None:
+    def __init__(self, round_trip_seconds: float = 0.0) -> None:
         self.broadcast_keys: list[str] = []
+        self._round_trip_seconds = round_trip_seconds
 
     def init_pubsub_client(self) -> "_BroadcastRecordingRedis":
         return self
 
+    async def send(self, messages: Sequence[str]) -> None:
+        if self._round_trip_seconds:
+            await asyncio.sleep(self._round_trip_seconds)
+        self.broadcast_keys.extend(json.loads(message)["cache_key"] for message in messages)
+
     async def publish(self, channel: str, message: str) -> int:
-        self.broadcast_keys.append(json.loads(message)["cache_key"])
+        await self.send((message,))
         return 1
 
     def pipeline(self, transaction: bool = True) -> _BroadcastPipeline:
@@ -9774,6 +9779,44 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     # the deleted key first, then both keys `_cache_team_object` writes: miss the alias one and the
     # JWT-by-alias path keeps resolving the team, miss the token and the key still authenticates
     assert redis.broadcast_keys == ["hashed-doomed-key", "team_id:team-doomed", "team_alias:doomed-team"]
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_500_member_team_reaches_every_member_cache_on_other_workers(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from itertools import chain
+
+    import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        team_membership_auth_cache_key,
+        team_membership_reservation_cache_key,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import _evict_deleted_team_member_cache
+
+    redis: Final = _BroadcastRecordingRedis(round_trip_seconds=0.001)
+    monkeypatch.setattr(pubsub_module, "coordination_redis_cache", lambda: redis)
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    members: Final = tuple(f"member-{index:03d}" for index in range(500))
+
+    await _evict_deleted_team_member_cache(
+        team_id="team-large", member_user_ids=members, user_api_key_cache=UserApiKeyCache()
+    )
+    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
+
+    expected: Final = frozenset(
+        chain.from_iterable(
+            (
+                member,
+                team_membership_auth_cache_key(team_id="team-large", user_id=member),
+                team_membership_reservation_cache_key(user_id=member, team_id="team-large"),
+            )
+            for member in members
+        )
+    )
+    assert expected - frozenset(redis.broadcast_keys) == frozenset()
 
 
 @pytest.mark.asyncio

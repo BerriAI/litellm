@@ -2914,6 +2914,29 @@ async def test_recompute_scim_member_roles_grants_when_in_admin_group(mocker, mo
 
 
 @pytest.mark.asyncio
+async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cached_admin_role(mocker, monkeypatch):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="member-1", value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    prisma, tx = _scim_admin_prisma(mocker, user_teams=["engineering"])
+
+    await _recompute_scim_member_roles(prisma, ["member-1"])
+
+    tx.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1"])
+    assert await cache.async_get_cache(key="member-1") is None
+
+
+@pytest.mark.asyncio
 async def test_recompute_scim_member_roles_noop_when_admin_group_unset(mocker, monkeypatch):
     """With scim_admin_group unset the recompute helper must not touch any role,
     preserving current behavior for SCIM group writes."""

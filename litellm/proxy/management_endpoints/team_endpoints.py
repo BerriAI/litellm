@@ -14,7 +14,7 @@ import copy
 import json
 import math
 import traceback
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -102,6 +102,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     OrganizationNotFoundError,
     _cache_team_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     allowed_route_check_inside_route,
+    await_inflight_team_membership_load,
     cache_team_object,
     can_org_access_model,
     delete_cache_key_objects,
@@ -119,12 +120,19 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    broadcast_evictions,
     evict_and_broadcast,
+    evict_local,
+    evict_shared,
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_membership_auth_cache_key,
+    team_membership_reservation_cache_key,
+)
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -4843,17 +4851,20 @@ async def _evict_deleted_team_member_cache(
     member_user_ids: Sequence[str],
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
-    await evict_and_broadcast(cache_keys=tuple(member_user_ids), user_api_key_cache=user_api_key_cache)
-    await asyncio.gather(
-        *(
-            invalidate_team_member_spend_state(
-                user_id=user_id,
-                team_id=team_id,
-                user_api_key_cache=user_api_key_cache,
-            )
-            for user_id in member_user_ids
-        )
+    _ = await asyncio.gather(
+        *(await_inflight_team_membership_load(user_id=user_id, team_id=team_id) for user_id in member_user_ids)
     )
+    cache_keys: Final = tuple(member_cache_keys(team_id, member_user_ids))
+    evict_local(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=cache_keys, cache=user_api_key_cache)
+    await broadcast_evictions(cache_keys=cache_keys)
+
+
+def member_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:
+    for user_id in user_ids:
+        yield user_id
+        yield team_membership_auth_cache_key(team_id=team_id, user_id=user_id)
+        yield team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
 
 async def _resolve_deleted_team_member_user_ids(

@@ -53,7 +53,12 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     delete_cache_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    broadcast_evictions,
+    evict_and_broadcast,
+    evict_local,
+    evict_shared,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     safe_get_request_headers,
@@ -524,6 +529,12 @@ async def _recompute_scim_member_roles(
             await tx.execute_raw(
                 _SET_USER_ROLE_SQL, role, sorted(user_id for user_id, user_role in resolved if user_role == role)
             )
+
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    evict_local(cache_keys=ids, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=ids, cache=user_api_key_cache)
+    await broadcast_evictions(cache_keys=ids)
 
 
 class _ResolvedUserMember(NamedTuple):
@@ -3062,13 +3073,8 @@ async def delete_group(
     group_id: Annotated[str, Path(title="Group ID")],
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
-    """Delete a group according to SCIM v2 protocol.
-
-    The group's team is deleted the way ``/team/delete`` deletes it, so the members'
-    group entries, their membership rows and every key issued on the team go with it,
-    however many members the group has. The roles are recomputed again for every user
-    the delete detached, so a member a concurrent group write added after the roster
-    was read is demoted with the rest.
+    """
+    Delete a group according to SCIM v2 protocol
     """
     verbose_proxy_logger.debug("SCIM DELETE GROUP request for group_id=%s", group_id)
     try:
