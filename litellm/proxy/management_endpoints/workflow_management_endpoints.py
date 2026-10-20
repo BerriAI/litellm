@@ -166,7 +166,6 @@ class _WorkflowTx(Protocol):
 async def _append_event_in_tx(
     tx: _WorkflowTx, run_id: str, event_data: _EventCreateData, new_status: str | None
 ) -> object:
-    """Create the event and, when the event type maps to a status, move the run to it in the same transaction."""
     event: Final = await tx.litellm_workflowevent.create(data=event_data)
     if new_status:
         await tx.litellm_workflowrun.update(

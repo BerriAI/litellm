@@ -90,7 +90,7 @@ class SearchAPIRouter:
     def get_matching_search_tools(
         router_instance: _SearchToolsRouter,
         search_tool_name: str,
-    ) -> list[SearchToolTypedDict]:
+    ) -> list:
         """
         Get all search tools matching the given name.
 
