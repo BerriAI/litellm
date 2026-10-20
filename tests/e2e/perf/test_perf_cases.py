@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Final
 
@@ -38,14 +39,15 @@ from setup.observe import (
     reset_mock,
     set_mock_latency,
 )
-from setup.performance_test_case import PerformanceTestCase
-from setup.plan import build_plan
+from setup.performance_test_case import MockLatency, PerformanceTestCase
+from setup.plan import PlannedRequest, build_plan
 from setup.podcpu import gateway_cpu_sampler
 from setup.provision import MOCK_PROVIDERS, build_setup, guardrail_url, mock_url
 from setup.run import run_plan
 
 pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
 _SPEND_SAMPLE: Final = 40
+_WARMUP_SECONDS: Final = 60
 
 
 def _spend_logged_share(proxy: ProxyClient, call_ids: tuple[str, ...]) -> float | None:
@@ -58,6 +60,20 @@ def _spend_logged_share(proxy: ProxyClient, call_ids: tuple[str, ...]) -> float 
         rows = proxy.spend_logs(SpendLogsParams(request_id=call_id))
         found += 1 if rows else 0
     return found / len(call_ids)
+
+
+def _warmup_plan(case: PerformanceTestCase, plan: tuple[PlannedRequest, ...]) -> tuple[PlannedRequest, ...]:
+    """The plan's first minute of traffic. It is sent before the memory baseline is read so a worker
+    has shed its startup allocations and `memory_growth_megabytes` is what the measured traffic added,
+    not startup churn (a lightly loaded case read negative growth)."""
+    return plan[: max(1, round(case.traffic.rps * _WARMUP_SECONDS))]
+
+
+def _arm_mocks(mock_urls: Mapping[str, str], latency: MockLatency) -> None:
+    for url in (*mock_urls.values(), guardrail_url()):
+        _ = reset_mock(url)
+    for url in mock_urls.values():
+        _ = set_mock_latency(url, latency)
 
 
 def _event_loop_rows(case: PerformanceTestCase, since: datetime) -> tuple[StallRow, ...]:
@@ -86,12 +102,11 @@ def test_perf_case(
         )
     plan: Final = build_plan(case)
     mock_urls: Final = {provider: mock_url(provider) for provider in MOCK_PROVIDERS}
-    for url in (*mock_urls.values(), guardrail_url()):
-        _ = reset_mock(url)
-    for url in mock_urls.values():
-        _ = set_mock_latency(url, case.mock_latency)
+    _arm_mocks(mock_urls, case.mock_latency)
     setup_started: Final = time.monotonic()
     setup: Final = build_setup(case, proxy=proxy, idp=idp, resources=resources)
+    _ = run_plan(case, _warmup_plan(case, plan), setup)
+    _arm_mocks(mock_urls, case.mock_latency)
     rss_before: Final = read_rss_everywhere(proxy)
     db_before: Final = read_db_counters()
     redis_before: Final = read_redis_counters()
