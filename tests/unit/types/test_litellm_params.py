@@ -252,6 +252,7 @@ INTERNAL_STATE_NAMES: Final = (
     "_context_compaction_state",
     *AGENTIC_LOOP_STATE_NAMES,
     "_router_weights",
+    "_encrypted_content_affinity_pinned",
     "fallback_depth",
     "max_fallbacks",
     "attempted_targets",

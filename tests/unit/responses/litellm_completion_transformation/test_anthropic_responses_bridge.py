@@ -867,6 +867,7 @@ async def test_router_with_encrypted_content_affinity_sends_the_compaction_block
 
     assert first.output[0].encrypted_content.startswith("litellm_enc:")
     assert _sent_assistant_content(route) == [_COMPACTION_BLOCK, {"type": "text", "text": "The."}]
+    assert [key for key in json.loads(route.calls.last.request.content) if key.startswith("_")] == []
 
 
 _DOCUMENT_BEFORE_COMPACTION: Final = "The design document pasted before the compaction."

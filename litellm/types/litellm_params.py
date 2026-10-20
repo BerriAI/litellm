@@ -383,6 +383,9 @@ class AgenticLoopState:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RouterState:
     weights: "RouterWeights | None" = field(default=None, metadata=wire("_router_weights"))
+    encrypted_content_affinity_pinned: bool | None = field(
+        default=None, metadata=wire("_encrypted_content_affinity_pinned")
+    )
     fallback_depth: int | None = None
     max_fallbacks: int | None = None
     attempted_targets: "AttemptedFallbackTargets | None" = None
