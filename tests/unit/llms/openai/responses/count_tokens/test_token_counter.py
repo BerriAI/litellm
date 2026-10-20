@@ -1,5 +1,6 @@
 import json
 import operator
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -393,6 +394,92 @@ async def test_undecodable_count_body_becomes_a_500_error_response_carrying_the_
             "status_code": 500,
         }
     )
+
+
+MALFORMED_TEXT_BLOCKS: Final = [
+    pytest.param({"type": "text", "text": None}, id="null"),
+    pytest.param({"type": "text", "text": 7}, id="number"),
+]
+
+
+def _tool_result_turns_with(text_block: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "run the build"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_log", "name": "bash", "input": {"cmd": "make"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_log",
+                    "content": [{"type": "text", "text": "build ok"}, text_block, {"type": "text", "text": "done"}],
+                }
+            ],
+        },
+    ]
+
+
+async def _count_tool_result_turns(
+    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object], litellm_params: dict[str, object]
+) -> tuple[TokenCountResponse | None, respx.Route]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=_tool_result_turns_with(text_block),
+            contents=None,
+            deployment={"litellm_params": litellm_params},
+            request_model="openai/gpt-4o",
+            messages_format="anthropic",
+        )
+        return result, route
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+async def test_anthropic_format_malformed_tool_result_text_answers_400_without_calling_openai(
+    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
+) -> None:
+    result, route = await _count_tool_result_turns(monkeypatch, text_block, {"api_key": "sk-test"})
+
+    assert route.called is False
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message) == (
+        True,
+        400,
+        "tool_result toolu_log content.1.text: Input should be a valid string",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+async def test_anthropic_format_drop_params_counts_the_tool_result_without_the_malformed_text(
+    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
+) -> None:
+    result, route = await _count_tool_result_turns(
+        monkeypatch, text_block, {"api_key": "sk-test", "drop_params": True}
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 9)
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\ndone"} in sent["input"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_tool_result_text_block_without_text_still_counts_as_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, route = await _count_tool_result_turns(monkeypatch, {"type": "text"}, {"api_key": "sk-test"})
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 9)
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\n\ndone"} in sent["input"]
 
 
 @pytest.mark.asyncio
