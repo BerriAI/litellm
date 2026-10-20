@@ -1829,6 +1829,25 @@ def split_anthropic_tool_use_id_signature(tool_use_id: str) -> tuple[str, str | 
         return base_id, encoded
 
 
+def _preserve_thought_suffix_on_sanitize(raw_id: str) -> str:
+    """
+    Sanitize a ``tool_use`` / ``tool_result`` id while keeping a valid
+    ``__thought__<urlsafe>`` Gemini signature suffix intact.
+
+    ``normalize_anthropic_tool_use_id`` intentionally strips thought suffixes
+    (for places that need the base id only). The ``/v1/messages`` request path
+    must preserve them so ``translate_anthropic_messages_to_openai`` can still
+    recover the signature after ``sanitize_tool_use_ids_in_anthropic_messages``.
+    """
+    if THOUGHT_SIGNATURE_SEPARATOR not in raw_id:
+        return normalize_anthropic_tool_use_id(raw_id)
+    base_id, sig_part = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+    sanitized_base: Final[str] = normalize_anthropic_tool_use_id(base_id)
+    if sig_part and all(c.isalnum() or c in "-_" for c in sig_part):
+        return f"{sanitized_base}{THOUGHT_SIGNATURE_SEPARATOR}{sig_part}"
+    return sanitized_base
+
+
 def _sanitize_tool_use_id_content_block(block: object) -> object:
     if not isinstance(block, dict):
         return block
@@ -1836,13 +1855,13 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
     if block_type in ("tool_use", "server_tool_use"):
         raw_id = block.get("id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = _preserve_thought_suffix_on_sanitize(raw_id)
             if normalized != raw_id:
                 return {**block, "id": normalized}
     elif block_type == "tool_result":
         raw_id = block.get("tool_use_id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = _preserve_thought_suffix_on_sanitize(raw_id)
             if normalized != raw_id:
                 return {**block, "tool_use_id": normalized}
     return block
@@ -1858,6 +1877,10 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> l
     conversation history containing ids like ``functions.Bash:0`` with ``.``
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
+
+    Valid Gemini ``__thought__<urlsafe>`` suffixes embedded by
+    ``format_anthropic_tool_use_id_with_signature`` are preserved so the
+    ``/v1/messages`` adapter can still recover the signature on later turns.
     """
     out: Final[list[Any]] = []
     for m in messages:
