@@ -3,7 +3,7 @@ import json
 import wave
 from collections.abc import Iterator
 from datetime import datetime
-from typing import Final
+from typing import Final, NamedTuple
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -376,17 +376,27 @@ def _one_second_wav() -> io.BytesIO:
     return audio_file
 
 
-class _SuccessCostRecorder(CustomLogger):
+class _LoggedSpend(NamedTuple):
+    cost: float | None
+    usage: dict[str, object] | None
+
+
+def _logged_spend(kwargs: dict[str, object]) -> _LoggedSpend:
+    payload: Final = kwargs["standard_logging_object"]
+    return _LoggedSpend(payload["response_cost"], payload["metadata"]["usage_object"])
+
+
+class _SuccessSpendRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.async_costs: Final[asyncio.Queue[float | None]] = asyncio.Queue()
-        self.sync_costs: Final[queue.Queue[float | None]] = queue.Queue()
+        self.async_spends: Final[asyncio.Queue[_LoggedSpend]] = asyncio.Queue()
+        self.sync_spends: Final[queue.Queue[_LoggedSpend]] = queue.Queue()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        await self.async_costs.put(kwargs["standard_logging_object"]["response_cost"])
+        await self.async_spends.put(_logged_spend(kwargs))
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        self.sync_costs.put(kwargs["standard_logging_object"]["response_cost"])
+        self.sync_spends.put(_logged_spend(kwargs))
 
 
 @pytest.mark.asyncio
@@ -394,9 +404,9 @@ async def test_atranscription_bills_the_transcript_when_the_model_ignores_stream
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def send_response(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"text": "hello world"})
+        return _duration_priced_transcript(streamed=False)
 
-    recorder: Final = _SuccessCostRecorder()
+    recorder: Final = _SuccessSpendRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     client: Final = AsyncOpenAI(
         api_key="sk-test",
@@ -404,26 +414,28 @@ async def test_atranscription_bills_the_transcript_when_the_model_ignores_stream
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(send_response)),
     )
     await litellm.atranscription(model="openai/whisper-1", file=_one_second_wav(), client=client)
-    unstreamed_cost: Final = await asyncio.wait_for(recorder.async_costs.get(), timeout=5)
+    unstreamed_spend: Final = await asyncio.wait_for(recorder.async_spends.get(), timeout=5)
     ignored_stream: Final = await litellm.atranscription(
         model="openai/whisper-1", file=_one_second_wav(), stream=True, client=client
     )
-    ignored_stream_cost: Final = await asyncio.wait_for(recorder.async_costs.get(), timeout=5)
+    ignored_stream_spend: Final = await asyncio.wait_for(recorder.async_spends.get(), timeout=5)
     await client.close()
 
     assert isinstance(ignored_stream, TranscriptionResponse)
     assert ignored_stream.text == "hello world"
-    assert unstreamed_cost is not None
-    assert ignored_stream_cost == unstreamed_cost > 0
+    assert unstreamed_spend.cost is not None
+    assert unstreamed_spend.cost > 0
+    assert unstreamed_spend.usage
+    assert ignored_stream_spend == unstreamed_spend
 
 
 def test_azure_transcription_bills_the_transcript_when_the_deployment_ignores_stream(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def send_response(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"text": "hello world"})
+        return _duration_priced_transcript(streamed=False)
 
-    recorder: Final = _SuccessCostRecorder()
+    recorder: Final = _SuccessSpendRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     client: Final = AzureOpenAI(
         api_key="azure-test-key",
@@ -438,17 +450,19 @@ def test_azure_transcription_bills_the_transcript_when_the_deployment_ignores_st
         "api_version": litellm.AZURE_DEFAULT_API_VERSION,
     }
     litellm.transcription(model="azure/whisper-1", file=_one_second_wav(), **azure_params)
-    unstreamed_cost: Final = recorder.sync_costs.get(timeout=5)
+    unstreamed_spend: Final = recorder.sync_spends.get(timeout=5)
     ignored_stream: Final = litellm.transcription(
         model="azure/whisper-1", file=_one_second_wav(), stream=True, **azure_params
     )
-    ignored_stream_cost: Final = recorder.sync_costs.get(timeout=5)
+    ignored_stream_spend: Final = recorder.sync_spends.get(timeout=5)
     client.close()
 
     assert isinstance(ignored_stream, TranscriptionResponse)
     assert ignored_stream.text == "hello world"
-    assert unstreamed_cost is not None
-    assert ignored_stream_cost == unstreamed_cost > 0
+    assert unstreamed_spend.cost is not None
+    assert unstreamed_spend.cost > 0
+    assert unstreamed_spend.usage
+    assert ignored_stream_spend == unstreamed_spend
 
 
 def _duration_priced_transcript(streamed: bool) -> httpx.Response:
@@ -477,7 +491,7 @@ async def test_atranscription_stream_bills_the_provider_duration_like_the_unstre
     async def send_response(request: httpx.Request) -> httpx.Response:
         return _duration_priced_transcript(streamed=_asks_for_stream(await request.aread()))
 
-    recorder: Final = _SuccessCostRecorder()
+    recorder: Final = _SuccessSpendRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     client: Final = AsyncOpenAI(
         api_key="sk-test",
@@ -485,17 +499,19 @@ async def test_atranscription_stream_bills_the_provider_duration_like_the_unstre
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(send_response)),
     )
     await litellm.atranscription(model="openai/gpt-transcribe", file=_one_second_wav(), client=client)
-    unstreamed_cost: Final = await asyncio.wait_for(recorder.async_costs.get(), timeout=5)
+    unstreamed_spend: Final = await asyncio.wait_for(recorder.async_spends.get(), timeout=5)
     stream: Final = await litellm.atranscription(
         model="openai/gpt-transcribe", file=_one_second_wav(), stream=True, client=client
     )
     events: Final = [event.type async for event in stream]
-    streamed_cost: Final = await asyncio.wait_for(recorder.async_costs.get(), timeout=5)
+    streamed_spend: Final = await asyncio.wait_for(recorder.async_spends.get(), timeout=5)
     await client.close()
 
     assert events == ["transcript.text.delta", "transcript.text.done"]
-    assert unstreamed_cost is not None
-    assert streamed_cost == unstreamed_cost > 0
+    assert unstreamed_spend.cost is not None
+    assert unstreamed_spend.cost > 0
+    assert unstreamed_spend.usage
+    assert streamed_spend == unstreamed_spend
 
 
 def test_transcription_stream_bills_the_provider_duration_like_the_unstreamed_call(
@@ -504,7 +520,7 @@ def test_transcription_stream_bills_the_provider_duration_like_the_unstreamed_ca
     def send_response(request: httpx.Request) -> httpx.Response:
         return _duration_priced_transcript(streamed=_asks_for_stream(request.read()))
 
-    recorder: Final = _SuccessCostRecorder()
+    recorder: Final = _SuccessSpendRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     client: Final = OpenAI(
         api_key="sk-test",
@@ -512,14 +528,16 @@ def test_transcription_stream_bills_the_provider_duration_like_the_unstreamed_ca
         http_client=httpx.Client(transport=httpx.MockTransport(send_response)),
     )
     litellm.transcription(model="openai/gpt-transcribe", file=_one_second_wav(), client=client)
-    unstreamed_cost: Final = recorder.sync_costs.get(timeout=5)
+    unstreamed_spend: Final = recorder.sync_spends.get(timeout=5)
     stream: Final = litellm.transcription(
         model="openai/gpt-transcribe", file=_one_second_wav(), stream=True, client=client
     )
     events: Final = [event.type for event in stream]
-    streamed_cost: Final = recorder.sync_costs.get(timeout=5)
+    streamed_spend: Final = recorder.sync_spends.get(timeout=5)
     client.close()
 
     assert events == ["transcript.text.delta", "transcript.text.done"]
-    assert unstreamed_cost is not None
-    assert streamed_cost == unstreamed_cost > 0
+    assert unstreamed_spend.cost is not None
+    assert unstreamed_spend.cost > 0
+    assert unstreamed_spend.usage
+    assert streamed_spend == unstreamed_spend
