@@ -1,21 +1,24 @@
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
+import respx
+
+import litellm
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching import vertex_ai_context_caching
-from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
-    ContextCachingEndpoints,
-    _parse_expire_time,
-    known_cached_contents,
-)
+from litellm.llms.vertex_ai.context_caching.known_cached_contents import known_cached_contents, parse_expire_time
+from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
 _MODULE: Final = "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching"
+_REGISTRY_MODULE: Final = "litellm.llms.vertex_ai.context_caching.known_cached_contents"
 _SCOPE: Final = ("https://vertex.test/v1/projects/p/locations/us/cachedContents", "")
 
 
@@ -163,7 +166,7 @@ def test_remembered_cache_is_listed_again_once_its_reuse_window_closes():
     client.post.return_value = _response(_created("cachedContents/1", _expire_time(60)))
     assert _sync_call(client)[2] == "cachedContents/1"
 
-    with patch(f"{_MODULE}.time.time", return_value=datetime.now(timezone.utc).timestamp() + 55):
+    with patch(f"{_REGISTRY_MODULE}.time.time", return_value=datetime.now(timezone.utc).timestamp() + 55):
         assert _sync_call(client)[2] == "cachedContents/listed"
 
 
@@ -290,18 +293,18 @@ async def test_waiters_resolve_on_their_own_when_the_first_request_fails():
 
 
 def test_parse_expire_time_accepts_nanosecond_precision():
-    assert _parse_expire_time("2026-10-14T18:06:21.123456789Z") == pytest.approx(
+    assert parse_expire_time("2026-10-14T18:06:21.123456789Z") == pytest.approx(
         datetime(2026, 10, 14, 18, 6, 21, 123456, tzinfo=timezone.utc).timestamp()
     )
     assert (
-        _parse_expire_time("2026-10-14T18:06:21Z") == datetime(2026, 10, 14, 18, 6, 21, tzinfo=timezone.utc).timestamp()
+        parse_expire_time("2026-10-14T18:06:21Z") == datetime(2026, 10, 14, 18, 6, 21, tzinfo=timezone.utc).timestamp()
     )
-    assert _parse_expire_time("not a time") is None
-    assert _parse_expire_time(None) is None
+    assert parse_expire_time("not a time") is None
+    assert parse_expire_time(None) is None
 
 
 def test_parse_expire_time_reads_a_missing_offset_as_utc():
-    assert _parse_expire_time("2026-10-14T18:06:21") == datetime(2026, 10, 14, 18, 6, 21, tzinfo=timezone.utc).timestamp()
+    assert parse_expire_time("2026-10-14T18:06:21") == datetime(2026, 10, 14, 18, 6, 21, tzinfo=timezone.utc).timestamp()
 
 
 def test_cache_expiring_within_the_margin_is_not_remembered():
@@ -311,9 +314,59 @@ def test_cache_expiring_within_the_margin_is_not_remembered():
 
 
 def test_registry_is_bounded():
-    with patch(f"{_MODULE}.MAX_KNOWN_CACHED_CONTENTS", 3):
+    with patch(f"{_REGISTRY_MODULE}.MAX_KNOWN_CACHED_CONTENTS", 3):
         for index in range(5):
             known_cached_contents.remember(_SCOPE, f"key-{index}", f"cachedContents/{index}", _expire_time(60))
 
     assert known_cached_contents.get(_SCOPE, "key-0") is None
     assert known_cached_contents.get(_SCOPE, "key-4") == "cachedContents/4"
+
+
+async def _complete(sync_mode: bool, stream: bool) -> None:
+    if sync_mode:
+        response = litellm.completion(model="gemini/gemini-3.1-pro", messages=_messages(), stream=stream)
+        for _chunk in response if stream else ():
+            pass
+        return
+    response = await litellm.acompletion(model="gemini/gemini-3.1-pro", messages=_messages(), stream=stream)
+    if stream:
+        async for _chunk in response:
+            pass
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize(
+    ("status_code", "relisted"),
+    [(400, True), (403, True), (404, True), (429, False), (500, False)],
+)
+@pytest.mark.asyncio
+async def test_cache_rejected_by_generate_content_is_looked_up_again(
+    respx_mock: respx.MockRouter,
+    fake_provider_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    stream: bool,
+    status_code: int,
+    relisted: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    respx_mock.post(url__regex=r".*/cachedContents$").mock(
+        return_value=httpx.Response(200, json=_created("cachedContents/deleted", _expire_time(300)))
+    )
+    generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
+        return_value=httpx.Response(status_code, json={"error": {"code": status_code, "message": "rejected"}})
+    )
+
+    for _ in range(2):
+        with pytest.raises(openai.APIStatusError):
+            await _complete(sync_mode, stream)
+
+    assert [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls] == [
+        "cachedContents/deleted",
+        "cachedContents/deleted",
+    ]
+    assert list_route.call_count == (2 if relisted else 1)

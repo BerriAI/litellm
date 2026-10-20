@@ -1,8 +1,6 @@
 import pytest
 
-from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
-    known_cached_contents,
-)
+from litellm.llms.vertex_ai.context_caching.known_cached_contents import known_cached_contents
 
 
 @pytest.fixture(autouse=True)

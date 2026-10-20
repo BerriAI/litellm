@@ -1,10 +1,4 @@
-import asyncio
-import re
-import threading
-import time
-import weakref
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import datetime, timezone
+from collections.abc import Sequence
 from typing import Final, Literal
 
 import httpx
@@ -26,6 +20,7 @@ from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
+from .known_cached_contents import KnownCachedContents, known_cached_contents
 from .transformation import (
     cached_messages_end_on_supported_turn,
     separate_cached_messages,
@@ -35,13 +30,6 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
-
-# A remembered cache stops being reused this long before Vertex expires it, so a request
-# resolved just before expiry does not reach generateContent with an expired cache.
-KNOWN_CACHE_EXPIRY_MARGIN_SECONDS: Final = 10.0
-MAX_KNOWN_CACHED_CONTENTS: Final = 10_000
-
-_RFC3339_FRACTION: Final = re.compile(r"\.(\d{1,6})\d*")
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -80,123 +68,6 @@ class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
 def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
     tokens: Final = (created.get("usageMetadata") or {}).get("totalTokenCount") or 0
     logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
-
-
-def _parse_expire_time(expire_time: object) -> float | None:
-    """Parse a Vertex RFC 3339 ``expireTime`` (nanosecond precision, ``Z`` suffix) to epoch seconds."""
-    if not isinstance(expire_time, str) or not expire_time:
-        return None
-    normalized: Final = _RFC3339_FRACTION.sub(lambda m: "." + m.group(1), expire_time.replace("Z", "+00:00"), count=1)
-    try:
-        parsed: Final = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc).timestamp()
-    return parsed.timestamp()
-
-
-class _KnownCachedContents:
-    """Process-local record of the cachedContents this process created or found.
-
-    Vertex meters every cachedContents list page against a per-minute, per-location quota,
-    so listing on every cache-marked request exhausts it under load. A cache is only
-    remembered with the ``expireTime`` Vertex reported, and is never reused within
-    ``KNOWN_CACHE_EXPIRY_MARGIN_SECONDS`` of it.
-    """
-
-    def __init__(self) -> None:
-        self._entries: dict[tuple[tuple[str, str], str], tuple[str, float]] = {}  # mutable-ok: guarded by _lock
-        self._lock: Final = threading.Lock()
-        self._inflight: weakref.WeakKeyDictionary[  # mutable-ok: private, guarded by _lock
-            asyncio.AbstractEventLoop, dict[tuple[tuple[str, str], str], asyncio.Future[str | None]]
-        ] = weakref.WeakKeyDictionary()
-
-    @staticmethod
-    def scope(
-        base_url: str,
-        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-        headers: Mapping[str, str],
-    ) -> tuple[str, str]:
-        """Where a cache name is valid: the Vertex URL names project and location, a Gemini key names the project.
-
-        The Gemini key is read from the headers actually sent, so an ``extra_headers`` override scopes the
-        cache to the caller's project. It is kept as-is in this in-memory scope and never logged or persisted.
-        """
-        if custom_llm_provider != "gemini":
-            return (base_url, "")
-        sent_keys: Final = [value for name, value in headers.items() if name.lower() == "x-goog-api-key"]
-        return (base_url, sent_keys[-1] if sent_keys else "")
-
-    @staticmethod
-    def is_usable(expire_time: object) -> bool:
-        expires_at: Final = _parse_expire_time(expire_time)
-        return expires_at is None or expires_at - KNOWN_CACHE_EXPIRY_MARGIN_SECONDS > time.time()
-
-    def get(self, scope: tuple[str, str], cache_key: str) -> str | None:
-        with self._lock:
-            entry: Final = self._entries.get((scope, cache_key))
-            if entry is None:
-                return None
-            name, reuse_until = entry
-            if reuse_until > time.time():
-                return name
-            del self._entries[(scope, cache_key)]
-            return None
-
-    def remember(self, scope: tuple[str, str], cache_key: str, name: str | None, expire_time: object) -> None:
-        expires_at: Final = _parse_expire_time(expire_time)
-        if not name or expires_at is None:
-            return
-        reuse_until: Final = expires_at - KNOWN_CACHE_EXPIRY_MARGIN_SECONDS
-        now: Final = time.time()
-        if reuse_until <= now:
-            return
-        with self._lock:
-            if len(self._entries) >= MAX_KNOWN_CACHED_CONTENTS:
-                self._entries = {k: v for k, v in self._entries.items() if v[1] > now}
-                while len(self._entries) >= MAX_KNOWN_CACHED_CONTENTS:
-                    del self._entries[next(iter(self._entries))]
-            self._entries[(scope, cache_key)] = (name, reuse_until)
-
-    async def single_flight(
-        self, scope: tuple[str, str], cache_key: str, resolve: Callable[[], Awaitable[str | None]]
-    ) -> str | None:
-        """Run ``resolve`` once per (scope, cache_key) at a time within this event loop.
-
-        Concurrent requests for the same prefix wait for the first one's lookup-or-create
-        instead of each listing (and creating a duplicate cache). If that first attempt
-        fails, each waiter resolves on its own.
-        """
-        loop: Final = asyncio.get_running_loop()
-        own: Final[asyncio.Future[str | None]] = loop.create_future()
-        with self._lock:
-            inflight: Final = self._inflight.setdefault(loop, {})
-            leader: Final = inflight.setdefault((scope, cache_key), own)
-        if leader is not own:
-            name: Final = await asyncio.shield(leader)
-            if name:
-                return name
-            return await resolve()
-        try:
-            resolved: Final = await resolve()
-        except BaseException:
-            own.set_result(None)
-            raise
-        else:
-            own.set_result(resolved)
-            return resolved
-        finally:
-            with self._lock:
-                inflight.pop((scope, cache_key), None)
-
-    def clear(self) -> None:
-        with self._lock:
-            self._entries.clear()
-            self._inflight.clear()
-
-
-known_cached_contents: Final = _KnownCachedContents()
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -291,7 +162,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_auth_header=vertex_auth_header,
             model=model,
         )
-        scope: Final = _KnownCachedContents.scope(base_url, custom_llm_provider, headers)
+        scope: Final = KnownCachedContents.scope(base_url, custom_llm_provider, headers)
         known_name: Final = known_cached_contents.get(scope, cache_key)
         if known_name is not None:
             return known_name
@@ -340,7 +211,7 @@ class ContextCachingEndpoints(VertexBase):
                 if display_name is None or display_name != cache_key:
                     continue
                 expire_time = cached_item.get("expireTime")
-                if not _KnownCachedContents.is_usable(expire_time):
+                if not KnownCachedContents.is_usable(expire_time):
                     continue
                 name = cached_item.get("name")
                 known_cached_contents.remember(scope, cache_key, name, expire_time)
@@ -388,7 +259,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_auth_header=vertex_auth_header,
             model=model,
         )
-        scope: Final = _KnownCachedContents.scope(base_url, custom_llm_provider, headers)
+        scope: Final = KnownCachedContents.scope(base_url, custom_llm_provider, headers)
         known_name: Final = known_cached_contents.get(scope, cache_key)
         if known_name is not None:
             return known_name
@@ -437,7 +308,7 @@ class ContextCachingEndpoints(VertexBase):
                 if display_name is None or display_name != cache_key:
                     continue
                 expire_time = cached_item.get("expireTime")
-                if not _KnownCachedContents.is_usable(expire_time):
+                if not KnownCachedContents.is_usable(expire_time):
                     continue
                 name = cached_item.get("name")
                 known_cached_contents.remember(scope, cache_key, name, expire_time)
@@ -604,7 +475,7 @@ class ContextCachingEndpoints(VertexBase):
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
         known_cached_contents.remember(
-            _KnownCachedContents.scope(url, custom_llm_provider, headers),
+            KnownCachedContents.scope(url, custom_llm_provider, headers),
             generated_cache_key,
             raw_response_cached.get("name"),
             raw_response_cached.get("expireTime"),
@@ -706,7 +577,7 @@ class ContextCachingEndpoints(VertexBase):
         generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        scope: Final = _KnownCachedContents.scope(url, custom_llm_provider, headers)
+        scope: Final = KnownCachedContents.scope(url, custom_llm_provider, headers)
 
         async def lookup_or_create() -> str | None:
             google_cache_name: Final = await self.async_check_cache(

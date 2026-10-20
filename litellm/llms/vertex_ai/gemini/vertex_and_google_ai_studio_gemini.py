@@ -96,6 +96,7 @@ from ..common_utils import (
     build_vertex_schema,
     supports_response_json_schema,
 )
+from ..context_caching.known_cached_contents import known_cached_contents
 from ..vertex_llm_base import VertexBase
 from .grounding_requests import calculate_grounding_requests
 from .long_decode import (
@@ -2831,6 +2832,7 @@ async def make_call(
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
+        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
         exception_string: Final = str(await e.response.aread())
         raise VertexAIError(
             status_code=e.response.status_code,
@@ -2891,14 +2893,18 @@ def make_sync_call(
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response: Final = client.post(
-        url_for(api_base, request_body),
-        headers=headers,
-        data=data,
-        stream=True,
-        logging_obj=logging_obj,
-        timeout=timeout,
-    )
+    try:
+        response: Final = client.post(
+            url_for(api_base, request_body),
+            headers=headers,
+            data=data,
+            stream=True,
+            logging_obj=logging_obj,
+            timeout=timeout,
+        )
+    except httpx.HTTPStatusError as e:
+        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
+        raise
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -3175,6 +3181,7 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
+                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
@@ -3385,6 +3392,7 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
+                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
