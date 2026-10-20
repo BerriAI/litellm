@@ -1,12 +1,14 @@
+import asyncio
 import os
 import sys
+from typing import Final
 
 import pytest
 
 from litellm import sandbox
 from litellm.harness.errors import SandboxError
 from litellm.harness.sandbox import LocalSandbox, Process, Sandbox
-from litellm.harness.sandbox.local import filtered_environ, is_secret_env_name
+from litellm.harness.sandbox.local import collect_output, filtered_environ, is_secret_env_name
 
 PY = sys.executable
 
@@ -68,6 +70,31 @@ async def test_exec_streams_stdin(sbx):
 async def test_run_timeout_kills(sbx):
     with pytest.raises(SandboxError, match="timed out"):
         await sbx.run([PY, "-c", "import time;time.sleep(30)"], timeout=0.5)
+
+
+class _NeverEndingProcess:
+    def __init__(self) -> None:
+        self.stdin: asyncio.StreamWriter | None = None
+        self.stdout: asyncio.StreamReader = asyncio.StreamReader()
+        self.stderr: asyncio.StreamReader = asyncio.StreamReader()
+        self.killed: bool = False
+
+    async def wait(self) -> int:
+        return await asyncio.Future()
+
+    async def kill(self) -> None:
+        self.killed = True
+
+
+async def test_cancelled_run_stops_its_command() -> None:
+    proc: Final = _NeverEndingProcess()
+    run: Final = asyncio.ensure_future(collect_output(proc, ["opencode", "export"], timeout=None))
+    await asyncio.sleep(0)
+    run.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    assert proc.killed
 
 
 async def test_missing_binary_raises(sbx):
