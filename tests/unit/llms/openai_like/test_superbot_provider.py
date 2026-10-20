@@ -156,7 +156,8 @@ def test_superbot_models_are_priced_in_both_cost_maps(model_id: str, context: in
         assert row["litellm_provider"] == "superbot-gg"
         assert row["mode"] == "chat"
         assert row["max_input_tokens"] == context
-        assert row["max_output_tokens"] == 65_536
+        assert row["max_output_tokens"] == 131_072
+        assert row["max_tokens"] == 131_072
         assert row["input_cost_per_token"] == pytest.approx(1.0e-6)
         assert row["output_cost_per_token"] == pytest.approx(5.0e-6)
         assert row["cache_read_input_token_cost"] == pytest.approx(5.0e-8)
