@@ -1,6 +1,7 @@
 import ast, asyncio, os
 import inspect
 import json
+import sys
 from unittest import mock
 
 import httpx
@@ -115,6 +116,33 @@ def test_cli_jwt_expiration_hours_from_environment(
         monkeypatch.delenv("CLI_JWT_EXPIRATION_HOURS", raising=False)
         monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
         importlib.reload(litellm.constants)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        (None, 64 * 1024 * 1024),
+        ("", 64 * 1024 * 1024),
+        ("invalid", 64 * 1024 * 1024),
+        ("0", 64 * 1024 * 1024),
+        ("-1", 64 * 1024 * 1024),
+        ("1", 1),
+        ("200000", 200000),
+        (str(sys.maxsize), sys.maxsize),
+        (str(sys.maxsize + 1), 64 * 1024 * 1024),
+    ),
+)
+def test_mcp_sse_event_limit_uses_positive_override_or_default(raw: str | None, expected: int) -> None:
+    try:
+        with pytest.MonkeyPatch.context() as environment:
+            if raw is None:
+                environment.delenv("LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES", raising=False)
+            else:
+                environment.setenv("LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES", raw)
+            importlib.reload(constants)
+            assert constants.MCP_MAX_SSE_EVENT_SIZE_BYTES == expected
+    finally:
+        importlib.reload(constants)
 
 
 def _is_blank(value: object) -> bool:
