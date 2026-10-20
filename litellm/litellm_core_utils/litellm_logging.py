@@ -1946,6 +1946,8 @@ class Logging(LiteLLMLoggingBaseClass):
         used for consistent cost calculation across response headers + logging integrations.
         """
 
+        self.model_call_details.pop("response_cost_failure_debug_information", None)
+
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
 
@@ -2106,15 +2108,17 @@ class Logging(LiteLLMLoggingBaseClass):
         previous_cost_breakdown: Final = self.cost_breakdown
         previous_billed_token_rates: Final = self.billed_token_rates
         debug_key: Final = "response_cost_failure_debug_information"
-        had_failure_debug_info: Final = debug_key in self.model_call_details
+        previous_failure_debug_info: Final = self.model_call_details.get(debug_key)
         try:
             cost: Final = self.response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
             return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
         finally:
             self.cost_breakdown = previous_cost_breakdown
             self.billed_token_rates = previous_billed_token_rates
-            if not had_failure_debug_info:
+            if previous_failure_debug_info is None:
                 self.model_call_details.pop(debug_key, None)
+            else:
+                self.model_call_details[debug_key] = previous_failure_debug_info
 
     def _record_zero_cost_diagnostic(
         self,
