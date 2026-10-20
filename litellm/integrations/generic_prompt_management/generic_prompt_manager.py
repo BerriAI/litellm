@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import (
@@ -26,9 +25,6 @@ from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-
-
-_PROMPT_API_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class GenericPromptManager(CustomPromptManagement):
@@ -128,7 +124,7 @@ class GenericPromptManager(CustomPromptManagement):
             )
 
             response.raise_for_status()
-            return _PROMPT_API_RESPONSE.validate_python(response.json())
+            return response.json()
         except httpx.HTTPError as e:
             raise Exception(f"Failed to fetch prompt '{prompt_id}' from API: {e}")
         except json.JSONDecodeError as e:
@@ -136,7 +132,7 @@ class GenericPromptManager(CustomPromptManagement):
 
     async def async_fetch_prompt_from_api(
         self, prompt_id: str | None, prompt_spec: PromptSpec | None
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """
         Fetch a prompt from the API asynchronously.
         """
@@ -164,7 +160,7 @@ class GenericPromptManager(CustomPromptManagement):
                 headers=self._get_headers(),
             )
             response.raise_for_status()
-            return _PROMPT_API_RESPONSE.validate_python(response.json())
+            return response.json()
         except httpx.HTTPError as e:
             raise Exception(f"Failed to fetch prompt '{prompt_id}' from API: {e}")
         except json.JSONDecodeError as e:

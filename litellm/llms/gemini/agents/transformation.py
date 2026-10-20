@@ -10,11 +10,9 @@ Proxies the Gemini v1beta Agents API:
 """
 
 from collections.abc import Mapping
-from typing import Final, TypeVar
+from typing import Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
@@ -52,44 +50,6 @@ _LITELLM_INTERNAL_KEYS: Final = frozenset(
         "provider_agent_response",
     }
 )
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _GeminiAgentResponse(TypedDict):
-    id: ReadOnly[NotRequired[str | None]]
-    name: ReadOnly[NotRequired[str | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _GeminiAgentListResponse(TypedDict):
-    agents: ReadOnly[NotRequired[list[dict[str, object]]]]
-    nextPageToken: ReadOnly[NotRequired[str | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _GeminiAgentVersionsResponse(TypedDict):
-    agentVersions: ReadOnly[NotRequired[list[dict[str, object]]]]
-    nextPageToken: ReadOnly[NotRequired[str | None]]
-
-
-_GEMINI_AGENT_RESPONSE_ADAPTER: Final = TypeAdapter(_GeminiAgentResponse)
-_GEMINI_AGENT_LIST_RESPONSE_ADAPTER: Final = TypeAdapter(_GeminiAgentListResponse)
-_GEMINI_AGENT_VERSIONS_RESPONSE_ADAPTER: Final = TypeAdapter(_GeminiAgentVersionsResponse)
-
-_ResponseT: Final = TypeVar("_ResponseT")
-
-
-def _parse_response(
-    raw_response: httpx.Response,
-    adapter: TypeAdapter[_ResponseT],
-    fallback: _ResponseT,
-) -> tuple[_ResponseT, bool]:
-    try:
-        return adapter.validate_python(raw_response.json()), False
-    except ValidationError:
-        raise
-    except Exception:
-        return fallback, True
 
 
 class GeminiAgentsConfig(BaseAgentsAPIConfig):
@@ -135,7 +95,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def validate_environment(
         self,
         headers: dict[str, str],
-        litellm_params: Mapping[str, object],
+        litellm_params: dict[str, Any],
     ) -> dict[str, str]:
         headers = dict(headers)
         headers["Content-Type"] = "application/json"
@@ -145,15 +105,14 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         # an authenticated proxy user could set ``api_base`` to an attacker-
         # controlled host and have the proxy ship its shared Gemini key in the
         # ``x-goog-api-key`` header.
-        if litellm_params.get("api_base") and not (isinstance(explicit_api_key, str) and explicit_api_key):
+        if litellm_params.get("api_base") and not explicit_api_key:
             raise ValueError(
                 "When overriding api_base for Gemini agents, you must also "
                 "supply an explicit api_key. Falling back to GOOGLE_API_KEY / "
                 "GEMINI_API_KEY env vars with a custom api_base is refused "
                 "to prevent leaking the shared provider key to arbitrary hosts."
             )
-        api_key_candidate: Final = explicit_api_key if isinstance(explicit_api_key, str) else None
-        api_key: Final = GeminiModelInfo.get_api_key(api_key_candidate)
+        api_key: Final = GeminiModelInfo.get_api_key(explicit_api_key)
         if not api_key:
             raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY, or pass api_key.")
         headers["x-goog-api-key"] = api_key
@@ -195,21 +154,19 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
            "system_instruction": "...", "base_environment": {...}}
         """
         self._raise_for_status(raw_response)
-        data, used_fallback = _parse_response(raw_response, _GEMINI_AGENT_RESPONSE_ADAPTER, {"id": name})
-        if used_fallback:
+        try:
+            data: dict[str, Any] = raw_response.json()
+        except Exception:
             verbose_logger.warning(
                 "GeminiAgentsConfig: non-JSON create response (status=%d).",
                 raw_response.status_code,
             )
+            data = {"id": name}
         # Gemini uses "id" as the identifier; normalise to both fields.
-        id_value: Final = data.get("id", name)
-        normalized_data: Final = {
-            **data,
-            "id": id_value,
-            "name": data.get("name", id_value),
-        }
-        verbose_logger.debug("GeminiAgentsConfig create response: %s", normalized_data)
-        return AgentCreateResponse.model_validate(normalized_data)
+        data.setdefault("id", name)
+        data.setdefault("name", data["id"])
+        verbose_logger.debug("GeminiAgentsConfig create response: %s", data)
+        return AgentCreateResponse(**data)
 
     # ------------------------------------------------------------------ #
     # LIST                                                                 #
@@ -233,7 +190,10 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         raw_response: httpx.Response,
     ) -> AgentListResponse:
         self._raise_for_status(raw_response)
-        data, _ = _parse_response(raw_response, _GEMINI_AGENT_LIST_RESPONSE_ADAPTER, {})
+        try:
+            data = raw_response.json()
+        except Exception:
+            data = {}
         verbose_logger.debug("GeminiAgentsConfig list response: %s", data)
         return AgentListResponse(
             agents=data.get("agents", []),
@@ -260,15 +220,14 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     ) -> AgentCreateResponse:
         """Same shape as create response — Gemini returns "id" as identifier."""
         self._raise_for_status(raw_response)
-        data, _ = _parse_response(raw_response, _GEMINI_AGENT_RESPONSE_ADAPTER, {"id": name})
-        id_value: Final = data.get("id", name)
-        normalized_data: Final = {
-            **data,
-            "id": id_value,
-            "name": data.get("name", id_value),
-        }
-        verbose_logger.debug("GeminiAgentsConfig get response: %s", normalized_data)
-        return AgentCreateResponse.model_validate(normalized_data)
+        try:
+            data = raw_response.json()
+        except Exception:
+            data = {"id": name}
+        data.setdefault("id", name)
+        data.setdefault("name", data["id"])
+        verbose_logger.debug("GeminiAgentsConfig get response: %s", data)
+        return AgentCreateResponse(**data)
 
     # ------------------------------------------------------------------ #
     # DELETE                                                               #
@@ -324,7 +283,10 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
           {"agentVersions": [{"agent": "waverunner", "name": "agents/.../versions/uuid", ...}]}
         """
         self._raise_for_status(raw_response)
-        data, _ = _parse_response(raw_response, _GEMINI_AGENT_VERSIONS_RESPONSE_ADAPTER, {})
+        try:
+            data = raw_response.json()
+        except Exception:
+            data = {}
         verbose_logger.debug("GeminiAgentsConfig list_versions response for '%s': %s", name, data)
         return AgentVersionsResponse(
             agent_versions=data.get("agentVersions", []),
