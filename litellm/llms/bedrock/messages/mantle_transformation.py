@@ -176,9 +176,9 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         self,
         model: str,
         httpx_response: httpx.Response,
-        request_body: dict,
+        request_body: dict[str, object],  # mutable-ok: mirrors the base signature
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         return AnthropicMessagesConfig.get_async_streaming_response_iterator(
             self,
             model=model,

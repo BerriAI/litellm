@@ -19,6 +19,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 MANAGED_MODEL: Final = "gpt-4.1-managed-ids"
 DEPLOYMENT_KEY: Final = "sk-fine-tuning-managed-deployment"
 TRAINING_LINE: Final = b'{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}\n'
@@ -292,13 +294,9 @@ def test_owner_create_returns_the_unified_job_id(fixture: str, request: pytest.F
     built: Final[Rig] = request.getfixturevalue(fixture)
     created: Final = Job.model_validate_json(built.created_text)
     expected: Final = _client_job(
-        _unified_job_id(built.deployment_id, built.provider_job), "validating_files", built.provider_file
+        _unified_job_id(built.deployment_id, built.provider_job), "validating_files", built.managed_file
     )
-    assert created.model_dump(exclude={"training_file"}) == expected.model_dump(exclude={"training_file"}), (
-        "training_file is excluded because test_managed_create_sends_the_provider_file_id_of_the_pinned_deployment "
-        "documents the known managed-create bug",
-        built.created_text,
-    )
+    assert created == expected, built.created_text
 
 
 def test_another_key_cannot_create_with_or_cancel_the_owners_managed_ids(rig: Rig) -> None:

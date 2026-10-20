@@ -817,7 +817,7 @@ def test_a_failing_bucket_still_bills_the_batch_and_the_other_sink_keeps_its_lin
     assert [record["custom_id"] for record in _records(gcs_body)] == [custom_id]
     assert spend > 0
     s3_name: Final = _object_name(f"{S3_PREFIX}/", batch.batch_id)
-    assert rig.s3.tried(s3_name) >= 1
+    eventually(lambda: rig.s3.tried(s3_name), lambda tries: tries >= 1, POLLER_SECONDS)
     assert s3_name not in rig.s3.objects()
 
 

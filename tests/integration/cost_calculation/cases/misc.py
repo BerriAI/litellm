@@ -19,13 +19,17 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountRates,
     SseResponse,
     WavUpload,
+    with_usage,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cases.anthropic import (
     CLAUDE_FABLE_5_1_CACHE_READ,
     CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
     CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
     CLAUDE_FABLE_5_1_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_MESSAGES_STREAM,
     CLAUDE_FABLE_5_1_STREAM,
     CLAUDE_FABLE_5_1_THINKING,
     CLAUDE_FABLE_5_1_TOOL_CALL,
@@ -33,10 +37,28 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
     CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
     CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
     CLAUDE_HAIKU_5_5_STREAM,
     CLAUDE_HAIKU_5_5_THINKING,
     CLAUDE_HAIKU_5_5_TOOL_CALL,
 )
+
+
+def _azure_ai_claude_messages_case(
+    response_case: CostTrackingTestCase,
+    request_case: CostTrackingTestCase,
+    name: str,
+    model: str,
+) -> CostTrackingTestCase:
+    return response_case.model_copy(
+        update={
+            "name": name,
+            "model": model,
+            "endpoint": "/v1/messages",
+            "request": request_case.request,
+        }
+    )
 
 
 def _azure_ai_claude_usage(
@@ -782,6 +804,31 @@ BEDROCK_INVOKE_HAIKU_STREAM: Final = CostTrackingTestCase(
     ),
 )
 
+BEDROCK_INVOKE_HAIKU_CHAT_STREAM: Final = CostTrackingTestCase(
+    name="bedrock-invoke-haiku-chat-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "bedrock-invoke-haiku-chat-stream"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "max_tokens": 412,
+    },
+    response=BEDROCK_INVOKE_HAIKU_STREAM.response,
+    expected=BEDROCK_INVOKE_HAIKU_STREAM.expected,
+)
+
+BEDROCK_INVOKE_HAIKU_RESPONSES: Final = CostTrackingTestCase(
+    name="bedrock-invoke-haiku-responses",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "bedrock-invoke-haiku-responses", "max_output_tokens": 412},
+    response=BEDROCK_INVOKE_HAIKU_JSON.response,
+    expected=BEDROCK_INVOKE_HAIKU_JSON.expected,
+)
+
 
 # azure_ai/gpt-5.4-mini-2026-03-17
 AZURE_AI_GPT_5_4_MINI_LATEST: Final = CostTrackingTestCase(
@@ -830,6 +877,61 @@ AZURE_AI_GPT_5_4_MINI_LATEST_STREAM: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.003234, input_cost=0.00138, output_cost=0.001854, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+
+# azure_ai/grok-4.6 (Grok on Azure AI Foundry reports reasoning_tokens outside completion_tokens, like xai)
+AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION: Final = CostTrackingTestCase(
+    name="azure-ai-grok-4.6-reasoning_folded_into_completion",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/grok-4.6",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "azure-ai-grok-4.6-reasoning"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "model": "grok-4.6",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2552,
+                "completion_tokens_details": {"reasoning_tokens": 300},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0108, input_cost=0.00368, output_cost=0.00712, prompt_tokens=1840, completion_tokens=712
+    ),
+)
+
+AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION_STREAM: Final = CostTrackingTestCase(
+    name="azure-ai-grok-4.6-reasoning_folded_into_completion-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="azure_ai/grok-4.6",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "azure-ai-grok-4.6-reasoning-stream"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}\n\n',
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[],"usage":{"prompt_tokens":1840,"completion_tokens":412,"total_tokens":2552,"completion_tokens_details":{"reasoning_tokens":300}}}\n\n',
+            "data: [DONE]\n\n",
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0108, input_cost=0.00368, output_cost=0.00712, prompt_tokens=1840, completion_tokens=712
     ),
 )
 
@@ -1947,7 +2049,66 @@ AZURE_AI_CLAUDE_HAIKU_5_5_TOOL_CALL: Final = _azure_ai_claude_shape_case(
     ),
 )
 
-
+AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_FABLE_5_1_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    "azure_ai/claude-fable-5-1-messages_input_text",
+    "azure_ai/claude-fable-5-1",
+)
+AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_FABLE_5_1_STREAM,
+    CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    "azure_ai/claude-fable-5-1-messages_stream",
+    "azure_ai/claude-fable-5-1",
+)
+AZURE_AI_CLAUDE_FABLE_5_1_ROUTE_BRIDGES: Final = bridge_pairs(
+    (AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT, AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+    "azure_ai/claude-haiku-5-5-messages_input_text",
+    "azure_ai/claude-haiku-5-5",
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_HAIKU_5_5_STREAM,
+    CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    "azure_ai/claude-haiku-5-5-messages_stream",
+    "azure_ai/claude-haiku-5-5",
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES: Final = bridge_pairs(
+    (AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT, AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = with_usage(
+    AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "azure_ai/claude-haiku-5-5-tiered_input_above_100k",
+    {
+        "input_tokens": 150000,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.14478, input_cost=0.1425, output_cost=0.00228, prompt_tokens=150000, completion_tokens=480
+    ),
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K: Final = with_usage(
+    AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    "azure_ai/claude-haiku-5-5-tiered_cache_read_above_100k",
+    {
+        "input_tokens": 4096,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 110592,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.01667744, input_cost=0.01439744, output_cost=0.00228, prompt_tokens=114688, completion_tokens=480
+    ),
+)
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     PERPLEXITY_SONAR_NEXT_OFF_PEAK,
     NOVA_NEXT_TRANSCRIPTIONS_PER_SECOND,
@@ -1976,8 +2137,12 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     XAI_GROK_5_PROVIDER_REPORTED_COST,
     BEDROCK_INVOKE_HAIKU_JSON,
     BEDROCK_INVOKE_HAIKU_STREAM,
+    BEDROCK_INVOKE_HAIKU_CHAT_STREAM,
+    BEDROCK_INVOKE_HAIKU_RESPONSES,
     AZURE_AI_GPT_5_4_MINI_LATEST,
     AZURE_AI_GPT_5_4_MINI_LATEST_STREAM,
+    AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION,
+    AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION_STREAM,
     AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH,
     AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH_STREAM,
     AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH_ONE_REQUEST,
@@ -2004,13 +2169,21 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
     AZURE_AI_CLAUDE_FABLE_5_1_THINKING,
     AZURE_AI_CLAUDE_FABLE_5_1_TOOL_CALL,
+    AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    *(pair.bridged for pair in AZURE_AI_CLAUDE_FABLE_5_1_ROUTE_BRIDGES),
     AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
     AZURE_AI_CLAUDE_HAIKU_5_5_STREAM,
     AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K,
+    AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K,
     AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
     AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
     AZURE_AI_CLAUDE_HAIKU_5_5_THINKING,
     AZURE_AI_CLAUDE_HAIKU_5_5_TOOL_CALL,
+    AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+    AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    *(pair.bridged for pair in AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES),
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -2021,4 +2194,25 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(
         plain=AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_HAIKU_5_5_STREAM
     ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+        streamed=AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_FABLE_5_1_ROUTE_BRIDGES[0].bridged,
+        streamed=AZURE_AI_CLAUDE_FABLE_5_1_ROUTE_BRIDGES[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+        streamed=AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES[0].bridged,
+        streamed=AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES[1].bridged,
+    ),
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *AZURE_AI_CLAUDE_FABLE_5_1_ROUTE_BRIDGES,
+    *AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES,
 )

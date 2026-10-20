@@ -4308,7 +4308,7 @@ async def test_async_data_generator_midstream_error():
         return chunk
 
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(side_effect=mock_streaming_hook)
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     # Mock the global proxy_logging_obj
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
@@ -6691,10 +6691,9 @@ def test_settings_store_uppercases_db_env_vars(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
     proxy_config = ProxyConfig()
-    db_values = proxy_config._prepared_db_settings_values(
-        "environment_variables", {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}
+    proxy_config._apply_db_environment_variables(
+        {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}, revision=None, environment_before_db={}, read=1
     )
-    proxy_config.environment_variables.apply_db_row("environment_variables", db_values)
 
     env_vars = proxy_config.environment_variables.resolved()
     assert env_vars["DD_API_KEY"] == "test-api-key"
@@ -7334,7 +7333,7 @@ async def test_async_data_generator_cleanup_on_early_exit():
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
         side_effect=lambda **kwargs: kwargs.get("response")
     )
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     # Create a mock response with aclose
     mock_response = MagicMock()
@@ -7455,7 +7454,7 @@ async def test_async_data_generator_uses_direct_stream_fast_path_without_callbac
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging") as mock_deferred_logging:
@@ -7511,7 +7510,7 @@ async def test_async_data_generator_preserves_non_raw_sse_like_bytes():
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
@@ -7568,7 +7567,7 @@ async def test_async_data_generator_buffers_split_google_native_sse_json_frame()
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
@@ -7615,7 +7614,7 @@ async def test_async_data_generator_flushes_raw_sse_stream_without_trailing_deli
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
@@ -7664,7 +7663,7 @@ async def test_async_data_generator_errors_when_raw_sse_frame_exceeds_buffer_lim
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
@@ -7720,7 +7719,7 @@ async def test_async_data_generator_checks_raw_sse_buffer_limit_after_complete_f
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
@@ -7772,7 +7771,7 @@ async def test_async_data_generator_google_genai_stream_omits_openai_done():
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
@@ -7814,7 +7813,7 @@ async def test_async_data_generator_does_not_mark_completed_stream_as_disconnect
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
@@ -7948,7 +7947,7 @@ async def test_async_data_generator_cleanup_on_midstream_error():
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
         side_effect=lambda **kwargs: kwargs.get("response")
     )
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     mock_response = MagicMock()
     mock_response.aclose = AsyncMock()
@@ -8310,6 +8309,37 @@ async def test_update_general_settings_ignores_an_invalid_user_api_key_cache_max
 
     _fill_user_api_key_cache(cache, 250)
     assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_serves_an_invalid_db_request_tag_mappings_like_unset_until_fixed(monkeypatch):
+    from fastapi import Request
+
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings)
+
+    async def mapped_tags() -> list[str]:
+        data: Final[dict[str, object]] = {}
+        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+            Request({"type": "http", "headers": [(b"baggage", b"tenant=a")]}),
+            data,
+            proxy_server_module.general_settings,
+            None,
+            MagicMock(),
+        )
+        metadata: Final = data.get("metadata")
+        return list(metadata.get("tags", [])) if isinstance(metadata, dict) else []
+
+    await proxy_config._update_general_settings(db_general_settings={"request_tag_mappings": [{"key": "tenant"}]})
+    assert await mapped_tags() == []
+
+    await proxy_config._update_general_settings(
+        db_general_settings={"request_tag_mappings": [{"key": "tenant", "tag_prefix": "tenant:", "required": True}]}
+    )
+    assert await mapped_tags() == ["tenant:a"]
 
 
 @pytest.mark.asyncio
@@ -9924,10 +9954,22 @@ class _FakeLitellmConfig:
         self.upsert_calls.append((name, value))
 
 
+class _LaggingReplicaLitellmConfig(_FakeLitellmConfig):
+    def __init__(self, replica_rows, writer):
+        super().__init__(initial_rows=replica_rows)
+        self.upsert = writer.upsert
+
+
 class _FakePrismaClient:
-    def __init__(self, initial_rows=None):
+    def __init__(self, initial_rows=None, replica_rows=None):
+        self.writer_db = mock.MagicMock()
+        self.writer_db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
         self.db = mock.MagicMock()
-        self.db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
+        self.db.litellm_config = (
+            self.writer_db.litellm_config
+            if replica_rows is None
+            else _LaggingReplicaLitellmConfig(replica_rows, writer=self.writer_db.litellm_config)
+        )
         self.jsonify_object = lambda obj: obj
 
 
@@ -9937,8 +9979,8 @@ def _update_config_setup(monkeypatch):
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth as auth_dep
 
-    def _install(initial_rows=None, store_model_in_db=True):
-        prisma = _FakePrismaClient(initial_rows=initial_rows)
+    def _install(initial_rows=None, store_model_in_db=True, replica_rows=None):
+        prisma = _FakePrismaClient(initial_rows=initial_rows, replica_rows=replica_rows)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", store_model_in_db)
         monkeypatch.setattr(
@@ -9988,6 +10030,22 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
         assert written == {"general_settings"}
         assert prisma.db.litellm_config.rows["litellm_settings"] == {"drop_params": True}
         assert prisma.db.litellm_config.rows["environment_variables"] == {"FOO": "enc:bar"}
+    finally:
+        restore()
+
+
+def test_update_config_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(_update_config_setup):
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"environment_variables": {"SAVED_A_MOMENT_AGO": "enc:new"}},
+        replica_rows={"environment_variables": {}},
+    )
+    try:
+        resp = client.post("/config/update", json={"environment_variables": {"ANOTHER_KEY": "value"}})
+        assert resp.status_code == 200
+        assert prisma.writer_db.litellm_config.rows["environment_variables"] == {
+            "SAVED_A_MOMENT_AGO": "enc:new",
+            "ANOTHER_KEY": "enc:value",
+        }
     finally:
         restore()
 

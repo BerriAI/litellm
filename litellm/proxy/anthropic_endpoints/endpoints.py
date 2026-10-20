@@ -6,9 +6,9 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -18,6 +18,7 @@ from litellm.anthropic_interface.exceptions import (
     AnthropicExceptionMapping,
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.pass_through.context_management import (
     AnthropicContextManagementError,
 )
@@ -32,6 +33,7 @@ from litellm.proxy.common_request_processing import (
     log_llm_api_exception,
     proxy_exception_from_http_exception,
     proxy_exception_from_route_error,
+    resolve_counted_tool_fields,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
@@ -46,7 +48,9 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
+from litellm.router import Router
 
 router: Final = APIRouter()
 
@@ -89,6 +93,31 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
         "error": _anthropic_error_detail(exc, envelope["error"], body_call_id),
     }
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
+
+
+_TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "system")
+
+
+def _token_count_request(fields: Mapping[str, object]) -> TokenCountRequest | ProxyException:
+    try:
+        return TokenCountRequest.model_validate({name: fields[name] for name in _TOKEN_COUNT_FIELDS if name in fields})
+    except ValidationError as e:
+        return ProxyException(
+            message=first_validation_error(e),
+            type="invalid_request_error",
+            param=str(e.errors(include_url=False)[0]["loc"][0]),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+def _token_count_fields(
+    data: Mapping[str, object], auto_drop_params: bool, llm_router: Router | None, team_id: str | None
+) -> Mapping[str, object] | ProxyException:
+    fields: Final = {
+        name: data[name] for name in (*_TOKEN_COUNT_FIELDS, "drop_params", "additional_drop_params") if name in data
+    }
+    resolving: Final = {**fields, "drop_params": True} if auto_drop_params else fields
+    return resolve_counted_tool_fields(resolving, llm_router, team_id)
 
 
 def _strip_total_tokens_from_anthropic_response(response: object) -> None:
@@ -351,7 +380,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
-    from litellm.proxy.proxy_server import count_request_tokens, proxy_config
+    from litellm.proxy.proxy_server import count_request_tokens, llm_router, proxy_config
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
@@ -368,26 +397,21 @@ async def count_tokens(
         if not messages:
             raise HTTPException(status_code=400, detail="messages parameter is required")
 
-        # Create TokenCountRequest for the internal endpoint
-        from litellm.proxy._types import TokenCountRequest
-
-        token_request: Final = TokenCountRequest(
-            model=model_name,
-            messages=messages,
-            tools=data.get("tools"),
-            system=data.get("system"),
+        auto_drop_params: Final = should_auto_drop_params_for_agentic_cli(
+            request.headers.get("user-agent", ""), "drop_params" in data, proxy_config
         )
+        token_fields: Final = _token_count_fields(data, auto_drop_params, llm_router, user_api_key_dict.team_id)
+        token_request: Final = (
+            token_fields if isinstance(token_fields, ProxyException) else _token_count_request(token_fields)
+        )
+        if isinstance(token_request, ProxyException):
+            return _anthropic_error_json_response(token_request, request)
 
         token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
-            **_count_tokens_body_options(
-                data,
-                should_auto_drop_params_for_agentic_cli(
-                    request.headers.get("user-agent", ""), "drop_params" in data, proxy_config
-                ),
-            ),
+            **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:
         return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
@@ -397,7 +421,7 @@ async def count_tokens(
         log_llm_api_exception(e, litellm_call_id)
         return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
     else:
-        return {"input_tokens": token_response.total_tokens}
+        return {"input_tokens": token_response.total_tokens, **count_source_fields(token_response)}
 
 
 @router.post(
