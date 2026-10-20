@@ -1299,7 +1299,9 @@ async def _stream_agentcore(body: str, sync_mode: bool) -> list[tuple[str | None
         ]
     return [
         (chunk.choices[0].delta.content, chunk.choices[0].finish_reason)
-        async for chunk in await litellm.acompletion(**kwargs, client=AsyncHTTPHandler())
+        async for chunk in await litellm.acompletion(
+            **kwargs, client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+        )
     ]
 
 
@@ -1310,7 +1312,8 @@ async def _stream_agentcore(body: str, sync_mode: bool) -> list[tuple[str | None
         pytest.param(
             'data: {"event":{"messageStop":{"stopReason":"end_turn"}}}\n\n'
             'data: {"event":{"metadata":{"usage":{"inputTokens":9,"outputTokens":7,"totalTokens":16}}}}\n\n'
-            'data: {"message":{"role":"assistant","content":[{"text":"Machine learning lets computers learn from data."}]}}\n\n',
+            'data: {"message":{"role":"assistant",'
+            '"content":[{"text":"Machine learning lets computers learn from data."}]}}\n\n',
             id="strands_full",
         ),
     ],
@@ -1318,9 +1321,8 @@ async def _stream_agentcore(body: str, sync_mode: bool) -> list[tuple[str | None
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.respx(assert_all_called=True)
 async def test_agentcore_stream_that_signals_its_end_completes(
-    ending: str, sync_mode: bool, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch
+    ending: str, sync_mode: bool, respx_mock: respx.Router
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post(_AGENTCORE_RUNTIME_URL).mock(
         return_value=httpx.Response(
             200, content=(_AGENTCORE_DELTAS + ending).encode(), headers={"content-type": "text/event-stream"}
@@ -1335,10 +1337,7 @@ async def test_agentcore_stream_that_signals_its_end_completes(
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.respx(assert_all_called=True)
-async def test_agentcore_stream_cut_before_it_signals_its_end_raises(
-    sync_mode: bool, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+async def test_agentcore_stream_cut_before_it_signals_its_end_raises(sync_mode: bool, respx_mock: respx.Router) -> None:
     respx_mock.post(_AGENTCORE_RUNTIME_URL).mock(
         return_value=httpx.Response(
             200, content=_AGENTCORE_DELTAS.encode(), headers={"content-type": "text/event-stream"}
