@@ -240,12 +240,13 @@ def _with_answered_turns_after_newest_compaction(
     )
     later: Final = input[newest:]
     moved: Final = _earlier_turn_indices_answered_later(input[:newest], _call_ids(later))
+    moved_indices: Final = frozenset(moved)
     moved_call_ids: Final = _call_ids([input[index] for index in moved])
     first_answer: Final = next(
         (index for index, item in enumerate(later) if _call_id(item) in moved_call_ids), len(later)
     )
     return (
-        *(item for index, item in enumerate(input[:newest]) if index not in moved and keeps_earlier_item(item)),
+        *(item for index, item in enumerate(input[:newest]) if index not in moved_indices and keeps_earlier_item(item)),
         *later[:first_answer],
         *(input[index] for index in moved),
         *later[first_answer:],
