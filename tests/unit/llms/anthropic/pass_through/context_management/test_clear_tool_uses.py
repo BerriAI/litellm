@@ -297,6 +297,34 @@ def test_clear_at_least_out_of_reach_leaves_messages_unchanged():
     assert new_messages == original
 
 
+def test_a_batch_closes_when_it_frees_exactly_clear_at_least():
+    messages = _make_history(n_pairs=6)
+    clear_one_use = {
+        "type": "clear_tool_uses_20250919",
+        "trigger": {"type": "tool_uses", "value": 0},
+        "keep": {"type": "tool_uses", "value": 5},
+    }
+    _, one = apply_clear_tool_uses_20250919(
+        model=MODEL, messages=messages, tools=None, system=None, edit_spec=clear_one_use
+    )
+    assert one is not None
+    assert one["cleared_tool_uses"] == 1
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            **clear_one_use,
+            "keep": {"type": "tool_uses", "value": 1},
+            "clear_at_least": {"type": "input_tokens", "value": 2 * one["cleared_input_tokens"]},
+        },
+    )
+    assert _cleared_ids(new_messages) == {f"toolu_{i:02d}" for i in range(4)}
+    assert applied is not None
+    assert applied["cleared_tool_uses"] == 4
+
+
 def test_exclude_tools_are_never_cleared_and_do_not_count_toward_keep():
     """keep counts clearable uses only: with keep=1 the newest get_weather result stays, not the newest search."""
     messages = [{"role": "user", "content": "Plan a trip."}]
@@ -416,6 +444,17 @@ def test_results_over_46_bytes_and_empty_results_still_count():
     assert new_messages[6]["content"][0]["content"] == [{"type": "text", "text": CLEARED_TOOL_RESULT_PLACEHOLDER}]
     assert applied is not None
     assert applied["cleared_tool_uses"] == 3
+
+
+def test_the_46_byte_cutoff_includes_46_and_counts_utf8_bytes():
+    # The 46 byte cutoff was measured on api.anthropic.com on 2026-10-19.
+    messages = _make_history(5)
+    messages[2]["content"][0]["content"] = "x" * 46
+    messages[4]["content"][0]["content"] = "鳥" * 16
+    new_messages, applied = _clear_with_keep_two(messages)
+    assert _cleared_ids(new_messages) == {"toolu_01", "toolu_02"}
+    assert applied is not None
+    assert applied["cleared_tool_uses"] == 2
 
 
 def _tool_inputs(messages: list[dict[str, object]]) -> dict[object, object]:
