@@ -56,7 +56,7 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
 
 class BedrockTokenCounter(BaseTokenCounter):
     """Token counter for AWS Bedrock: bedrock-runtime CountTokens first, and Anthropic's count_tokens
-    on bedrock-mantle for the Claude models bedrock-runtime answers 400 or 404 for"""
+    on bedrock-mantle for the Claude models bedrock-runtime answers 400 or 404."""
 
     def __init__(
         self,
