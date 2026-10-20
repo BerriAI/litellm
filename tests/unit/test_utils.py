@@ -4597,6 +4597,51 @@ def test_gemini_3_flash_and_31_pro_preview_resolve_4096_cache_minimum(local_mode
     assert not wrong, f"prompt_cache_min_tokens must be 4096: {wrong}"
 
 
+@pytest.mark.parametrize("provider_prefix", ["", "gemini/", "vertex_ai/"])
+@pytest.mark.parametrize(
+    "region_prefix",
+    [
+        "",
+        "au.",
+        "eu.",
+        "us.",
+        "ca.",
+        "jp.",
+        "uk.",
+        "in.",
+        "sg.",
+        "kr.",
+        "global.",
+        "apac.",
+        "us-central1.",
+        "europe-west4.",
+        "australia-southeast1.",
+        "asia-northeast1.",
+    ],
+)
+@pytest.mark.parametrize(
+    ("base_model", "expected_min_tokens"),
+    [
+        ("gemini-3.5-flash", 4096),
+        ("gemini-3.6-flash", 4096),
+        ("gemini-3.7-flash", 4096),
+        ("gemini-3.8-flash", 4096),
+        ("gemini-3.1-pro-preview", 4096),
+        ("gemini-2.5-pro", 2048),
+        ("gemini-2.5-flash", 1024),
+    ],
+)
+def test_gemini_cache_minimum_across_all_regions(
+    provider_prefix: str,
+    region_prefix: str,
+    base_model: str,
+    expected_min_tokens: int,
+    local_model_cost_map: None,
+) -> None:
+    model: Final = f"{provider_prefix}{region_prefix}{base_model}"
+    assert get_prompt_cache_min_tokens(model=model) == expected_min_tokens
+
+
 def test_get_prompt_cache_min_tokens_unmapped_model_falls_back_to_default(local_model_cost_map: None) -> None:
     """get_model_info raises for a model it has no entry for. The resolver must swallow that and
     fall back to the default, otherwise the raise reaches callers that would read it as
@@ -4620,6 +4665,13 @@ def test_is_prompt_caching_valid_prompt_uses_per_model_minimum(local_model_cost_
 
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-6", messages=PROMPT_CACHE_MESSAGES) is False
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES) is True
+    assert is_prompt_caching_valid_prompt(model="gemini-3.5-flash", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="au.gemini-3.5-flash", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="us-central1.gemini-3.5-flash", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="gemini-2.5-pro", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="au.gemini-2.5-pro", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="gemini-2.5-flash", messages=PROMPT_CACHE_MESSAGES) is True
+    assert is_prompt_caching_valid_prompt(model="au.gemini-2.5-flash", messages=PROMPT_CACHE_MESSAGES) is True
 
 
 def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model(local_model_cost_map: None) -> None:
