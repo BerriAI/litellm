@@ -1,4 +1,3 @@
-import copy
 # +-----------------------------------------------+
 # |                                               |
 # |               PII Masking                     |
@@ -32,7 +31,11 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
-from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import (
+    attribute_items,
+    attribute_or_none,
+    safe_deep_copy,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -1194,16 +1197,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
             # Operates on defensive copies so the client-facing request and response are not modified in-place
-            try:
-                kwargs = copy.deepcopy(kwargs)
-            except Exception:
-                kwargs = dict(kwargs)
-                if "messages" in kwargs and isinstance(kwargs["messages"], list):
-                    kwargs["messages"] = copy.deepcopy(kwargs["messages"])
-            try:
-                result = copy.deepcopy(result)
-            except Exception:
-                pass
+            kwargs = safe_deep_copy(kwargs)
+            result = safe_deep_copy(result)
 
             messages: Final[list | None] = kwargs.get("messages", None)
             tasks: Final = []
