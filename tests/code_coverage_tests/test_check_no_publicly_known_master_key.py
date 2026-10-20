@@ -32,27 +32,19 @@ def _run(guard: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
 
 
-def test_generated_dashboard_bundle_is_not_flagged(tmp_path: Path) -> None:
-    guard: Final = _repo_with(tmp_path, {BUNDLE_CHUNK: f'api_key="{RETIRED_KEY}"\n', "docs/a.md": "clean\n"})
-
-    result: Final = _run(guard)
-
-    assert result.returncode == 0, result.stdout
-    assert BUNDLE_CHUNK not in result.stdout
-
-
 @pytest.mark.parametrize(
     "source_path",
-    ["litellm/proxy/proxy_server.py", "ui/litellm-dashboard/src/app/page.tsx", "litellm/proxy/_experimental/x.py"],
+    [
+        "litellm/proxy/proxy_server.py",
+        "ui/litellm-dashboard/src/app/page.tsx",
+        "litellm/proxy/_experimental/x.py",
+        BUNDLE_CHUNK,
+    ],
 )
-def test_source_files_are_still_flagged(tmp_path: Path, source_path: str) -> None:
-    guard: Final = _repo_with(
-        tmp_path,
-        {BUNDLE_CHUNK: f'api_key="{RETIRED_KEY}"\n', source_path: f'key = "{RETIRED_KEY}"\n'},
-    )
+def test_tracked_files_are_flagged(tmp_path: Path, source_path: str) -> None:
+    guard: Final = _repo_with(tmp_path, {source_path: f'key = "{RETIRED_KEY}"\n'})
 
     result: Final = _run(guard)
 
     assert result.returncode == 1
     assert f"{source_path}:1" in result.stdout
-    assert BUNDLE_CHUNK not in result.stdout
