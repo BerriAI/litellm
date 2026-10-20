@@ -132,13 +132,6 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     GEMINI_FORMAT_MAPPINGS: ClassVar[Mapping[str, str]] = MappingProxyType(
         {"mp3": "MP3", "opus": "OGG_OPUS", "alaw": "ALAW", "mulaw": "MULAW"}
     )
-    GEMINI_TTS_REGIONAL_HOSTS: ClassVar[Mapping[str, str]] = MappingProxyType(
-        {
-            "us": "us-texttospeech.googleapis.com",
-            "eu": "eu-texttospeech.googleapis.com",
-            "europe": "eu-texttospeech.googleapis.com",
-        }
-    )
 
     def __init__(self) -> None:
         BaseTextToSpeechConfig.__init__(self)
@@ -567,23 +560,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         vertex_location: Final = litellm_params.get("vertex_location")
         if not isinstance(vertex_location, str) or vertex_location == "global":
             return self.TTS_API_URL
-        regional_host: Final = self.GEMINI_TTS_REGIONAL_HOSTS.get(vertex_location.split("-")[0])
-        if regional_host is None:
-            raise UnsupportedParamsError(
-                message=(
-                    f"{model} serves mp3, opus, alaw and mulaw through Cloud Text-to-Speech, which has global, us "
-                    f"and eu endpoints only, so vertex_location={vertex_location!r} cannot be honored. Request wav "
-                    "or pcm, or use vertex_location global, us, eu, or a us- or europe- region."
-                ),
-                model=model,
-                llm_provider="vertex_ai",
-            )
-        return f"https://{regional_host}/v1/text:synthesize"
+        return f"https://{vertex_location}-texttospeech.googleapis.com/v1/text:synthesize"
 
     def _validate_vertex_input(
         self,
         input_data: VertexTextToSpeechInput,
         optional_params: dict,
+        detect_ssml: bool,
     ) -> VertexTextToSpeechInput:
         """
         Validate and transform input for Vertex AI TTS
@@ -607,7 +590,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         else:
             # LiteLLM will auto-detect if text is in ssml format
             # check if "text" is an ssml - in this case we should pass it as ssml instead of text
-            if input_data:
+            if detect_ssml and input_data:
                 _text: Final = input_data.get("text", None) or ""
                 if "<speak>" in _text:
                     input_data["ssml"] = input_data.pop("text")
@@ -668,7 +651,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
         ####### Build the request ################
         prompt: Final = _JSON_OBJECT.validate_python(optional_params).get("prompt")
-        validated_input: Final = self._validate_vertex_input(VertexTextToSpeechInput(text=input), optional_params)
+        validated_input: Final = self._validate_vertex_input(
+            VertexTextToSpeechInput(text=input), optional_params, detect_ssml=not self._is_gemini_tts_model(model)
+        )
         vertex_input: Final[VertexTextToSpeechInput] = (
             {**validated_input, "prompt": prompt} if isinstance(prompt, str) else validated_input
         )

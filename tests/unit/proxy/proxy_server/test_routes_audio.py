@@ -179,9 +179,6 @@ def test_audio_speech_happy_path(client, auth_as, patched_speech, path):
         ("audio/flac", "flac", "audio/flac"),
         ("audio/pcm", "pcm", "audio/pcm"),
         ("audio/wav", "mp3", "audio/wav"),
-        ("audio/wav", "alaw", "audio/wav"),
-        ("audio/wav", "mulaw", "audio/wav"),
-        ("audio/wav", "pcm16", "audio/wav"),
         ("application/json", "flac", "audio/flac"),
         (None, "wav", "audio/wav"),
         (None, None, "audio/mpeg"),
@@ -202,35 +199,6 @@ def test_audio_speech_content_type_matches_audio_format(
         response = client.post("/v1/audio/speech", json=payload)
     assert response.status_code == 200
     assert response.headers.get("content-type", "").split(";")[0] == expected_content_type
-
-
-@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
-@pytest.mark.parametrize("patched_speech", (None, "application/json"), indirect=True)
-@pytest.mark.parametrize(
-    "response_format,expected_media_type",
-    [
-        ("alaw", "audio/x-alaw-basic"),
-        ("mulaw", "audio/basic"),
-    ],
-)
-def test_audio_speech_uses_requested_media_type(
-    client,
-    auth_as,
-    patched_speech,
-    path,
-    response_format,
-    expected_media_type,
-):
-    payload = {
-        "model": "gemini-3.1-flash-tts-preview",
-        "input": "Hi",
-        "voice": "Umbriel",
-        "response_format": response_format,
-    }
-    with auth_as():
-        response = client.post(path, json=payload)
-    assert response.status_code == 200
-    assert response.headers.get("content-type", "") == expected_media_type
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])

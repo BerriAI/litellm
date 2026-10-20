@@ -13429,28 +13429,12 @@ async def audio_speech(
             custom_headers.update(callback_headers)
 
         requested_format: Final = data.get("response_format")
-        requested_format_str: Final = requested_format if isinstance(requested_format, str) else None
-        extra_response_format_media_types: Final = MappingProxyType(
-            {
-                "alaw": "audio/x-alaw-basic",
-                "mulaw": "audio/basic",
-            }
-        )
-        extra_media_type: Final = (
-            extra_response_format_media_types.get(requested_format_str.lower())
-            if requested_format_str is not None
-            else None
-        )
         upstream_content_type: Final = (
             response.content_type if isinstance(response, HttpxBinaryResponseContent) else None
         )
         media_type: Final = resolve_speech_media_type(
-            upstream_content_type=(
-                upstream_content_type
-                if upstream_content_type is not None and upstream_content_type.lower().startswith("audio/")
-                else extra_media_type or upstream_content_type
-            ),
-            response_format=requested_format_str,
+            upstream_content_type=upstream_content_type,
+            response_format=requested_format if isinstance(requested_format, str) else None,
         )
 
         return StreamingResponse(
