@@ -4696,6 +4696,7 @@ class LlmProviders(str, Enum):
     SAIL = "sail"
     REKA = "reka"
     STREAMLAKE = "streamlake"
+    RUNCRATE = "runcrate"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
