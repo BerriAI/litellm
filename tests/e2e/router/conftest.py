@@ -13,10 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from requests import RequestException
-
 from complexity_router_client import ComplexityRouterClient, build_client
-from proxy_client import ProxyClient
 from e2e_http import NoBody, Success
 from lifecycle import ResourceManager
 from models import (
@@ -26,6 +23,8 @@ from models import (
     LiteLLMParamsBody,
     ModelsListResponse,
 )
+from proxy_client import ProxyClient
+from requests import RequestException
 
 ROUTER_MODEL = "complexity-smart-router"
 ROUTER_PARAMS = LiteLLMParamsBody(
@@ -120,8 +119,6 @@ def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  #
 @pytest.fixture
 def complexity_key(resources: ResourceManager, client: ComplexityRouterClient) -> str:
     """Per-test key allowed to call the complexity router and its tier backends."""
-    key = client.proxy.generate_key(
-        KeyGenerateBody(models=ROUTER_KEY_MODELS, user_id="e2e-complexity-router")
-    )
+    key = client.proxy.generate_key(KeyGenerateBody(models=ROUTER_KEY_MODELS, user_id="e2e-complexity-router"))
     resources.defer(lambda: client.proxy.delete_key(key))
     return key

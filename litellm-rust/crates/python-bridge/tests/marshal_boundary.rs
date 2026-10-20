@@ -1,5 +1,7 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 const DISALLOWED_OUTSIDE_INTEROP: &[&str] = &[
     "py.import(\"json\")",
@@ -41,7 +43,7 @@ fn serialization_uses_the_interop_boundary() {
         for disallowed in DISALLOWED_OUTSIDE_INTEROP {
             assert!(
                 !source.contains(disallowed),
-                "{} bypasses litellm-python-interop with `{disallowed}`",
+                "{} bypasses litellm-host-python with `{disallowed}`",
                 path.display()
             );
         }

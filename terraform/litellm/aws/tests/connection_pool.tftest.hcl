@@ -12,6 +12,7 @@ mock_provider "aws" {
 mock_provider "random" {}
 
 variables {
+  image_tag           = "v9.9.9"
   region              = "us-east-1"
   tenant              = "acme"
   env                 = "test"
@@ -48,6 +49,43 @@ run "pool_enabled_renders_the_three_vars_with_configured_sizes" {
       local.gateway_pool_env[2].name == "LITELLM_PGBOUNCER_MAX_CLIENT_CONN" && local.gateway_pool_env[2].value == "250",
     ])
     error_message = "The pool env must carry the enabled flag and the configured sizes as strings."
+  }
+}
+
+run "collector_sidecar_gets_the_same_pool_env_as_the_gateway" {
+  command = plan
+
+  variables {
+    create_database                 = false
+    database_url                    = "postgresql://litellm:pw@db.internal:5432/litellm"
+    collector_enabled               = true
+    gateway_connection_pool_enabled = true
+    gateway_pool_max_db_connections = 8
+    gateway_pool_max_client_conn    = 250
+  }
+
+  assert {
+    condition = alltrue([
+      for env in [local.gateway_environment, local.collector_container[0].environment] : (
+        { for e in env : e.name => e.value }["LITELLM_PGBOUNCER_ENABLED"] == "true" &&
+        { for e in env : e.name => e.value }["LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS"] == "8" &&
+        { for e in env : e.name => e.value }["LITELLM_PGBOUNCER_MAX_CLIENT_CONN"] == "250"
+      )
+    ])
+    error_message = "The collector sidecar must carry the same three LITELLM_PGBOUNCER_* vars as the gateway so its Prisma connects to the task-local pool."
+  }
+}
+
+run "collector_sidecar_gets_no_pool_env_when_the_pool_is_off" {
+  command = plan
+
+  variables {
+    collector_enabled = true
+  }
+
+  assert {
+    condition     = !anytrue([for e in local.collector_container[0].environment : startswith(e.name, "LITELLM_PGBOUNCER_")])
+    error_message = "The collector sidecar must get no LITELLM_PGBOUNCER_* env unless gateway_connection_pool_enabled is set."
   }
 }
 

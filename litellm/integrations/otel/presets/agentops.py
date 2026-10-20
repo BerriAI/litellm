@@ -9,9 +9,12 @@ this preset registers a custom exporter (``kind="agentops"``) that mints the JWT
 worker thread, off any event loop — and caches it for the process lifetime.
 """
 
-from typing import Any, Final
+from collections.abc import Sequence
+from typing import Final
 
 import httpx
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -71,7 +74,7 @@ def agentops_preset(
     )
 
 
-def _build_agentops_exporter(spec: ExporterSpec) -> Any:
+def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     """Factory for the ``agentops`` exporter kind: a lazy-auth OTLP/HTTP exporter."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
         OTLPSpanExporter,
@@ -106,7 +109,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> Any:
             except Exception as e:
                 verbose_logger.debug("AgentOps JWT fetch failed: %s", e)
 
-        def export(self, spans: Any) -> Any:
+        def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
             self._ensure_authenticated()
             return super().export(spans)
 
@@ -114,7 +117,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> Any:
     return _LazyAuthAgentOpsExporter(endpoint=spec.endpoint, api_key=options.get("api_key"))
 
 
-def _fetch_agentops_jwt(api_key: str) -> dict[str, Any]:
+def _fetch_agentops_jwt(api_key: str) -> dict[str, object]:
     # Own a short-lived client rather than ``_get_httpx_client()``: that returns
     # a process-wide cached ``HTTPHandler`` whose connection pool is shared by
     # every caller, so closing it here would break concurrent/subsequent

@@ -1,6 +1,6 @@
 # LiteLLM on GCP (Cloud Run)
 
-[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Flitellm&cloudshell_workspace=terraform%2Flitellm%2Fgcp%2Fexamples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true)
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Fterraform-google-litellm&cloudshell_git_branch=v1.105.0&cloudshell_workspace=examples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true)
 
 The button above opens the [DeployStack](https://github.com/GoogleCloudPlatform/deploystack) installer in Cloud Shell, walks you through `TUTORIAL.md`, and runs `terraform apply` once you've answered the prompts. The rest of this README is the manual / advanced path.
 
@@ -54,11 +54,15 @@ Then point the stack at it via `image_registry`:
 
 ```hcl
 image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
-image_tag      = "v1.86.0-dev"
 ```
 
-The four `litellm-<component>:${image_tag}` URIs are composed from those
-two vars. Set `gateway_image` / `backend_image` / `ui_image` /
+The four `litellm-<component>:${image_tag}` URIs are composed from
+`image_registry` and `image_tag`. A published module version (Terraform
+Registry `BerriAI/litellm/google`) ships with `image_tag` stamped to its
+own release tag, so bumping the module version bumps all four images with
+it. A git ref of this monorepo has no published images of its own, so
+there `image_tag` is required. Set `image_tag` to pin a different LiteLLM
+release. Set `gateway_image` / `backend_image` / `ui_image` /
 `migrations_image` only if you need a per-component override (custom
 build, different tag).
 
@@ -339,8 +343,11 @@ instead of the Unix socket helm uses; the proxy rejects any non-loopback
 address. The sidecar runs the same Redis CA + `DATABASE_URL` bootstrap as
 the gateway container, gets the same database, Redis, master-key, license,
 proxy config, and `gateway_extra_env` / `gateway_extra_secrets` values, and
-runs with `LITELLM_JOB_ROLE=collector`. When it is unreachable the
-gateway falls back to in-process spend tracking.
+runs with `LITELLM_JOB_ROLE=collector`. With `gateway_connection_pool_enabled`
+it also gets the `LITELLM_PGBOUNCER_*` env, so its Prisma client goes through
+the instance-local PgBouncer instead of opening a second pool straight to the
+database. When it is unreachable the gateway falls back to in-process spend
+tracking.
 
 ```hcl
 collector_enabled = true
@@ -481,6 +488,8 @@ provider "google-beta" {
 
 module "litellm" {
   source = "github.com/BerriAI/litellm//terraform/litellm/gcp?ref=<tag>"
+
+  image_tag = "<litellm release tag>" # a git ref ships no image default, a registry version does
 
   project = "my-gcp-project"
   region  = "us-central1"

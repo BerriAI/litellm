@@ -12,6 +12,7 @@ interface ImpactResult {
 
 interface ImpactPreviewAlertProps {
   impactResult: ImpactResult;
+  isDefault?: boolean;
 }
 
 interface SampleListProps {
@@ -32,8 +33,9 @@ const SampleList: React.FC<SampleListProps> = ({ label, samples, totalCount }) =
   </div>
 );
 
-const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult }) => {
+const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult, isDefault = false }) => {
   const isGlobal = impactResult.affected_keys_count === -1;
+  const qualifier = isDefault ? "up to " : "";
 
   return (
     <Alert className="mb-4">
@@ -47,7 +49,7 @@ const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult })
         ) : (
           <div>
             <span>
-              This attachment would affect{" "}
+              This attachment would affect {qualifier}
               <strong>
                 {impactResult.affected_keys_count} key{impactResult.affected_keys_count !== 1 ? "s" : ""}
               </strong>{" "}
@@ -57,6 +59,11 @@ const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult })
               </strong>
               .
             </span>
+            {isDefault && (
+              <div className="text-xs text-muted-foreground">
+                Default attachments only apply to requests no non-default attachment matches, so fewer may be affected.
+              </div>
+            )}
             {impactResult.sample_keys.length > 0 && (
               <SampleList
                 label="Keys"
