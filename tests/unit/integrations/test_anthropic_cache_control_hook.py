@@ -12,6 +12,7 @@ from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
 from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
@@ -27,6 +28,10 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_invoke,
     convert_to_anthropic_tool_invoke,
+)
+from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
+    ClaudePromptCache,
+    claude_prompt_cache,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -1142,7 +1147,7 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
                     "id": "prompt_breakpoint",
                     "type": "function",
                     "function": {"name": "lookup", "arguments": "{}"},
-                    "prompt_cache_breakpoint": {"type": "ephemeral"},
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
                 },
                 {
                     "id": "srvtoolu_web_search",
@@ -1170,7 +1175,7 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
         },
     }
 
-    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
 
 
 _SEARCH_ANSWER: Final = {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"}
@@ -1270,6 +1275,54 @@ def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_anthropic_r
     census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
 
     assert (census, _wire_cache_marks(messages, model)) == (expected_breakpoints, expected_breakpoints)
+
+
+def _translated_for_claude(messages: list[AllMessageValues], modify_params: bool) -> list[AllMessageValues]:
+    outcome: Final = claude_prompt_cache(
+        messages,
+        None,
+        {},
+        drop_params=False,
+        tool_history_as_text=False,
+        tool_config_cache_control=None,
+        route="anthropic",
+        adds_a_tool=False,
+        pairs_unanswered_tool_calls=modify_params,
+    )
+    assert isinstance(outcome, ClaudePromptCache), outcome
+    return cast(list[AllMessageValues], list(outcome.messages))
+
+
+@pytest.mark.parametrize(
+    ("follow_ups", "modify_params", "expected_breakpoints"),
+    [
+        pytest.param((), False, 0, id="trailing_call_rebuilt_from_its_kept_result"),
+        pytest.param((), True, 1, id="trailing_call_replayed_with_the_modify_params_placeholder"),
+        pytest.param((_SEARCH_ANSWER,), False, 1, id="replayed_with_the_client_answer"),
+        pytest.param((_SEARCH_ANSWER, _GO_ON), False, 0, id="client_answer_replaced_by_the_kept_result"),
+    ],
+)
+def test_cache_control_hook_counts_a_breakpoint_on_a_server_tool_call_only_when_claude_receives_its_mark(
+    monkeypatch: pytest.MonkeyPatch,
+    follow_ups: tuple[AllMessageValues, ...],
+    modify_params: bool,
+    expected_breakpoints: int,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    search_call: Final = {
+        **{key: value for key, value in _SEARCH_CALL.items() if key != "cache_control"},
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+    messages: Final = [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        _replayed_search_call(search_call),
+        *follow_ups,
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+    received: Final = _wire_cache_marks(_translated_for_claude(messages, modify_params))
+
+    assert (census, received) == (expected_breakpoints, expected_breakpoints)
 
 
 @pytest.mark.parametrize(
@@ -1470,6 +1523,49 @@ def test_cache_control_hook_fills_the_mark_budget_every_claude_route_sends_after
     )
 
     assert _marks_the_route_sends(model, custom_llm_provider, processed) == 4
+
+
+def test_a_breakpoint_on_a_copilot_tool_call_never_starts_the_github_device_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+):
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_DEVICE_CODE_URL", "https://github.test/login/device/code")
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {"role": "system", "content": "You are a weather assistant."},
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny"},
+        ],
+    )
+
+    with respx.mock(assert_all_called=False) as github:
+        device_login: Final = github.post("https://github.test/login/device/code").respond(status_code=503)
+        AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="claude-sonnet-4.6",
+            messages=messages,
+            non_default_params={
+                "custom_llm_provider": "github_copilot",
+                "cache_control_injection_points": [{"location": "message", "role": "system"}],
+            },
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+
+    assert not device_login.called
 
 
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])
@@ -3111,12 +3207,12 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         assert _count_cache_control(processed) == 3 + injected
 
     @pytest.mark.parametrize("tool", [MARKED_TOOL_SEARCH_REGEX, MARKED_TOOL_SEARCH_BM25], ids=["regex", "bm25"])
-    def test_chat_cap_ignores_marked_tool_search_tools(self, tool):
+    def test_chat_cap_counts_marked_tool_search_tools_the_anthropic_transform_sends(self, tool):
         messages = [{"role": "system", "content": "sys"}, *self._marked_user_turns(3)]
         params = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
         self._seed(params, copy.deepcopy(messages), tools=[tool])
         processed = self._chat(params, copy.deepcopy(messages))
-        assert _count_cache_control(processed) == 4
+        assert _count_cache_control(processed) == 3
 
     @pytest.mark.parametrize("marked_turns,forwarded", [(3, ["tool_config"]), (4, [])], ids=["slot_left", "cap_full"])
     def test_chat_forwards_tool_config_point_only_while_a_slot_is_left(self, marked_turns, forwarded):
@@ -3711,6 +3807,33 @@ class TestOpenAIPromptCacheBreakpoint:
         assert result[:3] == messages[:3]
         assert result[3]["content"] == [{"type": "text", "text": "d", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert result[4] == {"role": "user", "content": "e"}
+
+    def test_a_tool_call_breakpoint_takes_no_slot_openai_counts(self):
+        messages = [
+            *(
+                {"role": "user", "content": [{"type": "text", "text": text, "prompt_cache_breakpoint": self.EXPLICIT}]}
+                for text in ("a", "b", "c")
+            ),
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_0",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                        "prompt_cache_breakpoint": self.EXPLICIT,
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_0", "content": "found"},
+            {"role": "user", "content": "d"},
+        ]
+        params = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+
+        _, processed, _ = self._chat(messages, params)
+
+        assert processed[-1]["content"] == [{"type": "text", "text": "d", "prompt_cache_breakpoint": self.EXPLICIT}]
 
 
 class TestOpenAIPromptCacheBreakpointPlacementRules:
@@ -4836,6 +4959,27 @@ class TestMalformedInjectionPointsAreIgnored:
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
         _stamp_injection_points_for_the_hook(kwargs, "gpt-5.6", "openai", None, None)
         assert kwargs == {"cache_control_injection_points": value}
+
+
+def test_cache_control_hook_counts_tool_call_prompt_cache_breakpoints():
+    message: Final[AllMessageValues] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": cast(
+            list[ChatCompletionAssistantToolCall],
+            [
+                {
+                    "id": f"call_{index}",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+                for index in range(3)
+            ],
+        ),
+    }
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
 
 
 def test_cache_control_hook_leaves_the_duplicate_tool_result_warning_to_the_request_builder(

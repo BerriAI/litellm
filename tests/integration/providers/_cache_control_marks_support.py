@@ -3,6 +3,7 @@ import re
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -16,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 # https://platform.claude.com/docs/en/build-with-claude/prompt-caching (read 2026-09-28): at most 4 blocks with cache_control
 ANTHROPIC_CACHE_CONTROL_CAP: Final = 4
 # https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html (read 2026-09-28): at most 4 cache checkpoints
+# Claude on Converse counts a run of adjacent cachePoints in the tool config as one (seen live 2026-10-18)
 BEDROCK_CACHE_CHECKPOINT_CAP: Final = 4
 
 ANTHROPIC_MODEL: Final = "claude-opus-5-5"
@@ -380,8 +382,19 @@ def bedrock_labels(request: Request) -> list[str]:
     return [label for role, blocks in _bedrock_sections(body) for label in _cache_points(role, blocks)]
 
 
+def _cache_point_checkpoints(role: str, blocks: JsonValue) -> int:
+    listed: Final = blocks if isinstance(blocks, list) else []
+    points: Final = tuple(isinstance(block, dict) and "cachePoint" in block for block in listed)
+    return sum(is_point for is_point, _ in groupby(points)) if role == "tool" else sum(points)
+
+
+def _bedrock_checkpoints(request: Request) -> int:
+    body: Final = _JSON_OBJECT.validate_json(request.body)
+    return sum(_cache_point_checkpoints(role, blocks) for role, blocks in _bedrock_sections(body))
+
+
 def bedrock_peer(request: Request) -> Reply:
-    found: Final = len(bedrock_labels(request))
+    found: Final = _bedrock_checkpoints(request)
     if found > BEDROCK_CACHE_CHECKPOINT_CAP:
         return Reply(
             status=400,

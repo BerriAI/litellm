@@ -44,7 +44,7 @@ def _served(wire: Wire) -> frozenset[str]:
 
 
 @pytest.mark.timeout(240)
-def test_router_affinity_is_lost_when_auto_caching_stands_down_for_tool_call_marks(
+def test_router_affinity_holds_when_auto_caching_stands_down_for_tool_call_marks(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     session: Final = new_marker()
@@ -90,4 +90,4 @@ def test_router_affinity_is_lost_when_auto_caching_stands_down_for_tool_call_mar
         served: Final = {"left": _served(left), "right": _served(right)}
     assert [status for status, _, _ in follow_ups] == [200] * _FOLLOW_UPS, [text for _, _, text in follow_ups]
     assert {first_marker, *follow_up_markers} == served["left"] | served["right"]
-    assert all(served[side] & set(follow_up_markers) for side in served), served
+    assert {first_marker, *follow_up_markers} in served.values(), served

@@ -8,7 +8,7 @@ import re
 import time
 import types
 from collections.abc import Mapping, Sequence
-from itertools import chain
+from itertools import chain, takewhile
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
@@ -17,6 +17,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
+    BEDROCK_COMPUTER_USE_TOOLS,
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
 )
@@ -138,13 +139,6 @@ ADAPTIVE_THINKING_ON_UNRESOLVED_ARN_WARNING: Final = (
     "the deployment (for example `us.anthropic.claude-opus-4-8`) to send adaptive thinking as requested."
 )
 
-# Computer use tool prefixes supported by Bedrock
-BEDROCK_COMPUTER_USE_TOOLS: Final = [
-    "computer_use_preview",
-    "computer_",
-    "bash_",
-    "text_editor_",
-]
 BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS: Final = 16
 
 # Beta header patterns that are not supported by Bedrock Converse API
@@ -279,6 +273,84 @@ class AmazonConverseConfig(BaseConfig):
             (m.get("role") == "assistant" and m.get("tool_calls")) or m.get("role") in ("tool", "function")
             for m in messages
         )
+
+    @staticmethod
+    def sends_tools(optional_params: Mapping[str, object], messages: Sequence[object]) -> bool:
+        return bool(optional_params.get("tools")) or (
+            "tools" not in optional_params and AmazonConverseConfig._adds_a_dummy_tool(messages)
+        )
+
+    @staticmethod
+    def adds_a_tool(optional_params: Mapping[str, object], messages: Sequence[object]) -> bool:
+        return any(
+            message_field(message_field(tool, "function"), "name") == RESPONSE_FORMAT_TOOL_NAME
+            for tool in parts_of(optional_params.get("tools"))
+        ) or ("tools" not in optional_params and AmazonConverseConfig._adds_a_dummy_tool(messages))
+
+    @staticmethod
+    def _adds_a_dummy_tool(messages: Sequence[object]) -> bool:
+        return (
+            not litellm.bedrock_neutralize_orphaned_tool_blocks
+            and litellm.modify_params
+            and any(message_field(message, "tool_calls") is not None for message in messages)
+        )
+
+    @staticmethod
+    def sends_tool_history_as_text(sends_tools: bool) -> bool:
+        return litellm.bedrock_neutralize_orphaned_tool_blocks and not sends_tools
+
+    @staticmethod
+    def tool_config_cache_control(injection_points: object) -> ChatCompletionCachedContent | None:
+        """The ``cache_control`` of the cachePoint a ``tool_config`` injection point appends after the tools."""
+        from litellm.integrations.anthropic_cache_control_hook import configured_injection_points
+
+        point: Final = next(
+            (
+                point
+                for point in configured_injection_points(injection_points)
+                if point.get("location") == "tool_config"
+            ),
+            None,
+        )
+        if point is None:
+            return None
+        control: Final = point.get("control")
+        return control if isinstance(control, dict) else ChatCompletionCachedContent(type="ephemeral")
+
+    @staticmethod
+    def _cache_point_holders(message: AllMessageValues) -> tuple[object, ...]:
+        """The blocks whose ``cache_control`` Converse sends as a cachePoint: every part and tool call, and the message
+        itself when its content is a string or it is a tool result."""
+        content: Final = message_field(message, "content")
+        sends_message_mark: Final = isinstance(content, str) or message_field(message, "role") in ("tool", "function")
+        return (
+            *((message,) if sends_message_mark else ()),
+            *parts_of(content),
+            *parts_of(message_field(message, "tool_calls")),
+        )
+
+    @staticmethod
+    def _sends_a_one_hour_cache_point(
+        system_content_blocks: Sequence[SystemContentBlock], messages: Sequence[AllMessageValues]
+    ) -> bool:
+        holders: Final = chain.from_iterable(map(AmazonConverseConfig._cache_point_holders, messages))
+        return any(message_field(block.get("cachePoint"), "ttl") == "1h" for block in system_content_blocks) or any(
+            message_field(message_field(holder, "cache_control"), "ttl") == "1h" for holder in holders
+        )
+
+    @staticmethod
+    def _tool_config_cache_point_control(
+        control: ChatCompletionCachedContent,
+        system_content_blocks: Sequence[SystemContentBlock],
+        messages: Sequence[AllMessageValues],
+    ) -> ChatCompletionCachedContent:
+        """Claude rejects a 1h cachePoint read after a 5m one, so a tool_config cachePoint that sets no ttl takes 1h
+        when a later one does."""
+        if control.get("ttl") is not None or not AmazonConverseConfig._sends_a_one_hour_cache_point(
+            system_content_blocks, messages
+        ):
+            return control
+        return ChatCompletionCachedContent(type="ephemeral", ttl="1h")
 
     @staticmethod
     def _neutralize_orphaned_tool_blocks(
@@ -1453,6 +1525,15 @@ class AmazonConverseConfig(BaseConfig):
         return cache_point
 
     @staticmethod
+    def _joins_cache_points_with_a_ttl(cache_point: CachePointBlock, bedrock_tools: Sequence[ToolBlock]) -> bool:
+        """Bedrock rejects a run of adjacent cachePoints in which more than one sets a ttl, and they would all cache the
+        same tools."""
+        return "ttl" in cache_point and any(
+            message_field(block.get("cachePoint"), "ttl") is not None
+            for block in takewhile(lambda block: "cachePoint" in block, reversed(bedrock_tools))
+        )
+
+    @staticmethod
     def _assistant_has_tool_calls(message: object) -> bool:
         return message_field(message, "role") == "assistant" and bool(message_field(message, "tool_calls"))
 
@@ -2023,27 +2104,35 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
-        cache_injection_points: Final = additional_request_params.pop("cache_control_injection_points", None)
-        if (
-            cache_injection_points
+        injection_points: Final = cast(  # cast-ok: untyped request params
+            object, additional_request_params.pop("cache_control_injection_points", None)
+        )
+        tool_config_control: Final = self.tool_config_cache_control(injection_points)
+        tool_config_cache_point: Final = (
+            self._build_cache_point_block(
+                self._tool_config_cache_point_control(tool_config_control, system_content_blocks, messages or ()),
+                model,
+                deployment_model,
+            )
+            if tool_config_control is not None
             and len(bedrock_tools) > 0
             and bedrock_model_accepts_cache_points(model, deployment_model)
+            else None
+        )
+        if tool_config_cache_point is not None and not self._joins_cache_points_with_a_ttl(
+            tool_config_cache_point, bedrock_tools
         ):
-            for point in cache_injection_points:
-                if point.get("location") == "tool_config":
-                    cache_point = self._build_cache_point_block(point.get("control"), model, deployment_model)
-                    bedrock_tools.append(ToolBlock(cachePoint=cache_point))
-                    # Spend attribution credits the gateway only for breakpoints it placed, and
-                    # this is the one place a tool_config point becomes one. The hook that reads
-                    # the configuration cannot record it: whether a cachePoint lands depends on
-                    # this provider and on the request carrying tools, neither of which it sees.
-                    if litellm_params is not None:
-                        from litellm.integrations.anthropic_cache_control_hook import (
-                            AnthropicCacheControlHook,
-                        )
+            bedrock_tools.append(ToolBlock(cachePoint=tool_config_cache_point))
+            # Spend attribution credits the gateway only for breakpoints it placed, and
+            # this is the one place a tool_config point becomes one. The hook that reads
+            # the configuration cannot record it: whether a cachePoint lands depends on
+            # this provider and on the request carrying tools, neither of which it sees.
+            if litellm_params is not None:
+                from litellm.integrations.anthropic_cache_control_hook import (
+                    AnthropicCacheControlHook,
+                )
 
-                        AnthropicCacheControlHook.record_gateway_injection(litellm_params, 1)
-                    break
+                AnthropicCacheControlHook.record_gateway_injection(litellm_params, 1)
 
         bedrock_tool_config: ToolConfigBlock | None = None
         if len(bedrock_tools) > 0:
