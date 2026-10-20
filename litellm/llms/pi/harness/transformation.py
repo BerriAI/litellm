@@ -8,7 +8,7 @@ extensions, MCP servers and skills are never read. PiOptions.config is pi's own 
 keys LiteLLM manages. The provider's apiKey is the `$`-reference
 pi resolves from LITELLM_HARNESS_TOKEN, so the token is never in argv or on disk. pi exits 0
 after a failed provider call, so failure is read from the last assistant message instead.
-Verified against @earendil-works/pi-coding-agent 1.1.0.
+Verified against @earendil-works/pi-coding-agent 1.1.0 and 1.3.0.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm.exceptions import ModelNotMappedError
 from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsMismatch
 from litellm.harness.options import PiOptions, PiThinkingLevel
 from litellm.harness.types import (
@@ -50,6 +51,7 @@ from litellm.llms.base_llm.harness.utils import (
     stderr_tail_text,
     turn_prompt,
 )
+from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
     from litellm.harness.context import SessionContext
@@ -132,8 +134,17 @@ NATIVE_TO_NORMALIZED: Final[Mapping[str, str]] = MappingProxyType(
 
 PI_THINKING_LEVEL_MAP: Final[Mapping[str, str]] = MappingProxyType({"xhigh": "xhigh", "max": "max"})
 
+# pi adds `store: false` to every call otherwise, which LiteLLM rejects for providers that have no `store`.
+PI_PROVIDER_COMPAT: Final[Mapping[str, object]] = MappingProxyType({"supportsStore": False})
+
 PI_BUILTIN_TOOLS: Final = frozenset({*NATIVE_TO_NORMALIZED, "codemode", "tool_search"})
-FAILED_STOP_REASONS: Final = frozenset({"error", "aborted"})
+FAILED_STOP_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "error": "the model call failed",
+        "aborted": "aborted",
+        "length": "the reply hit the model's output token limit",
+    }
+)
 
 
 class _Frozen(BaseModel):
@@ -292,6 +303,16 @@ def session_model(ctx: SessionContext) -> str:
     return model
 
 
+def model_limits(model: str) -> Mapping[str, int]:
+    """contextWindow and maxTokens from LiteLLM's model map, since pi assumes 128000 and 16384 otherwise."""
+    try:
+        info: Final = get_model_info(model)
+    except ModelNotMappedError:
+        return MappingProxyType({})
+    limits: Final = (("contextWindow", info.get("max_input_tokens")), ("maxTokens", info.get("max_output_tokens")))
+    return MappingProxyType({key: value for key, value in limits if isinstance(value, int)})
+
+
 def build_models_json(model: str, base_url: str, thinking: PiThinkingLevel | None) -> str:
     # pi clamps --thinking to "off" unless the model declares reasoning, and offers xhigh/max only when
     # thinkingLevelMap names them. Declaring reasoning without a requested level would make pi send its
@@ -306,7 +327,8 @@ def build_models_json(model: str, base_url: str, thinking: PiThinkingLevel | Non
             "baseUrl": base_url,
             "api": "openai-completions",
             "apiKey": f"${PI_TOKEN_ENV}",
-            "models": (MappingProxyType({"id": model, **reasoning}),),
+            "compat": PI_PROVIDER_COMPAT,
+            "models": (MappingProxyType({"id": model, **model_limits(model), **reasoning}),),
         }
     )
     return json.dumps({"providers": {PI_PROVIDER_ID: provider}}, default=_plain_json)
@@ -464,9 +486,12 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
         exit_code: int,
         stderr_tail: Sequence[str],
     ) -> HarnessTurnResponse:
-        if state.stop_reason in FAILED_STOP_REASONS:
-            raise HarnessTurnError(f"pi turn failed: {state.error or state.stop_reason}")
+        failure: Final = FAILED_STOP_REASONS.get(state.stop_reason or "")
+        if failure is not None:
+            raise HarnessTurnError(f"pi turn failed: {state.error or failure}")
         if exit_code != 0:
             raise HarnessTurnError(f"pi exited with code {exit_code}: {stderr_tail_text(stderr_tail) or 'no output'}")
+        if state.stop_reason is None:
+            raise HarnessTurnError(f"pi exited without a reply: {stderr_tail_text(stderr_tail) or 'no output'}")
         output_json: Final = last_json_object(state.final_text) if ctx.output is not None else None
         return HarnessTurnResponse(final_text=state.final_text, output_json=output_json)

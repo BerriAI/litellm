@@ -49,7 +49,7 @@ from litellm.llms.pi.harness.transformation import (
     tool_args,
     validate_user_config,
 )
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, get_model_info
 
 FIXTURES: Final = Path(__file__).parent / "fixtures"
 TOKEN: Final = "tok-secret-123"
@@ -500,20 +500,33 @@ def test_build_models_json():
                 "baseUrl": "http://h:1/v1",
                 "api": "openai-completions",
                 "apiKey": f"${PI_TOKEN_ENV}",
+                "compat": {"supportsStore": False},
                 "models": [{"id": "m1"}],
             }
         }
-    }
+    }, "an unmapped model keeps pi's own limits, and pi must not send `store`, which non-OpenAI providers reject"
 
 
-REASONING_MODEL: Final = {"id": MODEL, "reasoning": True, "thinkingLevelMap": {"xhigh": "xhigh", "max": "max"}}
+def test_mapped_model_declares_litellm_context_and_output_limits() -> None:
+    info: Final = get_model_info(MODEL)
+    models: Final = setup_models(setup_for(make_ctx()))
+    declared: Final = models["providers"]["litellm"]["models"][0]
+    assert (declared["contextWindow"], declared["maxTokens"]) == (info["max_input_tokens"], info["max_output_tokens"])
+
+
+MAPPED_MODEL: Final = {
+    "id": MODEL,
+    "contextWindow": get_model_info(MODEL)["max_input_tokens"],
+    "maxTokens": get_model_info(MODEL)["max_output_tokens"],
+}
+REASONING_MODEL: Final = {**MAPPED_MODEL, "reasoning": True, "thinkingLevelMap": {"xhigh": "xhigh", "max": "max"}}
 
 
 @pytest.mark.parametrize(
     ("thinking", "declared_model"),
     [
-        (None, {"id": MODEL}),
-        ("off", {"id": MODEL}),
+        (None, MAPPED_MODEL),
+        ("off", MAPPED_MODEL),
         ("minimal", REASONING_MODEL),
         ("high", REASONING_MODEL),
         ("xhigh", REASONING_MODEL),
@@ -666,6 +679,18 @@ def test_turn_response_paths():
         CONFIG.transform_turn_response(make_ctx(), PiStreamState(stop_reason="aborted"), 0, [])
     with pytest.raises(HarnessTurnError, match="code 3: no output"):
         CONFIG.transform_turn_response(make_ctx(), PiStreamState(), 3, [])
+
+
+def test_reply_cut_off_at_the_output_token_limit_is_an_error():
+    state: Final = PiStreamState()
+    parse(assistant_end("partial", "length"), state)
+    with pytest.raises(HarnessTurnError, match="output token limit"):
+        CONFIG.transform_turn_response(make_ctx(), state, 0, [])
+
+
+def test_exit_zero_without_a_reply_is_an_error():
+    with pytest.raises(HarnessTurnError, match="without a reply: Session found in different project"):
+        CONFIG.transform_turn_response(make_ctx(), PiStreamState(), 0, ["Session found in different project: /a"])
 
 
 async def test_start_writes_token_only_in_env():
