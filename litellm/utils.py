@@ -1365,6 +1365,7 @@ def _schedule_async_success_logging(
     """
 
     def _enqueue_async_logging() -> None:
+        logging_obj.mark_async_success_log_enqueued()
         asyncio.create_task(
             _client_async_logging_helper(
                 logging_obj=logging_obj,
