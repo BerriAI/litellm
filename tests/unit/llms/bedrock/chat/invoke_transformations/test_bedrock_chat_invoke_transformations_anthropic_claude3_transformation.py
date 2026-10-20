@@ -747,7 +747,7 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
                     "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
                 },
             },
-            "thinking": {"type": "enabled", "budget_tokens": 4096},
+            "thinking": {"type": "enabled", "budget_tokens": 4096, "block_binding": BLOCK_BINDING},
             "max_tokens": 8192,
         },
         optional_params={},
@@ -756,8 +756,32 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     )
 
     assert "tools" in result
-    assert result["thinking"] == {"type": "adaptive"}
+    assert result["thinking"] == {"type": "adaptive", "block_binding": BLOCK_BINDING}
     assert result["output_config"] == {"effort": "high"}
+
+
+def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(local_model_cost_map):
+    """Anthropic accepts a forced tool_choice next to adaptive thinking, and dropping
+    it lets the model answer in prose instead of the requested JSON."""
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            },
+            "thinking": {"type": "adaptive"},
+            "max_tokens": 8192,
+        },
+        optional_params={},
+        model="us.anthropic.claude-opus-5",
+        drop_params=False,
+    )
+
+    assert result["tool_choice"] == {"type": "tool", "name": result["tools"][0]["name"]}
+    assert result["thinking"] == {"type": "adaptive"}
 
 
 def test_bedrock_chat_invoke_response_format_stub_still_upgrades_legacy_thinking(local_model_cost_map):
@@ -972,6 +996,71 @@ def test_bedrock_chat_invoke_preserves_display_when_translating_legacy_thinking(
 
     assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
+
+
+BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
+
+
+@pytest.mark.parametrize(
+    "requested_thinking",
+    (
+        {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1},
+        {
+            "type": "enabled",
+            "budget_tokens": 2048,
+            "display": "updates",
+            "block_binding": BLOCK_BINDING,
+            "future_key": 1,
+        },
+    ),
+    ids=("adaptive", "legacy"),
+)
+def test_bedrock_chat_invoke_keeps_block_binding_with_display_updates(
+    local_model_cost_map, local_beta_headers_config, requested_thinking
+) -> None:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-opus-5"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 512, "thinking": requested_thinking},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}
+
+
+@pytest.mark.parametrize(
+    "config_path",
+    (
+        "litellm.llms.bedrock.chat.mantle.transformation.AmazonMantleConfig",
+        "litellm.llms.bedrock_mantle.chat.claude_transformation.BedrockMantleClaudeChatConfig",
+    ),
+    ids=("bedrock_mantle_route", "bedrock_mantle_provider"),
+)
+def test_bedrock_chat_mantle_rebuilds_display_updates_without_block_binding(
+    local_model_cost_map, local_beta_headers_config, config_path: str
+) -> None:
+    module_name, _, class_name = config_path.rpartition(".")
+    config: Final = getattr(importlib.import_module(module_name), class_name)()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 512,
+            "thinking": {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1},
+        },
+        optional_params={},
+        model="anthropic.claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert optional_params.get("thinking") == {"type": "adaptive", "display": "updates"}
 
 
 FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"

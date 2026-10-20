@@ -20077,7 +20077,13 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "token_count_framing": 97
+    },
+    "databricks/system.ai.deepseek-v4-flash-0731": {
+        "litellm_provider": "databricks",
+        "mode": "chat",
+        "token_count_framing": 97
     },
     "databricks/databricks-deepseek-v4-pro-0813": {
         "cache_creation_input_token_cost": 1.31999e-06,
@@ -21068,7 +21074,13 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "token_count_framing": 100
+    },
+    "databricks/system.ai.kimi-k3": {
+        "litellm_provider": "databricks",
+        "mode": "chat",
+        "token_count_framing": 100
     },
     "databricks/databricks-llama-4-maverick": {
         "cache_creation_input_token_cost": 5.0001e-07,
@@ -77877,7 +77889,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "token_count_framing": 64,
+        "token_count_tokenizer": "kimi_k3"
     },
     "global.moonshotai.kimi-k3": {
         "supports_regex_lookaround": false,
@@ -77907,7 +77921,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "token_count_framing": 64,
+        "token_count_tokenizer": "kimi_k3"
     },
     "us.moonshotai.kimi-k3": {
         "supports_regex_lookaround": false,
@@ -77937,7 +77953,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "token_count_framing": 64,
+        "token_count_tokenizer": "kimi_k3"
     },
     "openrouter/xiaomi/mimo-v2.6-flash": {
         "cache_read_input_token_cost": 2.8e-09,

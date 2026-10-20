@@ -9,11 +9,12 @@ The request payload is correctly processed and forwarded to the httpx client.
 
 import json
 import unittest.mock
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import JsonValue, ValidationError
 
 # Add the parent directory to the system path
 
@@ -493,3 +494,39 @@ async def test_gemini_proxy_config_with_custom_api_base():
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.parametrize("system_field", ("systemInstruction", "system_instruction"))
+@pytest.mark.parametrize("parts", ({"text": "Follow these rules"}, [{"text": "Follow these rules"}]))
+@pytest.mark.parametrize("tools", (None, []))
+def test_google_count_tokens_accepts_equivalent_system_parts_and_no_tools(
+    system_field: str, parts: JsonValue, tools: JsonValue
+) -> None:
+    from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request
+
+    contents: Final = [{"role": "user", "parts": [{"text": "Count this request"}]}]
+    request: Final = _google_count_tokens_request(
+        "counted", {"contents": contents, system_field: {"parts": parts}, "tools": tools}
+    )
+
+    assert request.messages == [{"role": "user", "content": "Count this request"}]
+    assert request.system == [{"type": "text", "text": "Follow these rules"}]
+    assert request.tools is None
+    assert request.contents == contents
+
+
+@pytest.mark.parametrize(
+    "parts",
+    (
+        {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}},
+        [{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}],
+    ),
+)
+def test_google_count_tokens_rejects_media_only_system_parts(parts: JsonValue) -> None:
+    from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request
+
+    with pytest.raises(ValidationError):
+        _google_count_tokens_request(
+            "counted",
+            {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}], "systemInstruction": {"parts": parts}},
+        )

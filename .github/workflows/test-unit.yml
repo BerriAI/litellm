@@ -670,6 +670,7 @@ jobs:
           - shard: proxy-extras
             test-path: >-
               tests/unit/litellm_proxy_extras
+              tests/unit/db_scripts
             python-version: "3.12"
             workers: 2
             reruns: 0

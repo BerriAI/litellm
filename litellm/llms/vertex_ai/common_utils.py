@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -22,7 +22,7 @@ from litellm.types.llms.vertex_ai import (
     PartType,
     Schema,
 )
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
@@ -1271,6 +1271,8 @@ class VertexAITokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "openai",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         import copy
 
@@ -1342,30 +1344,55 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
-            from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
-            from litellm.llms.vertex_ai.gemini.transformation import (
-                gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
+            from litellm.llms.vertex_ai.count_tokens.context import (
+                VertexGeminiCountContextError,
+                count_context_error_response,
+                gemini_count_contents,
+                inference_request_view,
+                provider_error_response,
+                unconvertible_messages_error,
+                vertex_gemini_count_context,
             )
+            from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
+
+            request_view: Final = inference_request_view(messages or [], system, messages_format)
+            count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
+            if isinstance(count_context, VertexGeminiCountContextError):
+                return count_context_error_response(count_context, request_model, model_to_use)
+            blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
+            if blocks_error is not None:
+                return count_context_error_response(blocks_error, request_model, model_to_use)
 
             resolved_contents: Final = (
-                contents if contents is not None else gemini_convert_messages_with_history(messages=messages or [])
+                contents
+                if contents is not None
+                else await gemini_count_contents(
+                    request_view.messages, messages_format, model_to_use, "vertex_ai", count_tokens_params_request
+                )
             )
+            if isinstance(resolved_contents, VertexGeminiCountContextError):
+                return count_context_error_response(resolved_contents, request_model, model_to_use)
 
             count_tokens_params: Final = {
                 "model": model_to_use,
                 "contents": resolved_contents,
+                "system_instruction": count_context.system_instruction,
+                "tools": count_context.tools,
             }
             count_tokens_params_request.update(count_tokens_params)
-            result = await VertexAITokenCounter().acount_tokens(
-                **count_tokens_params_request,
-            )
+            try:
+                result = await VertexAITokenCounter().acount_tokens(
+                    **count_tokens_params_request,
+                )
+            except litellm.APIError as error:
+                return provider_error_response(error, request_model, model_to_use)
 
-            if result is not None and "totalTokens" in result:
+            if "totalTokens" in result:
                 return TokenCountResponse(
                     total_tokens=result["totalTokens"],
                     request_model=request_model,
                     model_used=model_to_use,
-                    tokenizer_type=result.get("tokenizer_used", ""),
+                    tokenizer_type=result.get("tokenizer_used", "gemini"),
                     original_response=result,
                 )
 

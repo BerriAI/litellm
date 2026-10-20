@@ -8,6 +8,7 @@ from typing_extensions import (
 )
 
 from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput
+from litellm.types.token_count import TokenCountSourceFields
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
 # opt-in for combined embeddings — a provider-specific extension of the
@@ -319,12 +320,13 @@ class UsageMetadata(TypedDict, total=False):
     candidatesTokensDetails: list[PromptTokensDetails]  # Alternative key name used in some responses
 
 
-class TokenCountDetailsResponse(TypedDict):
+class TokenCountDetailsResponse(TokenCountSourceFields):
     """
     Response structure for token count details with modality breakdown.
 
     Example:
-        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+         'litellm_count_source': 'provider'}
     """
 
     totalTokens: int
