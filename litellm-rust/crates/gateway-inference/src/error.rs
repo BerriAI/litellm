@@ -16,6 +16,15 @@ pub enum Error {
     Auth(#[from] litellm_gateway_auth::Error),
     #[error("invalid request body: {0}")]
     InvalidBody(String),
+    /// A param the route requires is absent, worded as the proxy's
+    /// `ProxyMissingRequiredParamError`.
+    #[error("{route}: Missing required parameter: '{param}'.")]
+    MissingParam {
+        route: &'static str,
+        param: &'static str,
+    },
+    #[error(transparent)]
+    InvalidMessages(#[from] MalformedMessages),
     #[error(
         "/v1/messages: Invalid model name passed in model={0}. Call `/v1/models` to view available models for your key."
     )]
@@ -36,6 +45,23 @@ pub enum Error {
     /// A hook turned the request away.
     #[error("{}", .0.message)]
     Refused(Refusal),
+}
+
+/// How a request's `messages` falls short of a list of messages the route can send.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum MalformedMessages {
+    #[error("Invalid type for 'messages': expected an array of messages.")]
+    NotAnArray,
+    #[error(
+        "Invalid 'messages': empty array. Expected an array with minimum length 1, but got an empty array instead."
+    )]
+    Empty,
+    #[error("Invalid type for 'messages[{0}]': expected an object.")]
+    NotAnObject(usize),
+    #[error("Invalid type for 'messages[{0}].role': expected a string.")]
+    Role(usize),
+    #[error("Invalid type for 'messages[{0}].content': expected a string or an array.")]
+    Content(usize),
 }
 
 impl From<Refusal> for Error {
@@ -80,7 +106,10 @@ impl Error {
                 .http_status_code()
                 .and_then(|status| StatusCode::from_u16(status).ok())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
+            Self::InvalidBody(_)
+            | Self::UnknownModel(_)
+            | Self::MissingParam { .. }
+            | Self::InvalidMessages(_) => StatusCode::BAD_REQUEST,
             Self::ModelNotFound(_) => StatusCode::NOT_FOUND,
             Self::Route(RouteError::Transport(TransportError::Http { status, .. })) => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
@@ -129,10 +158,15 @@ impl Error {
             }
             _ => self.to_string(),
         };
+        let param = match self {
+            Self::MissingParam { param, .. } => Some(*param),
+            Self::InvalidMessages(_) => Some("messages"),
+            _ => None,
+        };
         let mut error = json!({
             "message": message,
             "type": error_type(status),
-            "param": null,
+            "param": param,
             "code": status.as_u16(),
         });
         if let Self::Route(RouteError::Transport(TransportError::Http { body, .. })) = self
@@ -376,6 +410,48 @@ mod tests {
         let frame = error.openai_sse_frame();
         assert_eq!(error.openai_body(), expected);
         assert_eq!(frame, format!("data: {expected}\n\n"));
+    }
+
+    #[rstest]
+    #[case::missing(
+        Error::MissingParam { route: "/chat/completions", param: "messages" },
+        json!({"error": {
+            "message": "/chat/completions: Missing required parameter: 'messages'.",
+            "type": "invalid_request_error", "param": "messages", "code": 400,
+        }}),
+    )]
+    #[case::malformed(
+        Error::InvalidMessages(MalformedMessages::NotAnObject(2)),
+        json!({"error": {
+            "message": "Invalid type for 'messages[2]': expected an object.",
+            "type": "invalid_request_error", "param": "messages", "code": 400,
+        }}),
+    )]
+    fn malformed_requests_are_invalid_request_errors_naming_the_param(
+        #[case] error: Error,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(error.openai_body(), expected);
+    }
+
+    #[rstest]
+    #[case::missing(
+        Error::MissingParam { route: "anthropic_messages", param: "max_tokens" },
+        "anthropic_messages: Missing required parameter: 'max_tokens'.",
+    )]
+    #[case::malformed(
+        Error::InvalidMessages(MalformedMessages::Content(0)),
+        "Invalid type for 'messages[0].content': expected a string or an array."
+    )]
+    fn malformed_messages_requests_get_the_anthropic_envelope(
+        #[case] error: Error,
+        #[case] message: &str,
+    ) {
+        assert_eq!(
+            error.body(Some("req_1")),
+            json!({"type": "error", "error": {"type": "invalid_request_error", "message": message}, "request_id": "req_1"}),
+        );
     }
 
     #[rstest]

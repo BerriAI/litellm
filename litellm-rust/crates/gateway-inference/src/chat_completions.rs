@@ -62,6 +62,7 @@ async fn handle(
 ) -> Result<Response, Error> {
     let body = with_model(object, model);
     gateway.check_body(&body)?;
+    request::check_chat_messages(&body)?;
     let group = request::resolve_group(gateway, &body)?;
     let name = request::model_name(&body)?.to_owned();
     let tracking = crate::hooks::admit(

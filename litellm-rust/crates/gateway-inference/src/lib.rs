@@ -29,7 +29,7 @@ use litellm_inference_messages::MessagesRoute;
 use litellm_llms::base_llm::model_info::ModelInfo;
 use litellm_secrets::source::SecretSource;
 
-pub use error::Error;
+pub use error::{Error, MalformedMessages};
 pub use hooks::Hooks;
 pub use litellm_router::{Deployment, Error as RoutingError, Router as ModelRouter};
 pub use request::{JsonBody, JsonObject, RequestId};

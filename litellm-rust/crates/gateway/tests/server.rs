@@ -86,7 +86,11 @@ async fn authenticates_before_serving_mounted_inference_routes(
         .post(format!("http://{address}{path}"))
         .timeout(Duration::from_secs(5))
         .header("x-request-id", "gateway-test")
-        .json(&json!({"model": "unconfigured-model"}));
+        .json(&json!({
+            "model": "unconfigured-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 8,
+        }));
     let request = match authorization {
         Some(value) => request.header("authorization", value),
         None => request,
