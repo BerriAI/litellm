@@ -91,7 +91,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, CostPerToken, ModelInfo, Usage
+from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -159,6 +159,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -1193,33 +1194,33 @@ def _billed_earlier_attempts(
     )
 
 
-def _deployment_cost_per_token(deployment_id: str | None, model: str) -> CostPerToken | None:
-    """The pricing the router registered for this deployment under its ``model_info.id``, read
-    through ``deployment_pricing_model_info`` exactly as the success path does; None means the
-    public cost map. The id is ``Logging.get_router_model_id()`` (the logging object's own
-    ``litellm_params``), never the flattened ``model_call_details`` copy a request body key can
-    overwrite."""
-    model_info: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=model)
-    if model_info is None:
-        return None
-    return CostPerToken(
-        input_cost_per_token=model_info["input_cost_per_token"] or 0.0,
-        output_cost_per_token=model_info["output_cost_per_token"] or 0.0,
-    )
+def _deployment_priced_input_cost(
+    model: str, custom_llm_provider: str | None, prompt_tokens: int, deployment_pricing: ModelInfo
+) -> float:
+    """Input price for the estimated prompt at the deployment's registered rates, read through
+    ``deployment_pricing_model_info`` and priced by ``generic_cost_per_token`` the way the success
+    path prices them, so a long-context tier the deployment declares (``input_cost_per_token_above_200k_tokens``)
+    is honoured instead of flattened to the standard rate. An entry it cannot price keeps the row at $0."""
+    usage: Final = Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    try:
+        prompt_cost, _ = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider or str(deployment_pricing.get("litellm_provider") or ""),
+            model_info=deployment_pricing,
+        )
+    except Exception as exc:  # noqa: BLE001  # a malformed registered entry must not drop the failure row
+        verbose_proxy_logger.debug("failure spend estimate: could not price deployment of %s: %s", model, exc)
+        return 0.0
+    return prompt_cost
 
 
-def _priced_input_cost(
-    pricing_model: str,
-    custom_llm_provider: str | None,
-    prompt_tokens: int,
-    custom_cost_per_token: CostPerToken | None,
-) -> float | None:
+def _priced_input_cost(pricing_model: str, custom_llm_provider: str | None, prompt_tokens: int) -> float | None:
     try:
         estimated_input_cost, _ = litellm.cost_per_token(
             model=pricing_model,
             custom_llm_provider=custom_llm_provider,
             prompt_tokens=prompt_tokens,
-            custom_cost_per_token=custom_cost_per_token,
         )
     except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
         verbose_proxy_logger.debug("failure spend estimate: could not price %s: %s", pricing_model, exc)
@@ -1233,18 +1234,20 @@ def _estimated_input_cost(
     deployment_id: str | None,
     base_model: str | None,
 ) -> float:
-    """Input price for the estimated prompt: the deployment's registered rate when it has one, else
-    the cost map's rate for ``base_model``, else the deployment model, the same candidate order
-    ``completion_cost`` walks (an Azure deployment name is not in the cost map, its ``base_model``
-    is; a ``base_model`` the cost map does not know falls through to the deployment model). A model
-    no candidate can price keeps the row at $0 rather than dropping the failure row."""
+    """Input price for the estimated prompt: the deployment's registered rates when it has any (the id
+    is ``Logging.get_router_model_id()``, never the flattened ``model_call_details`` copy a request body
+    key can overwrite), else the cost map's rate for ``base_model``, else the deployment model, the same
+    candidate order ``completion_cost`` walks (an Azure deployment name is not in the cost map, its
+    ``base_model`` is; a ``base_model`` the cost map does not know falls through to the deployment
+    model). A model no candidate can price keeps the row at $0 rather than dropping the failure row."""
     model: Final = str(model_call_details.get("model") or "")
     custom_llm_provider: Final = str(model_call_details.get("custom_llm_provider") or "") or None
-    custom_cost_per_token: Final = _deployment_cost_per_token(deployment_id, model)
+    deployment_pricing: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=model)
+    if deployment_pricing is not None:
+        return _deployment_priced_input_cost(model, custom_llm_provider, prompt_tokens, deployment_pricing)
     pricing_models: Final = (base_model, model) if base_model is not None else (model,)
     candidate_costs: Final = (
-        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens, custom_cost_per_token)
-        for pricing_model in pricing_models
+        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens) for pricing_model in pricing_models
     )
     return next((cost for cost in candidate_costs if cost is not None), 0.0)
 
