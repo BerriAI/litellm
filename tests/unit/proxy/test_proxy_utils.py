@@ -15,7 +15,6 @@ from litellm.types.guardrails import GuardrailEventHooks
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
-from litellm.router import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     check_complete_credentials,
@@ -25,6 +24,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
+from litellm.router import Router
 from pydantic import ValidationError
 
 pytestmark = pytest.mark.xdist_group("proxy_heavy")
@@ -1679,7 +1679,6 @@ def test_get_model_group_info_merges_custom_tags_and_metadata_across_deployments
     assert (group.custom_tags, group.custom_metadata) == (expected_tags, expected_metadata)
 
 
-
 @pytest.mark.parametrize(
     "alias_target",
     [pytest.param("gpt-4", id="string"), pytest.param({"model": "gpt-4", "hidden": False}, id="item")],
@@ -1705,6 +1704,7 @@ def test_get_model_group_info_serves_the_target_groups_custom_fields_on_an_alias
     assert {group.model_group: (group.custom_tags, group.custom_metadata) for group in groups} == {
         model_group: (("deprecated",), {"retirement_date": "2027-03-01"}) for model_group in ("gpt-4", "gpt-alias")
     }
+
 
 @pytest.fixture
 def mock_team_data():

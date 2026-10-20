@@ -13,9 +13,13 @@ describe("ModelCustomMetadata", () => {
     expect(screen.getByText("Tags:")).toBeInTheDocument();
     expect(screen.getByText("deprecated")).toBeInTheDocument();
     expect(screen.getByText("ptu")).toBeInTheDocument();
-    expect(screen.getByText("retirement_date").nextElementSibling).toHaveTextContent("2027-03-01");
-    expect(screen.getByText("provisioned_ptu").nextElementSibling).toHaveTextContent("100");
-    expect(screen.getByText("gsu").nextElementSibling).toHaveTextContent("false");
+    const terms = screen.getAllByRole("term").map((term) => term.textContent);
+    const definitions = screen.getAllByRole("definition").map((definition) => definition.textContent);
+    expect(terms.map((term, index) => [term, definitions[index]])).toEqual([
+      ["retirement_date", "2027-03-01"],
+      ["provisioned_ptu", "100"],
+      ["gsu", "false"],
+    ]);
   });
 
   it("renders nothing when the model has no tags or metadata", () => {
