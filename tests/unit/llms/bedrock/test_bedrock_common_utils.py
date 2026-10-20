@@ -1197,12 +1197,13 @@ def test_get_anthropic_beta_from_headers_reads_a_json_array_header(header_value:
     assert get_anthropic_beta_from_headers({"anthropic-beta": header_value}) == expected
 
 
-def test_get_anthropic_beta_from_headers_returns_strings_for_a_json_array_of_numbers():
+def test_get_anthropic_beta_from_headers_never_splits_a_json_array_of_numbers_as_text():
     from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 
     betas: Final = get_anthropic_beta_from_headers({"anthropic-beta": "[1, 2]"})
 
     assert all(isinstance(beta, str) for beta in betas)
+    assert not any("[" in beta or "]" in beta for beta in betas)
 
 
 @pytest.fixture()

@@ -483,7 +483,7 @@ class TestGoogleAIStudioTokenCounter:
 def _map_image_config(raw_image_config: str) -> dict[str, object]:
     return map_openai_image_params_to_gemini(
         {"imageConfig": raw_image_config},
-        "gemini-2.5-flash-image",
+        "gemini-3.1-flash-image",
         ["imageConfig"],
         parse_image_config_string=True,
     )
