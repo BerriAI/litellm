@@ -11,7 +11,6 @@ import importlib
 import json
 import os
 import threading
-import time
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
@@ -1386,12 +1385,14 @@ class TestCustomLogger(CustomLogger):
         self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
         self.response_obj: Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]] = None
         self.logged_kwargs: Optional[dict] = None
+        self.logged = asyncio.Event()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload = kwargs.get("standard_logging_object", None)
         self.logged_standard_logging_payload = standard_logging_payload
         self.response_obj = response_obj
         self.logged_kwargs = kwargs
+        self.logged.set()
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
@@ -1618,10 +1619,7 @@ async def test_responses_redaction_removes_request_instructions_from_logged_kwar
         ),
     )
 
-    for _ in range(100):
-        if test_custom_logger.logged_kwargs is not None:
-            break
-        await asyncio.sleep(0.1)
+    await asyncio.wait_for(test_custom_logger.logged.wait(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
     kwargs: Final = test_custom_logger.logged_kwargs
     assert kwargs is not None
     assert kwargs["standard_logging_object"]["model_parameters"]["instructions"] == "redacted-by-litellm"
@@ -1648,18 +1646,22 @@ async def test_one_callback_opting_out_redacts_instructions_only_for_itself(
         ),
     )
 
-    for _ in range(100):
-        if sibling.logged_kwargs is not None and opted_out.logged_kwargs is not None:
-            break
-        await asyncio.sleep(0.1)
+    await asyncio.wait_for(
+        asyncio.gather(sibling.logged.wait(), opted_out.logged.wait()), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS
+    )
     assert _logged_instructions(sibling) == (SECRET,) * 6
     assert _logged_instructions(opted_out) == ("redacted-by-litellm",) * 6
 
 
 class SyncTestCustomLogger(TestCustomLogger):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.logged_in_thread = threading.Event()
+
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.response_obj = response_obj
         self.logged_kwargs = kwargs
+        self.logged_in_thread.set()
 
 
 @pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
@@ -1683,10 +1685,8 @@ def test_one_callback_opting_out_on_a_sync_call_gets_a_redacted_copy_only_for_it
         ),
     )
 
-    for _ in range(100):
-        if sibling.logged_kwargs is not None and opted_out.logged_kwargs is not None:
-            break
-        time.sleep(0.1)
+    assert sibling.logged_in_thread.wait(LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    assert opted_out.logged_in_thread.wait(LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
     assert _logged_instructions(sibling) == (SECRET,) * 6
     assert _logged_instructions(opted_out) == ("redacted-by-litellm",) * 6
     assert _logged_question_and_answer(sibling) == (True, True)
