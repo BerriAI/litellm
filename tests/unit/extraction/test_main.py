@@ -296,6 +296,7 @@ async def test_provider_keys_go_upstream_as_sent_while_litellm_params_stay_local
         metadata={"team": "billing"},
         num_retries=0,
         user="end-user-1",
+        stream=False,
     )
 
     assert json.loads(route.calls[0].request.content) == {
@@ -328,6 +329,32 @@ async def test_stream_is_refused_before_http_without_drop_params(respx_mock: res
         await litellm.aextraction(model="cloudflare/clairic", state=_STATE, fields=_FIELDS, stream=True)
 
     assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "value"), (("temperature", 0.2), ("seed", 7), ("response_format", {"type": "json_object"}))
+)
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_openai_generation_params_are_refused_before_http_without_drop_params(
+    respx_mock: respx.MockRouter, name: str, value: object
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape(f"does not support parameters: ['{name}']")):
+        await litellm.aextraction(model="cloudflare/clairic", state=_STATE, fields=_FIELDS, **{name: value})
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_openai_generation_params_are_dropped_with_drop_params(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_CLAIRIC_URL).respond(json=_ENVELOPE)
+
+    await litellm.aextraction(
+        model="cloudflare/clairic", state=_STATE, fields=_FIELDS, temperature=0.2, seed=7, drop_params=True
+    )
+
+    assert json.loads(route.calls[0].request.content) == {"model": "clairic", "state": _STATE, "fields": _FIELDS}
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,18 @@
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, JsonValue, PrivateAttr, model_validator, with_config
+from pydantic import (
+    ConfigDict,
+    Field,
+    JsonValue,
+    PrivateAttr,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    model_validator,
+    with_config,
+)
 from typing_extensions import ReadOnly, Required, Self, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -10,7 +21,8 @@ ExtractionFieldType: TypeAlias = Literal[
     "text", "number", "date", "time", "datetime", "duration", "list", "estimate", "forecast"
 ]
 ExtractionFieldName: TypeAlias = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")]
-ExtractionBound: TypeAlias = int | float | str
+JsonNumber: TypeAlias = StrictInt | StrictFloat
+ExtractionBound: TypeAlias = JsonNumber | StrictStr
 
 
 def _is_none(value: object) -> bool:
@@ -31,8 +43,8 @@ class ExtractionField(_ClairicObject):
     type: Annotated[ExtractionFieldType, Field(description="The answer type for this field")]
     instructions: Annotated[str | None, Field(description="What the field should contain")] = None
     unit: Annotated[str | None, Field(description="Unit label. For durations, seconds through years")] = None
-    integer: Annotated[bool | None, Field(description="Numbers and durations only")] = None
-    decimals: Annotated[int | None, Field(description="Numbers, durations and number lists only, 0 to 6")] = None
+    integer: Annotated[StrictBool | None, Field(description="Numbers and durations only")] = None
+    decimals: Annotated[JsonNumber | None, Field(description="Numbers, durations and number lists only, 0 to 6")] = None
     items: Annotated[
         Literal["text", "number", "date"] | None, Field(description="Item type, required for list fields")
     ] = None
@@ -41,9 +53,9 @@ class ExtractionField(_ClairicObject):
     step: Annotated[ExtractionBound | None, Field(description="Estimate grid step, or month or year")] = None
     scale: Literal["linear", "log"] | None = None
     null_threshold: Annotated[
-        int | float | None, Field(description="Probability of null above which the value is null")
+        JsonNumber | None, Field(description="Probability of null above which the value is null")
     ] = None
-    horizon: Annotated[int | None, Field(description="Forecast only, number of steps")] = None
+    horizon: Annotated[JsonNumber | None, Field(description="Forecast only, number of steps")] = None
     interval: Literal["step", "minute", "hour", "day", "week", "month", "quarter", "year"] | None = None
 
     @model_validator(mode="after")
@@ -62,8 +74,8 @@ ExtractionImage: TypeAlias = Annotated[str, Field(pattern=r"^[Dd][Aa][Tt][Aa]:")
 
 
 class ExtractionOptions(_ClairicObject):
-    include_quantiles: Annotated[bool | None, Field(description="Add 99 percentiles to estimates")] = None
-    return_state_text: Annotated[bool | None, Field(description="Return the text that spans index into")] = None
+    include_quantiles: Annotated[StrictBool | None, Field(description="Add 99 percentiles to estimates")] = None
+    return_state_text: Annotated[StrictBool | None, Field(description="Return the text that spans index into")] = None
 
 
 class ExtractionRequestBody(_ClairicObject):

@@ -132,6 +132,7 @@ from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import validate_router_weights
@@ -1568,7 +1569,7 @@ def _override_openai_response_model(
             downstream_model,
         )
 
-    if isinstance(response_obj, BaseModel) and response_obj.model_config.get("frozen"):
+    if isinstance(response_obj, ExtractionResponse):
         return response_obj.model_copy(update={"model": requested_model})
 
     try:

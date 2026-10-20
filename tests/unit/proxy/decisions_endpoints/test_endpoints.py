@@ -560,7 +560,7 @@ def test_openai_format_decisions_translate_through_systemone(
         },
     }
     body: Final = response.json()
-    assert body["model"] == _OPENAI_FORMAT_REQUEST["model"]
+    assert body["model"] == _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST["model"]
     assert body["answers"] == _OPENAI_FORMAT_ANSWERS
     assert body["usage"] == {
         "input_tokens": _INPUT_TOKENS,

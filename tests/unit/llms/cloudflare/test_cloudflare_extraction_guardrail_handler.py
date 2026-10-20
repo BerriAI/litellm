@@ -14,6 +14,7 @@ class _TaggingGuardrail(CustomGuardrail):
     def __init__(self) -> None:
         super().__init__(guardrail_name="tagging")
         self.seen: tuple[str, tuple[str, ...]] | None = None
+        self.seen_images: tuple[str, ...] = ()
 
     async def apply_guardrail(
         self,
@@ -24,6 +25,7 @@ class _TaggingGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         texts: Final = tuple(inputs.get("texts", []))
         self.seen = (input_type, texts)
+        self.seen_images = tuple(inputs.get("images", []))
         return GenericGuardrailAPIInputs(texts=[f"{text} [GUARDRAILED]" for text in texts])
 
 
@@ -63,16 +65,32 @@ async def test_request_state_and_field_instructions_are_guardrailed_on_a_copy() 
 
 
 @pytest.mark.asyncio
-async def test_a_request_with_no_text_skips_the_guardrail() -> None:
+async def test_a_request_with_no_text_or_images_skips_the_guardrail() -> None:
     guardrail: Final = _TaggingGuardrail()
-    data: Final = {"model": "invoice-reader", "fields": {"total": {"type": "number"}}, "images": ["data:,"]}
+    data: Final = {"model": "invoice-reader", "fields": {"total": {"type": "number"}}}
 
     assert await ExtractionHandler().process_input_messages(data, guardrail) is data
     assert guardrail.seen is None
 
 
 @pytest.mark.asyncio
-async def test_response_text_answers_guesses_and_state_text_are_guardrailed_on_a_copy() -> None:
+async def test_request_images_reach_the_guardrail_as_data_urls() -> None:
+    guardrail: Final = _TaggingGuardrail()
+    data: Final = {
+        "model": "invoice-reader",
+        "fields": {"total": {"type": "number"}},
+        "images": [{"content_type": "image/png", "base64": "iVBORw0KGgo="}, "data:image/jpeg;base64,/9j/"],
+    }
+
+    result: Final = await ExtractionHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.seen == ("request", ())
+    assert guardrail.seen_images == ("data:image/png;base64,iVBORw0KGgo=", "data:image/jpeg;base64,/9j/")
+    assert result["images"] == data["images"]
+
+
+@pytest.mark.asyncio
+async def test_response_answers_and_state_text_are_guardrailed_on_a_copy_without_stale_spans() -> None:
     guardrail: Final = _TaggingGuardrail()
     response: Final = ExtractionResponse.model_validate(
         {
@@ -97,17 +115,8 @@ async def test_response_text_answers_guesses_and_state_text_are_guardrailed_on_a
     assert result.model_dump(mode="json") == {
         **response.model_dump(mode="json"),
         "answers": {
-            "vendor": {
-                "type": "text",
-                "value": "Acme Tools [GUARDRAILED]",
-                "guess": "Acme Tools [GUARDRAILED]",
-                "span": [19, 29],
-            },
-            "items": {
-                "type": "list",
-                "value": ["12 [GUARDRAILED]", "hammers [GUARDRAILED]"],
-                "spans": [[51, 53], [54, 61]],
-            },
+            "vendor": {"type": "text", "value": "Acme Tools [GUARDRAILED]", "guess": "Acme Tools [GUARDRAILED]"},
+            "items": {"type": "list", "value": ["12 [GUARDRAILED]", "hammers [GUARDRAILED]"]},
             "total": {"type": "number", "value": 174, "guess": 174},
             "contact": {"type": "text", "value": None, "p_null": 0.98},
         },
@@ -115,3 +124,24 @@ async def test_response_text_answers_guesses_and_state_text_are_guardrailed_on_a
     }
     assert response.answers["vendor"].value == "Acme Tools"
     assert result.hidden_params["response_cost"] == 0.0000052
+
+
+@pytest.mark.asyncio
+async def test_spans_into_the_callers_own_state_survive_a_response_guardrail() -> None:
+    response: Final = ExtractionResponse.model_validate(
+        {
+            "model": "invoice-reader",
+            "answers": {"vendor": {"type": "text", "value": "Acme Tools", "span": [19, 29]}},
+            "truncated": False,
+            "usage": {"input_tokens": 52, "output_tokens": 0},
+        }
+    )
+
+    result: Final = await ExtractionHandler().process_output_response(response, _TaggingGuardrail())
+
+    assert isinstance(result, ExtractionResponse)
+    assert result.answers["vendor"].model_dump(mode="json") == {
+        "type": "text",
+        "value": "Acme Tools [GUARDRAILED]",
+        "span": [19, 29],
+    }

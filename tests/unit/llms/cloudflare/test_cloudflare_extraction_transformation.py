@@ -164,6 +164,35 @@ def test_a_list_field_without_an_item_type_is_rejected_locally() -> None:
         ExtractionRequestBody.model_validate({"state": INVOICE_STATE, "fields": {"line_items": {"type": "list"}}})
 
 
+@pytest.mark.parametrize(
+    "spec",
+    (
+        {"type": "number", "decimals": "2"},
+        {"type": "number", "integer": "yes"},
+        {"type": "number", "integer": 1},
+        {"type": "estimate", "min": True, "max": 90},
+    ),
+    ids=("string_decimals", "string_integer", "number_integer", "bool_min"),
+)
+def test_a_field_value_of_the_wrong_json_type_is_rejected_instead_of_coerced(spec: dict[str, object]) -> None:
+    # Cloudflare answered each of these specs with a 400 or 422 on @cf/cloudflare/clairic, probed 2026-10-20
+    with pytest.raises(ValidationError, match=r"fields\.total\."):
+        ExtractionRequestBody.model_validate({"state": INVOICE_STATE, "fields": {"total": spec}})
+
+
+def test_numbers_in_a_field_spec_go_to_cloudflare_exactly_as_sent() -> None:
+    # Cloudflare answered "decimals": 2.0 and "step": 1.0 with a 200 on @cf/cloudflare/clairic, probed 2026-10-20
+    fields: Final = {
+        "total": {"type": "number", "decimals": 2.0, "null_threshold": 1},
+        "days_to_pay": {"type": "estimate", "min": 0, "max": 90, "step": 1.0},
+    }
+    request: Final = ExtractionRequestBody.model_validate({"state": INVOICE_STATE, "fields": fields})
+
+    body: Final = _cloudflare_config().transform_extraction_request("@cf/cloudflare/clairic", request)
+
+    assert json.dumps(body["fields"]) == json.dumps(fields)
+
+
 @pytest.mark.parametrize("name", ("due date", "1st_item", "x" * 80), ids=("space", "digit_first", "80_chars"))
 def test_a_field_name_clairic_refuses_is_rejected_locally(name: str) -> None:
     # Cloudflare answered each of these names with 422 code 3030 on @cf/cloudflare/clairic, probed 2026-10-19

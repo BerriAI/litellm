@@ -1,12 +1,12 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Final, Literal
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter
 
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.types.extraction import ExtractionAnswer, ExtractionResponse
+from litellm.types.extraction import ExtractionAnswer, ExtractionBase64Image, ExtractionResponse
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -16,6 +16,9 @@ if TYPE_CHECKING:
 
 _FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, Mapping[str, object]]]] = TypeAdapter(
     Mapping[str, Mapping[str, object]]
+)
+_IMAGES_ADAPTER: Final[TypeAdapter[tuple[ExtractionBase64Image | JsonValue, ...]]] = TypeAdapter(
+    tuple[Annotated[ExtractionBase64Image | JsonValue, Field(union_mode="left_to_right")], ...]
 )
 
 
@@ -32,6 +35,16 @@ def _instructions(fields: Mapping[str, Mapping[str, object]]) -> tuple[tuple[str
         (name, instructions)
         for name, spec in fields.items()
         if isinstance(instructions := spec.get("instructions"), str)
+    )
+
+
+def _image_urls(images: object) -> tuple[str, ...]:
+    if not isinstance(images, list):
+        return ()
+    return tuple(
+        f"data:{image.content_type};base64,{image.base64}" if isinstance(image, ExtractionBase64Image) else image
+        for image in _IMAGES_ADAPTER.validate_python(images)
+        if isinstance(image, (str, ExtractionBase64Image))
     )
 
 
@@ -64,13 +77,14 @@ def _scans_of(
 
 
 def _guardrailed_answer(
-    name: str, answer: ExtractionAnswer, scanned: Sequence[tuple[_AnswerText, str]]
+    name: str, answer: ExtractionAnswer, scanned: Sequence[tuple[_AnswerText, str]], drop_spans: bool
 ) -> ExtractionAnswer:
     value_scans: Final = _scans_of(name, "value", scanned)
     guess_scans: Final = _scans_of(name, "guess", scanned)
     update: Final = {
         **({"value": _guardrailed_value(answer.value, value_scans)} if value_scans else {}),
         **({"guess": _guardrailed_value(answer.guess, guess_scans)} if guess_scans else {}),
+        **({"span": None, "spans": None} if drop_spans else {}),
     }
     return answer.model_copy(update=update) if update else answer
 
@@ -82,9 +96,13 @@ async def _scanned_texts(
     request_data: dict[str, object],  # mutable-ok: CustomGuardrail.apply_guardrail takes the request as a plain dict
     input_type: Literal["request", "response"],
     litellm_logging_obj: "LiteLLMLoggingObj | None",
+    images: Sequence[str] = (),
 ) -> tuple[str, ...]:
+    inputs: Final = GenericGuardrailAPIInputs(texts=list(texts), model=model if isinstance(model, str) else None)
+    if images:
+        inputs["images"] = list(images)
     guardrailed: Final = await guardrail_to_apply.apply_guardrail(  # pyright: ignore[reportUnknownMemberType]  # CustomGuardrail.apply_guardrail types request_data as a bare dict
-        inputs=GenericGuardrailAPIInputs(texts=list(texts), model=model if isinstance(model, str) else None),
+        inputs=inputs,
         request_data=request_data,
         input_type=input_type,
         logging_obj=litellm_logging_obj,
@@ -104,7 +122,8 @@ class ExtractionHandler(BaseTranslation):
         states: Final = (state,) if isinstance(state, str) and state else ()
         fields: Final = _FIELDS_ADAPTER.validate_python(data.get("fields") or {})
         instructions: Final = _instructions(fields)
-        if not states and not instructions:
+        images: Final = _image_urls(data.get("images"))
+        if not states and not instructions and not images:
             return data
         scanned: Final = await _scanned_texts(
             (*states, *(text for _, text in instructions)),
@@ -113,6 +132,7 @@ class ExtractionHandler(BaseTranslation):
             data,
             "request",
             litellm_logging_obj,
+            images,
         )
         scanned_instructions: Final = dict(zip((name for name, _ in instructions), scanned[len(states) :]))
         return {
@@ -149,11 +169,13 @@ class ExtractionHandler(BaseTranslation):
             litellm_logging_obj,
         )
         pairs: Final = tuple(zip(texts, scanned))
+        state_text: Final = scanned[-1] if state_texts else response.state_text
         return response.model_copy(
             update={
                 "answers": {
-                    name: _guardrailed_answer(name, answer, pairs) for name, answer in response.answers.items()
+                    name: _guardrailed_answer(name, answer, pairs, drop_spans=state_text != response.state_text)
+                    for name, answer in response.answers.items()
                 },
-                **({"state_text": scanned[-1]} if state_texts else {}),
+                **({"state_text": state_text} if state_texts else {}),
             }
         )

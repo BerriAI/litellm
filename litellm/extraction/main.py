@@ -38,8 +38,12 @@ ExtractionOptionsParam: TypeAlias = ExtractionOptions | Mapping[str, object]
 
 _REQUEST_ADAPTER: Final[TypeAdapter[ExtractionRequestBody]] = TypeAdapter(ExtractionRequestBody)
 _HANDLER: Final = BaseLLMHTTPHandler()
-_LITELLM_KWARGS: Final = frozenset(
-    (*all_litellm_params, *GenericLiteLLMParams.model_fields, *OPENAI_CHAT_COMPLETION_PARAMS)
+_LITELLM_ONLY_KWARGS: Final = frozenset((*all_litellm_params, *GenericLiteLLMParams.model_fields))
+_LITELLM_KWARGS: Final = frozenset((*_LITELLM_ONLY_KWARGS, *OPENAI_CHAT_COMPLETION_PARAMS))
+_UNSUPPORTED_OPENAI_PARAMS: Final = (
+    frozenset(OPENAI_CHAT_COMPLETION_PARAMS)
+    - _LITELLM_ONLY_KWARGS
+    - frozenset(("user", "extra_headers", "base_url", "default_headers", "deployment_id"))
 )
 
 
@@ -98,6 +102,16 @@ def _request_fields(
     return MappingProxyType({name: value for name, value in sent.items() if value is not None})
 
 
+def _unsupported_openai_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            name
+            for name, value in kwargs.items()
+            if name in _UNSUPPORTED_OPENAI_PARAMS and value is not None and value is not False
+        )
+    )
+
+
 def _prepare_call(
     *,
     model: str,
@@ -120,10 +134,11 @@ def _prepare_call(
         api_key=api_key,
     )
     provider_config: Final = _provider_config(model, provider)
-    if kwargs.get("stream") and not drops_unsupported_params(kwargs.get("drop_params")):
+    unsupported: Final = _unsupported_openai_params(kwargs)
+    if unsupported and not drops_unsupported_params(kwargs.get("drop_params")):
         raise litellm.UnsupportedParamsError(
             message=(
-                f"{provider} does not support parameters: ['stream'], for model={model}. "
+                f"{provider} does not support parameters: {list(unsupported)}, for model={model}. "
                 "To drop these, set `litellm.drop_params=True` or for proxy:\n\n"
                 "`litellm_settings:\n drop_params: true`\n"
             ),
