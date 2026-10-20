@@ -5508,6 +5508,7 @@ def build_custom_logger_compatible_class(
         _nops_base: Final = (os.getenv(NOPS_OTEL_ENDPOINT_ENV) or NOPS_DEFAULT_OTEL_ENDPOINT).rstrip("/")
         _nops_config: Final = OpenTelemetryConfig(
             exporter="otlp_http",
+            skip_set_global=True,
             endpoint=(_nops_base if _nops_base.endswith("/v1/traces") else f"{_nops_base}/v1/traces"),
             headers=f"Authorization=Bearer {_nops_key}",
             capture_message_content=(
