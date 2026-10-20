@@ -27,7 +27,6 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/actions/cache-cargo-build/**"
       - ".github/scripts/detect_changes.sh"
-      - ".github/scripts/uv_sync_with_retries.sh"
       - ".circleci/scripts/classify_changes.sh"
 
 permissions:
@@ -85,7 +84,7 @@ jobs:
           for extra in core mcp proxy; do
             args=()
             if [ "$extra" != core ]; then args=(--extra "$extra"); fi
-            UV_PROJECT_ENVIRONMENT=".venv-$extra" .github/scripts/uv_sync_with_retries.sh --frozen --no-dev --no-editable --python ${{ matrix.python-version }} "${args[@]}"
+            UV_PROJECT_ENVIRONMENT=".venv-$extra" uv sync --frozen --no-dev --no-editable --python ${{ matrix.python-version }} "${args[@]}"
             uv pip check --python ".venv-$extra"
             if [ "$extra" = core ]; then
               checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
