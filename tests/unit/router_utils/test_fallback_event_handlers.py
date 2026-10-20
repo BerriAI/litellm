@@ -247,10 +247,46 @@ async def test_run_async_fallback_preserves_superseded_usage_when_hop_fails_befo
 
 
 class _RateLimitedHop(Exception):
-    def __init__(self) -> None:
+    def __init__(self, deployment_id: str = "fallback-dep-1") -> None:
         super().__init__("fallback deployment rate limited")
         self.status_code = 429
-        self.failed_deployment_id = "fallback-dep-1"
+        self.failed_deployment_id = deployment_id
+
+
+_EARLIER_FAILURE_MARKER: Final = datetime(2026, 1, 1)
+_FIRST_HOP_FAILURE_MARKER: Final = datetime(2026, 1, 2)
+_FINAL_HOP_FAILURE_MARKER: Final = datetime(2026, 1, 3)
+
+
+class _TwoFailureFallbackRouter(Router):
+    def __init__(self) -> None:
+        super().__init__(
+            model_list=[
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
+                    "model_info": {"id": f"fallback-dep-{index}"},
+                }
+                for index in (1, 2)
+            ],
+            allowed_fails=0,
+            cooldown_time=60,
+            num_retries=0,
+        )
+
+    async def async_function_with_fallbacks(self, *args: object, **kwargs: object) -> NoReturn:
+        logging_obj: Final[object] = kwargs["litellm_logging_obj"]
+        assert isinstance(logging_obj, Logging)
+        assert logging_obj.model_call_details.get("has_logged_async_failure", False) is False
+
+        logging_obj.model_call_details["current_attempt_api_call_start_time"] = _FIRST_HOP_FAILURE_MARKER
+        try:
+            raise _RateLimitedHop("fallback-dep-1")
+        except _RateLimitedHop:
+            logging_obj.mark_logging_complete("async_failure")
+
+        logging_obj.model_call_details["current_attempt_api_call_start_time"] = _FINAL_HOP_FAILURE_MARKER
+        raise _RateLimitedHop("fallback-dep-2")
 
 
 def _two_deployment_router() -> Router:
@@ -276,12 +312,15 @@ async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_l
     router: Final = _two_deployment_router()
     logging_obj: Final = _request_logging_obj()
     if failure_already_logged:
-        logging_obj.model_call_details["has_logged_async_failure"] = True
+        logging_obj.model_call_details["current_attempt_api_call_start_time"] = _EARLIER_FAILURE_MARKER
+        logging_obj.mark_logging_complete("async_failure")
 
     async def rate_limited_hop(*args: object, **kwargs: object) -> NoReturn:
         hop_logging_obj: Final = kwargs["litellm_logging_obj"]
         assert isinstance(hop_logging_obj, Logging)
-        hop_logging_obj.model_call_details["has_logged_async_failure"] = True
+        hop_logging_obj.model_call_details["current_attempt_api_call_start_time"] = _FINAL_HOP_FAILURE_MARKER
+        if hop_logging_obj.model_call_details.get("has_logged_async_failure", False) is not True:
+            hop_logging_obj.mark_logging_complete("async_failure")
         raise _RateLimitedHop()
 
     with pytest.raises(_RateLimitedHop):
@@ -299,6 +338,29 @@ async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_l
 
     cooled_down: Final = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert cooled_down == (["fallback-dep-1"] if failure_already_logged else [])
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_cools_down_the_final_deployment_after_retry_failure_logging() -> None:
+    router: Final = _TwoFailureFallbackRouter()
+    logging_obj: Final = _request_logging_obj()
+    assert logging_obj.model_call_details.get("has_logged_async_failure", False) is False
+
+    with pytest.raises(_RateLimitedHop):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["fallback-model"],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("stream dropped before content"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            litellm_logging_obj=logging_obj,
+            metadata={},
+        )
+
+    assert logging_obj.model_call_details.get("has_logged_async_failure", False) is True
+    cooled_down: Final = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    assert cooled_down == ["fallback-dep-2"]
 
 
 @pytest.mark.asyncio
@@ -1317,11 +1379,18 @@ class TestRunAsyncFallbackTriggersCooldown:
             return None
 
         async def async_function_with_fallbacks(self, *args, **kwargs):
+            logging_obj: Final = kwargs.get("litellm_logging_obj")
+            if isinstance(logging_obj, Logging):
+                logging_obj.model_call_details["current_attempt_api_call_start_time"] = _FINAL_HOP_FAILURE_MARKER
+                if logging_obj.model_call_details.get("has_logged_async_failure", False) is not True:
+                    logging_obj.mark_logging_complete("async_failure")
             raise RuntimeError("fallback model also failed")
 
     def _logging_obj(self, has_logged_async_failure: bool) -> Logging:
         logging_obj: Final = _request_logging_obj()
-        logging_obj.model_call_details["has_logged_async_failure"] = has_logged_async_failure
+        if has_logged_async_failure:
+            logging_obj.model_call_details["current_attempt_api_call_start_time"] = _EARLIER_FAILURE_MARKER
+            logging_obj.mark_logging_complete("async_failure")
         return logging_obj
 
     @pytest.mark.asyncio

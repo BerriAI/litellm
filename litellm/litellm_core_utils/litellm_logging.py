@@ -579,6 +579,10 @@ def _timestamp_seconds(moment: object) -> float | None:
     return None
 
 
+def same_attempt_marker(first: object, second: object) -> bool:
+    return first is second or first == second
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -2393,7 +2397,7 @@ class Logging(LiteLLMLoggingBaseClass):
             if (
                 attempt_payload is not None
                 and self.model_call_details.get("standard_logging_object") is shared_payload
-                and (current_marker is attempt_marker or current_marker == attempt_marker)
+                and same_attempt_marker(current_marker, attempt_marker)
             ):
                 self.model_call_details["standard_logging_object"] = attempt_payload
 
@@ -2509,6 +2513,10 @@ class Logging(LiteLLMLoggingBaseClass):
             """
             return
         self.model_call_details[f"has_logged_{event_type}"] = True
+        if event_type == "async_failure":
+            self.model_call_details["async_failure_logged_attempt"] = self.model_call_details.get(
+                "current_attempt_api_call_start_time"
+            )
         return
 
     def has_run_logging(

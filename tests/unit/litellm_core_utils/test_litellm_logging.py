@@ -1822,13 +1822,19 @@ def test_mark_logging_complete_flags_by_stream_and_event(
         "async_failure",
         "sync_failure",
     )
+    attempt_marker: Final = datetime_unit_test(2026, 1, 1)
     logging_obj.stream = stream
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = attempt_marker
 
     logging_obj.mark_logging_complete(event_type=event)
 
     expected_to_run: Final = stream and event in ("async_success", "sync_success")
     assert logging_obj.should_run_logging(event_type=event) is expected_to_run
     assert all(logging_obj.should_run_logging(event_type=other_event) for other_event in events if other_event != event)
+    if event == "async_failure":
+        assert logging_obj.model_call_details["async_failure_logged_attempt"] is attempt_marker
+    else:
+        assert "async_failure_logged_attempt" not in logging_obj.model_call_details
 
 
 @pytest.mark.parametrize("stream", [False, True])

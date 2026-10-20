@@ -16,7 +16,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
-from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging, same_attempt_marker
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -461,7 +461,11 @@ def _failure_callbacks_blocked_logging_object(kwargs: Mapping[str, object]) -> L
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, Logging):
         return None
-    return logging_obj if logging_obj.model_call_details.get("has_logged_async_failure", False) is True else None
+    if logging_obj.model_call_details.get("has_logged_async_failure", False) is not True:
+        return None
+    current_marker: Final = logging_obj.model_call_details.get("current_attempt_api_call_start_time")
+    logged_marker: Final = logging_obj.model_call_details.get("async_failure_logged_attempt")
+    return logging_obj if not same_attempt_marker(current_marker, logged_marker) else None
 
 
 def _request_metadata_bucket(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -863,9 +867,6 @@ async def run_async_fallback(
                 )
                 continue
             attempted.record(attempt_key)
-        failure_callbacks_blocked_logging_obj = _failure_callbacks_blocked_logging_object(
-            _FALLBACK_KWARGS_ADAPTER.validate_python(kwargs)
-        )
         try:
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
@@ -912,7 +913,11 @@ async def run_async_fallback(
                 kwargs=kwargs,
                 original_exception=original_exception,
             )
-            if failure_callbacks_blocked_logging_obj is not None:
+            if (
+                failure_callbacks_blocked_logging_obj := _failure_callbacks_blocked_logging_object(
+                    _FALLBACK_KWARGS_ADAPTER.validate_python(kwargs)
+                )
+            ) is not None:
                 _trigger_cooldown_for_failed_deployment(
                     litellm_router=litellm_router,
                     kwargs=kwargs,
