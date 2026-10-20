@@ -177,9 +177,11 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
     warm_tokenizer(model)
     logging_obj = _logging_obj()
     logging_obj.model_call_details = {"model": model, "stream": True}
+    logging_obj.model = model
     logging_obj.litellm_params = {}
     logging_obj.get_router_model_id.return_value = None
     logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
 
     _, took, lags = await timed_with_loop_lags(
         lambda: PassThroughStreamingHandler._route_streaming_logging_to_handler(
@@ -195,8 +197,9 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
         )
     )
 
-    logging_obj.dispatch_success_handlers.assert_awaited_once()
-    logged_usage = logging_obj.dispatch_success_handlers.await_args.kwargs["result"].usage
+    logging_obj.dispatch_success_handlers.assert_not_awaited()
+    logging_obj.dispatch_failure_handlers.assert_awaited_once()
+    logged_usage = logging_obj.record_partial_usage_for_failure.call_args.kwargs["usage"]
     assert logged_usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
 

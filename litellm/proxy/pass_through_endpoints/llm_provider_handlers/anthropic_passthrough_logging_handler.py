@@ -240,11 +240,20 @@ class AnthropicPassthroughLoggingHandler:
     ) -> None:
         if not all_chunks:
             return
+        byte_chunks: Final = tuple(chunk for chunk in all_chunks if isinstance(chunk, bytes))
+        normalized_chunks: Final = (
+            tuple(b"".join(byte_chunks).decode("utf-8", errors="replace").splitlines())
+            if len(byte_chunks) == len(all_chunks)
+            else all_chunks
+        )
         model: Final = AnthropicPassthroughLoggingHandler._resolve_logged_model(
-            litellm_logging_obj, request_body, all_chunks
+            litellm_logging_obj, request_body, normalized_chunks
         )
         partial_response: Final = AnthropicPassthroughLoggingHandler._build_streaming_response_for_logging(
-            litellm_logging_obj=litellm_logging_obj, request_body=request_body, all_chunks=all_chunks, model=model
+            litellm_logging_obj=litellm_logging_obj,
+            request_body=request_body,
+            all_chunks=normalized_chunks,
+            model=model,
         )
         usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
         if partial_response is None or usage is None:

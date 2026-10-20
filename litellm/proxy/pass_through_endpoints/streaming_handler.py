@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -14,6 +15,11 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.anthropic_stream_diagnostics import (
+    AnthropicStreamDiagnostics,
+    StreamEnd,
+    finish_stream_diagnostics,
+)
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject, Usage
@@ -36,6 +42,8 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
 from .success_handler import PassThroughEndpointLogging
+
+_REQUEST_BODY: Final = TypeAdapter(dict[str, object])
 
 
 class RouteStreamingLogging(Protocol):
@@ -62,9 +70,25 @@ class PassThroughStreamContext:
 
 class PassThroughStreamingHandler:
     @staticmethod
-    def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
+    def _stamp_first_chunk_if_needed(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        diagnostics: AnthropicStreamDiagnostics | None = None,
+        chunk: bytes = b"",
+    ) -> None:
         if litellm_logging_obj.completion_start_time is None:
             litellm_logging_obj.update_completion_start_time(completion_start_time=datetime.now())
+        if diagnostics is not None:
+            diagnostics.observe(chunk)
+
+    @staticmethod
+    def _stream_logging_context(
+        logging_obj: LiteLLMLoggingObj, endpoint_type: EndpointType, stream_end: StreamEnd
+    ) -> LiteLLMLoggingObj:
+        if endpoint_type != EndpointType.ANTHROPIC:
+            return logging_obj
+        attempt: Final = logging_obj.attempt_scoped_copy() if stream_end == "closed" else logging_obj
+        attempt.model_call_details["anthropic_stream_end"] = stream_end
+        return attempt
 
     @staticmethod
     async def schedule_stream_failure_logging(
@@ -152,10 +176,18 @@ class PassThroughStreamingHandler:
         )
         raw_bytes: Final[list[bytes]] = []
         resolved_request_body: Final[dict[str, object]] = request_body or {}
+        diagnostics: Final = (
+            AnthropicStreamDiagnostics.from_env("provider_read", litellm_logging_obj.litellm_call_id, response.headers)
+            if endpoint_type == EndpointType.ANTHROPIC
+            else None
+        )
+        stream_end: StreamEnd = "closed"  # rebind-ok: distinguish generator close, EOF and transport failure
 
         def _build_logging_coroutine() -> Coroutine[None, None, None]:
             return resolved_route_streaming_logging(
-                litellm_logging_obj=litellm_logging_obj,
+                litellm_logging_obj=PassThroughStreamingHandler._stream_logging_context(
+                    litellm_logging_obj, endpoint_type, stream_end
+                ),
                 passthrough_success_handler_obj=passthrough_success_handler_obj,
                 url_route=url_route,
                 request_body=resolved_request_body,
@@ -197,7 +229,7 @@ class PassThroughStreamingHandler:
                 # Hot path: just buffer for end-of-stream logging and forward.
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
-                    PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
+                    PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj, diagnostics, chunk)
                     if tinyfish_scan_active:
                         complete_frames, tinyfish_pending = split_complete_sse_frames(tinyfish_pending + chunk)
                         run_id = run_id_from_sse_frames(complete_frames) if b"run_id" in complete_frames else None
@@ -218,7 +250,7 @@ class PassThroughStreamingHandler:
                 pending = b""
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
-                    PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
+                    PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj, diagnostics, chunk)
                     complete_frames, pending = split_complete_sse_frames(pending + chunk)
                     if complete_frames:
                         yield ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
@@ -227,6 +259,7 @@ class PassThroughStreamingHandler:
                 if pending:
                     yield pending
             stream_ended = True  # rebind-ok: the finally reads it to spot a close-at-frame
+            stream_end = "eof"  # rebind-ok: upstream iteration completed without a transport exception
             # Stream completed cleanly.  When the proxy armed deferred
             # dispatch (post-call guardrails active), park the logging
             # coroutine on logging_obj instead of enqueueing now, so
@@ -237,14 +270,15 @@ class PassThroughStreamingHandler:
             # upstream exceptions log a failure instead (LIT-3798).
             if (
                 getattr(litellm_logging_obj, "_on_deferred_stream_complete", None) is not None
-                and raw_bytes
+                and (raw_bytes or endpoint_type == EndpointType.ANTHROPIC)
                 and response.status_code < 400
             ):
                 logging_scheduled = True
                 bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
                 litellm_logging_obj._deferred_stream_complete_args = (_build_logging_coroutine(),)
         except Exception as e:
-            verbose_proxy_logger.error("Error in chunk_processor: %s", e)
+            stream_end = "transport_error"  # rebind-ok: preserve the transport failure in the final diagnostic
+            verbose_proxy_logger.error("Error in chunk_processor (%s)", type(e).__name__)
             if response.status_code < 400:
                 logging_scheduled = True
                 await PassThroughStreamingHandler.schedule_stream_failure_logging(
@@ -261,6 +295,7 @@ class PassThroughStreamingHandler:
                 )
             raise
         finally:
+            finish_stream_diagnostics(diagnostics, stream_end)
             # GeneratorExit (raised on client disconnect) is not caught by
             # `except Exception`; the finally block ensures partial usage
             # still gets logged for spend tracking. See LIT-2642.
@@ -268,7 +303,11 @@ class PassThroughStreamingHandler:
             # the caller before this generator starts (see
             # _log_passthrough_upstream_failure); logging them again here as
             # a success would double-log the same request.
-            if not logging_scheduled and raw_bytes and response.status_code < 400:
+            if (
+                not logging_scheduled
+                and (raw_bytes or endpoint_type == EndpointType.ANTHROPIC)
+                and response.status_code < 400
+            ):
                 logging_scheduled = True
                 superseded_error_event: Final = (
                     None
@@ -295,10 +334,7 @@ class PassThroughStreamingHandler:
 
     @staticmethod
     def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:
-        """The provider `event: error` frame of a stream the router closed because a retry or fallback took the
-        request over. That attempt is logged as its own failure, on a copy taken now so the retry's rebinding of
-        the shared logging object never reaches it. A stream that ran to its end or that the client closed keeps
-        logging through the success route, so its usage is still billed."""
+        """Capture a superseded attempt's provider error before the retry rebinds the shared logging object."""
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             closing_superseded_attempt,
             parse_anthropic_error_event,
@@ -333,6 +369,10 @@ class PassThroughStreamingHandler:
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
             is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
+            parse_anthropic_error_event,
+        )
+        from litellm.llms.anthropic.pass_through.messages.utils import (
+            INCOMPLETE_STREAM_ERROR_MESSAGE,
         )
 
         # Transport reads can split event names and JSON payloads. Recognize terminal
@@ -349,6 +389,41 @@ class PassThroughStreamingHandler:
             and not is_provider_error_chunk(complete_frames)
         )
         try:
+            if endpoint_type == EndpointType.ANTHROPIC:
+                request_mapping: Final = _REQUEST_BODY.validate_python(request_body)
+                error_event: Final = parse_anthropic_error_event(complete_frames)
+                if error_event is not None:
+                    await AnthropicPassthroughLoggingHandler.log_error_frame_as_failure(
+                        attempt_logging_obj=litellm_logging_obj,
+                        request_body=request_mapping,
+                        all_chunks=raw_bytes,
+                        error_event=error_event,
+                    )
+                    return
+                if not litellm_logging_obj.model_call_details["prompt_cache_response_complete"]:
+                    await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
+                        litellm_logging_obj=litellm_logging_obj,
+                        request_body=request_mapping,
+                        all_chunks=raw_bytes,
+                    )
+                    consumer_closed: Final = (
+                        litellm_logging_obj.model_call_details.get("anthropic_stream_end") == "closed"
+                    )
+                    await litellm_logging_obj.dispatch_failure_handlers(
+                        litellm.APIError(
+                            status_code=499 if consumer_closed else 502,
+                            message=(
+                                "Stream consumer closed before message_stop"
+                                if consumer_closed
+                                else INCOMPLETE_STREAM_ERROR_MESSAGE
+                            ),
+                            llm_provider="anthropic",
+                            model=str(litellm_logging_obj.model),
+                        ),
+                        "",
+                        prefer_async_handlers=True,
+                    )
+                    return
             # TinyFish billing is owned by the detached poller; the $0 fallback below is only for streams with no run_id
             if endpoint_type == EndpointType.TINYFISH:
                 if sse_poller_spawned(litellm_logging_obj):

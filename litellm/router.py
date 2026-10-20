@@ -6270,8 +6270,6 @@ class Router:
                     if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                         yield chunk
                         continue
-                    if _stream_commits_now(chunk, has_generated_content, len(buffered_lifecycle_chunks)):
-                        has_generated_content = True
                     # A transport can split one SSE data line across byte chunks, so pre-content
                     # detection parses the accumulated buffer plus the current chunk, never the
                     # chunk alone; the buffer is already capped, which bounds this window too.
@@ -6280,6 +6278,8 @@ class Router:
                         if not has_generated_content and isinstance(chunk, (bytes, bytearray))  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes at runtime
                         else chunk
                     )
+                    if _stream_commits_now(parse_window, has_generated_content, len(buffered_lifecycle_chunks)):
+                        has_generated_content = True
                     error_event = parse_anthropic_error_event(parse_window)
                     recoverable_frame_error = self._anthropic_messages_recoverable_frame_error(
                         error_event, chunk, has_generated_content, model, initial_kwargs
@@ -6337,7 +6337,13 @@ class Router:
         # Referenced by stream_with_fallbacks via closure - assigned here, before
         # the generator body ever runs, so the reference resolves fine despite
         # being defined textually after the function that captures it.
-        wrapper: Final = FallbackAwareAnthropicMessagesStream(stream_with_fallbacks(), source_iterator)
+        from litellm.proxy.common_utils.anthropic_stream_diagnostics import AnthropicStreamDiagnostics
+
+        diagnostics: Final = AnthropicStreamDiagnostics.from_env("router_emit", initial_kwargs.get("litellm_call_id"))
+        stream: Final = stream_with_fallbacks()
+        wrapper: Final = FallbackAwareAnthropicMessagesStream(
+            diagnostics.relay(stream) if diagnostics is not None else stream, source_iterator
+        )
         return wrapper
 
     async def _aanthropic_messages_recover_stream_error(

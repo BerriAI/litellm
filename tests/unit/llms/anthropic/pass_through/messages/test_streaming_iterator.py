@@ -854,9 +854,13 @@ class _SuccessRecorder(CustomLogger):
     def __init__(self):
         super().__init__()
         self.success_kwargs: list = []
+        self.failure_kwargs: list = []
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.success_kwargs.append(kwargs)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_kwargs.append(kwargs)
 
 
 def _make_priced_logging_obj(call_id: str, recorder: _SuccessRecorder, model: str) -> LiteLLMLoggingObj:
@@ -869,6 +873,7 @@ def _make_priced_logging_obj(call_id: str, recorder: _SuccessRecorder, model: st
         litellm_call_id=call_id,
         function_id=call_id,
         dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
     )
     logging_obj.update_environment_variables(
         model=model,
@@ -908,7 +913,7 @@ async def test_client_disconnect_partial_billing_prices_recovered_tokens(monkeyp
     """
     Regression (LIT-6872): a client disconnect that lands on partial billing
     re-tokenizes the buffered text into completion_tokens, but the logged cost
-    stayed priced at the message_start placeholder (1 output token). The success
+    stayed priced at the message_start placeholder (1 output token). The failure
     row's response_cost must match its recovered completion_tokens.
     """
     import litellm
@@ -952,8 +957,10 @@ async def test_client_disconnect_partial_billing_prices_recovered_tokens(monkeyp
     assert len(enqueued) == 1, "client disconnect never reached partial billing"
     await enqueued[0]
 
-    assert len(recorder.success_kwargs) == 1
-    logged = recorder.success_kwargs[0]["standard_logging_object"]
+    assert recorder.success_kwargs == []
+    assert len(recorder.failure_kwargs) == 1
+    logged = recorder.failure_kwargs[0]["standard_logging_object"]
+    assert logged["status"] == "failure"
     assert 1 < logged["completion_tokens"] < 1500
     prompt_cost, completion_cost = litellm.cost_per_token(
         model=model, prompt_tokens=29, completion_tokens=logged["completion_tokens"]
@@ -1009,8 +1016,10 @@ async def test_proxy_disconnect_closing_upstream_prices_recovered_tokens():
     assert len(enqueued) == 1, "closing the upstream never reached partial billing"
     await enqueued[0]
 
-    assert len(recorder.success_kwargs) == 1
-    logged = recorder.success_kwargs[0]["standard_logging_object"]
+    assert recorder.success_kwargs == []
+    assert len(recorder.failure_kwargs) == 1
+    logged = recorder.failure_kwargs[0]["standard_logging_object"]
+    assert logged["status"] == "failure"
     assert logged["completion_tokens"] > 1
     prompt_cost, completion_cost = litellm.cost_per_token(
         model=model, prompt_tokens=29, completion_tokens=logged["completion_tokens"]

@@ -66,16 +66,20 @@ async def _keepalive_ping_stream(
     ping_chunk: str,
 ) -> AsyncGenerator[str, None]:
     pending = asyncio.ensure_future(stream.__anext__())
+    recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: keepalives must not split a partially forwarded SSE event
     try:
         while True:
             await asyncio.wait({pending}, timeout=ping_interval_seconds)
             if not pending.done():
-                yield ping_chunk
+                if recent_tail.endswith(_SSE_FRAME_DELIMITERS):
+                    yield ping_chunk
                 continue
             try:
-                yield pending.result()
+                chunk = pending.result()
             except StopAsyncIteration:
                 return
+            recent_tail = advance_sse_tail(recent_tail, chunk)
+            yield chunk
             pending = asyncio.ensure_future(stream.__anext__())
     finally:
         pending.cancel()
