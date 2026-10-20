@@ -7,6 +7,7 @@ import hashlib
 import os
 from collections.abc import Callable, Mapping, MutableMapping
 from functools import partial
+from types import MappingProxyType
 from typing import (
     Final,
     Protocol,
@@ -164,6 +165,17 @@ def get_copilot_default_headers(
         "Authorization": f"Bearer {api_key}",
         "x-request-id": str(uuid4()),
     }
+
+
+_OPENAI_SDK_HEADER_NAMES: Final = MappingProxyType(
+    {"accept": "Accept", "content-type": "Content-Type", "user-agent": "User-Agent"}
+)
+
+
+def with_openai_sdk_header_names(
+    headers: Mapping[str, str],
+) -> dict[str, str]:  # mutable-ok: becomes the chat request's extra_headers, which the SDK merges as a dict
+    return {_OPENAI_SDK_HEADER_NAMES.get(name.lower(), name): value for name, value in headers.items()}
 
 
 def _hostname(url: str) -> str | None:

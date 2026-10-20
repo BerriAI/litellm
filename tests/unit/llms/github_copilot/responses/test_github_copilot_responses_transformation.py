@@ -7,6 +7,7 @@ transformations for the Responses API.
 Source: litellm/llms/github_copilot/responses/transformation.py
 """
 
+from typing import Final
 import os
 import uuid
 from unittest.mock import MagicMock, patch
@@ -26,7 +27,7 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 
-STORED_ACCESS_TOKEN = "stored-oauth-access-token"
+STORED_ACCESS_TOKEN: Final = "stored-oauth-access-token"
 
 
 @pytest.fixture

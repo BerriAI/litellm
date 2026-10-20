@@ -44,9 +44,9 @@ def _credential(auth_type="per_user_oauth"):
     return CredentialItem(credential_name="copilot-cred", credential_values=values, credential_info={})
 
 
-COPILOT_USER_URL = "https://api.github.com/copilot_internal/user"
-DEFAULT_COPILOT_HOST = "https://api.githubcopilot.com"
-PLAN_COPILOT_HOST = "https://api.business.githubcopilot.com"
+COPILOT_USER_URL: Final = "https://api.github.com/copilot_internal/user"
+DEFAULT_COPILOT_HOST: Final = "https://api.githubcopilot.com"
+PLAN_COPILOT_HOST: Final = "https://api.business.githubcopilot.com"
 
 
 def answer_plan(endpoints_api: object, status_code: int = 200) -> Callable[[httpx.Request], httpx.Response]:
@@ -593,7 +593,7 @@ def _unauthorized(request: httpx.Request) -> httpx.Response:
     return httpx.Response(401, json={"error": {"message": "Unauthorized"}}, request=request)
 
 
-_RECONNECT_MESSAGE = "Reconnect GitHub Copilot for credential 'copilot-cred'"
+_RECONNECT_MESSAGE: Final = "Reconnect GitHub Copilot for credential 'copilot-cred'"
 
 
 @pytest.mark.parametrize("surface", ["completion", "embedding", "responses"])
@@ -882,6 +882,32 @@ def test_e2e_completion_shared_mode_still_uses_authenticator(tmp_path, monkeypat
         )
     assert mock_completion.call_args.kwargs["api_key"] == "shared-copilot-token"
     assert response.usage.total_tokens > 0
+
+
+def test_completion_sends_each_copilot_client_header_once_with_its_configured_value(tmp_path, monkeypatch):
+    from openai import OpenAI
+
+    _shared_login(tmp_path, monkeypatch)
+    monkeypatch.setenv("GITHUB_COPILOT_USER_AGENT", "opencode/1.18.7")
+    sent: list[httpx.Request] = []
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=_chat_completion_response().model_dump(), request=request)
+
+    sdk_client: Final = OpenAI(api_key="unused", http_client=httpx.Client(transport=httpx.MockTransport(capture)))
+    with github_http(lambda request: pytest.fail(f"unexpected request to {request.url}")):
+        litellm.completion(
+            model="github_copilot/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            client=sdk_client,
+        )
+    assert len(sent) == 1
+    assert [sent[0].headers.get_list(name) for name in ("accept", "content-type", "user-agent")] == [
+        ["application/json"],
+        ["application/json"],
+        ["opencode/1.18.7"],
+    ]
 
 
 def test_e2e_embedding_shared_mode_still_uses_authenticator(tmp_path, monkeypatch):

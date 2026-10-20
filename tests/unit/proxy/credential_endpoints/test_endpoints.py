@@ -1465,10 +1465,10 @@ from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
 _DEVICE_CODE_URL = "https://github.com/login/device/code"
 _ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
-_COPILOT_MODELS_URL = f"{DEFAULT_GITHUB_COPILOT_API_BASE}/models"
+_COPILOT_MODELS_URL: Final = f"{DEFAULT_GITHUB_COPILOT_API_BASE}/models"
 _GITHUB_USER_URL = "https://api.github.com/user"
-_COPILOT_USER_URL = "https://api.github.com/copilot_internal/user"
-_DEFAULT_PLAN = {"endpoints": {"api": DEFAULT_GITHUB_COPILOT_API_BASE}}
+_COPILOT_USER_URL: Final = "https://api.github.com/copilot_internal/user"
+_DEFAULT_PLAN: Final = {"endpoints": {"api": DEFAULT_GITHUB_COPILOT_API_BASE}}
 
 
 def _as_user(user_id="user-a"):
