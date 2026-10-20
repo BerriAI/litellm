@@ -53,7 +53,9 @@ import {
 } from "../overview/overviewData";
 import { Panel, Segmented, Sparkline, Stat } from "../overview/Primitives";
 import TopModelView from "./TopModelView";
+import TeamTagSpendCard from "./TeamTagSpendCard";
 import TeamUserSpendCard from "./TeamUserSpendCard";
+import { singleTeamId } from "./teamTagSpend";
 import { ProviderSpendBreakdown } from "./SpendByProvider";
 
 const BRAND = "#2b3fd6";
@@ -361,6 +363,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const filterSlot = entityFilterSlots[entityType];
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
+  const tagSpendTeamId = entityType === "team" ? singleTeamId(selectedTags) : null;
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
   const showPtuHours = entityType === "team" && hasPtuHours(spendData.metadata);
   const userSpendTeamIds = useMemo(
@@ -572,6 +575,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           size="compact"
         />
       </Panel>
+
+      {tagSpendTeamId !== null && (
+        <TeamTagSpendCard accessToken={accessToken} startTime={startTime} endTime={endTime} teamId={tagSpendTeamId} />
+      )}
 
       {entityType === "team" && (
         <TeamUserSpendCard

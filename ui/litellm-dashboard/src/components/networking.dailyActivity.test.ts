@@ -123,6 +123,18 @@ describe("dailyActivityAggregatedCall", () => {
     expect(requestedUrl(mockFetch).searchParams.get("include_current_utc_day")).toBe("true");
   });
 
+  it("sends group_by on team reports only, and only when set", async () => {
+    const mockFetch = captureFetch();
+
+    await dailyActivityAggregatedCall("team", req({ entityIds: ["team-a"], groupBy: "tag" }));
+    await dailyActivityAggregatedCall("team", req({ entityIds: ["team-a"] }));
+    await dailyActivityAggregatedCall("tag", req({ entityIds: ["tag-a"], groupBy: "tag" }));
+
+    expect(requestedUrl(mockFetch, 0).searchParams.get("group_by")).toBe("tag");
+    expect(requestedUrl(mockFetch, 1).searchParams.has("group_by")).toBe(false);
+    expect(requestedUrl(mockFetch, 2).searchParams.has("group_by")).toBe(false);
+  });
+
   it("sends api_key_limit only when provided", async () => {
     const mockFetch = captureFetch();
 
