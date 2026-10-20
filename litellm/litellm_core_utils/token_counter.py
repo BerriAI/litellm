@@ -3,6 +3,7 @@
 import base64
 import io
 import math
+import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from itertools import accumulate
@@ -345,6 +346,7 @@ Type for a function that counts tokens in a string.
 
 EXTRAPOLATION_SAMPLES: Final = 16
 PDF_PAGE_MAX_EXACT_CONTENT_BYTES: Final = 64 * 1024
+PDF_STRING_OPERAND: Final = re.compile(rb"\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>")
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
@@ -846,13 +848,17 @@ def _evenly_spaced_page_indices(page_count: int) -> tuple[int, ...]:
     return tuple((page_count - 1) * index // (EXTRAPOLATION_SAMPLES - 1) for index in range(EXTRAPOLATION_SAMPLES))
 
 
+def _pdf_string_operand_bytes(content: bytes) -> int:
+    return sum(match.end() - match.start() for match in PDF_STRING_OPERAND.finditer(content))
+
+
 def _pdf_page_text_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
-    """A page whose content stream is too large to extract cheaply is priced at one token per content byte,
-    which no byte-level tokenizer undercuts."""
+    """A page whose content stream is too large to extract cheaply is priced at one token per byte of its string
+    operands, which no byte-level tokenizer undercuts."""
     contents: Final = page.get_contents()
-    content_bytes: Final = len(contents.get_data()) if contents is not None else 0
-    if content_bytes > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
-        return content_bytes
+    content: Final = contents.get_data() if contents is not None else b""
+    if len(content) > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
+        return _pdf_string_operand_bytes(content)
     return count_function(page.extract_text() or "")
 
 

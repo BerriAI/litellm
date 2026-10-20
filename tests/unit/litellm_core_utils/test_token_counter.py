@@ -1613,10 +1613,11 @@ def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[st
     assert strip == 328
 
 
-def _fake_pdf_page(content_bytes: int) -> SimpleNamespace:
+def _fake_pdf_page(content_bytes: int | bytes) -> SimpleNamespace:
+    content: Final = b"x" * content_bytes if isinstance(content_bytes, int) else content_bytes
     return SimpleNamespace(
         mediabox=SimpleNamespace(width=612.0, height=792.0),
-        get_contents=lambda: SimpleNamespace(get_data=lambda: b"x" * content_bytes),
+        get_contents=lambda: SimpleNamespace(get_data=lambda: content),
         extract_text=MagicMock(return_value="Revenue grew eleven percent while churn fell to two percent."),
     )
 
@@ -1630,12 +1631,37 @@ def test_long_pdf_reads_text_from_a_bounded_number_of_pages():
 
 
 def test_dense_pdf_page_is_priced_from_its_size_without_extracting_its_text():
-    page: Final = _fake_pdf_page(content_bytes=2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES)
+    string_operand: Final = b"(Revenue grew eleven percent)"
+    text_operator: Final = string_operand + b" Tj\n"
+    content: Final = text_operator * (2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(string_operand) + 1)
+    page: Final = _fake_pdf_page(content_bytes=content)
 
     priced: Final = _price_pdf_pages((page,), len)
 
     page.extract_text.assert_not_called()
     assert priced >= 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+
+
+def test_oversized_pdf_page_is_priced_from_its_string_operands_without_extracting_text():
+    content: Final = b"BT /F1 9 Tf (Figure 3) Tj ET\n" + b"10 10 m 200 300 l S\n" * 10_000
+    page: Final = _fake_pdf_page(content_bytes=content)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+    blank_page.extract_text.return_value = ""
+
+    priced: Final = _price_pdf_pages((page,), len) - _price_pdf_pages((blank_page,), len)
+
+    page.extract_text.assert_not_called()
+    assert priced <= len(b"(Figure 3)")
+
+
+def test_unterminated_pdf_literal_string_is_priced_in_linear_time():
+    page: Final = _fake_pdf_page(content_bytes=b"(" * (4 * 1024 * 1024))
+
+    started: Final = time.perf_counter()
+    _price_pdf_pages((page,), len)
+    elapsed: Final = time.perf_counter() - started
+
+    assert elapsed < 1.0
 
 
 def test_dense_pdf_page_is_priced_without_extracting_its_full_text():
