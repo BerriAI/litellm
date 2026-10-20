@@ -29,7 +29,7 @@ from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, Usage
+from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
 @pytest.mark.asyncio
@@ -3279,3 +3279,92 @@ async def test_group_soft_alert_delivery_failure_does_not_suppress_other_groups(
         (call.kwargs["user_info"].key_alias, call.kwargs["user_info"].spend)
         for call in delivery.budget_alerts.await_args_list
     ] == [("broken-delivery", 350), ("healthy-delivery", 350)]
+
+
+class _SharedCounter:
+    def __init__(self) -> None:
+        self.totals: dict[str, float] = {}
+
+    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
+        self.totals[key] = self.totals.get(key, 0) + value
+        return self.totals[key]
+
+
+def _grounded_gemini_kwargs(response_cost: float) -> dict:
+    return {
+        "model": "vertex_ai/gemini-test",
+        "call_type": "acompletion",
+        "response_cost": response_cost,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "user_api_key_user_id": "user-1"}},
+        "standard_logging_object": {
+            "response_cost": response_cost,
+            "request_tags": None,
+            "cache_hit": None,
+            "cost_breakdown": {
+                "input_cost": 0.0,
+                "output_cost": 0.0,
+                "tool_usage_cost": 0.5,
+                "total_cost": response_cost,
+            },
+            "model_map_information": {
+                "model_map_key": "vertex_ai/gemini-test",
+                "model_map_value": {
+                    "litellm_provider": "vertex_ai",
+                    "mode": "chat",
+                    "web_search_billing_unit": "per_query",
+                    "search_context_cost_per_query": {"search_context_size_medium": 0.1},
+                    "search_free_requests": {"count": 100, "period": "month", "shared_group": "test"},
+                },
+            },
+        },
+        "stream": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opted_in", [True, False])
+async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(monkeypatch, opted_in):
+    monkeypatch.setattr(litellm, "apply_search_free_tier", opted_in, raising=False)
+    counter = _SharedCounter()
+    kwargs = _grounded_gemini_kwargs(response_cost=1.0)
+    response = ModelResponse(
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=5),
+        )
+    )
+
+    with (
+        patch(  # test-quality-ok: increment_spend_counters is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: update_cache is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        mock_proxy_logging.internal_usage_cache.dual_cache.redis_cache = counter
+
+        await ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs, completion_response=response, start_time=datetime.now(), end_time=datetime.now()
+        )
+        await asyncio.sleep(0)
+
+        mock_proxy_logging.failed_tracking_alert.assert_not_called()
+        mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
+
+    breakdown = kwargs["standard_logging_object"]["cost_breakdown"]
+    if opted_in:
+        assert kwargs["response_cost"] == pytest.approx(1.0 - 5 * 0.1)
+        assert breakdown["original_cost"] == 1.0 and breakdown["discount_amount"] == pytest.approx(5 * 0.1)
+        assert sum(counter.totals.values()) == 5
+    else:
+        assert kwargs["response_cost"] == 1.0 and "discount_amount" not in breakdown
+        assert counter.totals == {}

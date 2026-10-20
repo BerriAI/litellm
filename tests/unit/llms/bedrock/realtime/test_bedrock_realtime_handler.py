@@ -643,7 +643,7 @@ class TestBedrockRealtimeSessionLifecycle:
         )
 
         assert vault.read.is_set()
-        assert not vault.stalled_the_loop.is_set()
+        assert not vault.read_on_loop.is_set()
         assert stub_aws_sdk_client["config_kwargs"]["region"] == "us-west-2"
         assert stub_aws_sdk_client["config_kwargs"]["endpoint_uri"] == "https://bedrock-runtime.us-west-2.amazonaws.com"
 
