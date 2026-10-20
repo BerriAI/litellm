@@ -2,6 +2,7 @@ import asyncio
 import copy
 import datetime
 import json
+import logging
 from collections.abc import AsyncIterable, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
@@ -13,6 +14,8 @@ import httpx
 import pytest
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.requests import ClientDisconnect
+from starlette.types import Message, Scope
 
 import litellm
 from litellm._uuid import uuid
@@ -61,6 +64,7 @@ from litellm.proxy.common_request_processing import (
     create_response,
     sse_error_payload,
 )
+from litellm.proxy.common_utils.anthropic_stream_diagnostics import AnthropicStreamDiagnostics
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.sse_keepalive import ANTHROPIC_PING_SSE_CHUNK
@@ -11791,3 +11795,144 @@ class TestResponseCostFromLoggingObjForCacheHits:
         )
 
         assert cost == ""
+
+
+class _DiagnosticClock:
+    def __init__(self) -> None:
+        self.seconds = 100.0
+
+    def __call__(self) -> float:
+        return self.seconds
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disconnect", (False, True))
+async def test_anthropic_stream_diagnostics_measure_asgi_send_not_just_generator_yield(
+    disconnect: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
+    clock: Final = _DiagnosticClock()
+    diagnostics: Final = AnthropicStreamDiagnostics("slow", "http_send", "synthetic-call", clock=clock)
+    body: Final = (
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_synthetic"}}\n\n'
+        'event: content_block_delta\ndata: {"type":"content_block_delta",'
+        '"delta":{"type":"text_delta","text":"PRIVATE_OUTPUT"}}\n\n'
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    )
+    closed: Final = asyncio.Event()
+
+    async def source() -> AsyncGenerator[str, None]:
+        try:
+            yield body
+        finally:
+            closed.set()
+
+    async def receive() -> Message:
+        pytest.fail("ASGI 2.4 does not use the receive-side disconnect listener")
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            clock.seconds = 101.0
+        if message["type"] == "http.response.body" and message.get("body"):
+            assert diagnostics.counts.text_chars == 0
+            assert message["body"] == body.encode()
+            clock.seconds = 104.0
+            if disconnect:
+                raise OSError("PRIVATE_ERROR")
+
+    response: Final = _UpstreamClosingStreamingResponse(source(), stream_diagnostics=diagnostics)
+    scope: Final[Scope] = {"type": "http", "asgi": {"spec_version": "2.4"}}
+    if disconnect:
+        with pytest.raises(ClientDisconnect):
+            await response(scope, receive, send)
+    else:
+        await response(scope, receive, send)
+    assert closed.is_set()
+    assert len(caplog.records) == 1
+    summary: Final = json.loads(caplog.records[0].getMessage().split(" ", 1)[1])
+    assert (summary["stage"], summary["send_attempts"], summary["sends_completed"], summary["send_failed"]) == (
+        "http_send",
+        1,
+        int(not disconnect),
+        disconnect,
+    )
+    assert summary["complete"] is not disconnect
+    assert summary["text_chars"] == (0 if disconnect else len("PRIVATE_OUTPUT"))
+    assert summary["first_send_attempt_ms"] == 1000
+    assert summary["last_send_completed_ms"] == (None if disconnect else 4000)
+    assert summary["max_send_ms"] == (0 if disconnect else 3000)
+    assert summary["send_in_flight_ms"] == (3000 if disconnect else None)
+    assert "PRIVATE_OUTPUT" not in caplog.text and "PRIVATE_ERROR" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (False, True))
+async def test_create_response_diagnostics_preserve_sse_and_provider_request_id(
+    enabled: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("LITELLM_ANTHROPIC_STREAM_DIAGNOSTICS", "all")
+    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
+    frame: Final = 'event: ping\ndata: {"type":"ping"}\n\n'
+
+    async def source() -> AsyncGenerator[str, None]:
+        yield frame
+
+    async def receive() -> Message:
+        pytest.fail("ASGI 2.4 does not use the receive-side disconnect listener")
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.body" and message.get("body"):
+            assert message["body"] == frame.encode()
+
+    response: Final = await create_response(
+        source(),
+        "text/event-stream",
+        {"x-litellm-call-id": "synthetic-call", "llm_provider-x-tc-requestid": "tc-synthetic"},
+        diagnose_anthropic_stream=enabled,
+    )
+    scope: Final[Scope] = {"type": "http", "asgi": {"spec_version": "2.4"}}
+    await response(scope, receive, send)
+    assert len(caplog.records) == int(enabled)
+    if enabled:
+        summary: Final = json.loads(caplog.records[0].getMessage().split(" ", 1)[1])
+        assert (summary["call_id"], summary["upstream_request_id"], summary["pings"]) == (
+            "synthetic-call",
+            "tc-synthetic",
+            1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_stream_diagnostics_log_a_cancelled_send_once(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
+    sending: Final = asyncio.Event()
+    closed: Final = asyncio.Event()
+    diagnostics: Final = AnthropicStreamDiagnostics("slow", "http_send", "synthetic-call", clock=lambda: 100.0)
+
+    async def source() -> AsyncGenerator[str, None]:
+        try:
+            yield 'event: ping\ndata: {"type":"ping"}\n\n'
+        finally:
+            closed.set()
+
+    async def receive() -> Message:
+        await sending.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.body" and message.get("body"):
+            sending.set()
+            await asyncio.Event().wait()
+
+    response: Final = _UpstreamClosingStreamingResponse(source(), stream_diagnostics=diagnostics)
+    scope: Final[Scope] = {"type": "http", "asgi": {"spec_version": "2.3"}}
+    await response(scope, receive, send)
+    assert closed.is_set()
+    assert len(caplog.records) == 1
+    summary: Final = json.loads(caplog.records[0].getMessage().split(" ", 1)[1])
+    assert (summary["end"], summary["send_failed"], summary["send_attempts"], summary["sends_completed"]) == (
+        "closed",
+        True,
+        1,
+        0,
+    )

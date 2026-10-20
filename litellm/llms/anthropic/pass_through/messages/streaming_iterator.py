@@ -41,11 +41,17 @@ _UPSTREAM_PUMP_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdl
 _DETACHED_STREAM_DRAINS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: bounded strong-ref set, detached drains
 
 
+def _sse_event_names(chunk: bytes | bytearray) -> tuple[bytes, ...]:
+    return tuple(
+        line[len(b"event:") :].removeprefix(b" ") for line in bytes(chunk).splitlines() if line.startswith(b"event:")
+    )
+
+
 def is_message_stop_chunk(chunk: object) -> bool:
     if isinstance(chunk, dict):
         return chunk.get("type") == "message_stop"
     if isinstance(chunk, (bytes, bytearray)):
-        return any(line == b"event: message_stop" for line in chunk.splitlines())
+        return b"message_stop" in _sse_event_names(chunk)
     return False
 
 
@@ -72,12 +78,12 @@ def is_anthropic_ping_chunk(chunk: object) -> bool:
         return chunk.get("type") == "ping"
     if not isinstance(chunk, (bytes, bytearray)):
         return False
-    event_lines: Final = tuple(line for line in chunk.splitlines() if line.startswith(b"event:"))
+    event_names: Final = _sse_event_names(chunk)
     return (
-        bool(event_lines)
-        and all(line == b"event: ping" for line in event_lines)
-        and chunk.startswith(b"event: ping")
-        and chunk.endswith((b"\n\n", b"\r\n\r\n"))
+        bool(event_names)
+        and all(name == b"ping" for name in event_names)
+        and chunk.startswith((b"event: ping", b"event:ping"))
+        and chunk.endswith((b"\n\n", b"\r\n\r\n", b"\r\r"))
     )
 
 
@@ -92,7 +98,7 @@ def is_anthropic_content_delta_chunk(chunk: object) -> bool:
     if isinstance(chunk, dict):
         return chunk.get("type") == "content_block_delta"
     if isinstance(chunk, (bytes, bytearray)):
-        return any(line == b"event: content_block_delta" for line in chunk.splitlines())
+        return b"content_block_delta" in _sse_event_names(chunk)
     return False
 
 
@@ -521,6 +527,7 @@ class BaseAnthropicMessagesStreamingIterator:
         if self.completion_start_time is not None:
             self.litellm_logging_obj.completion_start_time = self.completion_start_time
             self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
+        self.litellm_logging_obj.model_call_details["anthropic_stream_end"] = "closed" if stream_teardown else "eof"
         logging_coroutine: Final = PassThroughStreamingHandler.route_streaming_logging_to_handler(
             litellm_logging_obj=self.litellm_logging_obj,
             passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,

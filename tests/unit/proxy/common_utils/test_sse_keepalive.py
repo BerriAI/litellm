@@ -6,7 +6,6 @@ import pytest
 from fastapi.responses import StreamingResponse
 
 from litellm.proxy.common_request_processing import create_response
-from litellm.types.utils import ModelResponse
 from litellm.proxy.common_utils.sse_keepalive import (
     ANTHROPIC_PING_SSE_CHUNK,
     SSE_COMMENT_PING_BYTES,
@@ -17,6 +16,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
     wrap_sse_stream_with_keepalive_pings,
 )
+from litellm.types.utils import ModelResponse
 
 MESSAGE_START_CHUNK: Final = 'data: {"type": "message_start"}\n\n'
 TEXT_DELTA_CHUNK: Final = 'data: {"type": "content_block_delta"}\n\n'
@@ -118,6 +118,32 @@ async def test_aclose_mid_silence_cancels_upstream_and_runs_its_cleanup():
     await wrapped.aclose()
 
     assert upstream_cleaned_up.is_set()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_read_inside_partial_json_closes_upstream():
+    reading: Final = asyncio.Event()
+    cleaned_up: Final = asyncio.Event()
+    partial: Final = 'event: content_block_delta\ndata: {"type":"content_block_delta","index"'
+
+    async def partial_stream() -> AsyncGenerator[str, None]:
+        try:
+            yield partial
+            reading.set()
+            await asyncio.Event().wait()
+        finally:
+            cleaned_up.set()
+
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(partial_stream(), 1)
+    assert await wrapped.__anext__() == partial
+    pending: Final = asyncio.create_task(wrapped.__anext__())
+    await reading.wait()
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    await wrapped.aclose()
+
+    assert cleaned_up.is_set()
 
 
 @pytest.mark.asyncio
@@ -404,7 +430,5 @@ def _deployment(keepalive_seconds=..., model="openai/gpt-4o"):
         ([_deployment()], None, None, "nothing anywhere leaves it off"),
     ],
 )
-def test_ttft_interval_resolves_through_the_deployments_it_could_land_on(
-    deployments, global_interval, expected, why
-):
+def test_ttft_interval_resolves_through_the_deployments_it_could_land_on(deployments, global_interval, expected, why):
     assert resolve_ttft_keepalive_interval(deployments, global_interval) == expected, why

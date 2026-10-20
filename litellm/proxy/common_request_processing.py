@@ -28,7 +28,7 @@ import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 from typing_extensions import Never
 
 import litellm
@@ -90,6 +90,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
 from litellm.proxy.bug_report_config import build_proxy_bug_report
+from litellm.proxy.common_utils.anthropic_stream_diagnostics import AnthropicStreamDiagnostics
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
@@ -966,9 +967,11 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
         headers: Mapping[str, str] | None = None,
         status_code: int = status.HTTP_200_OK,
         upstream_generator: AsyncGenerator[str, None] | None = None,
+        stream_diagnostics: AnthropicStreamDiagnostics | None = None,
     ) -> None:
         super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
         self._upstream_generator = upstream_generator
+        self._stream_diagnostics = stream_diagnostics
 
     @property
     def upstream_generator(self) -> AsyncGenerator[str, None] | None:
@@ -976,9 +979,31 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
         return self._upstream_generator
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        diagnostics: Final = self._stream_diagnostics
+
+        async def observed_send(message: Message) -> None:
+            assert diagnostics is not None
+            body: Final = message.get("body")
+            has_body: Final = message["type"] == "http.response.body" and isinstance(body, bytes) and bool(body)
+            if has_body:
+                diagnostics.start_send()
+            try:
+                await send(message)
+            except BaseException:
+                diagnostics.send_failed = True
+                raise
+            if message["type"] == "http.response.start":
+                diagnostics.headers_sent_ms = diagnostics.elapsed_ms()
+            if has_body and isinstance(body, bytes):
+                diagnostics.complete_send(body)
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                diagnostics.http_complete = True
+
         try:
-            await super().__call__(scope, receive, send)
+            await super().__call__(scope, receive, observed_send if diagnostics is not None else send)
         finally:
+            if diagnostics is not None:
+                diagnostics.finish("eof" if diagnostics.http_complete else "closed")
             with anyio.CancelScope(shield=True):
                 for target in (self.body_iterator, self._upstream_generator):
                     aclose = getattr(target, "aclose", None)
@@ -1150,6 +1175,7 @@ async def create_response(
     request: Request | None = None,
     refresh_headers: Callable[[], Awaitable[Mapping[str, str]]] | None = None,
     general_settings: Mapping[str, object] = _NO_GENERAL_SETTINGS,
+    diagnose_anthropic_stream: bool = False,
 ) -> StreamingResponse | JSONResponse:
     """
     Create streaming response, checking if the first chunk is an error.
@@ -1270,6 +1296,13 @@ async def create_response(
         headers=_sse_stream_headers(resolved_headers),
         status_code=final_status_code,
         upstream_generator=generator,
+        stream_diagnostics=(
+            AnthropicStreamDiagnostics.from_env(
+                "http_send", resolved_headers.get(LITELLM_CALL_ID_HEADER), resolved_headers
+            )
+            if diagnose_anthropic_stream
+            else None
+        ),
     )
 
 
@@ -3110,6 +3143,7 @@ class ProxyBaseLLMRequestProcessing:
                         request=request,
                         refresh_headers=refresh_stream_headers,
                         general_settings=general_settings,
+                        diagnose_anthropic_stream=route_type == "anthropic_messages",
                     )
 
             ### CALL HOOKS ### - modify outgoing data

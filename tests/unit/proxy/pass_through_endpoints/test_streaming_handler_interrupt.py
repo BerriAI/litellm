@@ -28,6 +28,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 def _make_streaming_response(chunks):
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
+    mock.headers = httpx.Headers()
 
     async def _aiter_bytes():
         for c in chunks:
@@ -663,6 +664,7 @@ def _anthropic_sse(event: str, payload: dict) -> bytes:
 def _anthropic_stream_that_times_out_mid_stream():
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
+    mock.headers = httpx.Headers()
 
     async def _aiter_bytes():
         yield _anthropic_sse(
@@ -782,7 +784,11 @@ def _anthropic_completed_stream_tail() -> tuple[bytes, ...]:
         _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
         _anthropic_sse(
             "message_delta",
-            {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 3}},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 3},
+            },
         ),
         _anthropic_sse("message_stop", {"type": "message_stop"}),
     )
@@ -802,6 +808,7 @@ def _anthropic_overloaded_error_frame() -> bytes:
 def _anthropic_stream_of(frames: tuple[bytes, ...]):
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
+    mock.headers = httpx.Headers()
 
     async def _aiter_bytes():
         for frame in frames:
@@ -811,11 +818,91 @@ def _anthropic_stream_of(frames: tuple[bytes, ...]):
     return mock
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ("eof", "close", "cancel", "complete"))
+@pytest.mark.parametrize("split_at", (1, 17, 67, -3))
+async def test_initial_three_output_tokens_do_not_make_an_interrupted_stream_successful(
+    ending: str, split_at: int
+) -> None:
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "synthetic"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-initial-three-tokens",
+        function_id="test-initial-three-tokens",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    start = _anthropic_message_start_frame().replace(b'"output_tokens": 1', b'"output_tokens": 3')
+    tail = _anthropic_completed_stream_tail() if ending == "complete" else ()
+    stream = PassThroughStreamingHandler.chunk_processor(
+        response=_anthropic_stream_of((start[:split_at], start[split_at:], *tail)),
+        request_body={"model": "claude-sonnet-5", "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+    )
+    assert await stream.__anext__() + await stream.__anext__() == start
+    if ending == "close":
+        await stream.aclose()
+    elif ending == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await stream.athrow(asyncio.CancelledError())
+    else:
+        assert tuple([chunk async for chunk in stream]) == tail
+    await GLOBAL_LOGGING_WORKER.flush()
+    events = recorder.success_kwargs if ending == "complete" else recorder.failure_kwargs
+    assert len(events) == 1
+    assert len(recorder.success_kwargs) + len(recorder.failure_kwargs) == 1
+    logged = events[0]["standard_logging_object"]
+    assert (logged["prompt_tokens"], logged["completion_tokens"]) == (52, 3)
+    assert logged["status"] == ("success" if ending == "complete" else "failure")
+    if ending != "complete":
+        assert events[0]["exception"].status_code == (499 if ending in ("close", "cancel") else 502)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_empty_http_200_stream_is_logged_as_failure() -> None:
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "synthetic"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-empty-stream",
+        function_id="test-empty-stream",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    stream = PassThroughStreamingHandler.chunk_processor(
+        response=_anthropic_stream_of(()),
+        request_body={"model": "claude-sonnet-5-5", "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+    )
+    assert tuple([chunk async for chunk in stream]) == ()
+    await GLOBAL_LOGGING_WORKER.flush()
+    assert recorder.success_kwargs == []
+    assert len(recorder.failure_kwargs) == 1
+    assert recorder.failure_kwargs[0]["exception"].status_code == 502
+
+
 @pytest.mark.parametrize(
     "frames, billed",
     [
         pytest.param(
-            (_anthropic_message_start_frame(), _anthropic_overloaded_error_frame()), True, id="error-after-message-start"
+            (_anthropic_message_start_frame(), _anthropic_overloaded_error_frame()),
+            True,
+            id="error-after-message-start",
         ),
         pytest.param((_anthropic_overloaded_error_frame(),), False, id="error-frame-only"),
     ],
@@ -872,9 +959,7 @@ async def test_chunk_processor_logs_a_provider_error_frame_as_a_failure_when_clo
 
 
 @pytest.mark.asyncio
-async def test_chunk_processor_logs_a_stream_that_ended_at_the_provider_error_frame_through_the_success_route():
-    """A provider error frame that ends a stream nobody closed early is the request's final answer, and that
-    stream keeps logging the way it always has: once, through the success route, with the usage it carried."""
+async def test_chunk_processor_logs_a_stream_that_ended_at_the_provider_error_frame_as_failure():
     recorder = _EventRecorder()
     logging_obj = LiteLLMLoggingObj(
         model="claude-sonnet-5",
@@ -900,21 +985,17 @@ async def test_chunk_processor_logs_a_stream_that_ended_at_the_provider_error_fr
             url_route="/v1/messages",
         )
     ]
-    await _settle(recorder.success_kwargs)
+    await _settle(recorder.failure_kwargs)
 
     assert received == list(frames)
-    assert recorder.failure_kwargs == []
-    success_payload = recorder.success_kwargs[0]["standard_logging_object"]
-    assert success_payload["status"] == "success"
-    assert success_payload["prompt_tokens"] == 52
-    assert logging_obj.model_call_details["prompt_cache_response_complete"] is False
+    assert recorder.success_kwargs == []
+    failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
+    assert failure_payload["status"] == "failure"
+    assert failure_payload["prompt_tokens"] == 52
 
 
 @pytest.mark.asyncio
 async def test_chunk_processor_bills_a_stream_the_client_closed_at_the_provider_error_frame():
-    """The Anthropic SDK raises on a provider `event: error` frame and drops the connection, so a non-retried
-    stream is closed at the frame by the client, not by a retry taking over. Its usage must still reach the
-    success route, or the tokens the provider billed never reach the key's spend."""
     recorder = _EventRecorder()
     logging_obj = LiteLLMLoggingObj(
         model="claude-sonnet-5",
@@ -940,12 +1021,12 @@ async def test_chunk_processor_bills_a_stream_the_client_closed_at_the_provider_
         if b"event: error" in chunk:
             break
     await stream.aclose()
-    await _settle(recorder.success_kwargs)
+    await _settle(recorder.failure_kwargs)
 
-    assert recorder.failure_kwargs == []
-    success_payload = recorder.success_kwargs[0]["standard_logging_object"]
-    assert success_payload["status"] == "success"
-    assert success_payload["prompt_tokens"] == 52
+    assert recorder.success_kwargs == []
+    failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
+    assert failure_payload["status"] == "failure"
+    assert failure_payload["prompt_tokens"] == 52
 
 
 @pytest.mark.asyncio
