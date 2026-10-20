@@ -435,7 +435,7 @@ class TestMigrationSQLIdempotency:
         for migration_name, sql in _guarded_migrations(all_migrations):
             for line_num, line in _statements(sql):
                 if re.search(r"DROP\s+INDEX\s+", line, re.IGNORECASE) and not re.search(
-                    r"DROP\s+INDEX\s+IF\s+EXISTS", line, re.IGNORECASE
+                    r"DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?IF\s+EXISTS", line, re.IGNORECASE
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
         assert (

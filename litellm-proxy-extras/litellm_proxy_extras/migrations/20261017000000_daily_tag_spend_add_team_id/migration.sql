@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 -- Records the team that sent each request on its daily tag spend rows, so one tag used by
 -- several teams lands in one row per team. "" means the request had no team, and every row
 -- written before this migration keeps "" (attribution is not retroactive).
