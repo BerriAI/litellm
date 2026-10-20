@@ -661,6 +661,7 @@ async def cursor_chat_completions(
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
                 request=request,
+                dispatched_call_type=processor.route_type,
             )
         # Otherwise, use the default generator
         return async_data_generator(
@@ -668,6 +669,7 @@ async def cursor_chat_completions(
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
             request=request,
+            dispatched_call_type=processor.route_type,
         )
 
     try:
