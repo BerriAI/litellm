@@ -1080,12 +1080,22 @@ class SpendLogCleanup:
             rule.target_bytes,
         )
         latest: Final[list[SpendLogStorage]] = [before]  # mutable-ok: last measurement, rewritten per partition drop
+        baseline: Final[list[StorageProbe]] = [
+            probe
+        ]  # mutable-ok: counters after the last drop, the saved state's base
 
         async def still_over_target() -> bool:
             measured: Final = await self._probe_storage(prisma_client, deadline)
             if measured is None:
                 return False
-            latest[0] = latest[0].after_deleting(0, measured.allocated_bytes)
+            kept: Final = min(1.0, measured.allocated_bytes / max(latest[0].allocated_bytes, 1))
+            latest[0] = SpendLogStorage(
+                allocated_bytes=measured.allocated_bytes,
+                reclaimable_bytes=min(measured.allocated_bytes, round(latest[0].reclaimable_bytes * kept)),
+                bytes_per_row=latest[0].bytes_per_row,
+                live_rows=measured.live_rows,
+            )
+            baseline[0] = measured
             return latest[0].estimated_live_bytes > rule.target_bytes
 
         partitions_dropped: Final = await self._drop_oldest_partitions_for_size(
@@ -1106,7 +1116,9 @@ class SpendLogCleanup:
         await self._save_size_state(
             prisma_client,
             deadline,
-            after.to_state(inserted_total=probe.inserted_total, deleted_total=probe.deleted_total + rows_deleted),
+            after.to_state(
+                inserted_total=baseline[0].inserted_total, deleted_total=baseline[0].deleted_total + rows_deleted
+            ),
         )
         report: Final = SizePassReport(
             rule=rule, before=before, after=after, partitions_dropped=partitions_dropped, results=results

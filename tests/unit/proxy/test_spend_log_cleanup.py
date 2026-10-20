@@ -2005,7 +2005,7 @@ async def test_partitioned_size_pass_drops_the_oldest_partitions_first_and_skips
     db = MagicMock()
     _wire_tx(db)
     db.execute_raw = AsyncMock(return_value=1000)
-    _wire_size_probes(
+    saves = _wire_size_probes(
         db,
         [_storage(10 * 1024**3, live=1000, dead=0), _storage(256 * 1024**2, live=25, dead=0)],
         cutoff=datetime.now(timezone.utc),
@@ -2035,6 +2035,9 @@ async def test_partitioned_size_pass_drops_the_oldest_partitions_first_and_skips
     summary = next(r.getMessage() for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
     assert "partitions_dropped=1" in summary
     assert "target_reached=true" in summary
+    assert (saves[-1].inserted_total, saves[-1].deleted_total, saves[-1].allocated_bytes) == (25, 0, 256 * 1024**2), (
+        "the saved counters must be the post-drop ones, or the next check reads the drop as a statistics reset"
+    )
 
 
 def test_drop_oldest_partitions_while_only_drops_fully_elapsed_partitions_oldest_first():
