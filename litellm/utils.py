@@ -9724,6 +9724,10 @@ class ProviderConfigManager:
 
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
+        elif litellm.LlmProviders.DEEPSEEK == provider:
+            from litellm.llms.deepseek.responses.transformation import DeepSeekResponsesConfig
+
+            return DeepSeekResponsesConfig() if DeepSeekResponsesConfig.supports_model(model) else None
         elif litellm.LlmProviders.AZURE == provider:
             # Check if it's an O-series model
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
