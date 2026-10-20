@@ -653,6 +653,7 @@ async def test_resume_elsewhere_continues_a_copy_filed_under_the_sandbox() -> No
     copy: Final = json.loads(sandbox.files[COPY_PATH])
     copy_id: Final = resumed_session_arg(sandbox)
     assert copy["info"]["id"] == copy_id != SAVED
+    assert copy["info"]["directory"] == sandbox.workdir
     assert tuple(sandbox.runs[-1]) == ("opencode", "--pure", "import", COPY_PATH)
     assert sandbox.run_envs[-1]["XDG_DATA_HOME"] == "/tmp/oc-1/xdg/data"
     assert sandbox.run_envs[-2]["XDG_DATA_HOME"] == "/tmp/oc-1/xdg/data"
@@ -685,6 +686,15 @@ def test_resume_copy_keeps_the_message_order() -> None:
     assert sorted(copied_ids) == copied_ids
 
 
+async def test_later_turns_after_a_resume_do_not_export_again() -> None:
+    handler, ctx, sandbox = await resumed("/other")
+
+    sandbox.outputs.append(fixture_proc("turn2_session_skill.jsonl"))
+    await collect(handler, ctx, "again")
+
+    assert [run[2] for run in sandbox.runs if run[0] == "opencode"] == ["export", "import"]
+
+
 async def test_each_resume_elsewhere_makes_its_own_copy() -> None:
     _, _, first = await resumed("/other")
     _, _, second = await resumed("/other")
@@ -713,6 +723,33 @@ async def test_resume_that_cannot_be_prepared_fails_the_turn_without_running_ope
     with pytest.raises(HarnessTurnError, match=SAVED):
         await collect(handler, ctx, "hi")
     assert sandbox.execs == []
+
+
+async def test_resume_runs_nothing_until_the_first_turn() -> None:
+    handler, ctx, sandbox = await started()
+    runs_before_resume: Final = len(sandbox.runs)
+
+    await handler.resume(ctx, SAVED)
+
+    assert len(sandbox.runs) == runs_before_resume
+    assert COPY_PATH not in sandbox.files
+
+
+async def test_restart_after_a_failed_resume_tries_the_resume_again() -> None:
+    handler, ctx, sandbox = await started()
+    sandbox.run_stdout = exported_session("/other")
+    sandbox.failing_subcommand = "export"
+    await handler.resume(ctx, SAVED)
+    with pytest.raises(HarnessTurnError, match=SAVED):
+        await collect(handler, ctx, "hi")
+
+    sandbox.failing_subcommand = None
+    await handler.start(ctx)
+    await handler.resume(ctx, SAVED)
+    sandbox.outputs.append(fixture_proc("turn2_session_skill.jsonl"))
+    await collect(handler, ctx, "again")
+
+    assert resumed_session_arg(sandbox) == json.loads(sandbox.files["/tmp/oc-2/resume-session.json"])["info"]["id"]
 
 
 async def test_restart_resumes_its_own_session_without_exporting_it() -> None:

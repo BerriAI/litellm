@@ -141,7 +141,8 @@ class BaseCLIHarnessConfig(BaseHarnessConfig[OptionsT], Generic[OptionsT, Stream
     def transform_resume_export_command(self, native_session_id: str) -> Sequence[str] | None:
         """Command that prints a saved session before resuming one this handler did not run.
 
-        None resumes the saved session as is. A non-zero exit or a timeout fails the next turn.
+        None resumes the saved session as is. A non-zero exit or a timeout fails the turn, and the next turn
+        tries again.
         """
         return None
 

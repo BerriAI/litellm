@@ -112,12 +112,15 @@ async def _read_all(handle: SubprocessHandle) -> tuple[bytes, bytes, int]:
 
 
 async def collect_output(handle: SubprocessHandle, cmd: Sequence[str], timeout: float | None) -> CompletedRun:
-    """Close stdin, read stdout/stderr to EOF; kill and raise SandboxError on timeout."""
+    """Close stdin, read stdout/stderr to EOF; kill on cancel, and kill and raise SandboxError on timeout."""
     try:
         stdout, stderr, code = await asyncio.wait_for(_read_all(handle), timeout)
     except asyncio.TimeoutError:
         await handle.kill()
         raise SandboxError(f"command timed out after {timeout}s: {cmd[0]}")
+    except asyncio.CancelledError:
+        await handle.kill()
+        raise
     return CompletedRun(
         stdout=stdout.decode("utf-8", errors="replace"),
         stderr=stderr.decode("utf-8", errors="replace"),

@@ -152,7 +152,7 @@ class CLIHarnessHandler(BaseHarnessHandler):
         self._private_dir: str | None = None
         self._setup: HarnessSessionSetup | None = None
         self._native_id: str | None = None
-        self._resume_failure: str | None = None
+        self._pending_resume: str | None = None
         self._proc: Process | None = None
 
     async def start(self, ctx: SessionContext) -> None:
@@ -176,8 +176,9 @@ class CLIHarnessHandler(BaseHarnessHandler):
     async def turn(self, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
         if self._setup is None or self._private_dir is None:
             raise RuntimeError("CLIHarnessHandler.turn() called before start()")
-        if self._resume_failure is not None:
-            raise HarnessTurnError(self._resume_failure)
+        if self._pending_resume is not None:
+            self._native_id = await self._prepared_session_id(ctx, self._setup, self._private_dir, self._pending_resume)
+            self._pending_resume = None
         request = self.config.transform_turn_request(ctx, self._setup, self._private_dir, prompt, self._native_id)
         argv: Final = list(request.argv)  # mutable-ok: Sandbox.exec takes list[str]
         proc = await ctx.sandbox.exec(argv, env=request.env, cwd=request.cwd)
@@ -217,17 +218,16 @@ class CLIHarnessHandler(BaseHarnessHandler):
         return self._native_id
 
     async def resume(self, ctx: SessionContext, native_session_id: str) -> None:
-        if self._setup is None or self._private_dir is None:
-            raise RuntimeError("CLIHarnessHandler.resume() called before start()")
-        if native_session_id == self._native_id:
-            return
-        target: Final = await resumable_session_id(
-            self.config, ctx.sandbox, self._setup.env, self._private_dir, native_session_id
-        )
+        if native_session_id != self._native_id:
+            self._native_id = native_session_id
+            self._pending_resume = native_session_id
+
+    async def _prepared_session_id(
+        self, ctx: SessionContext, setup: HarnessSessionSetup, private_dir: str, saved_id: str
+    ) -> str:
+        target: Final = await resumable_session_id(self.config, ctx.sandbox, setup.env, private_dir, saved_id)
         match target:
             case ResumeFailed(reason=reason):
-                self._resume_failure = f"could not prepare session {native_session_id} for resume: {reason}"
-                self._native_id = native_session_id
+                raise HarnessTurnError(f"could not prepare session {saved_id} for resume: {reason}")
             case session_id:
-                self._resume_failure = None
-                self._native_id = session_id
+                return session_id

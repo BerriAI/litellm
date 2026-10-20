@@ -11,11 +11,13 @@ DB outlives a session for resume. Verified against opencode 1.14.41.
 
 opencode files each session under the folder it ran in and only streams a resumed session's
 events from that folder, so resuming one filed elsewhere (by an older LiteLLM that left PWD
-unset, or from another sandbox) hangs. Resume runs `opencode export` in the sandbox, and when
-the session is filed elsewhere it imports a copy under fresh ids, filed under the sandbox folder,
-and continues the copy. Import overwrites the folder of a session id it already has, so reusing
-the ids would break the original wherever it was saved. A failed or timed-out export or import
-fails the next turn instead of hanging. Verified against opencode 1.19.3.
+unset, or from another sandbox) hangs. The first turn after a resume runs `opencode export` in
+the sandbox, and when the session is filed elsewhere it imports a copy under fresh ids, filed
+under the sandbox folder, and continues the copy. Import overwrites the folder of a session id it
+already has, so reusing the ids would break the original wherever it was saved. Before 1.15.6,
+import files a session under the folder named in its JSON, so the copy names the sandbox folder.
+A failed or timed-out export or import fails that turn instead of hanging, and the next turn
+tries again. Verified against opencode 1.14.41, 1.15.5, 1.15.6 and 1.19.3.
 """
 
 from __future__ import annotations
@@ -241,6 +243,14 @@ def with_ids_replaced(value: JsonValue, fresh: Mapping[str, str]) -> JsonValue:
             return value
 
 
+def filed_under(exported: JsonValue, workdir: str) -> JsonValue:
+    match exported:
+        case {"info": dict() as info}:
+            return {**exported, "info": {**info, "directory": workdir}}
+        case _:
+            return exported
+
+
 def session_copy(exported: str, path: str, workdir: str) -> HarnessSessionCopy | None:
     """A copy of an exported session filed under workdir, or None when the session is already filed there."""
     try:
@@ -254,7 +264,7 @@ def session_copy(exported: str, path: str, workdir: str) -> HarnessSessionCopy |
     return HarnessSessionCopy(
         session_id=fresh[session.info.id],
         path=path,
-        data=json.dumps(with_ids_replaced(raw, fresh)).encode("utf-8"),
+        data=json.dumps(filed_under(with_ids_replaced(raw, fresh), workdir)).encode("utf-8"),
         import_command=(OPENCODE_BINARY, "--pure", "import", path),
     )
 

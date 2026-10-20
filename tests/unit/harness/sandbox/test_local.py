@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 from typing import Final
@@ -92,6 +93,22 @@ async def test_exec_streams_stdin(sbx):
 async def test_run_timeout_kills(sbx):
     with pytest.raises(SandboxError, match="timed out"):
         await sbx.run([PY, "-c", "import time;time.sleep(30)"], timeout=0.5)
+
+
+async def test_cancelled_run_stops_its_command(sbx, tmp_path):
+    pid_file: Final = tmp_path / "pid"
+    run: Final = asyncio.ensure_future(
+        sbx.run([PY, "-c", "import os, time; open('pid', 'w').write(str(os.getpid())); time.sleep(30)"])
+    )
+    for _ in range(500):
+        if pid_file.exists() and pid_file.read_text():
+            break
+        await asyncio.sleep(0.01)
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
 
 
 async def test_missing_binary_raises(sbx):
