@@ -453,7 +453,11 @@ def _sl_attribution_fallback(
 
 
 def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
-    litellm_params: Final = LiteLLM_Params.model_validate(deployment["litellm_params"])
+    return deployment_params_provider(LiteLLM_Params.model_validate(deployment["litellm_params"]))
+
+
+def deployment_params_provider(litellm_params: LiteLLM_Params) -> str | None:
+    """The provider a deployment's ``litellm_params`` authenticate against, None when its model cannot be resolved."""
     if litellm.LiteLLMProxyChatConfig.should_use_litellm_proxy_by_default(litellm_params=litellm_params):
         return LlmProviders.LITELLM_PROXY.value
     declared: Final = declared_authenticating_provider(litellm_params.model, litellm_params.custom_llm_provider)
