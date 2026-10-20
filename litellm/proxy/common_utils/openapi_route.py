@@ -36,6 +36,7 @@ def serve_openapi_off_the_event_loop(
     if openapi_url is None:
         return
     build_lock: Final = asyncio.Lock()
+    installed_openapi: Final = app.openapi
 
     async def built_schema() -> OpenAPISchema:
         async with build_lock:
@@ -47,8 +48,13 @@ def serve_openapi_off_the_event_loop(
                 app.openapi_schema = schema
             return schema
 
+    async def served_schema() -> OpenAPISchema:
+        if app.openapi != installed_openapi:
+            return app.openapi()
+        return app.openapi_schema or await built_schema()
+
     async def openapi(request: Request) -> Response:
-        schema: Final = app.openapi_schema or await built_schema()
+        schema: Final = await served_schema()
         scope_root_path: Final[object] = request.scope.get("root_path")
         root_path: Final = scope_root_path.rstrip("/") if isinstance(scope_root_path, str) else ""
         servers_root_path: Final = root_path if app.root_path_in_servers else ""

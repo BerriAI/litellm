@@ -126,6 +126,17 @@ async def test_a_rebuilt_schema_is_served_instead_of_the_previous_one():
     assert (first.json(), second.json()) == ({"build": 0}, {"build": 1})
 
 
+
+async def test_an_app_that_replaces_its_openapi_function_serves_that_schema():
+    app: Final = FastAPI()
+    serve_openapi_off_the_event_loop(app, _route_paths(app), lambda paths: {"built_by": "the proxy"})
+    app.openapi = lambda: {"built_by": "the operator"}
+
+    async with _client(app) as client:
+        response: Final = await client.get("/openapi.json")
+
+    assert response.json() == {"built_by": "the operator"}
+
 @pytest.mark.parametrize(
     ("servers", "expected"),
     [
