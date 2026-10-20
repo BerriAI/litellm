@@ -36,9 +36,10 @@ from opentelemetry.trace import StatusCode
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm._service_logger import ServiceLogging
 from litellm._internal_context import current_service_target
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
 from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -1805,8 +1806,11 @@ class _FakeRedisRunningIncrementIfPresent(FakeAsyncRedis):
 
 class _RedisCacheOnClient(RedisCache):
     def __init__(self, client: FakeAsyncRedis) -> None:
-        super().__init__(host="127.0.0.1", port=6379)
         self._injected_client: Final = client
+        self.namespace = None
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
+        self.service_logger_obj = ServiceLogging()
+        self.default_ttl = None
 
     def init_async_client(self) -> FakeAsyncRedis:
         return self._injected_client
