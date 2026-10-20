@@ -9630,11 +9630,11 @@ async def test_atranscription_ignores_a_non_string_base_url_when_api_base_is_set
 
 
 def _make_rate_limit_error(retry_after: str | None = None) -> litellm.RateLimitError:
-    headers = {"retry-after": retry_after} if retry_after else {}
-    resp = MagicMock()
+    headers: Final = {"retry-after": retry_after} if retry_after else {}
+    resp: Final = MagicMock()
     resp.headers = headers
     resp.status_code = 429
-    err = litellm.RateLimitError(
+    err: Final = litellm.RateLimitError(
         message="Rate limit reached",
         response=resp,
         llm_provider="openai",
@@ -9646,10 +9646,10 @@ def _make_rate_limit_error(retry_after: str | None = None) -> litellm.RateLimitE
 
 
 def _make_auth_error() -> litellm.AuthenticationError:
-    resp = MagicMock()
+    resp: Final = MagicMock()
     resp.headers = {}
     resp.status_code = 401
-    err = litellm.AuthenticationError(
+    err: Final = litellm.AuthenticationError(
         message="Invalid API Key",
         response=resp,
         llm_provider="openai",
@@ -9660,10 +9660,10 @@ def _make_auth_error() -> litellm.AuthenticationError:
 
 
 def _make_bad_request_error() -> litellm.BadRequestError:
-    resp = MagicMock()
+    resp: Final = MagicMock()
     resp.headers = {}
     resp.status_code = 400
-    err = litellm.BadRequestError(
+    err: Final = litellm.BadRequestError(
         message="Invalid argument",
         response=resp,
         llm_provider="openai",
@@ -9674,10 +9674,10 @@ def _make_bad_request_error() -> litellm.BadRequestError:
 
 
 def _make_service_unavailable_error() -> litellm.ServiceUnavailableError:
-    resp = MagicMock()
+    resp: Final = MagicMock()
     resp.headers = {}
     resp.status_code = 503
-    err = litellm.ServiceUnavailableError(
+    err: Final = litellm.ServiceUnavailableError(
         message="The server is temporarily overloaded",
         response=resp,
         llm_provider="openai",
@@ -9688,10 +9688,10 @@ def _make_service_unavailable_error() -> litellm.ServiceUnavailableError:
 
 
 def _make_internal_server_error() -> litellm.InternalServerError:
-    resp = MagicMock()
+    resp: Final = MagicMock()
     resp.headers = {}
     resp.status_code = 500
-    err = litellm.InternalServerError(
+    err: Final = litellm.InternalServerError(
         message="Internal server error",
         response=resp,
         llm_provider="openai",
@@ -9703,16 +9703,16 @@ def _make_internal_server_error() -> litellm.InternalServerError:
 
 def test_completion_with_retries_honors_retry_after():
     """Verify completion_with_retries reads Retry-After and applies jitter."""
-    calls = []
+    calls: Final[list[int]] = []
 
-    def mock_completion(*args, **kwargs):
+    def mock_completion(*args: object, **kwargs: object) -> dict[str, str]:
         calls.append(1)
         if len(calls) == 1:
             raise _make_rate_limit_error(retry_after="2")
         return {"status": "ok"}
 
     with patch("time.sleep") as mock_sleep:
-        res = completion_with_retries(
+        res: Final = completion_with_retries(
             model="gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
             num_retries=3,
@@ -9721,15 +9721,15 @@ def test_completion_with_retries_honors_retry_after():
         assert res == {"status": "ok"}
         assert len(calls) == 2
         mock_sleep.assert_called_once()
-        sleep_arg = mock_sleep.call_args[0][0]
+        sleep_arg: Final = mock_sleep.call_args[0][0]
         assert 2.0 <= sleep_arg <= 2.8
 
 
 def test_completion_with_retries_non_transient_auth_error_fails_immediately():
     """Non-transient errors like 401 should fail on attempt 1 without retrying."""
-    calls = []
+    calls: Final[list[int]] = []
 
-    def mock_completion(*args, **kwargs):
+    def mock_completion(*args: object, **kwargs: object) -> NoReturn:
         calls.append(1)
         raise _make_auth_error()
 
@@ -9747,9 +9747,9 @@ def test_completion_with_retries_non_transient_auth_error_fails_immediately():
 
 def test_completion_with_retries_bad_request_fails_immediately():
     """Non-transient errors like 400 Bad Request should fail on attempt 1 without retrying."""
-    calls = []
+    calls: Final[list[int]] = []
 
-    def mock_completion(*args, **kwargs):
+    def mock_completion(*args: object, **kwargs: object) -> NoReturn:
         calls.append(1)
         raise _make_bad_request_error()
 
@@ -9767,16 +9767,16 @@ def test_completion_with_retries_bad_request_fails_immediately():
 
 def test_completion_with_retries_service_unavailable_503():
     """503 Service Unavailable should be retried with exponential backoff."""
-    calls = []
+    calls: Final[list[int]] = []
 
-    def mock_completion(*args, **kwargs):
+    def mock_completion(*args: object, **kwargs: object) -> dict[str, str]:
         calls.append(1)
         if len(calls) < 3:
             raise _make_service_unavailable_error()
         return {"status": "recovered"}
 
     with patch("time.sleep") as mock_sleep:
-        res = completion_with_retries(
+        res: Final = completion_with_retries(
             model="gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
             num_retries=3,
@@ -9789,16 +9789,16 @@ def test_completion_with_retries_service_unavailable_503():
 
 def test_completion_with_retries_internal_server_error_500():
     """500 Internal Server Error should be retried."""
-    calls = []
+    calls: Final[list[int]] = []
 
-    def mock_completion(*args, **kwargs):
+    def mock_completion(*args: object, **kwargs: object) -> dict[str, str]:
         calls.append(1)
         if len(calls) < 2:
             raise _make_internal_server_error()
         return {"status": "recovered"}
 
     with patch("time.sleep") as mock_sleep:
-        res = completion_with_retries(
+        res: Final = completion_with_retries(
             model="gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
             num_retries=2,
@@ -9812,16 +9812,16 @@ def test_completion_with_retries_internal_server_error_500():
 @pytest.mark.asyncio
 async def test_acompletion_with_retries_honors_retry_after():
     """Verify acompletion_with_retries reads Retry-After and applies jitter."""
-    calls = []
+    calls: Final[list[int]] = []
 
-    async def mock_acompletion(*args, **kwargs):
+    async def mock_acompletion(*args: object, **kwargs: object) -> dict[str, str]:
         calls.append(1)
         if len(calls) == 1:
             raise _make_rate_limit_error(retry_after="3")
         return {"status": "ok"}
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        res = await acompletion_with_retries(
+        res: Final = await acompletion_with_retries(
             model="gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
             num_retries=3,
@@ -9830,16 +9830,16 @@ async def test_acompletion_with_retries_honors_retry_after():
         assert res == {"status": "ok"}
         assert len(calls) == 2
         mock_sleep.assert_called_once()
-        sleep_arg = mock_sleep.call_args[0][0]
+        sleep_arg: Final = mock_sleep.call_args[0][0]
         assert 3.0 <= sleep_arg <= 3.8
 
 
 @pytest.mark.asyncio
 async def test_acompletion_with_retries_non_transient_auth_error_fails_immediately():
     """Async 401 should fail on attempt 1 without retrying."""
-    calls = []
+    calls: Final[list[int]] = []
 
-    async def mock_acompletion(*args, **kwargs):
+    async def mock_acompletion(*args: object, **kwargs: object) -> NoReturn:
         calls.append(1)
         raise _make_auth_error()
 
@@ -9902,18 +9902,50 @@ async def test_completion_with_retries_honors_a_directly_passed_retry_policy(
     assert mock_completion.call_count == expected_calls
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_with_retries_keeps_the_first_errors_retry_policy_budget(sync_mode: bool):
+    errors: Final = iter((_make_bad_request_error(), *(_make_service_unavailable_error() for _ in range(4))))
+
+    def raise_next_error(*args: object, **kwargs: object) -> NoReturn:
+        raise next(errors)
+
+    mock_completion: Final = MagicMock(side_effect=raise_next_error)
+
+    async def mock_acompletion(*args: object, **kwargs: object) -> None:
+        mock_completion(*args, **kwargs)
+
+    request: Final = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "num_retries": 1,
+        "retry_policy": RetryPolicy(BadRequestErrorRetries=3),
+    }
+
+    async def call_with_retries() -> None:
+        if sync_mode:
+            completion_with_retries(original_function=mock_completion, **request)
+        else:
+            await acompletion_with_retries(original_function=mock_acompletion, **request)
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(litellm.ServiceUnavailableError):
+            await call_with_retries()
+    assert mock_completion.call_count == 4
+
+
 def test_completion_with_retries_connection_error_with_constant_retry():
     """Verify APIConnectionError (no status_code) retries and constant_retry waits 0.0s."""
-    calls = []
+    calls: Final[list[int]] = []
 
-    def mock_completion(*args, **kwargs):
+    def mock_completion(*args: object, **kwargs: object) -> dict[str, str]:
         calls.append(1)
         if len(calls) == 1:
             raise APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"))
         return {"status": "recovered"}
 
     with patch("time.sleep") as mock_sleep:
-        res = completion_with_retries(
+        res: Final = completion_with_retries(
             model="gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
             num_retries=2,
@@ -9926,7 +9958,7 @@ def test_completion_with_retries_connection_error_with_constant_retry():
 
 
 _RETRY_HOST: Final = "https://retry-upstream.invalid"
-_RETRY_RESPONSES_OK: Final = {
+_RETRY_RESPONSES_OK: Final[Mapping[str, object]] = {
     "id": "resp-retry",
     "object": "response",
     "created_at": 1,
@@ -9943,7 +9975,7 @@ _RETRY_RESPONSES_OK: Final = {
     ],
     "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
 }
-_RETRY_ANTHROPIC_OK: Final = {
+_RETRY_ANTHROPIC_OK: Final[Mapping[str, object]] = {
     "id": "msg-retry",
     "type": "message",
     "role": "assistant",
@@ -10070,16 +10102,17 @@ async def test_completion_num_retries_exhausts_configured_attempts(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_completion_whole_float_num_retries_retries_that_many_times(
-    retry_upstream: respx.MockRouter, sync_mode: bool
+@pytest.mark.parametrize(("num_retries", "expected_requests"), [(2.0, 3), (2.5, 4)], ids=["whole", "fractional"])
+async def test_completion_float_num_retries_retries_the_rounded_up_count(
+    retry_upstream: respx.MockRouter, sync_mode: bool, num_retries: float, expected_requests: int
 ):
-    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(return_value=_provider_error(500))
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(500))
 
     with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
         with pytest.raises(litellm.InternalServerError):
-            await _completion_with_retries_kwargs(sync_mode, _RESPONSES_BRIDGE, num_retries=2.0)
+            await _completion_with_retries_kwargs(sync_mode, _ANTHROPIC, num_retries=num_retries)
 
-    assert route.call_count == 3
+    assert route.call_count == expected_requests
 
 
 @pytest.mark.asyncio
@@ -10101,6 +10134,74 @@ async def test_completion_retry_policy_count_only_retries_its_own_error_class(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_num_retries_keeps_the_context_window_fallback(
+    retry_upstream: respx.MockRouter, sync_mode: bool
+):
+    def prompt_too_long_for_the_small_model(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content)["model"] == "test-model-large":
+            return httpx.Response(200, json=_ANTHROPIC.ok_body)
+        return httpx.Response(
+            400,
+            json={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "prompt is too long: 250000 tokens > 200000 maximum",
+                },
+            },
+        )
+
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(side_effect=prompt_too_long_for_the_small_model)
+
+    response: Final = await _completion_with_retries_kwargs(
+        sync_mode,
+        _ANTHROPIC,
+        num_retries=2,
+        context_window_fallback_dict={_ANTHROPIC.model: "anthropic/test-model-large"},
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "ok"
+    assert [json.loads(call.request.content)["model"] for call in route.calls] == ["test-model", "test-model-large"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_retry_policy_retries_a_later_error_its_policy_names(
+    retry_upstream: respx.MockRouter, sync_mode: bool
+):
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(400), _provider_error(401), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        response: Final = await _completion_with_retries_kwargs(
+            sync_mode,
+            _ANTHROPIC,
+            retry_policy=RetryPolicy(BadRequestErrorRetries=3, AuthenticationErrorRetries=3),
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert route.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_acompletion_logs_success_when_a_retry_succeeds(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    recorder: Final = _SuccessEventRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(500), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    await _completion_with_retries_kwargs(False, _ANTHROPIC, num_retries=1, retry_strategy="constant_retry")
+
+    assert (await _wait_for_success_event(recorder, "acompletion")).call_type == "acompletion"
+
+
+@pytest.mark.asyncio
 async def test_global_num_retries_is_spent_the_same_way_by_sync_and_async_calls(
     retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
@@ -10118,7 +10219,9 @@ async def test_global_num_retries_is_spent_the_same_way_by_sync_and_async_calls(
                 await _completion_with_retries_kwargs(sync_mode, _ANTHROPIC)
         return auth_requests, route.call_count - auth_requests
 
-    assert await requests_sent(sync_mode=True) == await requests_sent(sync_mode=False) == (1, 1)
+    sync_requests: Final = await requests_sent(sync_mode=True)
+    assert sync_requests[0] == 1
+    assert sync_requests == await requests_sent(sync_mode=False)
 
 
 @pytest.mark.asyncio
