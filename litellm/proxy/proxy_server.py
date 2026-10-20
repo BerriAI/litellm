@@ -13432,8 +13432,6 @@ async def audio_speech(
         requested_format_str: Final = requested_format if isinstance(requested_format, str) else None
         extra_response_format_media_types: Final = MappingProxyType(
             {
-                "pcm16": "audio/wav",
-                "linear16": "audio/wav",
                 "alaw": "audio/x-alaw-basic",
                 "mulaw": "audio/basic",
             }

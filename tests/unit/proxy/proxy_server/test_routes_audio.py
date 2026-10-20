@@ -209,7 +209,6 @@ def test_audio_speech_content_type_matches_audio_format(
 @pytest.mark.parametrize(
     "response_format,expected_media_type",
     [
-        ("pcm16", "audio/wav"),
         ("alaw", "audio/x-alaw-basic"),
         ("mulaw", "audio/basic"),
     ],

@@ -8836,14 +8836,9 @@ def speech(
 
         generic_optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
-        from .endpoints.speech.speech_to_completion_bridge.transformation import (
-            GEMINI_TTS_SUPPORTED_RESPONSE_FORMATS,
-        )
-
         needs_cloud_text_to_speech: Final = (
             litellm.utils.is_gemini_tts_model(model)
-            and response_format is not None
-            and response_format not in GEMINI_TTS_SUPPORTED_RESPONSE_FORMATS
+            and response_format in VertexAITextToSpeechConfig.GEMINI_FORMAT_MAPPINGS
         )
         if "gemini" in model and not needs_cloud_text_to_speech:
             from .endpoints.speech.speech_to_completion_bridge.handler import (

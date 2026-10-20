@@ -253,11 +253,11 @@ class TestVertexAITextToSpeechConfig:
 
         voice_str, optional_params = config.map_openai_params(
             model="gemini-3.1-flash-tts-preview",
-            optional_params={"response_format": "pcm16"},
+            optional_params={"response_format": "opus"},
             voice=voice,
         )
         assert voice_str is None
-        assert optional_params["audioEncoding"] == "LINEAR16"
+        assert optional_params["audioEncoding"] == "OGG_OPUS"
         assert optional_params["vertex_voice_dict"] == expected_voice
 
     def test_gemini_tts_nested_language_and_voice_alias_reach_cloud_tts(self):
@@ -1528,6 +1528,122 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_reaches_cloud_tts_for_any_gemini
     assert sent["voice"]["modelName"] == "gemini-3.8-flash-tts"
     assert sent["voice"]["name"] == "Kore"
     assert sent["audioConfig"]["audioEncoding"] == "MP3"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_without_voice_keeps_the_gemini_model(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+    )
+
+    await litellm.aspeech(
+        model="vertex_ai/gemini-3.1-flash-tts-preview",
+        input="Say hello",
+        response_format="mp3",
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location="global",
+    )
+
+    sent: Final = json.loads(route.calls[0].request.content)
+    assert sent["voice"] == {"languageCode": "en-US", "modelName": "gemini-3.1-flash-tts-preview"}
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_sends_instructions_as_the_style_prompt(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+    )
+
+    await litellm.aspeech(
+        model="vertex_ai/gemini-3.1-flash-tts-preview",
+        input="Have a wonderful day",
+        voice="Kore",
+        response_format="mp3",
+        instructions="Read this slowly and calmly",
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location="global",
+    )
+
+    sent: Final = json.loads(route.calls[0].request.content)
+    assert sent["input"] == {"text": "Have a wonderful day", "prompt": "Read this slowly and calmly"}
+
+
+@pytest.mark.parametrize(
+    ("vertex_location", "synthesize_url"),
+    (
+        ("us-central1", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("europe-west4", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("eu", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("global", _SYNTHESIZE_URL),
+    ),
+)
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_keeps_the_deployment_region(
+    respx_mock: respx.MockRouter,
+    google_token_endpoint: responses.RequestsMock,
+    vertex_location: str,
+    synthesize_url: str,
+) -> None:
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    route: Final = respx_mock.post(synthesize_url).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+    )
+
+    response: Final = await litellm.aspeech(
+        model="vertex_ai/gemini-3.1-flash-tts-preview",
+        input="Say hello",
+        voice="Kore",
+        response_format="mp3",
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location=vertex_location,
+    )
+
+    assert route.call_count == 1
+    assert response.content == audio_bytes
+
+
+@pytest.mark.parametrize(
+    "deployment",
+    (
+        {"vertex_location": "asia-northeast1"},
+        {"vertex_location": "us-central1", "api_base": "https://vertex.gateway.internal"},
+    ),
+)
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_mp3_rejects_a_deployment_cloud_tts_cannot_serve(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, deployment: dict[str, str]
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Request wav or pcm"):
+        await litellm.aspeech(
+            model="vertex_ai/gemini-3.1-flash-tts-preview",
+            input="Say hello",
+            voice="Kore",
+            response_format="mp3",
+            vertex_credentials=_AUTHORIZED_USER,
+            **deployment,
+        )
+
+
+@pytest.mark.parametrize("response_format", ("aac", "flac", "pcm16", "WAV"))
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_unsupported_format_is_rejected_before_calling_google(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, response_format: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Supported response formats: alaw, mp3, mulaw, opus, pcm, wav"):
+        await litellm.aspeech(
+            model="vertex_ai/gemini-3.1-flash-tts-preview",
+            input="Say hello",
+            voice="Kore",
+            response_format=response_format,
+            vertex_credentials=_AUTHORIZED_USER,
+            vertex_location="global",
+        )
 
 
 @patch(  # test-quality-ok: exercises public Gemini speech dispatch up to the outbound HTTP boundary

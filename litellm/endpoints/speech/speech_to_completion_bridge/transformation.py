@@ -54,6 +54,20 @@ class SpeechToCompletionBridgeTransformationHandler:
             return
         from litellm.exceptions import BadRequestError
 
+        if custom_llm_provider.startswith("vertex_ai"):
+            from litellm.llms.vertex_ai.text_to_speech.transformation import VertexAITextToSpeechConfig
+
+            vertex_supported: Final = ", ".join(
+                sorted({*GEMINI_TTS_SUPPORTED_RESPONSE_FORMATS, *VertexAITextToSpeechConfig.GEMINI_FORMAT_MAPPINGS})
+            )
+            raise BadRequestError(
+                message=(
+                    f"Vertex AI Gemini TTS does not support response_format='{response_format}'."
+                    f" Supported response formats: {vertex_supported}."
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
         supported: Final = ", ".join(sorted(GEMINI_TTS_SUPPORTED_RESPONSE_FORMATS))
         raise BadRequestError(
             message=(

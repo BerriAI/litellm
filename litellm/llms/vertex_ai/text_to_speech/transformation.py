@@ -130,14 +130,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         }
     )
     GEMINI_FORMAT_MAPPINGS: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {"mp3": "MP3", "opus": "OGG_OPUS", "alaw": "ALAW", "mulaw": "MULAW"}
+    )
+    GEMINI_TTS_REGIONAL_HOSTS: ClassVar[Mapping[str, str]] = MappingProxyType(
         {
-            **FORMAT_MAPPINGS,
-            "alaw": "ALAW",
-            "mulaw": "MULAW",
-            "ogg_opus": "OGG_OPUS",
-            "pcm": "LINEAR16",
-            "pcm16": "LINEAR16",
-            "linear16": "LINEAR16",
+            "us": "us-texttospeech.googleapis.com",
+            "eu": "eu-texttospeech.googleapis.com",
+            "europe": "eu-texttospeech.googleapis.com",
         }
     )
 
@@ -163,11 +162,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             - voice_str: Original string voice (for interface compatibility)
             - voice_dict: Vertex AI format dict with languageCode and name
         """
-        if voice is None:
-            return None, None
-
         if model is not None and self._is_gemini_tts_model(model):
             return self._map_gemini_tts_voice_to_vertex_format(model=model, voice=voice)
+
+        if voice is None:
+            return None, None
 
         if isinstance(voice, dict):
             # Already in Vertex AI format
@@ -312,9 +311,12 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _map_gemini_tts_voice_to_vertex_format(
         self,
         model: str,
-        voice: str | Mapping[str, object],
+        voice: str | Mapping[str, object] | None,
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: provider request serialization requires a concrete dict
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
+
+        if voice is None:
+            return None, {"languageCode": self.DEFAULT_LANGUAGE_CODE, "modelName": model}
 
         if isinstance(voice, str):
             return voice, {
@@ -440,7 +442,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Note: Vertex AI also supports additional parameters like audioConfig
         which can be passed but are not part of the OpenAI spec
         """
-        return ["voice", "response_format", "speed"]
+        return ["voice", "response_format", "speed", *(["instructions"] if self._is_gemini_tts_model(model) else [])]
 
     def map_openai_params(
         self,
@@ -465,6 +467,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             Tuple of (mapped_voice_str, mapped_params)
         """
         mapped_params: Final[dict[str, object]] = {}
+        openai_params: Final = _JSON_OBJECT.validate_python(optional_params)
 
         ##########################################################
         # Map voice using helper
@@ -492,10 +495,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             mapped_params["audioEncoding"] = self.DEFAULT_AUDIO_ENCODING
 
         # Map speed (OpenAI: 0.25-4.0, Vertex AI: speakingRate 0.25-4.0)
-        if "speed" in optional_params:
-            speed: Final = optional_params["speed"]
-            if speed is not None:
-                mapped_params["speakingRate"] = str(speed)
+        speed: Final = openai_params.get("speed")
+        if speed is not None:
+            mapped_params["speakingRate"] = str(speed)
+
+        instructions: Final = openai_params.get("instructions")
+        if isinstance(instructions, str) and self._is_gemini_tts_model(model):
+            mapped_params["prompt"] = instructions
 
         # Pass through Vertex AI-specific parameters from kwargs
         if "audioConfig" in kwargs:
@@ -538,10 +544,41 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
         Google Cloud TTS endpoint: https://texttospeech.googleapis.com/v1/text:synthesize
         """
+        if self._is_gemini_tts_model(model):
+            return self._get_gemini_tts_url(
+                model=model, api_base=api_base, litellm_params=_JSON_OBJECT.validate_python(litellm_params)
+            )
+
         if api_base:
             return api_base
 
         return self.TTS_API_URL
+
+    def _get_gemini_tts_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
+        if api_base:
+            raise UnsupportedParamsError(
+                message=(
+                    f"{model} serves mp3, opus, alaw and mulaw through Cloud Text-to-Speech, which does not use "
+                    "this deployment's api_base. Request wav or pcm, or use a deployment without api_base."
+                ),
+                model=model,
+                llm_provider="vertex_ai",
+            )
+        vertex_location: Final = litellm_params.get("vertex_location")
+        if not isinstance(vertex_location, str) or vertex_location == "global":
+            return self.TTS_API_URL
+        regional_host: Final = self.GEMINI_TTS_REGIONAL_HOSTS.get(vertex_location.split("-")[0])
+        if regional_host is None:
+            raise UnsupportedParamsError(
+                message=(
+                    f"{model} serves mp3, opus, alaw and mulaw through Cloud Text-to-Speech, which has global, us "
+                    f"and eu endpoints only, so vertex_location={vertex_location!r} cannot be honored. Request wav "
+                    "or pcm, or use vertex_location global, us, eu, or a us- or europe- region."
+                ),
+                model=model,
+                llm_provider="vertex_ai",
+            )
+        return f"https://{regional_host}/v1/text:synthesize"
 
     def _validate_vertex_input(
         self,
@@ -630,8 +667,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         headers["x-goog-user-project"] = vertex_project
 
         ####### Build the request ################
-        vertex_input = VertexTextToSpeechInput(text=input)
-        vertex_input = self._validate_vertex_input(vertex_input, optional_params)
+        prompt: Final = _JSON_OBJECT.validate_python(optional_params).get("prompt")
+        validated_input: Final = self._validate_vertex_input(VertexTextToSpeechInput(text=input), optional_params)
+        vertex_input: Final[VertexTextToSpeechInput] = (
+            {**validated_input, "prompt": prompt} if isinstance(prompt, str) else validated_input
+        )
 
         # Build voice configuration
         # Check for voice dict stored in:
@@ -639,7 +679,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         # 2. optional_params by map_openai_params
         voice_dict: Final = litellm_params.get("vertex_voice_dict") or optional_params.get("vertex_voice_dict")
         if voice_dict is not None and isinstance(voice_dict, dict):
-            vertex_voice = VertexTextToSpeechVoice(**voice_dict)
+            vertex_voice = _JSON_OBJECT.validate_python(voice_dict)
         elif voice is not None:
             # Handle string voice (shouldn't normally happen if dispatch was called)
             parts: Final = voice.split("-")
