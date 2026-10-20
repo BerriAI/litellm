@@ -457,7 +457,6 @@ class _ProxyDBLogger(CustomLogger):
                         update_cache_read_keys=update_cache_read_keys(
                             user_id=user_id,
                             end_user_id=end_user_id,
-                            team_id=team_id,
                             tags=tags,
                             response_cost=response_cost,
                         ),

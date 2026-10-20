@@ -1229,9 +1229,16 @@
             "region": {
               "type": "string",
               "pattern": "\\S"
+            },
+            "litellm_provider": {
+              "type": "string",
+              "enum": [
+                "bedrock",
+                "bedrock_mantle"
+              ]
             }
           },
-          "description": "Model that counts tokens for this one, and the AWS region its count API runs in."
+          "description": "Model that counts tokens for this one, its counting provider, and the AWS region its count API runs in."
         },
         "token_count_tokenizer": {
           "type": "string",
