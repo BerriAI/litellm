@@ -70,3 +70,28 @@ def test_prepare_completion_kwargs_keeps_prompt_cache_key_through_responses_rero
     )
     assert completion_kwargs["model"] == "openai/responses/gpt-5.6-luna"
     assert completion_kwargs["prompt_cache_key"] == "session-abc"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "azure_api_base_env", "derives_key"),
+    [
+        (None, None, True),
+        ("https://api.mistral.ai/v1", None, True),
+        ("https://my-resource.openai.azure.com/openai/v1", None, False),
+        (None, "https://my-resource.services.ai.azure.com/openai", False),
+    ],
+)
+def test_prepare_completion_kwargs_derives_prompt_cache_key_only_for_a_mistral_hosted_endpoint(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, azure_api_base_env: str | None, derives_key: bool
+):
+    if azure_api_base_env is None:
+        monkeypatch.delenv("MISTRAL_AZURE_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("MISTRAL_AZURE_API_BASE", azure_api_base_env)
+
+    completion_kwargs = _prepare(
+        "mistral/mistral-small-latest", {"custom_llm_provider": "mistral", "api_base": api_base}
+    )
+
+    assert completion_kwargs["user"] == CLAUDE_CODE_USER_ID
+    assert ("prompt_cache_key" in completion_kwargs) is derives_key

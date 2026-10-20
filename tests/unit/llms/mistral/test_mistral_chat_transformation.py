@@ -1,4 +1,5 @@
-from typing import List, cast
+from collections.abc import Mapping
+from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -43,21 +44,15 @@ class TestMistralReasoningSupport:
         mistral_config = MistralConfig()
 
         # Test magistral model supports reasoning parameters
-        supported_params = mistral_config.get_supported_openai_params(
-            "mistral/magistral-medium-2506"
-        )
+        supported_params = mistral_config.get_supported_openai_params("mistral/magistral-medium-2506")
         assert "reasoning_effort" in supported_params
         assert "thinking" in supported_params
 
-        supported_params_reasoning = mistral_config.get_supported_openai_params(
-            "mistral/mistral-medium-latest"
-        )
+        supported_params_reasoning = mistral_config.get_supported_openai_params("mistral/mistral-medium-latest")
         assert "reasoning_effort" in supported_params_reasoning
         assert "thinking" not in supported_params_reasoning
 
-        supported_params_normal = mistral_config.get_supported_openai_params(
-            "mistral/mistral-large-latest"
-        )
+        supported_params_normal = mistral_config.get_supported_openai_params("mistral/mistral-large-latest")
         assert "reasoning_effort" not in supported_params_normal
         assert "thinking" not in supported_params_normal
 
@@ -192,9 +187,7 @@ class TestMistralReasoningSupport:
         messages = [{"role": "user", "content": "What is 2+2?"}]
         optional_params = {"_add_reasoning_prompt": True}
 
-        result = mistral_config._add_reasoning_system_prompt_if_needed(
-            messages, optional_params
-        )
+        result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
 
         # Should add a new system message at the beginning
         assert len(result) == 2
@@ -216,9 +209,7 @@ class TestMistralReasoningSupport:
         ]
         optional_params = {"_add_reasoning_prompt": True}
 
-        result = mistral_config._add_reasoning_system_prompt_if_needed(
-            messages, optional_params
-        )
+        result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
 
         # Should modify existing system message
         assert len(result) == 2
@@ -249,9 +240,7 @@ class TestMistralReasoningSupport:
         ]
         optional_params = {"_add_reasoning_prompt": True}
 
-        result = mistral_config._add_reasoning_system_prompt_if_needed(
-            messages, optional_params
-        )
+        result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
 
         # Should modify existing system message preserving list format
         assert len(result) == 2
@@ -264,10 +253,7 @@ class TestMistralReasoningSupport:
 
         # Original content should be preserved
         assert "You are a helpful assistant." in result[0]["content"][1]["text"]
-        assert (
-            "You always provide detailed explanations."
-            in result[0]["content"][2]["text"]
-        )
+        assert "You always provide detailed explanations." in result[0]["content"][2]["text"]
 
         assert result[1]["role"] == "user"
 
@@ -285,9 +271,7 @@ class TestMistralReasoningSupport:
         ]
         string_params = {"_add_reasoning_prompt": True}
 
-        string_result = mistral_config._add_reasoning_system_prompt_if_needed(
-            string_messages, string_params
-        )
+        string_result = mistral_config._add_reasoning_system_prompt_if_needed(string_messages, string_params)
         assert isinstance(string_result[0]["content"], str)
         assert "<think>" in string_result[0]["content"]
         assert "You are helpful." in string_result[0]["content"]
@@ -302,9 +286,7 @@ class TestMistralReasoningSupport:
         ]
         list_params = {"_add_reasoning_prompt": True}
 
-        list_result = mistral_config._add_reasoning_system_prompt_if_needed(
-            list_messages, list_params
-        )
+        list_result = mistral_config._add_reasoning_system_prompt_if_needed(list_messages, list_params)
         assert isinstance(list_result[0]["content"], list)
         assert list_result[0]["content"][0]["type"] == "text"
         assert "<think>" in list_result[0]["content"][0]["text"]
@@ -317,9 +299,7 @@ class TestMistralReasoningSupport:
         messages = [{"role": "user", "content": "What is 2+2?"}]
         optional_params = {}
 
-        result = mistral_config._add_reasoning_system_prompt_if_needed(
-            messages, optional_params
-        )
+        result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
 
         # Should return messages unchanged
         assert result == messages
@@ -442,9 +422,7 @@ class TestMistralReasoningSupport:
 
 def test_mistral_streaming_chunk_preserves_thinking_blocks():
     """Ensure streaming chunks keep magistral reasoning content."""
-    iterator = MistralChatResponseIterator(
-        streaming_response=iter([]), sync_stream=True, json_mode=False
-    )
+    iterator = MistralChatResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
 
     streamed_chunk = {
         "id": "chunk-1",
@@ -521,9 +499,7 @@ class TestMistralParallelToolCalls:
     def test_get_supported_openai_params_includes_parallel_tool_calls(self):
         """Test that parallel_tool_calls is in supported parameters."""
         mistral_config = MistralConfig()
-        supported_params = mistral_config.get_supported_openai_params(
-            "mistral/mistral-large-latest"
-        )
+        supported_params = mistral_config.get_supported_openai_params("mistral/mistral-large-latest")
         assert "parallel_tool_calls" in supported_params
 
     def test_transform_request_preserves_parallel_tool_calls(self):
@@ -689,9 +665,7 @@ class TestMistralEmptyContentHandling:
 
         result = MistralConfig._handle_empty_content_response(response_data)
 
-        assert (
-            result["choices"][0]["message"]["content"] == "Hello, how can I help you?"
-        )
+        assert result["choices"][0]["message"]["content"] == "Hello, how can I help you?"
 
     def test_handle_empty_content_response_handles_multiple_choices(self):
         """Test that only the first choice is processed for empty content."""
@@ -928,9 +902,7 @@ def test_mistral_transform_request_keeps_an_empty_tool_message_after_its_tool_ca
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
-                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
             },
             {"role": "tool", "tool_call_id": "call_1", "content": ""},
         ],
@@ -954,9 +926,7 @@ def test_mistral_transform_request_sends_a_null_tool_reply_as_empty_text(reply):
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
-                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
             },
             {"role": "tool", "tool_call_id": "call_1", **reply},
         ],
@@ -1011,9 +981,7 @@ def test_mistral_transform_request_hoists_tool_message_image():
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
-                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
             },
             {
                 "role": "tool",
@@ -1173,13 +1141,15 @@ def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_
         ("codestral-latest", "codestral"),
     ],
 )
-def test_prompt_cache_key_reaches_the_mistral_request_body(local_model_cost_map, model, custom_llm_provider):
+def test_prompt_cache_key_reaches_the_mistral_request_body(
+    local_model_cost_map: None, model: str, custom_llm_provider: str
+) -> None:
     import litellm
 
-    optional_params = litellm.get_optional_params(
+    optional_params: Final = litellm.get_optional_params(
         model=model, custom_llm_provider=custom_llm_provider, prompt_cache_key="session-1"
     )
-    request = MistralConfig().transform_request(
+    request: Final = MistralConfig().transform_request(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
         optional_params=optional_params,
@@ -1190,13 +1160,61 @@ def test_prompt_cache_key_reaches_the_mistral_request_body(local_model_cost_map,
     assert request["prompt_cache_key"] == "session-1"
 
 
-def test_prompt_cache_key_stays_unsupported_for_vertex_hosted_mistral(local_model_cost_map):
+AZURE_HOSTED_MISTRAL_API_BASE: Final = "https://my-resource.services.ai.azure.com/openai/v1"
+
+
+def _transform_with_prompt_cache_key(litellm_params: dict[str, object]) -> Mapping[str, object]:
+    return cast(
+        Mapping[str, object],
+        MistralConfig().transform_request(
+            model="mistral-small-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"prompt_cache_key": "session-1", "temperature": 0.2},
+            litellm_params=litellm_params,
+            headers={},
+        ),
+    )
+
+
+@pytest.mark.parametrize("api_base", ["https://api.mistral.ai/v1", "https://codestral.mistral.ai/v1"])
+def test_prompt_cache_key_reaches_a_mistral_hosted_endpoint(api_base: str) -> None:
+    request: Final = _transform_with_prompt_cache_key({"api_base": api_base})
+
+    assert request["prompt_cache_key"] == "session-1"
+
+
+@pytest.mark.parametrize("api_base", [AZURE_HOSTED_MISTRAL_API_BASE, "https://mistral.ai.example.com/v1"])
+def test_prompt_cache_key_for_another_host_is_rejected_without_drop_params(api_base: str) -> None:
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="prompt_cache_key"):
+        _transform_with_prompt_cache_key({"api_base": api_base})
+
+
+def test_prompt_cache_key_for_another_host_is_dropped_under_drop_params() -> None:
+    request: Final = _transform_with_prompt_cache_key({"api_base": AZURE_HOSTED_MISTRAL_API_BASE, "drop_params": True})
+
+    assert "prompt_cache_key" not in request
+    assert request["temperature"] == 0.2
+
+
+def test_prompt_cache_key_for_the_azure_endpoint_set_in_the_environment_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MISTRAL_AZURE_API_BASE", "https://my-resource.services.ai.azure.com/openai")
+
+    request: Final = _transform_with_prompt_cache_key({"drop_params": True})
+
+    assert "prompt_cache_key" not in request
+
+
+def test_prompt_cache_key_stays_unsupported_for_vertex_hosted_mistral(local_model_cost_map: None) -> None:
     import litellm
 
     with pytest.raises(litellm.UnsupportedParamsError):
         litellm.get_optional_params(model="mistral-medium-3", custom_llm_provider="vertex_ai", prompt_cache_key="s")
 
-    dropped = litellm.get_optional_params(
+    dropped: Final = litellm.get_optional_params(
         model="mistral-medium-3", custom_llm_provider="vertex_ai", prompt_cache_key="s", drop_params=True
     )
     assert "prompt_cache_key" not in dropped

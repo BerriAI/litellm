@@ -9,10 +9,14 @@ Docs - https://docs.mistral.ai/api/
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from itertools import accumulate, count
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
+from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -28,7 +32,7 @@ from litellm.router_utils.reasoning_effort_capability import (
     nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
+from litellm.types.llms.mistral import MistralRequestRouting, MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
@@ -55,6 +59,7 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 
 
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
+_MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -212,6 +217,28 @@ class MistralConfig(OpenAIGPTConfig):
             if param in ("parallel_tool_calls", "prompt_cache_key"):
                 optional_params[param] = value
         return optional_params
+
+    def accepts_prompt_cache_key_at(self, api_base: str | None) -> bool:
+        resolved_api_base, _ = self._get_openai_compatible_provider_info(api_base, None)
+        hostname: Final = urlparse(resolved_api_base).hostname or ""
+        return hostname == "mistral.ai" or hostname.endswith(".mistral.ai")
+
+    def _prompt_cache_key_withheld(self, model: str, routing: MistralRequestRouting) -> bool:
+        requested_api_base: Final = routing.get("api_base")
+        api_base: Final = requested_api_base if isinstance(requested_api_base, str) else None
+        if self.accepts_prompt_cache_key_at(api_base):
+            return False
+        if litellm.drop_params is True or routing.get("drop_params") is True:
+            return True
+        raise UnsupportedParamsError(
+            message=(
+                f"{self.custom_llm_provider} does not support parameters: ['prompt_cache_key'], for model={model} "
+                f"at api_base={api_base}, since only the Mistral API (*.mistral.ai) takes it. To drop it, set "
+                "`litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            llm_provider=self.custom_llm_provider,
+            model=model,
+        )
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
@@ -635,7 +662,13 @@ class MistralConfig(OpenAIGPTConfig):
         if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
             messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
 
-        upstream_params: Final = {key: value for key, value in optional_params.items() if key != "client_metadata"}
+        withheld_params: Final = (
+            ("client_metadata", "prompt_cache_key")
+            if "prompt_cache_key" in optional_params
+            and self._prompt_cache_key_withheld(model, _MISTRAL_REQUEST_ROUTING.validate_python(litellm_params))
+            else ("client_metadata",)
+        )
+        upstream_params: Final = {key: value for key, value in optional_params.items() if key not in withheld_params}
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(

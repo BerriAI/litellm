@@ -1,6 +1,6 @@
 from typing import Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class FunctionCall(TypedDict):
@@ -22,3 +22,8 @@ class MistralTextBlock(TypedDict):
 class MistralThinkingBlock(TypedDict):
     type: Literal["thinking"]
     thinking: list[MistralTextBlock]
+
+
+class MistralRequestRouting(TypedDict, total=False):
+    api_base: ReadOnly[object]
+    drop_params: ReadOnly[object]
