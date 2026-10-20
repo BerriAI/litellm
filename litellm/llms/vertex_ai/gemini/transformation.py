@@ -18,6 +18,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
@@ -1306,6 +1307,7 @@ def sync_transform_request_body(
         ),
         model,
         custom_llm_provider,
+        bool(litellm_params.get("model_info")),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is an untyped dict
     )
 
 
@@ -1324,18 +1326,29 @@ def _answers_text(cost_map_key: str) -> bool:
     return "text" in row.get("supported_output_modalities", ("text",))
 
 
-def _text_chat_model_max_output_tokens(model: str, custom_llm_provider: str) -> int | None:
+def _overrides_max_output_tokens(cost_map_row: object) -> bool:
+    return isinstance(cost_map_row, AliasedCostEntry) and "max_output_tokens" in cost_map_row.registered_fields
+
+
+def _text_chat_model_max_output_tokens(
+    model: str, custom_llm_provider: str, from_router_deployment: bool
+) -> int | None:
     info: Final = litellm.utils.lookup_model_info_for_registration(model, custom_llm_provider)
     if isinstance(info, litellm.utils.ModelInfoLookupMiss) or info.get("mode") != "chat":
         return None
     if not _answers_text(info["key"]):
         return None
+    if from_router_deployment and _overrides_max_output_tokens(litellm.model_cost.get(info["key"])):  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
+        return None
     return info.get("max_output_tokens")
 
 
-def _with_default_output_budget(request_body: RequestBody, model: str, custom_llm_provider: str) -> RequestBody:
+def _with_default_output_budget(
+    request_body: RequestBody, model: str, custom_llm_provider: str, from_router_deployment: bool
+) -> RequestBody:
     return with_default_output_budget(
-        request_body, partial(_text_chat_model_max_output_tokens, model, custom_llm_provider)
+        request_body,
+        partial(_text_chat_model_max_output_tokens, model, custom_llm_provider, from_router_deployment),
     )
 
 
@@ -1423,7 +1436,12 @@ async def async_transform_request_body(
         if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages)
         else transform()
     )
-    return _with_default_output_budget(request_body, model, custom_llm_provider)
+    return _with_default_output_budget(
+        request_body,
+        model,
+        custom_llm_provider,
+        bool(litellm_params.get("model_info")),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is an untyped dict
+    )
 
 
 def _default_user_message_when_system_message_passed() -> ChatCompletionUserMessage:

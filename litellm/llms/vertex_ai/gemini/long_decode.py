@@ -2,9 +2,10 @@ import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain
-from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # sum_usage_metadata casts computed keys
+from typing import Final, Literal, TypeAlias, TypeVar, cast  # noqa: TID251  # sum_usage_metadata casts computed keys
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import Timeout
@@ -53,6 +54,7 @@ CUT_OFF_FINISH_REASONS: Final = frozenset({"MAX_TOKENS", HOP_END_FINISH_REASON})
 DEFAULT_OUTPUT_BUDGET_ENV: Final = "LITELLM_GEMINI_DEFAULT_MAX_OUTPUT_TOKENS"
 _OUTPUT_LIMIT_KEYS: Final = frozenset({"max_output_tokens", "maxOutputTokens"})
 _REQUEST_KEYS_THAT_SKIP_THE_DEFAULT_BUDGET: Final = frozenset({"generation_config", "continuationToken"})
+_TEXT_ONLY_MODALITIES: Final = TypeAdapter(list[Literal["TEXT"]])
 
 _VERTEX_V1_PATH: Final = "/v1/projects/"
 _VERTEX_PATH_ACCEPTING_CONTINUATION_TOKEN: Final = "/v1beta1/projects/"
@@ -91,22 +93,27 @@ def continuation_cap_of(request_body: RequestBody) -> int | None:
     return _int_or_none(generation_config["max_output_tokens"])
 
 
-def _asks_for_text_only(generation_config: GenerationConfig) -> bool:
+def _asks_for_text_only(generation_config: Mapping[str, object]) -> bool:
     if "response_modalities" in generation_config:
         return False
-    if "responseModalities" not in generation_config:
-        return True
-    return all(modality == "TEXT" for modality in generation_config["responseModalities"])
+    try:
+        _ = _TEXT_ONLY_MODALITIES.validate_python(generation_config.get("responseModalities", []))
+    except ValidationError:
+        return False
+    return True
 
 
 def with_default_output_budget(
     request_body: RequestBody, model_max_output_tokens: Callable[[], int | None]
 ) -> RequestBody:
     generation_config: Final = request_body.get("generationConfig", GenerationConfig())
+    request_json: Final[Mapping[str, object]] = request_body
     budget: Final = get_env_int_or_none(DEFAULT_OUTPUT_BUDGET_ENV)
     if budget is None or budget <= 0:
         return request_body
     if not _REQUEST_KEYS_THAT_SKIP_THE_DEFAULT_BUDGET.isdisjoint(request_body):
+        return request_body
+    if not isinstance(request_json.get("generationConfig", {}), dict):
         return request_body
     if not _OUTPUT_LIMIT_KEYS.isdisjoint(generation_config):
         return request_body

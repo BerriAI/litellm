@@ -1599,6 +1599,55 @@ async def test_env_budget_above_a_models_output_limit_sends_that_limit_instead(
     assert _output_limits(sent[0]) == {"max_output_tokens": _cost_map_max_output_tokens(model)}
 
 
+@pytest.mark.asyncio
+async def test_env_budget_never_goes_above_the_cost_map_limit_when_a_deployment_overrides_it(monkeypatch: pytest.MonkeyPatch):
+    model: Final = "gemini/gemini-2.5-flash"
+    model_limit: Final = _cost_map_max_output_tokens(model)
+    monkeypatch.setenv(BUDGET_ENV, str(2 * model_limit))
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "plain", "litellm_params": {"model": model, "api_key": "fake-gemini-key"}},
+            {
+                "model_name": "raised",
+                "litellm_params": {"model": model, "api_key": "fake-gemini-key"},
+                "model_info": {"max_output_tokens": 4 * model_limit},
+            },
+        ]
+    )
+    sent: Final[list[dict[str, object]]] = []
+    replies: Final = (httpx.Response(200, json=HOP_2), httpx.Response(200, json=HOP_2))
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_replay(replies, sent)))
+
+    for model_name in ("plain", "raised"):
+        await router.acompletion(model=model_name, messages=list(MESSAGES), client=client)
+
+    sent_limits: Final = [_output_limits(request).get("max_output_tokens", 0) for request in sent]
+    assert len(sent_limits) == 2
+    assert all(isinstance(limit, int) and limit <= model_limit for limit in sent_limits)
+
+
+@pytest.mark.parametrize(
+    "generation_config",
+    [None, {"responseModalities": None}, {"responseModalities": {"TEXT": 1}}],
+)
+@pytest.mark.asyncio
+async def test_env_budget_sends_a_generation_config_of_an_unexpected_shape_as_it_came(
+    monkeypatch: pytest.MonkeyPatch, generation_config: object
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=ARGON,
+        messages=list(MESSAGES),
+        extra_body={"generationConfig": generation_config},
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert sent[0]["generationConfig"] == generation_config
+
+
 def test_initial_prompt_tokens_is_absent_on_a_single_hop_and_the_first_hops_count_otherwise():
     assert initial_prompt_tokens_of((HOP_1,)) is None
     assert initial_prompt_tokens_of((HOP_1, HOP_2)) == 10
