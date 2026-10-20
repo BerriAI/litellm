@@ -92,6 +92,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "cache_creation_input_token_cost_above_100k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_creation_input_token_cost_above_128k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -161,6 +166,11 @@
           "minimum": 0
         },
         "cache_read_input_token_cost_above_100k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_read_input_token_cost_above_100k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -333,6 +343,11 @@
           "description": "USD per prompt token."
         },
         "input_cost_per_token_above_100k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "input_cost_per_token_above_100k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -649,6 +664,11 @@
           "description": "USD per generated token."
         },
         "output_cost_per_token_above_100k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "output_cost_per_token_above_100k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."

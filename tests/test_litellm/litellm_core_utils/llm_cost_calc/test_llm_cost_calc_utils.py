@@ -3634,3 +3634,83 @@ def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_
 
     assert creation == pytest.approx(expected_creation)
     assert creation_1h == pytest.approx(expected_creation_1h)
+
+
+# Per-token rates read 2026-10-07 from https://platform.claude.com/docs/en/about-claude/pricing (direct and
+# azure_ai, which Microsoft bills at Anthropic's rates per
+# https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models-billing) and from the
+# AmazonBedrockFoundationModels price list at
+# https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json (Bedrock)
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
+    [
+        ("claude-haiku-5-5", "anthropic", 100_000, 1e-07, 1e-08, 5e-07),
+        ("claude-haiku-5-5", "anthropic", 100_001, 5e-07, 5e-08, 2.5e-06),
+        ("azure_ai/claude-haiku-5-5", "azure_ai", 100_000, 1e-07, 1e-08, 5e-07),
+        ("azure_ai/claude-haiku-5-5", "azure_ai", 100_001, 5e-07, 5e-08, 2.5e-06),
+        ("global.anthropic.claude-haiku-5-5", "bedrock", 100_000, 1e-07, 1e-08, 5e-07),
+        ("global.anthropic.claude-haiku-5-5", "bedrock", 100_001, 5e-07, 5e-08, 2.5e-06),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", 100_000, 1.1e-07, 1.1e-08, 5.5e-07),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", 100_001, 5.5e-07, 5.5e-08, 2.75e-06),
+        ("us-gov.anthropic.claude-haiku-5-5", "bedrock", 100_000, 1.2e-07, 1.2e-08, 6e-07),
+        ("us-gov.anthropic.claude-haiku-5-5", "bedrock", 100_001, 6e-07, 6e-08, 3e-06),
+        ("bedrock_mantle/anthropic.claude-haiku-5-5", "bedrock_mantle", 100_001, 5.5e-07, 5.5e-08, 2.75e-06),
+        ("bedrock/us-gov-west-1/anthropic.claude-haiku-5-5", "bedrock", 100_001, 6e-07, 6e-08, 3e-06),
+        ("vertex_ai/claude-haiku-5-5", "vertex_ai", 100_000, 1e-07, 1e-08, 5e-07),
+        ("vertex_ai/claude-haiku-5-5", "vertex_ai", 100_001, 5e-07, 5e-08, 2.5e-06),
+    ],
+)
+def test_generic_cost_per_token_claude_haiku_5_5_prompt_length_tiers(
+    _local_model_cost_map: None,
+    model: str,
+    custom_llm_provider: str,
+    prompt_tokens: int,
+    input_rate: float,
+    cache_read_rate: float,
+    output_rate: float,
+) -> None:
+    """Claude Haiku 5.5 bills every token at 5x the base rates once the prompt is over 100,000 tokens."""
+    cached_tokens: Final = 10_000
+    completion_tokens: Final = 1_000
+    usage: Final = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
+def test_vertex_regional_endpoint_uplift_scales_claude_haiku_5_5_over_100k_rates(
+    _local_model_cost_map: None,
+) -> None:
+    """Vertex regional endpoints bill 1.1x the global rate on all token types
+    (https://cloud.google.com/vertex-ai/generative-ai/pricing, 2026-10-07: regional
+    over-100K input is $0.55/MTok), so the uplift scales the over-100k rates too."""
+    cached_tokens: Final = 10_000
+    prompt_tokens: Final = 100_001
+    completion_tokens: Final = 1_000
+    usage: Final = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="vertex_ai/claude-haiku-5-5",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        vertex_location="us-east5",
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - cached_tokens) * 5.5e-07 + cached_tokens * 5.5e-08)
+    assert completion_cost == pytest.approx(completion_tokens * 2.75e-06)

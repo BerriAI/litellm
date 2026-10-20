@@ -56,6 +56,8 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 _SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(
     sorted((f"_{st.value}" for st in ServiceTier), key=len, reverse=True)
 )
+_BATCH_KEY_SUFFIX: Final = "_batches"
+_NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -576,7 +578,9 @@ def _get_token_base_cost(
     # so that the threshold detection loop only processes standard keys.  The
     # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
     threshold_keys: Final = [
-        k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
+        k
+        for k in model_info
+        if k.startswith("input_cost_per_token_above_") and not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES)
     ]
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
