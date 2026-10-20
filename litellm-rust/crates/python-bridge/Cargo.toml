@@ -72,7 +72,7 @@ rstest.workspace = true
 sqlx = { workspace = true, features = ["migrate"] }
 tokio-tungstenite.workspace = true
 wiremock.workspace = true
-aws-sdk-secretsmanager = "1.117.0"
+aws-sdk-secretsmanager = { version = "1.117.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
 [[bench]]
 name = "serialization"
