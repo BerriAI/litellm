@@ -546,9 +546,17 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
+from litellm.litellm_core_utils.fallback_generalizations import set_fallback_generalizations
+from litellm.litellm_core_utils.get_model_cost_map import (
+    get_model_cost_map as get_model_cost_map,
+    load_model_catalog,
+    mark_litellm_import_complete,
+)
+from litellm.rust_bridge.model_catalog import ModelCatalogSlot, ModelCostView
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
+model_catalog: ModelCatalogSlot = ModelCatalogSlot(load_model_catalog(url=model_cost_map_url))
+set_fallback_generalizations(model_catalog.registry.fallback_rules())
+model_cost: ModelCostView = ModelCostView(lambda: model_catalog.current)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
 cost_margin_config: Dict[
     str, Union[float, Dict[str, float]]
@@ -1022,7 +1030,7 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             bedrock_mantle_models.add(key)
 
 
-def add_known_models(model_cost_map: Optional[Dict] = None):
+def add_known_models(model_cost_map: Optional[Mapping[str, Mapping[str, object]]] = None):
     """Fold `model_cost_map` (defaults to `litellm.model_cost`) into the per-provider model sets,
     then refresh `models_by_provider` from those sets so the additions reach wildcard expansion.
     The refresh updates the dict in place, so references captured before a reload stay live.

@@ -1,12 +1,12 @@
 import json
 import uuid
-from pathlib import Path
 from typing import Final, Literal
 
 import httpx
 import pytest
 from pydantic import JsonValue
 
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
 from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.upstream import delete_scenario, register_scenario
@@ -263,16 +263,13 @@ def test_ultrafast_long_context_prompt_bills_ultrafast_long_context_rates(
         assert not set(LONG_CONTEXT_PRICING).intersection(body), body
 
 
-BUNDLED_COST_MAP: Final = (
-    Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json"
-)
 CUSTOM_STANDARD_INPUT_RATE: Final = 0.001
 CUSTOM_STANDARD_OUTPUT_RATE: Final = 0.002
 
 
 def _bundled_rate(model: str, field: str) -> float:
-    rate: Final = object_value(JSON_OBJECT.validate_json(BUNDLED_COST_MAP.read_bytes())[model])[field]
-    assert isinstance(rate, float) and rate > 0, f"{model}.{field} in {BUNDLED_COST_MAP.name}: {rate}"
+    rate: Final = object_value(JSON_OBJECT.validate_json(bundled_registry_bytes())[model])[field]
+    assert isinstance(rate, float) and rate > 0, f"bundled {model}.{field}: {rate}"
     return rate
 
 

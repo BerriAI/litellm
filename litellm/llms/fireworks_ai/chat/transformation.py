@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_response_only_fields,
     unpack_legacy_defs,
 )
+from litellm.rust_bridge._native import ModelCatalog
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -33,7 +34,6 @@ from litellm.types.utils import (
     ProviderSpecificModelInfo,
 )
 from litellm.utils import (
-    get_model_cost_mutation_generation,
     supports_function_calling,
     supports_reasoning,
     supports_tool_choice,
@@ -527,36 +527,29 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         return [strip_litellm_response_only_fields(message) for message in messages]
 
-    # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
-    # this index requires a full scan of model_cost (tens of thousands of
-    # entries), so we memoize it. The cache key is (id(model_cost),
-    # mutation_generation): the generation counter is bumped on every
-    # register_model / reload path, so add+remove or in-place value
-    # replacement (which can leave id and len unchanged) still invalidates.
-    _fireworks_index_cache: tuple[int, int, list[tuple[str, dict]]] | None = None
+    _fireworks_index_cache: "tuple[ModelCatalog, tuple[tuple[str, Mapping[str, object]], ...]] | None" = None
 
     @classmethod
-    def _get_fireworks_index(cls) -> list[tuple[str, dict]]:
-        model_cost: Final = litellm.model_cost
-        signature: Final = (id(model_cost), get_model_cost_mutation_generation())
+    def _get_fireworks_index(cls) -> tuple[tuple[str, Mapping[str, object]], ...]:
+        """The ``fireworks_ai/*`` entries keyed by short name, rebuilt once per served catalog."""
+        catalog: Final = litellm.model_catalog.current
         cached: Final = cls._fireworks_index_cache
-        if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
-            return cached[2]
-
-        index: Final[list[tuple[str, dict]]] = []
-        for key, model_info in (*model_cost.items(),):
-            if not key.startswith("fireworks_ai/"):
-                continue
-            if not isinstance(model_info, dict):
-                continue
-            key_short = key[len("fireworks_ai/") :]
-            key_short = key_short.removeprefix("accounts/fireworks/models/")
-            if not key_short:
-                continue
-            index.append((key_short, model_info))
-
-        cls._fireworks_index_cache = (signature[0], signature[1], index)
+        if cached is not None and cached[0] is catalog:
+            return cached[1]
+        model_cost: Final = litellm.model_cost
+        index: Final = tuple(
+            (short, model_cost[key])
+            for key, short in (
+                (key, cls._fireworks_short_key(key)) for key in model_cost if key.startswith("fireworks_ai/")
+            )
+            if short
+        )
+        cls._fireworks_index_cache = (catalog, index)
         return index
+
+    @staticmethod
+    def _fireworks_short_key(key: str) -> str:
+        return key[len("fireworks_ai/") :].removeprefix("accounts/fireworks/models/")
 
     @staticmethod
     def _matches_on_hyphen_boundary(short_name: str, key_short: str) -> bool:

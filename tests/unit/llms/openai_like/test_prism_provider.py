@@ -73,16 +73,13 @@ def test_prism_model_cost_and_capabilities(model: str):
     assert litellm.supports_vision(model) is model_info["supports_vision"]
 
 
-def test_prism_backup_registry_mirrors_cost_map():
-    package_root = Path(litellm.__file__).parent
-    cost_map = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
-    backup = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
+def test_prism_cost_map_lists_every_model_with_vision_support():
+    cost_map = json.loads((Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json").read_text())
     prism_entries = {name: entry for name, entry in cost_map.items() if name.startswith("prism/")}
 
     assert tuple(sorted(prism_entries)) == PRISM_MODELS
     assert prism_entries
     assert all("supports_vision" in entry for entry in prism_entries.values())
-    assert prism_entries == {name: backup[name] for name in prism_entries}
 
 
 def test_prism_is_available_in_add_model_form():

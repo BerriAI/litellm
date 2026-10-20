@@ -40,7 +40,7 @@ _HOSTS: Final = (
     "generativelanguage.googleapis.com",
     "api.openai.com",
 )
-_COST_MAP: Final = Path("litellm/model_prices_and_context_window_backup.json")
+_COST_MAP: Final = Path("model_prices_and_context_window.json")
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _CUT_MARKER: Final = "cut this stream after the usage frame"
 _GEMINI_USAGE: Final = {

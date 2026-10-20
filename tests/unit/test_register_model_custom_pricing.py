@@ -1704,3 +1704,47 @@ def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_prov
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.open_ai_chat_completion_models.intersection_update(openai_models_before)
+
+
+def test_direct_sdk_custom_pricing_bills_only_its_own_call() -> None:
+    entries: Final = _snapshot_model_cost_entries(("gpt-4o", "openai/gpt-4o"))
+
+    def cost(**pricing: float) -> object:
+        response: Final = litellm.completion(
+            model="openai/gpt-4o", messages=[{"role": "user", "content": "hi"}], mock_response="hello there", **pricing
+        )
+        return response._hidden_params["response_cost"]
+
+    try:
+        baseline: Final = cost()
+        assert cost(input_cost_per_token=0.0, output_cost_per_token=0.0) == 0.0
+        assert cost() == baseline
+    finally:
+        _restore_model_cost_entries(entries)
+
+
+def test_register_model_rejects_a_bad_known_value_naming_model_and_key() -> None:
+    with pytest.raises(ValueError) as rejected:
+        litellm.register_model(
+            {"bad-pricing-model": {"litellm_provider": "openai", "mode": "chatt", "input_cost_per_token": "abc"}}
+        )
+
+    assert "bad-pricing-model.mode" in str(rejected.value)
+    assert "bad-pricing-model.input_cost_per_token" in str(rejected.value)
+    assert "bad-pricing-model" not in litellm.model_cost
+
+
+def test_completion_with_invalid_custom_pricing_is_a_bad_request() -> None:
+    entries: Final = _snapshot_model_cost_entries(("openai/gpt-4o",))
+    try:
+        with pytest.raises(litellm.BadRequestError, match="input_cost_per_token"):
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="hello there",
+                input_cost_per_token="abc",
+                output_cost_per_token=1e-6,
+            )
+        assert litellm.model_cost.get("openai/gpt-4o") == entries["openai/gpt-4o"]
+    finally:
+        _restore_model_cost_entries(entries)

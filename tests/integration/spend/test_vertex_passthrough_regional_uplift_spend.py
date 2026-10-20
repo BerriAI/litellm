@@ -29,7 +29,7 @@ _GENERATE: Final = "generateContent"
 _STREAM: Final = "streamGenerateContent?alt=sse"
 _LOCATIONS: Final = ("global", "us")
 _ACTIONS: Final = (_GENERATE, _STREAM)
-_COST_MAP: Final = Path("litellm/model_prices_and_context_window_backup.json")
+_COST_MAP: Final = Path("model_prices_and_context_window.json")
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _BODY: Final[Mapping[str, JsonValue]] = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
 _CUT_PROMPT: Final = "end this stream early"

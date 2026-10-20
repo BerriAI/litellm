@@ -6,7 +6,6 @@ falls back to the Chat Completions bridge and rides Converse.
 
 import json
 import logging
-from importlib.resources import files
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +14,7 @@ import litellm
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
 from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -210,10 +210,8 @@ class TestProviderResolution:
         [("gpt-5.6", ("sol", "terra", "luna")), ("gpt-6", ("astra", "sol", "luna"))],
     )
     def test_the_shipped_price_map_signals_the_openai_families(self, family: str, variants: tuple[str, ...]):
-        """Reads the bundled backup directly rather than the network-fetched global."""
-        shipped = json.loads(
-            files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
-        )
+        """Reads the bundled registry directly rather than the network-fetched global."""
+        shipped = json.loads(bundled_registry_bytes())
         for prefix in ("us", "global"):
             for variant in variants:
                 model = f"{prefix}.openai.{family}-{variant}"
@@ -339,7 +337,10 @@ class TestDisabledReasoningEffort:
     @pytest.mark.parametrize("model", ["us.openai.gpt-5.6-luna", MODEL])
     def test_effort_level_disabled_in_model_map_is_dropped_with_drop_params(self, model, local_model_cost_map):
         params = _cfg().map_openai_params(
-            response_api_optional_params={"reasoning": {"effort": "minimal", "summary": "auto"}, "max_output_tokens": 64},
+            response_api_optional_params={
+                "reasoning": {"effort": "minimal", "summary": "auto"},
+                "max_output_tokens": 64,
+            },
             model=model,
             drop_params=True,
         )

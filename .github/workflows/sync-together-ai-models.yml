@@ -52,8 +52,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add model_prices_and_context_window.json \
-            litellm/model_prices_and_context_window_backup.json
+          git add model_prices_and_context_window.json
           git commit -m "feat(models): sync together_ai model registry $(date +'%Y-%m-%d')"
           gh auth setup-git
           git push origin "$branch"

@@ -326,6 +326,7 @@ include = [
     "litellm/proxy/public_endpoints/whats_new.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
     "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
+    { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [
     "litellm/proxy/enterprise",
@@ -348,6 +349,7 @@ cache-keys = [
     { file = "litellm-rust/Cargo.lock" },
     { file = "litellm-rust/Cargo.toml" },
     { file = "litellm-rust/crates/**/*" },
+    { file = "model_prices_and_context_window.json" },
 ]
 constraint-dependencies = [
     "tornado>=6.5.8",

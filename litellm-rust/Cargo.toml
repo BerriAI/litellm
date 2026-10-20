@@ -68,6 +68,7 @@ litellm-token-counter-fast = { path = "crates/token-counter-fast" }
 litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" }
 litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
+litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-python-compat = { path = "crates/python-compat" }
 
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }

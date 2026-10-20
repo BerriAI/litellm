@@ -154,6 +154,7 @@ from litellm.types.utils import (
 )
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
+    REQUEST_OWNER,
     Choices,
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -1257,6 +1258,28 @@ def _register_custom_pricing_for_request(
     kwargs: dict,
     model_info: dict | None,
 ) -> None:
+    """Register per-request custom pricing, raising ``BadRequestError`` before the provider call when it is invalid."""
+    try:
+        _register_request_pricing(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
+            model_info=model_info,
+        )
+    except ValueError as error:
+        raise litellm.BadRequestError(
+            message=f"Invalid custom pricing: {error}",
+            model=model,
+            llm_provider=custom_llm_provider,
+        ) from error
+
+
+def _register_request_pricing(
+    model: str,
+    custom_llm_provider: str,
+    kwargs: dict,
+    model_info: dict | None,
+) -> None:
     """Register per-request custom pricing in litellm.model_cost.
 
     Router-originated requests (identified by the deployment id the router puts
@@ -1277,21 +1300,21 @@ def _register_custom_pricing_for_request(
     shared_key: Final = f"{custom_llm_provider}/{model}"
     deployment_id: Final = _get_router_deployment_id(kwargs)
     if deployment_id is None:
-        litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, persist_across_reloads=False)
+        litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, owner=REQUEST_OWNER)
         return
     shared_entry: Final = keep_registered_mode(
         shared_key, CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
     )
     litellm.register_model(
         {deployment_id: entry},
-        persist_across_reloads=False,
+        owner=REQUEST_OWNER,
         warning_display_name=shared_key,
         custom_llm_provider=custom_llm_provider,
         add_to_provider_model_sets=False,
     )
     litellm.register_model(
         {shared_key: shared_entry},
-        persist_across_reloads=False,
+        owner=REQUEST_OWNER,
         warning_display_name=shared_key,
         custom_llm_provider=custom_llm_provider,
         add_to_provider_model_sets=False,

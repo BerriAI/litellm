@@ -56,6 +56,9 @@ from litellm.llms.custom_httpx.async_client_cleanup import (  # noqa: E402  # sa
     close_litellm_async_clients,
 )
 from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.get_model_cost_map import bundled_model_catalog  # noqa: E402  # same import-time dependency
+from litellm.rust_bridge.model_catalog import ModelCatalogSlot  # noqa: E402  # same import-time dependency
+from tests._support.model_catalog import add_model_cost  # noqa: E402  # same import-time dependency
 
 LOOPBACK_HOSTS: Final = ["127.0.0.1", "::1", "localhost"]
 AMBIENT_AZURE_CREDENTIAL_ENV_VARS: Final = (
@@ -112,6 +115,7 @@ RESTORED_GLOBALS: Final = (
     "prometheus_emit_stream_label",
     "vector_store_registry",
     "model_cost",
+    "model_catalog",
     "cost_margin_config",
     "cost_discount_config",
     "disable_hf_tokenizer_download",
@@ -281,31 +285,26 @@ def isolate_litellm_globals() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def isolate_router_model_cost_state() -> Iterator[None]:
     original_live_routers: Final = frozenset(litellm_router_module._live_routers)
-    original_runtime_registered_model_cost: Final = {
-        model_key: dict(model_value)
-        for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
-    }
-    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    original_model_catalog: Final = litellm.model_catalog
+    litellm.model_catalog = original_model_catalog.fork()
+    litellm_utils_module.invalidate_model_cost_caches()
     litellm_router_module._live_routers.clear()
-    litellm_utils_module._runtime_registered_model_cost.clear()
     yield
     for router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(router)
     for router in original_live_routers:
         litellm_router_module._live_routers.add(router)
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
-    litellm_utils_module._invalidate_model_cost_lowercase_map()
-    litellm.get_model_info.cache_clear()
+    litellm.model_catalog = original_model_catalog
+    litellm_utils_module.invalidate_model_cost_caches()
 
 
 @pytest.fixture
 def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
+    monkeypatch.setattr(litellm, "model_catalog", ModelCatalogSlot(bundled_model_catalog()))
+    litellm_utils_module.invalidate_model_cost_caches()
     yield
-    litellm.get_model_info.cache_clear()
+    litellm_utils_module.invalidate_model_cost_caches()
 
 
 NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
@@ -316,10 +315,14 @@ def set_native_structured_output(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> Callable[[str, NativeStructuredOutputKey], None]:
     def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
-        entry: Final = litellm.model_cost[model_cost_key]
-        monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
-        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
-        litellm.get_model_info.cache_clear()
+        add_model_cost(
+            {
+                model_cost_key: {
+                    "supports_native_structured_output": native_key == "legacy",
+                    "supports_bedrock_native_structured_output": native_key == "bedrock",
+                }
+            }
+        )
 
     return set_flags
 

@@ -11,7 +11,6 @@ from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 REPO_ROOT = Path(__file__).parents[2]
 MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
-BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 FLEX_LONG_CONTEXT = {
     "gpt-5.4": {
@@ -127,9 +126,8 @@ TIERED_COST_CASES = [
 ]
 
 
-@pytest.mark.parametrize("path", (MAIN_PATH, BACKUP_PATH), ids=("main", "backup"))
-def test_catalogs_contain_expected_tiered_long_context_rates(path: Path) -> None:
-    catalog: Final = _load(path)
+def test_catalog_contains_expected_tiered_long_context_rates() -> None:
+    catalog: Final = _load(MAIN_PATH)
 
     assert {model: {key: catalog[model][key] for key in rates} for model, rates in EXPECTED.items()} == EXPECTED, (
         "gpt-6-astra ultrafast rates per https://developers.openai.com/api/docs/pricing (2026-09-29)"

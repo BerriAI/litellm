@@ -5,7 +5,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).parents[2]
 MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
-BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 DAYBREAK_MODELS = (
     "gpt-5.6-cyber",
@@ -51,11 +50,3 @@ def test_official_alias_tracks_snapshot(alias, snapshot):
         field: snapshot_info.get(field) for field in PRICE_FIELDS
     }
     assert alias_info["max_output_tokens"] == snapshot_info["max_output_tokens"]
-
-
-@pytest.mark.parametrize("model", (*DAYBREAK_MODELS, BLUE_SNAPSHOT, *(alias for alias, _ in OFFICIAL_ALIAS_SNAPSHOTS)))
-def test_backup_matches_main(model):
-    main_cost = _load(MAIN_PATH)
-    backup_cost = _load(BACKUP_PATH)
-
-    assert backup_cost.get(model) == main_cost.get(model), f"{model} differs between main and backup model cost maps"

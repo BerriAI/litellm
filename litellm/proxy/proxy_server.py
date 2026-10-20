@@ -206,6 +206,8 @@ from litellm.utils import cost_map_omits_token_price, load_credentials_from_list
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+
+    from litellm.rust_bridge._native import ModelCatalog
     from fastapi.routing import APIRoute
     from opentelemetry.trace import Span as _Span
     from prisma import models as prisma_models
@@ -5515,10 +5517,10 @@ def resolve_classifier_plugin(
     return resolved
 
 
-def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
+def _swap_in_model_cost_map(registry: "ModelCatalog") -> int:
     from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
 
-    return adopt_model_cost_map(new_model_cost_map)
+    return adopt_model_cost_map(registry)
 
 
 def _websearch_handler_params(stored: Mapping[str, object]) -> dict[str, object]:
@@ -9161,7 +9163,7 @@ class ProxyConfig:
                 )
                 return
 
-            models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
+            models_count = _swap_in_model_cost_map(reload_result.catalog)
             self.model_cost_map_loaded_at = current_time
             await record_reload_run(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
             # Adopted last, so neither a failed fetch nor a failed status write is recorded
@@ -20806,7 +20808,7 @@ async def reload_model_cost_map(
                 detail=f"Failed to reload model cost map: {reload_result.reason}. Current pricing data was kept.",
             )
 
-        models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
+        models_count = _swap_in_model_cost_map(reload_result.catalog)
         current_time = utc_now()
         proxy_config.model_cost_map_loaded_at = current_time
         provenance: Final = get_model_cost_map_provenance()

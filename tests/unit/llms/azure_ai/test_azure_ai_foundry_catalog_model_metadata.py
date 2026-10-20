@@ -10,7 +10,6 @@ from litellm.types.utils import TranscriptionResponse
 
 REPO_ROOT: Final = Path(__file__).parents[4]
 MAIN_COST_MAP: Final = REPO_ROOT / "model_prices_and_context_window.json"
-BACKUP_COST_MAP: Final = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 A_MILLION: Final = 1_000_000
 AN_HOUR_IN_SECONDS: Final = 3600
@@ -94,14 +93,6 @@ def test_azure_ai_whisper_catalog_name_is_priced_per_second() -> None:
     one_hour_cost: Final = _whisper_transcription_cost(AN_HOUR_IN_SECONDS)
     assert one_second_cost > 0
     assert one_hour_cost == pytest.approx(AN_HOUR_IN_SECONDS * one_second_cost)
-
-
-@pytest.mark.parametrize("catalog_name", CATALOG_NAMES)
-def test_azure_ai_catalog_entry_source_and_backup_match(catalog_name: str) -> None:
-    main_entry = _cost_map_entry(MAIN_COST_MAP, catalog_name)
-    backup_entry = _cost_map_entry(BACKUP_COST_MAP, catalog_name)
-
-    assert backup_entry == main_entry
 
 
 def test_azure_ai_model_router_spellings_share_one_entry() -> None:

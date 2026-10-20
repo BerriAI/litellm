@@ -25,7 +25,6 @@ fn registry_validator() -> jsonschema::Validator {
 }
 
 #[test]
-#[ignore]
 fn generated_registry_schema_validates_checked_in_catalog() {
     let catalog = checked_in_catalog();
     let validator = registry_validator();
@@ -65,7 +64,6 @@ fn generated_registry_schema_rejects_invalid_entries(#[case] entry: Value) {
 }
 
 #[test]
-#[ignore]
 fn generated_schema_covers_catalog_fields() {
     let catalog = checked_in_catalog();
     let schema = schema();

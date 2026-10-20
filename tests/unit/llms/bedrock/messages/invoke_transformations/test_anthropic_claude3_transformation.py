@@ -2,7 +2,6 @@ import asyncio
 import base64
 import copy
 import json
-import os
 import struct
 import zlib
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -42,6 +41,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
 
 REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -2607,11 +2607,7 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
     flag explicitly."""
     import re
 
-    import litellm
-
-    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
-    with open(cost_map_path) as f:
-        cost_map = json.load(f)
+    cost_map = json.loads(bundled_registry_bytes())
     rules = cost_map["fallback_generalizations"]["rules"]
     pattern = re.compile(
         next(r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),

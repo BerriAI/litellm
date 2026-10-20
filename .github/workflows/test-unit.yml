@@ -982,7 +982,6 @@ jobs:
           UNIT_SHARD: ${{ matrix.shard }}
           SCHEMA_BASE_REF: origin/${{ github.event.repository.default_branch }}
         run: |
-          diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
             .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
           else

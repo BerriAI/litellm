@@ -1,4 +1,3 @@
-import json
 from decimal import Decimal
 from pathlib import Path
 from typing import Final
@@ -11,7 +10,6 @@ from litellm.types.utils import ModelInfo, Usage
 
 REPO_ROOT: Final = Path(__file__).parents[4]
 MAIN_PRICES: Final = REPO_ROOT / "model_prices_and_context_window.json"
-BACKUP_PRICES: Final = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 NEW_MODELS: Final = (
     "databricks/databricks-claude-opus-4-7",
     "databricks/databricks-claude-opus-4-8",
@@ -212,16 +210,6 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
         info = _model_info(model)
         for field in CACHE_FIELDS:
             assert info[field] == pytest.approx(info["input_cost_per_token"]), (model, field)
-
-
-@pytest.mark.parametrize("model", NEW_MODELS)
-def test_backup_price_map_matches_main(model: str) -> None:
-    main_cost: Final = json.loads(MAIN_PRICES.read_text())
-    backup_cost: Final = json.loads(BACKUP_PRICES.read_text())
-
-    assert model in main_cost
-    assert model in backup_cost
-    assert backup_cost[model] == main_cost[model]
 
 
 def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: None) -> None:

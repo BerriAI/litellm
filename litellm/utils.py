@@ -89,7 +89,6 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
@@ -3301,18 +3300,8 @@ _BEDROCK_REGION_PREFIXES: Final = (
 _TOKEN_COST_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
 
 
-def _builtin_cost_map() -> dict[str, Mapping[str, object]]:
-    return cast(dict[str, Mapping[str, object]], litellm.model_cost)
-
-
-def _replace_cost_map_entry(cost_map: dict[str, Mapping[str, object]], key: str, entry: Mapping[str, object]) -> None:
-    current: Final = cost_map.get(key)
-    merged: Final = {**(current or {}), **entry}
-    if not isinstance(current, AliasedCostEntry):
-        cost_map.update({key: merged})
-        return
-    sharing_names: Final = tuple(name for name in current.names if cost_map.get(name) is current)
-    cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, current.names)))
+def _builtin_cost_map() -> Mapping[str, Mapping[str, object]]:
+    return litellm.model_cost
 
 
 def _without_synthesized_costs(
@@ -3401,11 +3390,6 @@ class _BuiltinCostMatch:
 
 
 @dataclass(frozen=True, slots=True)
-class _LookupMiss:
-    tripped: bool
-
-
-@dataclass(frozen=True, slots=True)
 class _FallbackRegistration:
     entry: Mapping[str, object]
     matched_builtin: bool
@@ -3485,33 +3469,17 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
     return key not in litellm.model_cost and match_capability_generalizations(key) is not None
 
 
-_REGISTRATION_ATTEMPTS: Final = 3
-
-
-def _lookup_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
-    try:
-        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except ModelNotMappedError:
-        return _LookupMiss(tripped=False)
-    except Exception:
-        return _LookupMiss(tripped=True)
-    return _LookupMiss(tripped=False) if is_generalized_model_info(info) else info
-
-
-def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
+def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
-    Misses when the lookup cannot map the model or resolved it via a
-    fallback-generalization capability rule, since a rule-derived entry carries no
-    pricing. A lookup that raised anything else, such as a concurrent registration
-    changing the map mid-walk, is retried, so a transient failure registers exactly
-    where the untripped lookup would.
+    Misses when the lookup cannot map the model or resolved it via a fallback-generalization capability rule, since
+    a rule-derived entry carries no pricing.
     """
-    lookups: Final = (_lookup_for_registration(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS))
-    return next(
-        (lookup for lookup in lookups if not (isinstance(lookup, _LookupMiss) and lookup.tripped)),
-        _LookupMiss(tripped=True),
-    )
+    try:
+        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return None
+    return None if is_generalized_model_info(info) else info
 
 
 def _skips_builtin_registration_lookup(key: str, provider: object) -> bool:
@@ -3545,7 +3513,7 @@ def _registration_base(
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
         model=key, custom_llm_provider=custom_llm_provider
     )
-    if not isinstance(builtin_model_info, _LookupMiss):
+    if builtin_model_info is not None:
         return _RegistrationWrite(
             key=builtin_model_info["key"],
             entry=dict(_without_synthesized_costs(builtin_model_info, key=key, value=value)),
@@ -3567,95 +3535,33 @@ def _registration_base(
 def _registration_write(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
+    """The key a registration lands on and the fields it stores there.
+
+    A key the catalog already serves stores only the caller's fields, so a newer registry shows through every field
+    the caller did not set. A nested mapping the caller sets is merged with the one served now, since the catalog
+    merges whole fields. A new key is seeded from the row it resolves to, minus a ``litellm_provider`` of None that
+    would make ``_check_provider_match`` drop custom pricing on later cost lookups.
+    """
     base: Final = _registration_base(key, value, custom_llm_provider, warning_display_name)
-    # ``get_model_info`` returns ``litellm_provider: None`` when the
-    # provider is unknown (e.g. custom deployments registered via
-    # ``Router.add_deployment``). Persisting that None into
-    # ``litellm.model_cost`` causes ``_check_provider_match`` to drop
-    # custom pricing on subsequent cost lookups.
-    existing_model: Final = {
-        name: field_value
-        for name, field_value in base.entry.items()
-        if name != "litellm_provider" or field_value is not None
-    }
-    return _RegistrationWrite(key=base.key, entry=update_dictionary(existing_model, value))
-
-
-def _registration_attempt(
-    key: str,
-    value: Mapping[str, object],
-    custom_llm_provider: str | None,
-    warning_display_name: str | None,
-    final_attempt: bool,
-) -> _RegistrationWrite | None:
-    source: Final = _builtin_cost_map()
-    write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
-    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry)
-    return write if final_attempt or litellm.model_cost is source else None
-
-
-def _register_on_current_map(
-    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
-) -> _RegistrationWrite:
-    """A price data reload that swaps the map while the entry is being built or written would otherwise get the old
-    map's prices written over its own, or drop the entry with the old map, so each attempt writes into the map it was
-    built from and the entry is rebuilt when a reload replaced that map before the write finished. The last attempt
-    writes into the current map, so the entry is never lost."""
-    attempts: Final = (
-        _registration_attempt(
-            key, value, custom_llm_provider, warning_display_name, final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1
-        )
-        for attempt in range(_REGISTRATION_ATTEMPTS)
+    served: Final = litellm.model_cost.get(base.key)
+    seed: Final = (
+        {
+            name: dict(field_value)
+            for name, field_value in served.items()
+            if name in value and isinstance(field_value, dict)
+        }
+        if served is not None
+        else {
+            name: field_value
+            for name, field_value in base.entry.items()
+            if name != "litellm_provider" or field_value is not None
+        }
     )
-    return next(write for write in attempts if write is not None)
+    return _RegistrationWrite(key=base.key, entry=update_dictionary(seed, value))
 
 
-_runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
-
-
-class _LiveDeploymentReplay:
-    """Single-slot holder for the callback that rebuilds live router deployments.
-
-    A class attribute rather than a module global so there is one writer and one
-    reader, and neither needs a ``global`` statement.
-    """
-
-    callback: Callable[[], None] | None = None
-
-
-def set_live_deployment_replay(replay: Callable[[], None]) -> None:
-    """Install the callback that re-asserts live router deployments after a refresh.
-
-    ``litellm.router`` installs this at import time. The seam exists because the
-    deployment metadata a refresh has to restore belongs to whichever Router
-    objects are alive at that moment, which this module cannot see, and importing
-    the router here would be circular.
-    """
-    _LiveDeploymentReplay.callback = replay
-
-
-def reapply_runtime_model_cost_registrations() -> None:
-    """Re-apply runtime model metadata on top of a freshly adopted cost map.
-
-    Adopting a new catalog replaces ``litellm.model_cost`` wholesale, which on
-    its own discards everything registered at runtime: the deployment
-    ``model_info`` the Router registers from ``model_list``, and pricing
-    overrides passed to ``register_model``. Both are re-applied here so a price
-    data reload only updates pricing rather than erasing operator-supplied model
-    metadata.
-
-    The two are restored differently, and the difference is what keeps this
-    bounded. Deployment metadata is re-derived from the routers that are alive
-    right now, so a deployment that has been deleted or repointed, and a router
-    that has been discarded, are simply not part of the rebuild; nothing has to
-    withdraw them and nothing accumulates. Only ``register_model`` calls that
-    have no such owner are recorded and replayed, and a registration describing
-    a single request opts out of even that.
-    """
-    if _LiveDeploymentReplay.callback is not None:
-        _LiveDeploymentReplay.callback()
-    if _runtime_registered_model_cost:
-        register_model(model_cost=dict(_runtime_registered_model_cost))
+SDK_OWNER: Final = "sdk"
+REQUEST_OWNER: Final = "request"
 
 
 def cost_map_omits_token_price(*keys: object) -> bool:
@@ -3665,9 +3571,7 @@ def cost_map_omits_token_price(*keys: object) -> bool:
     zero. Surfaces that report pricing use this to keep an unpriced deployment at ``None``.
     """
     entries: Final = tuple(
-        entry
-        for entry in (litellm.model_cost.get(key) for key in keys if isinstance(key, str))
-        if isinstance(entry, dict)
+        entry for entry in (litellm.model_cost.get(key) for key in keys if isinstance(key, str)) if entry is not None
     )
     return len(entries) > 0 and not any(
         "input_cost_per_token" in entry or "output_cost_per_token" in entry for entry in entries
@@ -3677,7 +3581,7 @@ def cost_map_omits_token_price(*keys: object) -> bool:
 def register_model(
     model_cost: str | dict,
     *,
-    persist_across_reloads: bool = True,
+    owner: str = SDK_OWNER,
     warning_display_name: str | None = None,
     custom_llm_provider: str | None = None,
     add_to_provider_model_sets: bool = True,
@@ -3696,11 +3600,9 @@ def register_model(
         },
     }
 
-    ``persist_across_reloads`` controls whether the registration is replayed
-    when the cost map is refreshed. It defaults to True because a caller
-    registering a model is declaring durable intent. Pass False for a
-    registration that only describes one request, so it is dropped rather than
-    re-asserted over every future catalog.
+    ``owner`` names who the registration belongs to. Registrations survive a
+    price data reload, and ``unregister_model_cost(owner)`` takes back exactly
+    what that owner registered, e.g. when a router deletes a deployment.
 
     ``warning_display_name`` names the model in the missing-cache-pricing
     warning instead of the registered key, for callers that register under an
@@ -3722,16 +3624,10 @@ def register_model(
     elif isinstance(model_cost, str):
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost, max_attempts=1)
 
-    if persist_across_reloads:
-        _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
-        for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = dict(_registered_value)
-
     for key, value in loaded_model_cost.items():
-        write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
-
-        # Invalidate case-insensitive lookup map since model_cost was modified
-        _invalidate_model_cost_lowercase_map()
+        write = _registration_write(str(key), value, custom_llm_provider, warning_display_name)
+        litellm.model_catalog.register(owner, {write.key: write.entry})
+        invalidate_model_cost_caches()
 
         verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", write.key, write.key)
         if add_to_provider_model_sets and value.get("litellm_provider") == "openrouter":
@@ -5870,122 +5766,21 @@ def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
         return _strip_dated_snapshot_suffix(model_name=model)
 
 
-# Global case-insensitive lookup map for model_cost (built eagerly at module import)
-_model_cost_lowercase_map: dict[str, str] | None = None
-
-# Monotonic counter bumped on every model_cost mutation. Consumers that
-# memoize derived state (e.g. provider-specific indices) can include this
-# value in their cache key so they invalidate even when key add+remove or
-# in-place value replacement leaves len/id unchanged.
-_model_cost_mutation_generation: int = 0
+def unregister_model_cost(owner: str) -> None:
+    """Take back every entry ``owner`` registered, leaving what other owners registered on the same keys."""
+    litellm.model_catalog.unregister(owner)
+    invalidate_model_cost_caches()
 
 
-def get_model_cost_mutation_generation() -> int:
-    return _model_cost_mutation_generation
-
-
-def _invalidate_model_cost_lowercase_map() -> None:
-    """Invalidate the case-insensitive lookup map for model_cost.
-
-    Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
-    Also clears related LRU caches that depend on model_cost data.
-    """
-    global _model_cost_lowercase_map, _model_cost_mutation_generation
-    _model_cost_lowercase_map = None
-    _model_cost_mutation_generation += 1
-
-    # Clear LRU caches that depend on model_cost data
+def invalidate_model_cost_caches() -> None:
+    """Clear the LRU caches derived from ``litellm.model_cost``. Call after the served catalog changes."""
     _cached_get_model_info.cache_clear()
     cached_get_model_info_helper.cache_clear()
 
 
-def _rebuild_model_cost_lowercase_map() -> dict[str, str]:
-    """Rebuild the case-insensitive lookup map from the current model_cost.
-
-    Returns:
-        The rebuilt map (guaranteed to be not None).
-    """
-    global _model_cost_lowercase_map
-    _model_cost_lowercase_map = {k.lower(): k for k in tuple(litellm.model_cost)}
-    return _model_cost_lowercase_map
-
-
-def _handle_stale_map_entry_rebuild(
-    potential_key_lower: str,
-) -> str | None:
-    """
-    Handle stale _model_cost_lowercase_map entry (key was popped).
-
-    Rebuilds the map and retries the lookup.
-
-    Returns:
-        The matched key if found after rebuild, None otherwise.
-    """
-    matched_key: Final = _rebuild_model_cost_lowercase_map().get(potential_key_lower)
-    if matched_key is not None and matched_key in litellm.model_cost:
-        return matched_key
-    return None
-
-
-def _handle_new_key_with_scan(
-    potential_key_lower: str,
-) -> str | None:
-    """
-    Handle new key added to model_cost without invalidating _model_cost_lowercase_map.
-
-    Scans model_cost for case-insensitive match and rebuilds the map if found.
-
-    Returns:
-        The matched key if found, None otherwise.
-    """
-    global _model_cost_lowercase_map
-    for key in tuple(_builtin_cost_map()):
-        if key.lower() == potential_key_lower:
-            _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
-            return key
-    return None
-
-
 def get_model_cost_key(potential_key: str) -> str | None:
-    """
-    Get the actual key from model_cost, with case-insensitive fallback.
-
-    WARNING: Only O(1) lookup operations are acceptable. O(n) lookups will cause severe
-    CPU overhead. This function is called frequently during router operations.
-
-    ALLOWED HELPER FUNCTIONS (conditionally called, O(n) operations are acceptable):
-    - _rebuild_model_cost_lowercase_map: Rebuilds the lookup map (only when map is None)
-    - _handle_stale_map_entry_rebuild: Rebuilds map when stale entry detected (rare case)
-
-    If you need to add a new helper function with O(n) operations that is conditionally
-    called and confirmed not to cause performance issues, add it to the allowed_helpers
-    list in: tests/code_coverage_tests/check_get_model_cost_key_performance.py
-    """
-    # Exact match (O(1))
-    if potential_key in litellm.model_cost:
-        return potential_key
-
-    # Case-insensitive lookup via map (O(1)); bound locally because another thread's
-    # registration can invalidate the module-level map at any point
-    cached_lowercase_map: Final = _model_cost_lowercase_map
-    lowercase_map: Final = (
-        cached_lowercase_map if cached_lowercase_map is not None else _rebuild_model_cost_lowercase_map()
-    )
-
-    potential_key_lower: Final = potential_key.lower()
-    matched_key = lowercase_map.get(potential_key_lower)
-
-    # Verify key exists (O(1) - handles model_cost.pop() case)
-    if matched_key is not None and matched_key in litellm.model_cost:
-        return matched_key
-
-    # Rebuild map if stale entry detected (O(n) rebuild, but only when stale entry found)
-    if matched_key is not None:
-        matched_key = _handle_stale_map_entry_rebuild(potential_key_lower)
-        if matched_key is not None:
-            return matched_key
-
-    return None
+    """The ``litellm.model_cost`` key ``potential_key`` names, exactly or else case-insensitively."""
+    return litellm.model_catalog.current.key_for(potential_key)
 
 
 _get_model_cost_key = get_model_cost_key
@@ -8767,11 +8562,9 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
 
 @lru_cache(maxsize=1)
 def get_bundled_model_cost_map() -> dict[str, Any]:
-    try:
-        model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
-    except Exception:
-        return {}
+    from litellm.rust_bridge.model_catalog import bundled_registry_bytes
+
+    return json.loads(bundled_registry_bytes())
 
 
 _get_bundled_model_cost_map = get_bundled_model_cost_map

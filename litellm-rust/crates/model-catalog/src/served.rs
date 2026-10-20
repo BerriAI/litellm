@@ -618,7 +618,6 @@ mod tests {
     }
 
     #[rstest]
-    #[ignore]
     fn the_bundled_registry_parses() {
         assert!(
             Catalog::parse(BUNDLED_REGISTRY, Provenance::default())

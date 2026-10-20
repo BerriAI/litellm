@@ -6,7 +6,6 @@ import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from importlib.resources import files
 from itertools import chain
 from typing import Final
 from urllib.parse import unquote
@@ -22,6 +21,8 @@ from integration._support.upstream import (
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from redis import Redis
+
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
 
 _TOKEN: Final = "synthetic-bedrock-bearer"
 _NATIVE_REDACTED: Final = base64.b64encode(b"\x12\x1esynthetic redacted reasoning payload").decode()
@@ -162,9 +163,7 @@ def _fakes_structured_output_stream(model: str, entry: _CostEntry) -> bool:
 
 
 def _claude_without_native_structured_output() -> str:
-    entries: Final = _COST_MAP.validate_json(
-        (files("litellm") / "model_prices_and_context_window_backup.json").read_bytes()
-    )
+    entries: Final = _COST_MAP.validate_json(bundled_registry_bytes())
     return next(model for model, entry in entries.items() if _fakes_structured_output_stream(model, entry))
 
 

@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders, Message
 from litellm.utils import ProviderConfigManager
@@ -1303,7 +1304,9 @@ def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_aft
         pytest.param("invoke/us.anthropic.claude-opus-5-5", "claude-opus-5-5", id="provider-left-out-of-the-params"),
         pytest.param("anthropic/my-claude-alias", "my-claude-alias", id="model-the-cost-map-does-not-know"),
         pytest.param(
-            "anthropic/my-unreadable-claude-alias", "my-unreadable-claude-alias", id="cost-map-entry-the-lookup-cannot-read"
+            "anthropic/my-unreadable-claude-alias",
+            "my-unreadable-claude-alias",
+            id="cost-map-entry-the-lookup-cannot-read",
         ),
     ],
 )
@@ -2391,6 +2394,7 @@ class TestEnableAnthropicPromptCaching:
         self, monkeypatch, local_model_cost_map, asynchronous, model, target, client_control, expected
     ):
         import httpx
+
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
@@ -4120,9 +4124,7 @@ class TestPromptCacheBreakpointCapability:
 
     @pytest.fixture(autouse=True)
     def _bundled_model_map(self, monkeypatch):
-        bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
-        with open(bundled) as handle:
-            monkeypatch.setattr(litellm, "model_cost", json.load(handle))
+        monkeypatch.setattr(litellm, "model_cost", json.loads(bundled_registry_bytes()))
         litellm.utils.cached_get_model_info_helper.cache_clear()
         yield
         litellm.utils.cached_get_model_info_helper.cache_clear()
@@ -4354,9 +4356,7 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
 
     @pytest.fixture(autouse=True)
     def _bundled_model_map(self, monkeypatch):
-        bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
-        with open(bundled) as handle:
-            monkeypatch.setattr(litellm, "model_cost", json.load(handle))
+        monkeypatch.setattr(litellm, "model_cost", json.loads(bundled_registry_bytes()))
         litellm.utils.cached_get_model_info_helper.cache_clear()
         yield
         litellm.utils.cached_get_model_info_helper.cache_clear()

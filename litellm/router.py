@@ -400,6 +400,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import (
+    REQUEST_OWNER,
     CustomStreamWrapper,
     EmbeddingResponse,
     ModelResponse,
@@ -413,7 +414,7 @@ from litellm.utils import (
     is_generalized_model_info,
     is_region_allowed,
     provider_rejectable_params,
-    set_live_deployment_replay,
+    unregister_model_cost,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
@@ -998,20 +999,22 @@ class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
 
-# Routers that are still in use, so a price data reload can rebuild the cost-map
-# entries their deployments own. Weak so a router nothing references any more, such
-# as the per-request one built from a caller-supplied user_config, drops out on its
-# own rather than leaving entries behind that nothing can withdraw.
+# Routers that are still in use, for state they share (optional callbacks) and for
+# the deployments a newly adopted price registry may now resolve. Weak so a router
+# nothing references any more drops out on its own.
 _live_routers: Final["weakref.WeakSet[Router]"] = weakref.WeakSet()
 
 
-def _replay_live_router_model_cost() -> None:
-    """Re-assert every live router's deployments after the cost map is refreshed."""
+def catalog_adopted() -> None:
+    """Let every live router react to a newly adopted price registry."""
     for router in tuple(_live_routers):
-        router.replay_model_cost_registrations()
+        router._retry_provider_unresolved_deployments()
 
 
-set_live_deployment_replay(_replay_live_router_model_cost)
+def _unregister_model_cost_owners(owners: set[str]) -> None:  # mutable-ok: the router's live owner set
+    for owner in tuple(owners):
+        unregister_model_cost(owner)
+    owners.clear()
 
 
 RETRY_BREADCRUMB_LIMIT: Final = 4
@@ -1399,6 +1402,9 @@ class Router:
         self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
         self._init_routing_groups(None)
         self._provider_unresolved_deployments: tuple[Callable[[], Deployment | None], ...] = ()
+        self._model_cost_owner_prefix: Final = f"router:{uuid.uuid4().hex}:"
+        self._model_cost_owners: Final[set[str]] = set()  # mutable-ok: owners this router registered and must release
+        weakref.finalize(self, _unregister_model_cost_owners, self._model_cost_owners)
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
         self.model_group_affinity_config = model_group_affinity_config
@@ -1635,9 +1641,8 @@ class Router:
         Pseudo-destructor to be invoked to clean up global data structures when router is no longer used.
         For now, unhook router's callbacks from all lists
         """
-        # Stop contributing to cost-map rebuilds straight away rather than waiting
-        # for this router to be collected.
         _live_routers.discard(self)
+        _unregister_model_cost_owners(self._model_cost_owners)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_failure_callback, self)
@@ -4548,7 +4553,14 @@ class Router:
             litellm_params=LiteLLM_Params.model_validate(dynamic_litellm_params),
             model_info=model_info,
         )
-        Router._register_deployment_pricing(deployment=deployment_pydantic_obj)
+        try:
+            Router._register_deployment_pricing(deployment=deployment_pydantic_obj, owner=REQUEST_OWNER)
+        except ValueError as error:
+            raise litellm.BadRequestError(
+                message=f"Invalid custom pricing: {error}",
+                model=model_group,
+                llm_provider=dynamic_litellm_params.get("custom_llm_provider"),
+            ) from error
         return deployment_pydantic_obj
 
     @staticmethod
@@ -10047,6 +10059,7 @@ class Router:
 
             ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
             Router._register_deployment_in_model_cost(
+                owner=self._deployment_model_cost_owner(deployment.model_info.id),
                 model_id=deployment.model_info.id,
                 model_info=_model_info,
                 model=deployment.litellm_params.model,
@@ -10570,6 +10583,7 @@ class Router:
         self.complexity_routers = {}
         self.auto_routers = {}
         self._provider_unresolved_deployments = ()
+        _unregister_model_cost_owners(self._model_cost_owners)
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
@@ -10848,7 +10862,9 @@ class Router:
         # initialize client
         self._add_deployment(deployment=served)
 
-        Router._register_deployment_pricing(deployment=served)
+        Router._register_deployment_pricing(
+            deployment=served, owner=self._deployment_model_cost_owner(served.model_info.id)
+        )
 
         # add to model names
         self._add_model_to_list_and_index_map(model=_deployment, model_id=served.model_info.id)
@@ -11010,6 +11026,7 @@ class Router:
                         self._invalidate_model_group_info_cache()
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
+                        self._release_deployment_model_cost(deployment_id)
 
                 # Free the outgoing deployment's pre-routing strategy slot (keyed by the
                 # OLD model_name/tags) before the re-add below re-registers it.
@@ -11055,6 +11072,7 @@ class Router:
             return
         limit_resolver: Final = self.auto_router_capability_limit
         self.auto_router_capability_limit = None
+        self._release_deployment_model_cost(model_id)
         try:
             self.add_deployment(deployment=previous_deployment)
             verbose_router_logger.info(
@@ -11117,8 +11135,20 @@ class Router:
         )
         return model_info
 
+    def _deployment_model_cost_owner(self, model_id: str | None) -> str:
+        """The owner this router registers a deployment's cost-map entries under, recorded for release."""
+        owner: Final = f"{self._model_cost_owner_prefix}{model_id}"
+        self._model_cost_owners.add(owner)
+        return owner
+
+    def _release_deployment_model_cost(self, model_id: str | None) -> None:
+        owner: Final = f"{self._model_cost_owner_prefix}{model_id}"
+        if owner in self._model_cost_owners:
+            self._model_cost_owners.discard(owner)
+            unregister_model_cost(owner)
+
     @staticmethod
-    def _register_deployment_pricing(deployment: Deployment) -> None:
+    def _register_deployment_pricing(deployment: Deployment, owner: str) -> None:
         """Register a deployment's custom/inherited pricing in ``litellm.model_cost``.
 
         Takes only a ``Deployment``, so it registers pricing for a deployment that
@@ -11126,6 +11156,7 @@ class Router:
         deployment) just as readily as one that is.
         """
         Router._register_deployment_in_model_cost(
+            owner=owner,
             model_id=deployment.model_info.id,
             model_info=Router._deployment_model_cost_payload(deployment),
             model=deployment.litellm_params.model,
@@ -11135,6 +11166,7 @@ class Router:
     @staticmethod
     def _register_deployment_in_model_cost(
         *,
+        owner: str,
         model_id: str | None,
         model_info: dict,  # mutable-ok: cost-map entry
         model: str,
@@ -11142,11 +11174,8 @@ class Router:
     ) -> None:
         """Write a deployment's metadata into ``litellm.model_cost``.
 
-        Runs when a deployment is added and again after a price data reload, so
-        the entries a refresh rebuilds are the ones a fresh boot would produce.
-        Nothing is recorded for replay: a refresh walks the live routers instead,
-        so a deleted, repointed or never-added deployment, and a discarded router,
-        drop out of the rebuild on their own.
+        Every entry is registered under ``owner``, so a price data reload keeps it
+        and removing the deployment takes back exactly what it added.
 
         A strategy-router alias is never the deployment actually called or
         billed, so custom pricing configured on it must not become a cost-map
@@ -11160,7 +11189,7 @@ class Router:
         if model_id is not None:
             litellm.register_model(
                 model_cost={model_id: model_info},
-                persist_across_reloads=False,
+                owner=owner,
                 warning_display_name=model,
                 custom_llm_provider=custom_llm_provider,
                 add_to_provider_model_sets=False,
@@ -11178,36 +11207,16 @@ class Router:
         shared_model_info: Final = shared_backend_model_info(model_info)
         litellm.register_model(
             model_cost={_key: keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
-            persist_across_reloads=False,
+            owner=owner,
         )
 
-    def replay_model_cost_registrations(self) -> None:
-        """Re-assert this router's deployments onto a freshly fetched catalog.
-
-        Reads ``model_list`` at call time, so only deployments the router still
-        serves are restored, plus any config deployment the fresh catalog now resolves.
-        """
+    def _retry_provider_unresolved_deployments(self) -> None:
+        """Create the config deployments whose provider no registry resolved yet, now that a new one is served."""
         provider_unresolved: Final = self._provider_unresolved_deployments
         self._provider_unresolved_deployments = ()
         for create_deployment in provider_unresolved:
             create_deployment()
-        for entry in tuple(self.model_list):
-            try:
-                deployment = entry if isinstance(entry, Deployment) else Deployment(**entry)
-            except Exception:  # noqa: BLE001  # a malformed entry must not abort the rest of the rebuild
-                verbose_router_logger.exception(
-                    "Router: could not rebuild cost-map entry for a deployment during a price data reload"
-                )
-                continue
-            Router._register_deployment_in_model_cost(
-                model_id=deployment.model_info.id,
-                model_info=Router._deployment_model_cost_payload(deployment),
-                model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
         self._invalidate_model_group_info_cache()
-
-    _replay_model_cost_registrations = replay_model_cost_registrations
 
     def delete_deployment(self, id: str) -> Deployment | None:
         """
@@ -11226,6 +11235,7 @@ class Router:
             if deployment_idx is not None:
                 # Pop the item from the list first
                 item: Final = self.model_list.pop(deployment_idx)
+                self._release_deployment_model_cost(id)
                 self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)

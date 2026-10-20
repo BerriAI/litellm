@@ -2,13 +2,7 @@
 
 `Model::from_fields` reads a catalog entry and sorts every non-null key into exactly one part. `attributes` holds the named non-price fields, `prices` holds every price, `capabilities` holds every boolean `supports_*` key, and `unrecognized` holds the keys no type of this build reads
 
-A known key with a bad value is a `Problem` that names the model, the key, what was expected and what was received. `Catalog::parse` and `ServedCatalog::register` collect every problem and reject the whole document or registration, so a bad value fails where it is written (a registry fetch, `register_model`, a deployment load, a request's custom pricing) and never while a call is being billed. An unknown key is not a problem. It stays in `ModelEntry::fields`, which is what `litellm.model_cost` exposes to Python
-
-## Validation
-
-For `model_prices_and_context_window.json` validation, we should eventually:
-
-- Stop skipping this crate's tests
+A known key with a bad value is a `Problem` that names the model, the key, what was expected and what was received. `Catalog::parse` and `ServedCatalog::register` collect every problem and reject the whole document or registration, so a bad value fails where it is written (a registry fetch, `register_model`, a deployment load, a request's custom pricing) and never while a call is being billed. An unknown key is not a problem. It stays in `ModelEntry::fields`, which is what `litellm.model_cost` exposes to Python. `.github/workflows/test-model-catalog.yml` runs `tests/registry_validation.rs`, which requires the checked-in registry to parse with nothing unrecognized
 
 ## Prices
 

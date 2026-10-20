@@ -2058,6 +2058,35 @@ def test_deleted_deployments_are_not_replayed_onto_later_reloads(monkeypatch):
         _invalidate_model_cost_lowercase_map()
 
 
+def test_deleting_a_deployment_withdraws_its_entries_without_a_reload() -> None:
+    entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("doomed-now-id", "kept-now-id", "hosted_vllm/delete-now-backend")
+    }
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "doomed",
+                "litellm_params": {"model": "hosted_vllm/delete-now-backend"},
+                "model_info": {"id": "doomed-now-id", "max_input_tokens": 111},
+            },
+            {
+                "model_name": "kept",
+                "litellm_params": {"model": "hosted_vllm/delete-now-backend"},
+                "model_info": {"id": "kept-now-id", "max_input_tokens": 222},
+            },
+        ],
+    )
+    try:
+        assert router.delete_deployment(id="doomed-now-id") is not None
+
+        assert "doomed-now-id" not in litellm.model_cost
+        assert litellm.model_cost["kept-now-id"]["max_input_tokens"] == 222
+        assert "hosted_vllm/delete-now-backend" in litellm.model_cost
+    finally:
+        _restore_model_cost_entries(entries)
+
+
 def test_deleting_a_deployment_leaves_catalog_pricing_for_its_backend_model(monkeypatch):
     """
     A backend key is shared with the fetched catalog, so withdrawing the entries

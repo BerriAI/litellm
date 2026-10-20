@@ -24,6 +24,8 @@ from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
+
 _API_KEY: Final = "synthetic-provider-key"
 _ENVIRONMENT_KEY: Final = "synthetic-environment-key"
 _XAI_BACKEND: Final = "grok-test"
@@ -62,7 +64,6 @@ _IMAGE_USAGE: Final[dict[str, JsonValue]] = {
 }
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
-_PACKAGED_PRICES: Final = Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json"
 
 
 def _chat_reply(model: str, usage: dict[str, JsonValue]) -> Reply:
@@ -288,7 +289,7 @@ def _check_beta(response: httpx.Response) -> None:
 
 def _check_priced(response: httpx.Response) -> None:
     assert response.status_code == 200, response.text
-    packaged: Final = object_value(_JSON_OBJECT.validate_json(_PACKAGED_PRICES.read_bytes())[_OPENAI_BACKEND])
+    packaged: Final = object_value(_JSON_OBJECT.validate_json(bundled_registry_bytes())[_OPENAI_BACKEND])
     input_rate: Final = packaged["input_cost_per_token"]
     output_rate: Final = packaged["output_cost_per_token"]
     assert isinstance(input_rate, float) and isinstance(output_rate, float), packaged

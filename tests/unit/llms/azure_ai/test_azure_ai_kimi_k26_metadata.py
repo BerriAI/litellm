@@ -3,9 +3,10 @@ Test Azure AI Kimi K2.6 model metadata.
 """
 
 import json
-from importlib.resources import files
 
 import pytest
+
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
 
 
 @pytest.fixture(scope="module")
@@ -17,11 +18,7 @@ def use_local_model_cost_map():
     from litellm.utils import _invalidate_model_cost_lowercase_map
 
     original_model_cost = litellm.model_cost
-    litellm.model_cost = json.loads(
-        files("litellm")
-        .joinpath("model_prices_and_context_window_backup.json")
-        .read_text(encoding="utf-8")
-    )
+    litellm.model_cost = json.loads(bundled_registry_bytes())
     litellm.get_model_info.cache_clear()
     _invalidate_model_cost_lowercase_map()
     try:
@@ -31,5 +28,3 @@ def use_local_model_cost_map():
         litellm.get_model_info.cache_clear()
         _invalidate_model_cost_lowercase_map()
         monkeypatch.undo()
-
-

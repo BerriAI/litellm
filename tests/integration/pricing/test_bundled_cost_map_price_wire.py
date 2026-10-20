@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from typing import Final
 
 import pytest
@@ -8,12 +7,13 @@ from integration._support.openai_wire import answering_model_discovery, posted_t
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
+
 _BACKEND: Final = "gpt-4o-mini"
 _API_KEY: Final = "synthetic-openai-key"
 _PROMPT_TOKENS: Final = 1000
 _COMPLETION_TOKENS: Final = 500
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
-_PACKAGED_PRICES: Final = Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json"
 _REPLY: Final = json.dumps(
     {
         "id": "chatcmpl-bundled-price",
@@ -39,7 +39,7 @@ def _peer(request: Request) -> Reply:
 
 
 def test_a_deployment_with_no_configured_price_is_charged_at_the_packaged_cost_map_rates(gateway: Gateway) -> None:
-    packaged: Final = _JSON_OBJECT.validate_json(_PACKAGED_PRICES.read_bytes())[_BACKEND]
+    packaged: Final = _JSON_OBJECT.validate_json(bundled_registry_bytes())[_BACKEND]
     assert isinstance(packaged, dict)
     input_rate: Final = packaged["input_cost_per_token"]
     output_rate: Final = packaged["output_cost_per_token"]

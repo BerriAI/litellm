@@ -9,7 +9,7 @@ from integration._support.client import Gateway, string_value
 from integration._support.forward_proxy import refusing_forward_proxy
 from integration._support.process import owned_proxy
 
-_BUNDLED_COST_MAP: Final = Path(__file__).resolve().parents[3] / "litellm/model_prices_and_context_window_backup.json"
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
 
 
 def _git_blob_id(body: bytes) -> str:
@@ -35,5 +35,5 @@ def test_proxy_becomes_ready_without_network(gateway: Gateway, tmp_path: Path) -
     assert source["source"] == "local"
     assert source["is_env_forced"] is False
     assert string_value(source["fallback_reason"]).startswith("Remote fetch failed")
-    assert source["source_revision"] == _git_blob_id(_BUNDLED_COST_MAP.read_bytes())
+    assert source["source_revision"] == _git_blob_id(bundled_registry_bytes())
     assert refused == {f"{urlsplit(string_value(source['url'])).hostname}:443"}

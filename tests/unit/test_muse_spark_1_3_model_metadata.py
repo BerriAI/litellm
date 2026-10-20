@@ -3,9 +3,7 @@ from pathlib import Path
 
 import pytest
 
-import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import StandardBuiltInToolCostTracking
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
 MUSE_SPARK_STANDARD = "meta/muse-spark-1.3"
@@ -19,8 +17,8 @@ PRICING = (
 )
 
 
-def _load_cost_map(filename: str = "model_prices_and_context_window.json") -> dict:
-    with open(Path(__file__).parents[2] / filename) as f:
+def _load_cost_map() -> dict:
+    with open(Path(__file__).parents[2] / "model_prices_and_context_window.json") as f:
         return json.load(f)
 
 
@@ -31,15 +29,6 @@ def test_muse_spark_1_3_routes_to_meta_model_api(model: str):
     assert routed_model == model.split("/", 1)[1]
     assert provider == "meta"
     assert api_base == "https://api.meta.ai/v1"
-
-
-@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR, MUSE_WONDER))
-def test_muse_spark_1_3_backup_matches_main(model: str):
-    """Ensure the bundled model cost map stays in sync with the canonical file."""
-    main_cost = _load_cost_map()
-    backup_cost = _load_cost_map("litellm/model_prices_and_context_window_backup.json")
-
-    assert backup_cost.get(model) == main_cost.get(model), f"{model} differs between main and backup model cost maps"
 
 
 def test_muse_wonder_reasoning_efforts_include_max_and_exclude_none():

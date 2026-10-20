@@ -10,7 +10,6 @@ fn repo_root() -> PathBuf {
 }
 
 #[rstest]
-#[ignore]
 fn checked_in_registry_parses_with_every_key_understood(repo_root: PathBuf) {
     let body = std::fs::read(repo_root.join("model_prices_and_context_window.json")).unwrap();
     let catalog = Catalog::parse(&body, Provenance::default()).unwrap();
@@ -22,7 +21,6 @@ fn checked_in_registry_parses_with_every_key_understood(repo_root: PathBuf) {
 }
 
 #[rstest]
-#[ignore]
 fn fallback_generalizations_are_typed(repo_root: PathBuf) {
     let body = std::fs::read(repo_root.join("model_prices_and_context_window.json")).unwrap();
     let document: Map<String, Value> = serde_json::from_slice(&body).unwrap();

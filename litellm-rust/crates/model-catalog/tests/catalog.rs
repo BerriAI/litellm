@@ -256,7 +256,6 @@ fn malformed_documents_have_typed_outcomes(
 }
 
 #[rstest]
-#[ignore]
 fn parses_current_catalog(current_catalog: Catalog) {
     assert!(current_catalog.sample_spec().is_some());
     // Snapshot from 2026-09-23, an independent baseline that catches catalog shrinkage.

@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 /// Primary API surface / task type of the model.
 #[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq, Hash)]

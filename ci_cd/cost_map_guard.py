@@ -1,11 +1,10 @@
 """Guard the cost map on pull requests.
 
-Every pull request whose diff against its merge base touches one of the two cost map files gets the file
-checks: the files parse and the backup copy matches the root file. A pull request that leaves both untouched
-skips them, since merging it keeps the base branch's copies and its head tree only carries whatever state the
-branch was cut from. Pull requests from the cost map sync bot (branches named litellm_cost_map_sync_*) always
-get the file checks and additionally may only touch those two files or the legacy schema
-path and may only add or update models.
+Every pull request whose diff against its merge base touches the cost map gets the file checks: the file parses
+and its evaluation rows bill input only. A pull request that leaves it untouched skips them, since merging it keeps
+the base branch's copy and its head tree only carries whatever state the branch was cut from. Pull requests from the
+cost map sync bot (branches named litellm_cost_map_sync_*) always get the file checks and additionally may only touch
+the cost map or the legacy schema path and may only add or update models.
 """
 
 from __future__ import annotations
@@ -20,9 +19,7 @@ from types import MappingProxyType
 from typing import Final
 
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
-BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
-LEGACY_SCHEMA_PATH: Final = "model_prices_and_context_window.schema.json"
-GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
+LEGACY_PATHS: Final = ("model_prices_and_context_window.schema.json",)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
 SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
 EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
@@ -33,7 +30,6 @@ CostMap = dict[str, object]
 @dataclass(frozen=True, slots=True)
 class Snapshot:
     cost_map: str
-    backup: str
 
 
 def _parse_object(text: str, path: str) -> CostMap | str:
@@ -64,28 +60,14 @@ def _evaluation_output_price_failure(
 
 
 def _file_failures(
-    head: Snapshot,
     head_map: CostMap,
     *,
     evaluation_output_price_sources: Mapping[str, str] = EVALUATION_OUTPUT_PRICE_SOURCES,
 ) -> tuple[str, ...]:
-    backup_failure: Final = (
-        ()
-        if head.backup == head.cost_map
-        else (f"{BACKUP_PATH} differs from {COST_MAP_PATH}; copy the root file over it",)
-    )
-    return (
-        *backup_failure,
-        *(
-            failure
-            for key, entry in head_map.items()
-            if (
-                failure := _evaluation_output_price_failure(
-                    key, entry, evaluation_output_price_sources
-                )
-            )
-            is not None
-        ),
+    return tuple(
+        failure
+        for key, entry in head_map.items()
+        if (failure := _evaluation_output_price_failure(key, entry, evaluation_output_price_sources)) is not None
     )
 
 
@@ -110,7 +92,7 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
         *(
             f"bot PRs may only change the cost map files, not {path}"
             for path in changed_files
-            if path not in GUARDED_PATHS and path != LEGACY_SCHEMA_PATH
+            if path != COST_MAP_PATH and path not in LEGACY_PATHS
         ),
         *(f"bot PRs may not remove models: {key}" for key in base_map if key not in head_map),
         *(f"bot PRs may not remove fields: {ref}" for ref in removed_fields),
@@ -123,7 +105,7 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
 
 
 def touches_cost_map(changed_files: Sequence[str]) -> bool:
-    return any(path in GUARDED_PATHS for path in changed_files)
+    return COST_MAP_PATH in changed_files
 
 
 def contract_for(bot: bool, changed_files: Sequence[str]) -> str:
@@ -146,9 +128,7 @@ def guard_failures(
     if isinstance(head_map, str):
         return (head_map,)
     return (
-        *_file_failures(
-            head, head_map, evaluation_output_price_sources=evaluation_output_price_sources
-        ),
+        *_file_failures(head_map, evaluation_output_price_sources=evaluation_output_price_sources),
         *(_bot_failures(base, head_map, changed_files) if bot else ()),
     )
 
@@ -159,7 +139,7 @@ def _git(*args: str) -> str | None:
 
 
 def snapshot(revision: str) -> Snapshot:
-    return Snapshot(*(_git("show", f"{revision}:{path}") or "" for path in GUARDED_PATHS))
+    return Snapshot(cost_map=_git("show", f"{revision}:{COST_MAP_PATH}") or "")
 
 
 def changed_files(base: str, head: str) -> tuple[str, ...] | None:

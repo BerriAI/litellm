@@ -3,7 +3,7 @@
 Pulls ``GET https://api.together.ai/v1/models?serverless`` plus the deprecations doc, maps API fields onto
 registry fields, merges the reviewed capability rules below for everything the API cannot express, and diffs
 the result against the registry. Dry run (the default) prints the diff summary and the generated PR body;
-``--write`` applies the changes to the root cost map and its ``litellm/`` backup copy.
+``--write`` applies the changes to the root cost map.
 
 Policy highlights:
 - Prices arrive per 1M tokens with float artifacts and are normalized to clean per-token values.
@@ -34,10 +34,7 @@ DEPRECATIONS_URL: Final = "https://docs.together.ai/docs/deprecations.md"
 PROVIDER: Final = "together_ai"
 PREFIX: Final = "together_ai/"
 SOURCE_URL: Final = "https://docs.together.ai/docs/serverless-models"
-COST_MAP_RELPATHS: Final = (
-    "model_prices_and_context_window.json",
-    "litellm/model_prices_and_context_window_backup.json",
-)
+COST_MAP_RELPATHS: Final = ("model_prices_and_context_window.json",)
 
 TYPE_TO_MODE: Final = MappingProxyType({"chat": "chat", "embedding": "embedding", "moderation": "chat"})
 

@@ -2,17 +2,15 @@ import asyncio
 import copy
 import json
 import os
+import unittest.mock
 import uuid
 from typing import Any, Dict, Final, List
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-import respx
 import pytest
-from fastapi.testclient import TestClient
+import respx
 from pydantic import ValidationError
-
-
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.anthropic_interface import messages
@@ -21,14 +19,12 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
+from litellm.rust_bridge.model_catalog import bundled_registry_bytes
 from litellm.types.utils import (
-    Delta,
     ModelResponse,
     StandardLoggingPayloadErrorInformation,
-    StreamingChoices,
 )
 from litellm.utils import _invalidate_model_cost_lowercase_map
-import unittest.mock
 
 
 def test_anthropic_experimental_pass_through_messages_handler():
@@ -997,14 +993,9 @@ def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_sys
     unset. Every mapped first-party entry the fallback rule matches must
     carry the flag."""
     import json
-    import os
     import re
 
-    import litellm
-
-    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
-    with open(cost_map_path) as f:
-        cost_map = json.load(f)
+    cost_map = json.loads(bundled_registry_bytes())
     rules = cost_map["fallback_generalizations"]["rules"]
     rule_pattern = next(
         (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),

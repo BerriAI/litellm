@@ -1,0 +1,52 @@
+name: Model Catalog
+
+on:
+  push:
+    paths:
+      - "model_prices_and_context_window.json"
+      - "litellm-rust/crates/model-catalog/**"
+      - "litellm-rust/Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/test-model-catalog.yml"
+  pull_request:
+    branches:
+      - main
+      - "litellm_**"
+    paths:
+      - "model_prices_and_context_window.json"
+      - "litellm-rust/crates/model-catalog/**"
+      - "litellm-rust/Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/test-model-catalog.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  model-catalog-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: litellm-rust
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - run: rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: litellm-rust
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - run: cargo test -p litellm-model-catalog --all-features --locked
