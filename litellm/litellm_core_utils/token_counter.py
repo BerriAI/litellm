@@ -742,17 +742,17 @@ def openai_tokenizer_encoding(model: str) -> "Encoding":
 
 
 def openai_tokenizer_encoding_name(model: str) -> str:
-    """The tiktoken encoding name for `model`, without loading the encoding."""
-    from litellm.utils import print_verbose
+    """The tiktoken encoding name for `model`, without loading the encoding.
 
+    A listed OpenAI or Azure model that tiktoken does not know yet is a newer release than tiktoken's table, so it
+    gets o200k_base, the encoding every OpenAI model since gpt-4o uses."""
     model_to_use: Final = _fix_model_name(model)
     if "gpt-4o" in model_to_use:
         return "o200k_base"
     try:
         return tiktoken.encoding_name_for_model(model_to_use)
     except KeyError:
-        print_verbose("Warning: model not found. Using cl100k_base encoding.")
-        return "cl100k_base"
+        return "o200k_base"
 
 
 def uses_legacy_message_accounting(model: str) -> bool:
