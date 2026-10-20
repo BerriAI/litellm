@@ -586,9 +586,10 @@ def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
     [
         ("DeepSeek-V4-Pro", "DeepSeek-V4-Flash-0731"),
         ("accounts/fireworks/models/deepseek-v4-flash", "DeepSeek-V4-Flash-0731"),
-        ("deepseek/deepseek-chat", "DeepSeek-V4-Flash-0731"),
+        ("deepseek-chat", "DeepSeek-V4-Flash-0731"),
         ("deepseek-reasoner", "DeepSeek-V4-Flash-0731"),
-        ("deepseek/deepseek-flash", "DeepSeek-V4-Flash-0731"),
+        ("deepseek-flash", "DeepSeek-V4-Flash-0731"),
+        ("deepseek/deepseek-chat", "deepseek-v3.2"),
         ("openrouter/deepseek/deepseek-chat", "deepseek-v3.2"),
         ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
         ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
