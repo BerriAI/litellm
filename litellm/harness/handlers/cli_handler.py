@@ -89,7 +89,7 @@ async def copy_skills(sandbox: Sandbox, skills: Sequence[str], skills_root: str)
 
 
 class CLIHarnessHandler(BaseHarnessHandler):
-    config: BaseCLIHarnessConfig
+    config: BaseCLIHarnessConfig[object, object]
 
     def __init__(self, config: BaseCLIHarnessConfig) -> None:
         super().__init__(config)
@@ -158,4 +158,14 @@ class CLIHarnessHandler(BaseHarnessHandler):
         return self._native_id
 
     async def resume(self, ctx: SessionContext, native_session_id: str) -> None:
+        if self._setup is None or self._private_dir is None:
+            raise RuntimeError("CLIHarnessHandler.resume() called before start()")
         self._native_id = native_session_id
+        cmd: Final = self.config.transform_resume_command(self._private_dir, native_session_id)
+        if cmd is None:
+            return
+        run: Final = await ctx.sandbox.run(cmd, env=self._setup.env)
+        if run.exit_code != 0:
+            verbose_logger.warning(
+                "harness: could not prepare session %s for resume: %s", native_session_id, run.stderr.strip()
+            )

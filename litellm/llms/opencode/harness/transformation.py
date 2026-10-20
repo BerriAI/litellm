@@ -8,6 +8,11 @@ repo's own opencode.json cannot redirect model calls. The token is never in argv
 the config references it with `{file:<private_dir>/token}`. XDG dirs point at a persisted
 LiteLLM-owned root so the user's opencode config and auth are never read, and the session
 DB outlives a session for resume. Verified against opencode 1.14.41.
+
+opencode files each session under the folder it ran in and only streams a resumed session's
+events from that folder, so resuming one filed elsewhere (by an older LiteLLM that left PWD
+unset, or from another sandbox) hangs. Resume first runs `opencode export` and `opencode import`
+in the sandbox, which files the session under the sandbox folder. Verified against opencode 1.19.3.
 """
 
 from __future__ import annotations
@@ -57,6 +62,8 @@ OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
 # A fixed title skips opencode's extra title-generation model call on the first turn.
 OPENCODE_SESSION_TITLE: Final = "litellm-harness"
 TOKEN_FILENAME: Final = "token"
+RESUME_EXPORT_FILENAME: Final = "resume-session.json"
+REHOME_SESSION_SCRIPT: Final = '"$1" --pure export "$3" > "$2" && "$1" --pure import "$2"'
 INSTRUCTIONS_FILENAME: Final = "instructions.md"
 XDG_DIRNAME: Final = "xdg"
 XDG_SUBDIRS: Final = ("config", "data", "state", "cache")
@@ -361,6 +368,10 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
         )
         # The prompt goes on stdin; opencode appends non-TTY stdin to the message.
         return HarnessTurnRequest(argv=argv, env=setup.env, stdin=turn_prompt(ctx, prompt), cwd=ctx.sandbox.workdir)
+
+    def transform_resume_command(self, private_dir: str, native_session_id: str) -> Sequence[str]:
+        export_path: Final = f"{private_dir}/{RESUME_EXPORT_FILENAME}"
+        return ("sh", "-c", REHOME_SESSION_SCRIPT, "sh", OPENCODE_BINARY, export_path, native_session_id)
 
     def create_stream_state(self) -> OpenCodeStreamState:
         return OpenCodeStreamState()

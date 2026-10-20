@@ -25,6 +25,7 @@ from litellm.llms.opencode.harness.transformation import (
     INSTRUCTIONS_FILENAME,
     OPENCODE_ISOLATION_ENV,
     OPENCODE_SESSION_TITLE,
+    REHOME_SESSION_SCRIPT,
     TOKEN_FILENAME,
     XDG_DIRNAME,
     OpenCodeHarnessConfig,
@@ -107,6 +108,7 @@ class FakeSandbox:
     files: dict = field(default_factory=dict)
     execs: list = field(default_factory=list)
     runs: list = field(default_factory=list)
+    run_envs: list = field(default_factory=list)
     tempdirs: int = 0
 
     async def exec(self, cmd, *, env=None, cwd=None):
@@ -115,6 +117,7 @@ class FakeSandbox:
 
     async def run(self, cmd, *, env=None, cwd=None, timeout=None):
         self.runs.append(cmd)
+        self.run_envs.append(dict(env or {}))
         if self.persist_ok:
             return CompletedRun("", "", 0)
         return CompletedRun("", "read-only fs", 1)
@@ -594,11 +597,25 @@ async def test_prompt_is_sent_on_stdin_not_argv():
     assert "secret prompt text" not in sandbox.execs[0]["cmd"]
 
 
-async def test_resume_sets_session():
-    handler, ctx, sandbox = await started()
+@pytest.mark.parametrize("rehome_ok", [True, False])
+async def test_resume_files_the_session_under_the_sandbox_then_continues_it(
+    rehome_ok,
+):
+    handler, ctx, sandbox = await started(FakeSandbox(persist_ok=rehome_ok))
     await handler.resume(ctx, "ses_prev")
     sandbox.outputs.append(fixture_proc("turn2_session_skill.jsonl"))
     await collect(handler, ctx, "hi")
+
+    assert tuple(sandbox.runs[-1]) == (
+        "sh",
+        "-c",
+        REHOME_SESSION_SCRIPT,
+        "sh",
+        "opencode",
+        "/tmp/oc-1/resume-session.json",
+        "ses_prev",
+    )
+    assert sandbox.run_envs[-1]["XDG_DATA_HOME"] == "/tmp/oc-1/xdg/data"
     cmd = sandbox.execs[0]["cmd"]
     assert cmd[cmd.index("--session") + 1] == "ses_prev"
 

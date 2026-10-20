@@ -16,7 +16,7 @@ from litellm.harness import (
     ToolCall,
 )
 
-from .conftest import harness_params, model_for, requires_gateway
+from .conftest import harness_available, harness_params, model_for, requires_gateway
 
 pytestmark = [requires_gateway]
 
@@ -117,6 +117,35 @@ def test_agent_detach_and_resume(harness: Harness, workspace: Path) -> None:
             "What number did I ask you to remember? Reply with just the number."
         )
     assert "4817" in r.text
+
+
+@pytest.mark.skipif(
+    not harness_available(Harness.OPENCODE), reason="opencode runtime not installed"
+)
+def test_opencode_session_resumes_inside_a_different_sandbox(
+    workspace: Path, tmp_path: Path
+) -> None:
+    model = model_for(Harness.OPENCODE)
+    s = litellm.agent_session(
+        Harness.OPENCODE,
+        sandbox=sandbox.local(workspace),
+        model=model,
+        timeout=TURN_TIMEOUT,
+    )
+    s.run("Remember this number: 4817. Reply with just OK.")
+    raw = s.detach().dumps()
+    moved = tmp_path / "moved"
+    moved.mkdir()
+
+    with litellm.agent_resume(
+        State.loads(raw), sandbox=sandbox.local(moved), model=model, timeout=TURN_TIMEOUT
+    ) as resumed:
+        resumed.run(
+            "Create a file named hello.txt whose only content is the number I asked "
+            "you to remember."
+        )
+    assert (moved / "hello.txt").read_text().strip() == "4817"
+    assert not (workspace / "hello.txt").exists()
 
 
 @pytest.mark.parametrize("harness", harness_params())

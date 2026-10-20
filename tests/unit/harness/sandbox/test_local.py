@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Final
 
 import pytest
 
@@ -55,17 +56,19 @@ async def test_run_cwd_inside_workdir(sbx):
 
 
 async def test_child_trusting_pwd_writes_inside_its_cwd(
-    sbx, monkeypatch, tmp_path_factory
-):
-    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    sbx: LocalSandbox,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    elsewhere: Final = tmp_path_factory.mktemp("elsewhere")
     monkeypatch.setenv("PWD", str(elsewhere))
     os.mkdir(os.path.join(sbx.workdir, "sub"))
-    write_at_pwd = (
+    write_at_pwd: Final = (
         "import os;open(os.path.join(os.environ['PWD'],'hello.txt'),'w').write('hi')"
     )
 
-    top = await sbx.run([PY, "-c", write_at_pwd])
-    nested = await sbx.run(
+    top: Final = await sbx.run([PY, "-c", write_at_pwd])
+    nested: Final = await sbx.run(
         [PY, "-c", write_at_pwd], cwd="sub", env={"PWD": str(elsewhere)}
     )
 

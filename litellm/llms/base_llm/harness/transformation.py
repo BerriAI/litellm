@@ -128,6 +128,10 @@ class BaseCLIHarnessConfig(BaseHarnessConfig[OptionsT], Generic[OptionsT, Stream
     ) -> HarnessTurnRequest:
         """argv / env / stdin for one turn. native_session_id is set after the first turn."""
 
+    def transform_resume_command(self, private_dir: str, native_session_id: str) -> Sequence[str] | None:
+        """Command run once in the sandbox, with the session env, before resuming native_session_id."""
+        return None
+
     @abstractmethod
     def create_stream_state(self) -> StreamStateT:
         """Fresh per-turn parser state."""
