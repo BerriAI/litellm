@@ -138,6 +138,10 @@ USER root
 # requires an enterprise subscription. Add the public Wolfi repo so `apk add`
 # also works for anyone installing extra packages into a running container.
 # https://github.com/BerriAI/litellm/issues/33518
+RUN apk add --no-cache --repository https://packages.wolfi.dev/os \
+    glibc-2.44=2.44-r8 glibc-2.44-locale-posix=2.44-r8 \
+    ld-linux-2.44=2.44-r8 libcrypt1-2.44=2.44-r8
+
 RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
 
 # node (without npm) is required by the prisma CLI at runtime

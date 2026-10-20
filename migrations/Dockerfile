@@ -117,6 +117,10 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 USER root
 
+RUN apk add --no-cache --repository https://packages.wolfi.dev/os \
+    glibc-2.44=2.44-r8 glibc-2.44-locale-posix=2.44-r8 \
+    ld-linux-2.44=2.44-r8 libcrypt1-2.44=2.44-r8
+
 RUN for i in 1 2 3; do \
       apk add --no-cache bash openssl tzdata python-3.13 nodejs libsndfile libatomic && break; \
       [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \

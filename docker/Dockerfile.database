@@ -122,6 +122,10 @@ ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 USER root
 
 # node (without npm) is required by the prisma CLI at runtime
+RUN apk add --no-cache --repository https://packages.wolfi.dev/os \
+    glibc-2.44=2.44-r8 glibc-2.44-locale-posix=2.44-r8 \
+    ld-linux-2.44=2.44-r8 libcrypt1-2.44=2.44-r8
+
 RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile libevent
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
