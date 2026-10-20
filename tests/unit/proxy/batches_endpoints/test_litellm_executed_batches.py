@@ -702,6 +702,21 @@ async def test_create_dispatches_each_row_with_the_batch_model_and_the_key_metad
         assert metadata["user_api_key_user_email"] == "user@example.com"
 
 
+async def test_create_dispatches_each_row_with_the_key_team_and_project_tags_as_inherited_tags() -> None:
+    user = UserAPIKeyAuth(
+        api_key="sk-batch-key",
+        team_id="team-1",
+        metadata={"tags": ["key-tag", "shared"]},
+        team_metadata={"tags": ["&region:eu", "shared"]},
+        project_metadata={"tags": ["project-tag"]},
+    )
+    harness = make_runner(user=user)
+    await harness.create_and_finish()
+
+    inherited = [call.kwargs["metadata"]["inherited_tags"] for call in harness.router.acompletion.await_args_list]
+    assert inherited == [("key-tag", "shared", "&region:eu", "project-tag")] * 2
+
+
 async def test_create_dispatches_cli_session_rows_under_the_per_user_alias_not_the_login_token() -> None:
     session = UserAPIKeyAuth(
         api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
