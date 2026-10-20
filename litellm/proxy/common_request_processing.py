@@ -128,7 +128,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
 )
-from litellm.responses.streaming_iterator import _partial_responses_incomplete_event_on_disconnect
+from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
@@ -456,11 +456,11 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         # A natural end-of-stream success event already fired and released the
         # slot; do not bill again, and let the caller skip the slot release.
         return True
-    partial_responses_event: Final = _partial_responses_incomplete_event_on_disconnect(response)
+    partial_responses_event: Final = partial_responses_incomplete_event_on_disconnect(response)
     if partial_responses_event is not None:
         verbose_proxy_logger.debug(
             "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",
-            request_data.get("litellm_call_id"),
+            logging_obj.litellm_call_id,
         )
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)

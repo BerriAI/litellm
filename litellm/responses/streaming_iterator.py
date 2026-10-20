@@ -1601,7 +1601,7 @@ class _BillsPartialStreamOnDisconnect(Protocol):
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None: ...
 
 
-def _partial_responses_incomplete_event_on_disconnect(stream: object) -> ResponseIncompleteEvent | None:
+def partial_responses_incomplete_event_on_disconnect(stream: object) -> ResponseIncompleteEvent | None:
     """Ask the stream behind a proxy or router wrapper for the partial response to bill, if it can build one."""
     if not isinstance(stream, _BillsPartialStreamOnDisconnect):
         return None
@@ -1613,7 +1613,7 @@ def _partial_responses_incomplete_event_on_disconnect(stream: object) -> Respons
     return partial if isinstance(partial, ResponseIncompleteEvent) else None
 
 
-def _partial_output_items(generated_text: str) -> list[GenericResponseOutputItem]:
+def _partial_output_items(generated_text: str) -> Sequence[GenericResponseOutputItem]:
     if not generated_text:
         return []
     return [

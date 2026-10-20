@@ -2,7 +2,7 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
 from collections import deque
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncGenerator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ConfigDict, field_validator
@@ -22,7 +22,7 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
 from litellm.responses.streaming_iterator import (
-    _partial_responses_incomplete_event_on_disconnect,
+    partial_responses_incomplete_event_on_disconnect,
     stream_error_status_and_message,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
@@ -496,13 +496,13 @@ class AnthropicResponsesStreamWrapper:
         """SSE-encoded bytes for each Anthropic event chunk."""
         return AnthropicResponsesSSEByteStream(self)
 
-    async def _sse_frames(self) -> AsyncIterator[bytes]:
+    async def _sse_frames(self) -> AsyncGenerator[bytes, None]:
         safeguard_results: Final = StreamedSafeguardResults(self.safeguards_evaluator)
         async for chunk in self:
             yield anthropic_sse_frame(await safeguard_results.observe(chunk))
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
-        return _partial_responses_incomplete_event_on_disconnect(self.responses_stream)
+        return partial_responses_incomplete_event_on_disconnect(self.responses_stream)
 
 
 class AnthropicResponsesSSEByteStream:

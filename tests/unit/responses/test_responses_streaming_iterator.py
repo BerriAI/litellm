@@ -9,6 +9,8 @@ crashed with exit 139 whenever any CustomLogger was registered).
 import asyncio
 import json
 import time
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 import pytest
@@ -167,25 +169,26 @@ async def test_sync_callbacks_run_only_after_async_handler_completes(recording_e
     assert submit_times[0] >= recorder.async_hook_finished
 
 
-_CREATED_WITH_PRIORITY_TIER = {
+_CREATED_RESPONSE_WITH_PRIORITY_TIER: Final[Mapping[str, object]] = {
+    "id": "resp_partial",
+    "object": "response",
+    "created_at": 1700000000.0,
+    "model": "gpt-5.4-nano",
+    "status": "in_progress",
+    "output": [],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "service_tier": "priority",
+}
+_CREATED_WITH_PRIORITY_TIER: Final[Mapping[str, object]] = {
     "type": "response.created",
     "sequence_number": 0,
-    "response": {
-        "id": "resp_partial",
-        "object": "response",
-        "created_at": 1700000000.0,
-        "model": "gpt-5.4-nano",
-        "status": "in_progress",
-        "output": [],
-        "parallel_tool_calls": True,
-        "tool_choice": "auto",
-        "tools": [],
-        "service_tier": "priority",
-    },
+    "response": _CREATED_RESPONSE_WITH_PRIORITY_TIER,
 }
 
 
-def _text_delta(text: str, sequence_number: int) -> dict:
+def _text_delta(text: str, sequence_number: int) -> Mapping[str, object]:
     return {
         "type": "response.output_text.delta",
         "sequence_number": sequence_number,
@@ -196,12 +199,12 @@ def _text_delta(text: str, sequence_number: int) -> dict:
     }
 
 
-def _completed_after(text: str) -> dict:
+def _completed_after(text: str) -> Mapping[str, object]:
     return {
         "type": "response.completed",
         "sequence_number": 9,
         "response": {
-            **_CREATED_WITH_PRIORITY_TIER["response"],
+            **_CREATED_RESPONSE_WITH_PRIORITY_TIER,
             "status": "completed",
             "usage": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
         },
@@ -220,19 +223,21 @@ def _live_iterator(logging_obj: LitellmLogging) -> ResponsesAPIStreamingIterator
 
 
 def test_partial_response_on_disconnect_bills_the_relayed_text_at_the_served_service_tier():
-    iterator = _live_iterator(_make_logging_obj())
+    iterator: Final = _live_iterator(_make_logging_obj())
     for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time ", 1), _text_delta("a fox slept.", 2)):
         iterator._process_chunk(json.dumps(event))
 
-    incomplete_event = iterator.partial_response_on_disconnect()
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
 
     assert incomplete_event is not None
     assert incomplete_event.type == "response.incomplete"
-    partial = incomplete_event.response
+    partial: Final = incomplete_event.response
     assert partial.status == "incomplete"
     assert getattr(partial, "service_tier") == "priority"
     assert partial.output[0].content[0].text == "Once upon a time a fox slept."
-    assert partial.usage.output_tokens == litellm.token_counter(model="gpt-5.4-nano", text="Once upon a time a fox slept.")
+    assert partial.usage.output_tokens == litellm.token_counter(
+        model="gpt-5.4-nano", text="Once upon a time a fox slept."
+    )
     assert partial.usage.input_tokens == litellm.token_counter(
         model="gpt-5.4-nano", messages=[{"role": "user", "content": "tell me a story"}]
     )
@@ -249,8 +254,10 @@ def test_partial_response_on_disconnect_bills_the_relayed_text_at_the_served_ser
     ids=["nothing_relayed", "created_only", "already_completed"],
 )
 @pytest.mark.asyncio
-async def test_partial_response_on_disconnect_is_none_when_there_is_nothing_to_bill_or_the_stream_billed_itself(events):
-    iterator = _live_iterator(_make_logging_obj())
+async def test_partial_response_on_disconnect_is_none_when_there_is_nothing_to_bill_or_the_stream_billed_itself(
+    events: tuple[Mapping[str, object], ...],
+):
+    iterator: Final = _live_iterator(_make_logging_obj())
     for event in events:
         iterator._process_chunk(json.dumps(event))
 

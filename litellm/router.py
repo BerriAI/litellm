@@ -985,9 +985,9 @@ class FallbackAwareAnthropicMessagesStream:
         self.fallback_headers_adopted = True
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
-        from litellm.responses.streaming_iterator import _partial_responses_incomplete_event_on_disconnect
+        from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 
-        return _partial_responses_incomplete_event_on_disconnect(self._source_iterator)
+        return partial_responses_incomplete_event_on_disconnect(self._source_iterator)
 
     def follow_source_attribution(self) -> None:
         """
@@ -3972,9 +3972,9 @@ class Router:
                 return prepared
 
             def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
-                from litellm.responses.streaming_iterator import _partial_responses_incomplete_event_on_disconnect
+                from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 
-                return _partial_responses_incomplete_event_on_disconnect(self._billing_source)
+                return partial_responses_incomplete_event_on_disconnect(self._billing_source)
 
             def __aiter__(self):
                 return self
