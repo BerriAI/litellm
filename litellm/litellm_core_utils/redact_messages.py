@@ -239,16 +239,21 @@ def _redact_responses_api_output_dict(output_items: Sequence[object], redacted_s
     return [_redacted_responses_api_output_item(item, redacted_str) for item in output_items]
 
 
+def _with_redacted_instructions(params: Mapping[str, object]) -> Mapping[str, object]:
+    return params if params.get("instructions") is None else {**params, "instructions": REDACTED_BY_LITELLM}
+
+
 def _redacted_responses_api_response(response: Mapping[str, object]) -> Mapping[str, object]:
     output: Final = response.get("output")
-    return {
-        **response,
-        "output": _redact_responses_api_output_dict(_RESPONSE_ITEMS.validate_python(output), REDACTED_BY_LITELLM)
-        if isinstance(output, list)
-        else output,
-        **({"instructions": REDACTED_BY_LITELLM} if response.get("instructions") is not None else {}),
-        **({"reasoning": None} if response.get("reasoning") is not None else {}),
-    }
+    return _with_redacted_instructions(
+        {
+            **response,
+            "output": _redact_responses_api_output_dict(_RESPONSE_ITEMS.validate_python(output), REDACTED_BY_LITELLM)
+            if isinstance(output, list)
+            else output,
+            **({"reasoning": None} if response.get("reasoning") is not None else {}),
+        }
+    )
 
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -268,6 +273,9 @@ def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, 
 
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
+    model_parameters: Final = _as_mapping(standard_logging_object.get("model_parameters"))
+    if model_parameters is not None:
+        standard_logging_object["model_parameters"] = _with_redacted_instructions(model_parameters)
 
     response: Final = standard_logging_object.get("response")
     if response is not None:
@@ -369,7 +377,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     """
     request: Final = _as_mapping(params.get("proxy_server_request"))
     return {
-        **params,
+        **_with_redacted_instructions(params),
         **{
             key: _redacted_baseline_metadata(value)
             for key, value in params.items()
@@ -403,6 +411,13 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
+    optional_params: Final = _as_mapping(model_call_details.get("optional_params"))
+    model_call_details.update(
+        {
+            **({"instructions": REDACTED_BY_LITELLM} if model_call_details.get("instructions") is not None else {}),
+            **({"optional_params": _with_redacted_instructions(optional_params)} if optional_params else {}),
+        }
+    )
     model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):

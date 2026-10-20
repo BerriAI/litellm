@@ -26,6 +26,7 @@ import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     _redacted_responses_api_response,
@@ -1382,11 +1383,13 @@ class TestCustomLogger(CustomLogger):
         super().__init__(*args, **kwargs)
         self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
         self.response_obj: Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]] = None
+        self.logged_kwargs: Optional[dict] = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload = kwargs.get("standard_logging_object", None)
         self.logged_standard_logging_payload = standard_logging_payload
         self.response_obj = response_obj
+        self.logged_kwargs = kwargs
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
@@ -1584,6 +1587,55 @@ async def test_redaction_responses_api():
         "logged standard logging payload for ResponsesAPIResponse",
         json.dumps(standard_logging_payload, indent=2),
     )
+
+
+@pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "redaction, logged_keys",
+    [
+        ("global", ("instructions", "optional_params", "litellm_params", "standard_logging_object")),
+        ("custom_logger", ("litellm_params", "standard_logging_object")),
+    ],
+)
+@pytest.mark.asyncio
+async def test_responses_redaction_removes_request_instructions_from_logged_kwargs(
+    redaction: str, logged_keys: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    test_custom_logger: Final = TestCustomLogger(turn_off_message_logging=redaction == "custom_logger")
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redaction == "global")
+    monkeypatch.setattr(litellm, "callbacks", [test_custom_logger])
+    provider_reply: Final = {**mock_responses_api_response("private answer").model_dump(), "instructions": SECRET}
+
+    await litellm.aresponses(
+        model="openai/gpt-5-mini",
+        input="hi",
+        instructions=SECRET,
+        api_key="fake-key",
+        client=AsyncHTTPHandler(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=provider_reply, request=request))
+        ),
+    )
+
+    for _ in range(100):
+        if test_custom_logger.logged_kwargs is not None:
+            break
+        await asyncio.sleep(0.1)
+    kwargs: Final = test_custom_logger.logged_kwargs
+    assert kwargs is not None
+    assert kwargs["standard_logging_object"]["model_parameters"]["instructions"] == "redacted-by-litellm"
+    assert SECRET not in json.dumps({key: kwargs.get(key) for key in logged_keys}, default=str)
+
+
+def test_request_body_redaction_replaces_instructions_only_when_sent() -> None:
+    responses_body: Final = {"model": "gpt-5-mini", "input": SECRET, "instructions": SECRET}
+    chat_body: Final = {"model": "gpt-5-mini", "messages": [{"role": "user", "content": SECRET}]}
+
+    perform_redaction(responses_body, result=None)
+    perform_redaction(chat_body, result=None)
+
+    assert responses_body["instructions"] == "redacted-by-litellm"
+    assert SECRET not in json.dumps(responses_body)
+    assert "instructions" not in chat_body
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
