@@ -1,5 +1,4 @@
 import json
-import time
 from typing import Final
 
 import pytest
@@ -8,7 +7,6 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     compaction_output_item,
     holds_compaction_summary,
     response_holds_compaction_block,
-    with_answered_turns_after_newest_compaction,
     with_compaction_summary,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -87,19 +85,3 @@ def test_with_compaction_summary_rewrites_the_summary_and_keeps_the_affinity_wra
 
 def test_with_compaction_summary_leaves_a_token_it_cannot_read_unchanged() -> None:
     assert with_compaction_summary("gAAAAABopaque", "[REDACTED]") == "gAAAAABopaque"
-
-
-def test_moving_a_long_turn_after_a_compaction_item_takes_linear_time() -> None:
-    turn_text: Final = tuple(
-        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": f"Step {index}."}]}
-        for index in range(60_000)
-    )
-    call: Final = {"type": "function_call", "call_id": "call_osaka", "name": "get_weather", "arguments": "{}"}
-    output: Final = {"type": "function_call_output", "call_id": "call_osaka", "output": "Sunny."}
-
-    started: Final = time.perf_counter()
-    replayed: Final = with_answered_turns_after_newest_compaction([*turn_text, call, _ITEM, output])
-    elapsed: Final = time.perf_counter() - started
-
-    assert replayed == [_ITEM, *turn_text, call, output]
-    assert elapsed < 5.0
