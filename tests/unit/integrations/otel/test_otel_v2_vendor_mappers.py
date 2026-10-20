@@ -7,6 +7,7 @@ backends, so one trace lights up every configured destination.
 
 import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from itertools import chain
 from typing import Final
 
@@ -589,14 +590,15 @@ def _langfuse_payload() -> dict[str, object]:
     }
 
 
-def test_langfuse_mapper_sends_the_completion_start_time_in_utc():
+def test_langfuse_mapper_sends_the_completion_start_time_as_the_sdks_json_string():
     data: Final = LLMCallSpanData.from_standard_logging_payload(
         _langfuse_payload(), completion_start_seconds=1791547200.25
     )
 
     attrs: Final = LangfuseMapper().map(data)
 
-    assert attrs["langfuse.observation.completion_start_time"] == "2026-10-09T12:00:00.250000+00:00"
+    sent: Final = datetime.fromisoformat(json.loads(attrs["langfuse.observation.completion_start_time"]))
+    assert sent == datetime(2026, 10, 9, 12, 0, 0, 250000, tzinfo=timezone.utc)
 
 
 def test_langfuse_mapper_ignores_the_payloads_end_time_fallback_when_litellm_recorded_no_completion_start():

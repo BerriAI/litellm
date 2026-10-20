@@ -9,6 +9,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
+    serialize_langfuse_datetime,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -260,7 +261,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             safe_set_attribute(
                 span,
                 LangfuseSpanAttributes.OBSERVATION_COMPLETION_START_TIME.value,
-                completion_start_time.astimezone().isoformat(),
+                serialize_langfuse_datetime(completion_start_time),
             )
 
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)

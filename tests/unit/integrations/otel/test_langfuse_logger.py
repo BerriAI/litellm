@@ -587,7 +587,7 @@ def test_generation_carries_litellms_completion_start_time_like_the_default_emit
 
     attrs: Final = _generation_attrs(_llm_call_kwargs(optional_params, completion_start))
 
-    assert attrs[COMPLETION_START_ATTR] == "2026-10-09T12:00:00.250000+00:00"
+    assert datetime.fromisoformat(json.loads(attrs[COMPLETION_START_ATTR])) == completion_start
 
 
 def test_failed_generation_without_a_first_chunk_has_no_completion_start_time() -> None:

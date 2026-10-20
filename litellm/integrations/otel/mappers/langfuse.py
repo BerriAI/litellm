@@ -15,6 +15,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Final
 
+from litellm.integrations.langfuse.langfuse_otel_attributes import serialize_langfuse_datetime
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     collect,
@@ -47,7 +48,7 @@ class LangfuseMapper:
         "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
         "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
         "langfuse.observation.completion_start_time": lambda d: (
-            datetime.fromtimestamp(d.completion_start_seconds, tz=timezone.utc).isoformat()
+            serialize_langfuse_datetime(datetime.fromtimestamp(d.completion_start_seconds, tz=timezone.utc))
             if d.completion_start_seconds is not None
             else None
         ),

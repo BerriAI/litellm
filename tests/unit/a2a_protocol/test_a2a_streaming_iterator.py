@@ -6,6 +6,8 @@ async_success_handler (cross-thread pydantic mutation segfaults pydantic-core).
 
 import asyncio
 import time
+from datetime import datetime
+from typing import Final
 from types import SimpleNamespace
 
 import pytest
@@ -135,3 +137,50 @@ async def test_stream_completion_counts_tokens_off_the_event_loop(monkeypatch):
     assert usage.prompt_tokens > 100_000
     assert usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
+
+
+class _CompletionStartRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.completion_starts: list[object] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.completion_starts.append(kwargs.get("completion_start_time"))
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        self.completion_starts.append(kwargs.get("completion_start_time"))
+
+
+@pytest.mark.asyncio
+async def test_stream_logs_when_its_first_chunk_arrived():
+    recorder: Final = _CompletionStartRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="a2a/test-agent",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="a2a_send_message_streaming",
+        start_time=datetime(2026, 10, 9, 12, 0, 0),
+        litellm_call_id="a2a-first-chunk",
+        function_id="a2a-first-chunk",
+        dynamic_async_success_callbacks=[recorder],
+    )
+
+    async def _stream():
+        yield _AgentChunk("Hel")
+        yield _AgentChunk("Hello")
+
+    iterator: Final = A2AStreamingIterator(
+        stream=_stream(),
+        request=SimpleNamespace(params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": "hi"}]})),
+        logging_obj=logging_obj,
+        agent_name="test-agent",
+    )
+    tasks_before: Final = asyncio.all_tasks()
+
+    _ = await iterator.__anext__()
+    first_chunk_at: Final = logging_obj.completion_start_time
+    _ = [chunk async for chunk in iterator]
+    await asyncio.gather(*(asyncio.all_tasks() - tasks_before))
+
+    assert first_chunk_at is not None
+    assert recorder.completion_starts == [first_chunk_at]

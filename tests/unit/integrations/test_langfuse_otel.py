@@ -177,12 +177,12 @@ class TestLangfuseOtelIntegration:
         ids=["aware", "naive_local_time"],
     )
     def test_set_langfuse_specific_attributes_completion_start_time(self, completion_start_time: datetime):
-        """The first-token time goes out as Langfuse's completion start time, with an explicit offset."""
+        """The first-token time goes out the way the Langfuse SDK sends it: a JSON string, with an explicit offset."""
         span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
 
         LangfuseOtelLogger._set_langfuse_specific_attributes(span, {"completion_start_time": completion_start_time}, {})
 
-        sent: Final = datetime.fromisoformat(span.attributes["langfuse.observation.completion_start_time"])
+        sent: Final = datetime.fromisoformat(json.loads(span.attributes["langfuse.observation.completion_start_time"]))
         assert sent.tzinfo is not None
         assert sent.timestamp() == completion_start_time.timestamp()
 

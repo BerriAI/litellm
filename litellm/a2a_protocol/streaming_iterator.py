@@ -54,6 +54,8 @@ class A2AStreamingIterator:
     async def __anext__(self) -> "SendStreamingMessageResponse":
         try:
             chunk: Final = await self.stream.__anext__()
+            if self.logging_obj.completion_start_time is None:
+                self.logging_obj.update_completion_start_time(completion_start_time=datetime.now())
 
             # Store chunk
             self.chunks.append(chunk)
