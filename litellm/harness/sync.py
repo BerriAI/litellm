@@ -411,7 +411,7 @@ def agent(
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> Result | EventStream:
-    """Run an agent harness (Claude Code, Codex, OpenCode, Deep Agents, Tool Loop) on one prompt.
+    """Run an agent harness (Claude Code, Codex, OpenCode, pi, Deep Agents, Tool Loop) on one prompt.
 
     Returns a Result. With stream=True it returns an iterator of events instead.
     Prefix the model with `litellm_proxy/` to route every model call through your
