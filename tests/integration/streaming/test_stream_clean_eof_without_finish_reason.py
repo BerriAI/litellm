@@ -5,14 +5,14 @@ from typing import Final, Literal
 
 import pytest
 from integration._support.anthropic_sse import CONTENT_BLOCK_START, CONTENT_TAIL, message_start, text_delta
-from integration._support.client import Gateway, string_value
+from integration._support.client import Gateway, Scenario, string_value
 from integration._support.openai_wire import answering_model_discovery
 from integration._support.responses_stream import data_frames, spend_row, sse_events
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 Ending = Literal["ending-complete", "ending-clean-eof", "ending-done-without-finish", "ending-done-only"]
-Family = Literal["openai", "anthropic", "hosted_vllm", "gemini", "langgraph"]
+Family = Literal["openai", "anthropic", "hosted_vllm", "gemini", "langgraph", "agentcore"]
 
 _ENDINGS: Final[tuple[Ending, ...]] = (
     "ending-complete",
@@ -24,6 +24,7 @@ _PARTIAL: Final = ('{"findings":[{"title":', '"unfinished')
 _BACKEND: Final = "gpt-5.6"
 _CLAUDE: Final = "claude-sonnet-5-5"
 _GEMINI: Final = "gemini-3.8-flash"
+_AGENT_RUNTIME: Final = "arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/integration-agent"
 _PROVIDER_KEY: Final = "synthetic-provider-key"
 _CALL_ID_HEADER: Final = "x-litellm-call-id"
 _USAGE: Final = {"prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16}
@@ -33,6 +34,7 @@ _TARGETS: Final[Mapping[Family, str]] = {
     "anthropic": "/v1/messages",
     "gemini": f"/models/{_GEMINI}:streamGenerateContent",
     "langgraph": "/runs/stream",
+    "agentcore": "/runtimes/",
 }
 _DEPLOYMENTS: Final[Mapping[Family, str]] = {
     "openai": f"openai/{_BACKEND}",
@@ -40,6 +42,7 @@ _DEPLOYMENTS: Final[Mapping[Family, str]] = {
     "anthropic": f"anthropic/{_CLAUDE}",
     "gemini": f"gemini/{_GEMINI}",
     "langgraph": "langgraph/agent",
+    "agentcore": f"bedrock/agentcore/{_AGENT_RUNTIME}",
 }
 
 
@@ -100,8 +103,17 @@ def _langgraph_frames() -> tuple[bytes, ...]:
     )
 
 
+def _agentcore_frames(ending: Ending) -> tuple[bytes, ...]:
+    """A runtime that is not Strands can end its turn on messageStop with no metadata or final message."""
+    content: Final = tuple(_data({"event": {"contentBlockDelta": {"delta": {"text": part}}}}) for part in _PARTIAL)
+    message_stop: Final = _data({"event": {"messageStop": {"stopReason": "end_turn"}}})
+    return (*content, message_stop) if ending == "ending-complete" else content
+
+
 def _frames(family: Family, identity: str, ending: Ending) -> tuple[bytes, ...]:
     match family:
+        case "agentcore":
+            return _agentcore_frames(ending)
         case "anthropic":
             return _anthropic_frames(identity, ending)
         case "gemini":
@@ -125,6 +137,18 @@ def _upstream(family: Family) -> Callable[[Request], Reply]:
         return Reply(content_type="text/event-stream", chunks=frames)
 
     return answering_model_discovery(respond)
+
+
+def _deploy(scenario: Scenario, family: Family, wire: Wire) -> str:
+    if family == "agentcore":
+        return scenario.model(
+            model=_DEPLOYMENTS[family],
+            aws_bedrock_runtime_endpoint=wire.url,
+            aws_access_key_id="AKIAINTEGRATIONAGENT",
+            aws_secret_access_key="synthetic-agentcore-secret",
+            aws_region_name="us-west-2",
+        )
+    return scenario.model(model=_DEPLOYMENTS[family], api_base=wire.url, api_key=_PROVIDER_KEY)
 
 
 def _prompt(ending: Ending) -> str:
@@ -176,12 +200,12 @@ def _event_types(text: str) -> tuple[str, ...]:
     return tuple(event for event, _ in sse_events(text))
 
 
-@pytest.mark.parametrize("family", ["openai", "anthropic"])
+@pytest.mark.parametrize("family", ["openai", "anthropic", "agentcore"])
 def test_chat_stream_that_ends_cleanly_without_a_finish_reason_reaches_the_client_as_an_error(
     gateway: Gateway, family: Family
 ) -> None:
     with wire_server(_upstream(family)) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=_DEPLOYMENTS[family], api_base=wire.url, api_key=_PROVIDER_KEY)
+        model: Final = _deploy(scenario, family, wire)
         text, call_id = _chat(gateway, model, "ending-clean-eof")
         assert _chat_text(text) == "".join(_PARTIAL), text
         assert _finish_reasons(text) == (), text
@@ -211,10 +235,10 @@ def test_chat_stream_that_sends_only_done_still_completes_empty(gateway: Gateway
         assert text.rstrip().endswith("data: [DONE]"), text
 
 
-@pytest.mark.parametrize("family", ["openai", "anthropic", "gemini", "langgraph"])
+@pytest.mark.parametrize("family", ["openai", "anthropic", "gemini", "langgraph", "agentcore"])
 def test_chat_stream_with_a_provider_finish_reason_still_completes(gateway: Gateway, family: Family) -> None:
     with wire_server(_upstream(family)) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=_DEPLOYMENTS[family], api_base=wire.url, api_key=_PROVIDER_KEY)
+        model: Final = _deploy(scenario, family, wire)
         text, call_id = _chat(gateway, model, "ending-complete")
         assert _chat_text(text) == "".join(_PARTIAL), text
         assert _finish_reasons(text) == ("stop",), text
