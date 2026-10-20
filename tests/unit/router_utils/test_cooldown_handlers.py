@@ -691,15 +691,15 @@ class TestRouterLevelAllowedFailsEqualToDefault:
         Passing allowed_fails equal to litellm.allowed_fails must switch on the
         count-based cooldown like any other value, not count as "not set".
         """
-        router = _make_router(
+        router: Final = _make_router(
             model_list=[
                 {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}}
             ],
             allowed_fails=litellm.allowed_fails,
         )
-        _exception = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+        _exception: Final = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
 
-        decisions = [
+        decisions: Final = [
             _should_cooldown_deployment(
                 litellm_router_instance=router,
                 deployment="primary",
@@ -716,14 +716,14 @@ class TestRouterLevelAllowedFailsEqualToDefault:
         Without allowed_fails the router keeps its rate-based logic, which does not
         cool a single-deployment group down on a handful of failures.
         """
-        router = _make_router(
+        router: Final = _make_router(
             model_list=[
                 {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}}
             ],
         )
-        _exception = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+        _exception: Final = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
 
-        decisions = [
+        decisions: Final = [
             _should_cooldown_deployment(
                 litellm_router_instance=router,
                 deployment="primary",
