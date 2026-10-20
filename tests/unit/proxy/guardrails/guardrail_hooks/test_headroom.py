@@ -3242,3 +3242,79 @@ async def test_extra_invalid_response_row_uses_configured_failure_policy(
         return
     result: Final = await callback.apply_guardrail(original, {}, "request")
     assert result is original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_safe_result", [False, True])
+@pytest.mark.parametrize("unsafe_content", [
+    [{"type": "text", "text": "long " * 100}, {"type": "text", "text": "other paragraph"}],
+    [{"type": "text", "text": "long " * 100},
+     {"type": "search_result", "source": "https://example.com", "title": "Result",
+      "content": [{"type": "text", "text": "source text"}]}],
+])
+async def test_native_multipart_tool_result_is_excluded_before_compression(
+    unsafe_content: list[dict[str, object]], with_safe_result: bool,
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE)
+    unsafe: Final = {"type": "tool_result", "tool_use_id": "call_unsafe", "content": unsafe_content}
+    safe: Final = {"type": "tool_result", "tool_use_id": "call_safe", "content": "file.py\n" * 100}
+    result_blocks: Final = [unsafe, safe] if with_safe_result else [unsafe]
+    messages: Final = [
+        {"role": "user", "content": "Read the results"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": block["tool_use_id"], "name": "read", "input": {}}
+            for block in result_blocks
+        ]},
+        {"role": "user", "content": result_blocks},
+    ]
+
+    def compress(request: httpx.Request) -> httpx.Response:
+        rows: Final = json.loads(request.content)["messages"]
+        return httpx.Response(200, json={
+            "messages": [{**row, "content": "summary"} for row in rows],
+            "tokens_saved": 100, "ccr_hashes": [CCR_HASH],
+        })
+
+    route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").mock(side_effect=compress)
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        {"messages": messages, "model": "test-model", "max_tokens": 100}, callback
+    )
+    assert result["messages"][-1]["content"][0] == unsafe
+    if with_safe_result:
+        assert json.loads(route.calls.last.request.content)["messages"] == [
+            {"role": "tool", "tool_call_id": "call_safe", "content": safe["content"]},
+        ]
+        assert result["messages"][-1]["content"][1] == {**safe, "content": "summary"}
+        assert extract_compression_saved_tokens({"guardrail_information": _recorded_guardrail_entries(result)}) == 100
+    else:
+        assert not route.called
+        assert "tools" not in result
+        assert extract_compression_saved_tokens({"guardrail_information": _recorded_guardrail_entries(result)}) == 0
+
+
+@pytest.mark.asyncio
+async def test_cached_tool_call_does_not_protect_the_following_uncached_result(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    callback: Final = HeadroomGuardrail(api_base=FAKE_API_BASE)
+    cached_call: Final = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Reading files", "cache_control": {"type": "ephemeral"}}],
+        "tool_calls": [{"id": "call_files", "type": "function",
+                        "function": {"name": "read", "arguments": "{}"}}],
+    }
+    tool: Final = {"role": "tool", "tool_call_id": "call_files", "content": "file.py\n" * 100}
+    original: Final = [{"role": "user", "content": "Read files"}, cached_call, tool]
+    inputs: Final = GenericGuardrailAPIInputs(structured_messages=original)
+    route: Final = respx_mock.post(FAKE_API_BASE + "/v1/compress").respond(200, json={
+        "messages": [{**tool, "content": "file summary"}], "tokens_saved": 100,
+    })
+    result: Final = await callback.apply_guardrail(inputs, {}, "request")
+    assert route.called
+    assert json.loads(route.calls.last.request.content)["messages"] == [tool]
+    assert result["structured_messages"] == [*original[:-1], {**tool, "content": "file summary"}]

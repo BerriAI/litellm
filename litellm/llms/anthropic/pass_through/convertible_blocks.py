@@ -174,6 +174,21 @@ def _user_content_blocks(message: object) -> tuple[object, ...]:
             return ()
 
 
+def non_rewriteable_tool_result_ids(messages: object) -> frozenset[str]:
+    from litellm.proxy.guardrails.guardrail_hooks.content_text import is_rewriteable_text_content
+
+    blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(messages)))
+    results: Final = (as_str_mapping(block) for block in blocks)
+    return frozenset(
+        sanitize_anthropic_tool_use_id(call_id)
+        for result in results
+        if result is not None
+        and result.get("type") == "tool_result"
+        and isinstance(call_id := result.get("tool_use_id"), str)
+        and not is_rewriteable_text_content(result.get("content"))
+    )
+
+
 def _with_user_blocks(message: object, transform: Callable[[object], object]) -> object:
     match as_str_mapping(message):
         case {"role": "user", "content": list()} as user_message:

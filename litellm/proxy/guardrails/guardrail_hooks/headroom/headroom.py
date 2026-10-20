@@ -17,7 +17,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.compression.compress import get_cached_prefix_indices, get_protected_indices
+from litellm.compression.compress import get_protected_indices
 from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -240,9 +240,7 @@ def _retrieval_result_indices(
 def _protected_indices(
     messages: Sequence[Mapping[str, object]], extra_retrieve_call_ids: frozenset[str] = frozenset()
 ) -> frozenset[int]:
-    pinned: Final = frozenset(get_cached_prefix_indices(messages)) | _retrieval_result_indices(
-        messages, extra_retrieve_call_ids
-    )
+    pinned: Final = _retrieval_result_indices(messages, extra_retrieve_call_ids)
     pinned_exchanges: Final = tuple(
         group for group in group_tool_exchanges(messages) if any(member in pinned for member in group)
     )
@@ -805,6 +803,7 @@ class HeadroomGuardrail(CustomGuardrail):
         if not messages:
             return inputs
 
+        from litellm.llms.anthropic.pass_through.convertible_blocks import non_rewriteable_tool_result_ids
         from litellm.llms.base_llm.guardrail_translation.utils import (
             effective_skip_system_message_for_guardrail,
             scoped_structured_message_indices,
@@ -839,7 +838,13 @@ class HeadroomGuardrail(CustomGuardrail):
         typed_request: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data)
         raw_messages: Final = typed_request.get("messages")
         raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
-        protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids) | native_protected
+        non_rewriteable_ids: Final = non_rewriteable_tool_result_ids(raw_messages)
+        native_tool_protected: Final = frozenset(
+            index for index, message in enumerate(messages) if str(message.get("tool_call_id")) in non_rewriteable_ids
+        )
+        protected_indices: Final = (
+            _protected_indices(messages, raw_retrieve_call_ids) | native_protected | native_tool_protected
+        )
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
             return inputs

@@ -214,7 +214,7 @@ def _message_has_cache_control(message: Mapping[str, object]) -> bool:
     return False
 
 
-def get_cached_prefix_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
+def _cached_prefix_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
     last_breakpoint: Final = max(
         (index for index, msg in enumerate(messages) if _message_has_cache_control(msg)),
         default=-1,
@@ -240,9 +240,7 @@ def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int
     system_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
     last_user: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
     assistant_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")
-    return tuple(
-        dict.fromkeys(system_indices + last_user + assistant_indices[-1:] + get_cached_prefix_indices(messages))
-    )
+    return tuple(dict.fromkeys(system_indices + last_user + assistant_indices[-1:] + _cached_prefix_indices(messages)))
 
 
 def _combine_scores(
