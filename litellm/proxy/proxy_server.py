@@ -160,6 +160,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     TOKENIZER_LOAD_MAX_RUNNING,
     TOKENIZER_LOAD_REUSE_SECONDS,
     TOKENIZER_LOAD_WAIT_SECONDS,
+    LocalTokenCount,
     ProviderCountFailure,
     TokenCountSettings,
     cost_map_entry,
@@ -14782,6 +14783,8 @@ async def _provider_token_count(
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
     estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
     count_model: Final = settings.count_model
+    if isinstance(count_model, LocalTokenCount):
+        return None
     counting_model: Final = (
         model_to_use
         if count_model is None
@@ -14833,11 +14836,19 @@ def _provider_error_after_failed_estimate(
     provider_failure: ProviderCountFailure, error: BaseException
 ) -> ProxyException:
     verbose_proxy_logger.warning(
-        "Local token estimate failed after the provider's count error %s, answering that error: %s",
+        "Local token estimate failed, answering count error %s instead: %s",
         provider_failure.status_code,
         type(error).__name__,
     )
     return provider_failure.to_proxy_exception()
+
+
+def _local_estimate_failure(model: str) -> ProviderCountFailure:
+    return ProviderCountFailure(
+        status_code=400,
+        message=f"LiteLLM counts tokens for {model} locally and could not estimate this request",
+        rejected_before_provider_call=True,
+    )
 
 
 async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure: ProviderCountFailure) -> int:
@@ -15259,6 +15270,7 @@ async def count_request_tokens(
         provider_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
         if _model is not None:
             model_to_use = _model
+    counting_provider: Final = None if isinstance(settings.count_model, LocalTokenCount) else provider_counter
 
     sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
     count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
@@ -15280,7 +15292,7 @@ async def count_request_tokens(
     )
     chat_count: Final = (
         None
-        if routed_request is None or provider_counter is None or isinstance(provider_counter, OpenAITokenCounter)
+        if routed_request is None or counting_provider is None or isinstance(counting_provider, OpenAITokenCounter)
         else await chat_count_request(
             model_to_use,
             custom_llm_provider,
@@ -15293,10 +15305,10 @@ async def count_request_tokens(
         raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
     ladder: Final = (
         None
-        if provider_counter is None
+        if counting_provider is None
         else await _provider_token_count(
             count_with=_native_responses_count(
-                provider_counter,
+                counting_provider,
                 custom_llm_provider,
                 routed_request,
                 routed_deployment,
@@ -15304,7 +15316,7 @@ async def count_request_tokens(
             )
             or partial(
                 _try_provider_token_count,
-                provider_counter,
+                counting_provider,
                 custom_llm_provider,
                 messages=(
                     [dict(message) for message in chat_count.messages]
@@ -15384,7 +15396,9 @@ async def count_request_tokens(
         messages=counted_messages,
         tools=counted_tools,
         custom_tokenizer=custom_tokenizer,
-        provider_failure=ladder,
+        provider_failure=(
+            _local_estimate_failure(model_to_use) if isinstance(settings.count_model, LocalTokenCount) else ladder
+        ),
     )
     template: Final = (
         0 if kimi_k3_messages is None else kimi_k3_template_tokens(len(kimi_k3_messages), bool(counted_tools))
