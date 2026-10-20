@@ -6,10 +6,10 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Any, Final, TypeAlias, TypedDict, cast, overload
+from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
@@ -61,6 +61,7 @@ from litellm.types.utils import GenericImageParsingChunk
 from .common_utils import (
     converse_redacted_content,
     convert_content_list_to_str,
+    has_blank_redacted_data,
     infer_content_type_from_url_and_content,
     is_encrypted_reasoning_block,
     is_non_content_values_set,
@@ -2550,22 +2551,125 @@ def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple
 
 def _replayable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    *,
+    drop_params: bool = False,
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
+    keys_to_drop: Final = _UNSUPPORTED_THINKING_KEYS if drop_params else _STREAM_ONLY_THINKING_KEYS
     return [
-        _without_stream_index(_with_native_redacted_data(block))
+        _without_keys(_with_native_redacted_data(block), keys_to_drop)
         for block in thinking_blocks
-        if not is_unsignable_thinking_block(block)
+        if not (is_unsignable_thinking_block(block) or (drop_params and has_blank_redacted_data(block)))
     ]
 
 
-def _without_stream_index(
+def _as_thinking_block(item: object) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock | None:
+    match item:
+        case {"type": "thinking" | "redacted_thinking"}:
+            return cast(  # cast-ok: the mapping pattern matched a thinking block's type tag
+                ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, item
+            )
+        case _:
+            return None
+
+
+def _thinking_identity(item: object) -> tuple[str | None, ...] | None:
+    match item:
+        case {"type": "redacted_thinking", "data": str() as data}:
+            return ("redacted_thinking", native_redacted_thinking_data(data))
+        case {"type": "thinking", "signature": str() as signature} if signature:
+            return ("thinking", signature)
+        case {"type": str() as kind} if kind in ("thinking", "redacted_thinking"):
+            fields: Final = cast(Mapping[str, object], item)  # cast-ok: the mapping pattern matched
+            return _unsigned_thinking_identity(kind, fields.get("thinking"), fields.get("signature"))
+        case _:
+            return None
+
+
+def _unsigned_thinking_identity(kind: str, thinking: object, signature: object) -> tuple[str | None, ...] | None:
+    match thinking, signature:
+        case (str() | None as text, str() | None as signed):
+            return (kind, text, signed)
+        case _:
+            return None
+
+
+_Replayed: Final = TypeVar("_Replayed")
+
+
+def _with_missing_thinking_blocks(
+    content: Iterable[_Replayed], thinking_blocks: Sequence[_Replayed]
+) -> tuple[_Replayed, ...]:
+    content_items: Final = tuple(content)
+    block_identities: Final = tuple(map(_thinking_identity, thinking_blocks))
+    content_positions: Final[Mapping[tuple[object, ...] | None, int]] = MappingProxyType(
+        {
+            identity: index
+            for index, identity in reversed(tuple(enumerate(map(_thinking_identity, content_items))))
+            if identity is not None
+        }
+    )
+    anchors: Final = tuple(index for index, identity in enumerate(block_identities) if identity in content_positions)
+    if not anchors:
+        return (*thinking_blocks, *content_items)
+    missing_before: Final = MappingProxyType(
+        {
+            content_positions[block_identities[end]]: thinking_blocks[start + 1 : end]
+            for start, end in zip((-1, *anchors), anchors)
+        }
+    )
+    missing_after: Final = MappingProxyType(
+        {content_positions[block_identities[anchors[-1]]]: thinking_blocks[anchors[-1] + 1 :]}
+    )
+    return tuple(_interleave(content_items, missing_before, missing_after))
+
+
+def _without_repeated_thinking(
+    items: Sequence[_Replayed], identity: Callable[[_Replayed], tuple[object, ...] | None]
+) -> tuple[_Replayed, ...]:
+    identities: Final = tuple(map(identity, items))
+    first_positions: Final[Mapping[tuple[object, ...], int]] = MappingProxyType(
+        {key: index for index, key in reversed(tuple(enumerate(identities))) if key is not None}
+    )
+    return tuple(
+        item for index, (item, key) in enumerate(zip(items, identities)) if key is None or first_positions[key] == index
+    )
+
+
+def _interleave(
+    content: Sequence[_Replayed],
+    before: Mapping[int, Sequence[_Replayed]],
+    after: Mapping[int, Sequence[_Replayed]],
+) -> Iterator[_Replayed]:
+    for index, item in enumerate(content):
+        yield from before.get(index, ())
+        yield item
+        yield from after.get(index, ())
+
+
+def _thinking_in_replay_order(
+    content: str | Iterable[object] | None, thinking_blocks: Sequence[object] | None
+) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...]:
+    content_items: Final = content if isinstance(content, list) else ()
+    return tuple(
+        block
+        for item in _with_missing_thinking_blocks(content_items, thinking_blocks or ())
+        if (block := _as_thinking_block(item)) is not None
+    )
+
+
+_STREAM_ONLY_THINKING_KEYS: Final = frozenset({"index"})
+_UNSUPPORTED_THINKING_KEYS: Final = frozenset({"index", "cache_control"})
+
+
+def _without_keys(
     block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+    keys: frozenset[str],
 ) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
-    if "index" not in block:
+    if keys.isdisjoint(block):
         return block
-    return cast(  # cast-ok: dropping one key keeps the block's TypedDict shape
+    return cast(  # cast-ok: dropping keys keeps the block's TypedDict shape
         ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
-        {key: value for key, value in block.items() if key != "index"},
+        {key: value for key, value in block.items() if key not in keys},
     )
 
 
@@ -2629,6 +2733,7 @@ def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
     llm_provider: str,
+    drop_params: bool = False,
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -2816,7 +2921,9 @@ def anthropic_messages_pt(
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
-                _replayable_thinking_blocks(_raw_thinking_blocks) if _raw_thinking_blocks is not None else None
+                _replayable_thinking_blocks(_raw_thinking_blocks, drop_params=drop_params)
+                if _raw_thinking_blocks is not None
+                else None
             )
 
             # Check if tool_calls contain server tool calls (web search, etc.)
@@ -2951,42 +3058,28 @@ def anthropic_messages_pt(
                 # SEQUENTIAL MODE: No server tool calls, or no thinking blocks,
                 # or content is a list. Use the original sequential approach.
 
-                # When content is a list, check if it already contains thinking
-                # blocks inline. If so, skip prepending thinking_blocks to avoid
-                # duplication and preserve the original interleaved order.
-                # Fixes the gap where list-content messages bypass INTERLEAVED
-                # MODE and still get thinking blocks prepended out of order.
                 _content_is_list = "content" in assistant_content_block and isinstance(
                     assistant_content_block["content"], list
                 )
                 _content_list = assistant_content_block.get("content") if _content_is_list else None
-                _list_has_thinking = False
-                if _content_is_list and _content_list is not None:
-                    for _item in _content_list:
-                        if isinstance(_item, dict) and _item.get("type") in (
-                            "thinking",
-                            "redacted_thinking",
-                        ):
-                            _list_has_thinking = True
-                            break
 
                 if (
-                    thinking_blocks is not None and not _list_has_thinking
+                    thinking_blocks is not None and not _content_is_list
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
-                    for m in _content_list:
+                    for m in _with_missing_thinking_blocks(_content_list, thinking_blocks or ()):
                         if not isinstance(m, dict):
                             continue
                         # handle thinking blocks
-                        text_block = cast(str, m.get("text", ""))
-                        if m.get("type", "") == "thinking" and not is_unsignable_thinking_block(m):
-                            anthropic_message: ChatCompletionThinkingBlock | AnthropicMessagesTextParam = cast(
-                                ChatCompletionThinkingBlock, m
+                        if (thinking_block := _as_thinking_block(m)) is not None:
+                            assistant_content.extend(
+                                _replayable_thinking_blocks([thinking_block], drop_params=drop_params)
                             )
-                            assistant_content.append(anthropic_message)
+                            continue
+                        text_block = cast(str, m.get("text", ""))
                         # handle text
-                        elif (
+                        if (
                             m.get("type", "") == "text" and len(text_block) > 0
                         ):  # don't pass empty text blocks. anthropic api raises errors.
                             anthropic_message = AnthropicMessagesTextParam(type="text", text=text_block)
@@ -3058,7 +3151,12 @@ def anthropic_messages_pt(
             msg_i += 1
 
         if assistant_content:
-            new_messages.append({"role": "assistant", "content": assistant_content})
+            new_messages.append(
+                {
+                    "role": "assistant",
+                    "content": list(_without_repeated_thinking(assistant_content, _thinking_identity)),
+                }
+            )
 
         ## MID-CONVERSATION SYSTEM MESSAGES (placement is the caller's job) ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "system":
@@ -4190,6 +4288,16 @@ def _convert_to_bedrock_tool_call_result(
     return content_block
 
 
+def _reasoning_identity(block: BedrockContentBlock) -> tuple[object, ...] | None:
+    match block:
+        case {"reasoningContent": {"redactedContent": redacted}}:
+            return ("redacted_thinking", redacted)
+        case {"reasoningContent": {"reasoningText": {"signature": str() as signature}}} if signature:
+            return ("thinking", signature)
+        case _:
+            return None
+
+
 def _deduplicate_bedrock_content_blocks(
     blocks: list[BedrockContentBlock],
     block_key: str,
@@ -4673,6 +4781,7 @@ class BedrockConverseMessagesProcessor:
         assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
         deployment_model: str | None = None,
         base_model: str | None = None,
+        drop_params: bool = False,
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
 
@@ -4826,33 +4935,21 @@ class BedrockConverseMessagesProcessor:
                 )
                 _assistant_content = assistant_message_block.get("content", None)
                 thinking_blocks = assistant_message_block.get("thinking_blocks")
-
-                if thinking_blocks is not None:
-                    converted_thinking_blocks = (
-                        BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                            thinking_blocks, to_claude=to_claude
-                        )
+                converted_thinking_blocks = (
+                    BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                        _thinking_in_replay_order(_assistant_content, thinking_blocks), to_claude=to_claude
                     )
-                    assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
-                        thinking_blocks=converted_thinking_blocks,
-                        assistant_parts=assistant_content,
-                    )
+                )
+                assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                    thinking_blocks=converted_thinking_blocks,
+                    assistant_parts=assistant_content,
+                )
 
                 if _assistant_content is not None and isinstance(_assistant_content, list):
                     assistants_parts: list[BedrockContentBlock] = []
                     for element in _assistant_content:
                         if isinstance(element, dict):
-                            if element["type"] == "thinking" or element["type"] == "redacted_thinking":
-                                thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[element], to_claude=to_claude
-                                )
-                                assistants_parts = (
-                                    BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
-                                        thinking_blocks=thinking_block,
-                                        assistant_parts=assistants_parts,
-                                    )
-                                )
-                            elif element["type"] == "text":
+                            if element["type"] == "text":
                                 # Skip completely empty strings to avoid blank content blocks
                                 if element.get("text", "").strip():
                                     assistants_part = BedrockContentBlock(text=element["text"])
@@ -4871,7 +4968,9 @@ class BedrockConverseMessagesProcessor:
                             model=model,
                             deployment_model=deployment_model,
                         )
-                        if _cache_point_block is not None:
+                        if _cache_point_block is not None and not (
+                            drop_params and _as_thinking_block(element) is not None
+                        ):
                             assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
                 elif _assistant_content is not None and isinstance(_assistant_content, str):
@@ -4899,7 +4998,11 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
 
-            assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
+            assistant_content = list(
+                _without_repeated_thinking(
+                    _deduplicate_bedrock_content_blocks(assistant_content, "toolUse"), _reasoning_identity
+                )
+            )
             assistant_content = _sort_bedrock_assistant_content_blocks(assistant_content)
 
             if assistant_content:
@@ -5083,6 +5186,7 @@ def _bedrock_converse_messages_pt(
     assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
     deployment_model: str | None = None,
     base_model: str | None = None,
+    drop_params: bool = False,
 ) -> list[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -5244,35 +5348,21 @@ def _bedrock_converse_messages_pt(
             )
             _assistant_content = assistant_message_block.get("content", None)
             thinking_blocks = assistant_message_block.get("thinking_blocks")
-
-            if thinking_blocks is not None:
-                converted_thinking_blocks = (
-                    BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                        thinking_blocks, to_claude=to_claude
-                    )
+            converted_thinking_blocks = (
+                BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                    _thinking_in_replay_order(_assistant_content, thinking_blocks), to_claude=to_claude
                 )
-                assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
-                    thinking_blocks=converted_thinking_blocks,
-                    assistant_parts=assistant_content,
-                )
+            )
+            assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                thinking_blocks=converted_thinking_blocks,
+                assistant_parts=assistant_content,
+            )
 
             if _assistant_content is not None and isinstance(_assistant_content, list):
                 assistants_parts: list[BedrockContentBlock] = []
                 for element in _assistant_content:
                     if isinstance(element, dict):
-                        if element["type"] == "thinking" or element["type"] == "redacted_thinking":
-                            thinking_block = (
-                                BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[element], to_claude=to_claude
-                                )
-                            )
-                            assistants_parts = (
-                                BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
-                                    thinking_blocks=thinking_block,
-                                    assistant_parts=assistants_parts,
-                                )
-                            )
-                        elif element["type"] == "text":
+                        if element["type"] == "text":
                             # AWS Bedrock doesn't allow empty or whitespace-only text content
                             # Skip completely empty strings to avoid blank content blocks
                             if element.get("text", "").strip():
@@ -5292,7 +5382,9 @@ def _bedrock_converse_messages_pt(
                             model=model,
                             deployment_model=deployment_model,
                         )
-                        if _cache_point_block is not None:
+                        if _cache_point_block is not None and not (
+                            drop_params and _as_thinking_block(element) is not None
+                        ):
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
@@ -5313,7 +5405,11 @@ def _bedrock_converse_messages_pt(
 
             msg_i += 1
 
-        assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
+        assistant_content = list(
+            _without_repeated_thinking(
+                _deduplicate_bedrock_content_blocks(assistant_content, "toolUse"), _reasoning_identity
+            )
+        )
         assistant_content = _sort_bedrock_assistant_content_blocks(assistant_content)
 
         if assistant_content:

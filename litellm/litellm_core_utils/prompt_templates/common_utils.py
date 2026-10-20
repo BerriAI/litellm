@@ -2325,6 +2325,16 @@ def is_unsignable_thinking_block(block: object) -> bool:
     return not (isinstance(signature, str) and len(signature) > 0)
 
 
+def has_blank_redacted_data(block: object) -> bool:
+    match block:
+        case {"type": "redacted_thinking", "data": str() as data}:
+            return not data.strip()
+        case {"type": "redacted_thinking"}:
+            return True
+        case _:
+            return False
+
+
 def native_redacted_thinking_data(data: str) -> str:
     """Claude's own `data` string for a redacted_thinking block.
 
