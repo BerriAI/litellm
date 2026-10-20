@@ -39,10 +39,15 @@ class DailyActivityScope:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
+    # One team's tag spend (the Team view's Spend Per Tag card). Only the tag table records the
+    # sending team, and a team-scoped tag read leaves out the automatic User-Agent tags.
+    team_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
             raise ValueError(f"Invalid entity_id_field {self.entity_id_field!r} for {self.table.value}")
+        if self.team_id is not None and self.table is not DailyActivityTable.TAG:
+            raise ValueError(f"team_id applies only to {DailyActivityTable.TAG.value}, not {self.table.value}")
 
 
 @dataclass(frozen=True, slots=True)
