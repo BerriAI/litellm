@@ -1,7 +1,8 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
-from typing import TYPE_CHECKING, Annotated, Final, Literal
+from itertools import chain, groupby
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias, TypeVar
 
 from pydantic import Field, JsonValue, TypeAdapter
 
@@ -29,10 +30,16 @@ _IMAGES_ADAPTER: Final[TypeAdapter[tuple[ExtractionBase64Image | JsonValue, ...]
 )
 
 
+_AnswerKey: TypeAlias = Literal["value", "guess", "mean", "median"]
+_NULLED_ANSWER: Final[Mapping[str, None]] = MappingProxyType(
+    dict.fromkeys(("value", "guess", "mean", "median", "p10", "p90", "quantiles", "steps", "span", "spans"), None)
+)
+
+
 @dataclass(frozen=True, slots=True)
 class _AnswerText:
     name: str
-    key: Literal["value", "guess"]
+    key: _AnswerKey
     item: int | None
     text: str
 
@@ -57,10 +64,15 @@ def _spec_texts(fields: Mapping[str, Mapping[str, object]]) -> tuple[_SpecText, 
     return tuple(chain.from_iterable(_spec_texts_of(name, spec) for name, spec in fields.items()))
 
 
-def _guardrailed_spec(
-    name: str, spec: Mapping[str, object], scanned: Sequence[tuple[_SpecText, str]]
-) -> Mapping[str, object]:
-    return {**spec, **{text.key: guardrailed for text, guardrailed in scanned if text.name == name}}
+_NamedText = TypeVar("_NamedText", _AnswerText, _SpecText)
+
+
+def _scans_by_name(scanned: Iterable[tuple[_NamedText, str]]) -> Mapping[str, tuple[tuple[_NamedText, str], ...]]:
+    return {name: tuple(group) for name, group in groupby(scanned, key=lambda pair: pair[0].name)}
+
+
+def _guardrailed_spec(spec: Mapping[str, object], scanned: Sequence[tuple[_SpecText, str]]) -> Mapping[str, object]:
+    return {**spec, **{text.key: guardrailed for text, guardrailed in scanned}}
 
 
 def _metadata_key(data: Mapping[str, object]) -> Literal["metadata", "litellm_metadata"]:
@@ -85,20 +97,30 @@ def _image_urls(images: object) -> tuple[str, ...]:
     )
 
 
-def _value_texts(name: str, key: Literal["value", "guess"], value: JsonValue) -> tuple[_AnswerText, ...]:
-    if isinstance(value, str):
-        return (_AnswerText(name=name, key=key, item=None, text=value),)
+def _scalar_text(value: JsonValue) -> str | None:
+    if isinstance(value, bool):
+        return None
+    return str(value) if isinstance(value, (str, int, float)) else None
+
+
+def _item_texts(items: Sequence[JsonValue]) -> tuple[tuple[int, str], ...]:
+    return tuple((index, text) for index, item in enumerate(items) if (text := _scalar_text(item)) is not None)
+
+
+def _value_texts(name: str, key: _AnswerKey, value: JsonValue) -> tuple[_AnswerText, ...]:
     if isinstance(value, list):
-        return tuple(
-            _AnswerText(name=name, key=key, item=index, text=item)
-            for index, item in enumerate(value)
-            if isinstance(item, str)
-        )
-    return ()
+        return tuple(_AnswerText(name=name, key=key, item=index, text=text) for index, text in _item_texts(value))
+    text: Final = _scalar_text(value)
+    return () if text is None else (_AnswerText(name=name, key=key, item=None, text=text),)
 
 
 def _answer_texts(name: str, answer: ExtractionAnswer) -> tuple[_AnswerText, ...]:
-    return (*_value_texts(name, "value", answer.value), *_value_texts(name, "guess", answer.guess))
+    return (
+        *_value_texts(name, "value", answer.value),
+        *_value_texts(name, "guess", answer.guess),
+        *_value_texts(name, "mean", answer.mean),
+        *_value_texts(name, "median", answer.median),
+    )
 
 
 def _guardrailed_value(value: JsonValue, scanned: Mapping[int | None, str]) -> JsonValue:
@@ -107,23 +129,20 @@ def _guardrailed_value(value: JsonValue, scanned: Mapping[int | None, str]) -> J
     return scanned.get(None, value)
 
 
-def _scans_of(
-    name: str, key: Literal["value", "guess"], scanned: Sequence[tuple[_AnswerText, str]]
-) -> Mapping[int | None, str]:
-    return {text.item: guardrailed for text, guardrailed in scanned if (text.name, text.key) == (name, key)}
+def _scans_of(key: _AnswerKey, scanned: Sequence[tuple[_AnswerText, str]]) -> Mapping[int | None, str]:
+    return {text.item: guardrailed for text, guardrailed in scanned if text.key == key}
 
 
 def _guardrailed_answer(
-    name: str,
     answer: ExtractionAnswer,
     scanned: Sequence[tuple[_AnswerText, str]],
     drop_spans: bool,
     is_text: bool,
 ) -> ExtractionAnswer:
-    if not is_text and any(text.name == name and text.text != guardrailed for text, guardrailed in scanned):
-        return answer.model_copy(update={"value": None, "guess": None, "span": None, "spans": None})
-    value_scans: Final = _scans_of(name, "value", scanned if is_text else ())
-    guess_scans: Final = _scans_of(name, "guess", scanned if is_text else ())
+    if not is_text and any(text.text != guardrailed for text, guardrailed in scanned):
+        return answer.model_copy(update=_NULLED_ANSWER)
+    value_scans: Final = _scans_of("value", scanned if is_text else ())
+    guess_scans: Final = _scans_of("guess", scanned if is_text else ())
     update: Final = {
         **({"value": _guardrailed_value(answer.value, value_scans)} if value_scans else {}),
         **({"guess": _guardrailed_value(answer.guess, guess_scans)} if guess_scans else {}),
@@ -177,7 +196,7 @@ class ExtractionHandler(BaseTranslation):
             litellm_logging_obj,
             images,
         )
-        scanned_specs: Final = tuple(zip(spec_texts, scanned[len(states) :]))
+        spec_scans: Final = _scans_by_name(zip(spec_texts, scanned[len(states) :]))
         state_rewritten: Final = bool(states) and scanned[0] != states[0]
         return {
             **data,
@@ -187,7 +206,7 @@ class ExtractionHandler(BaseTranslation):
                 if state_rewritten
                 else {}
             ),
-            "fields": {name: _guardrailed_spec(name, spec, scanned_specs) for name, spec in fields.items()},
+            "fields": {name: _guardrailed_spec(spec, spec_scans.get(name, ())) for name, spec in fields.items()},
         }
 
     async def process_output_response(
@@ -217,16 +236,15 @@ class ExtractionHandler(BaseTranslation):
             if texts or state_texts
             else ()
         )
-        pairs: Final = tuple(zip(texts, scanned))
+        answer_scans: Final = _scans_by_name(zip(texts, scanned))
         state_text: Final = next(iter(scanned[len(texts) :]), response.state_text)
         specs: Final = _FIELDS_ADAPTER.validate_python(request.get("fields") or {})
         return response.model_copy(
             update={
                 "answers": {
                     name: _guardrailed_answer(
-                        name,
                         answer,
-                        pairs,
+                        answer_scans.get(name, ()),
                         drop_spans=state_text != response.state_text,
                         is_text=_is_text_answer(answer, specs.get(name)),
                     )

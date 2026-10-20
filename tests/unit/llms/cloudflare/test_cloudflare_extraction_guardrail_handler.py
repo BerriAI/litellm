@@ -1,3 +1,4 @@
+import time
 from typing import Final, Literal
 
 import pytest
@@ -128,14 +129,17 @@ async def test_response_answers_and_state_text_are_guardrailed_on_a_copy_without
 
     result: Final = await ExtractionHandler().process_output_response(response, guardrail)
 
-    assert guardrail.seen == ("response", ("Acme Tools", "Acme Tools", "12", "hammers", "Invoice from Acme Tools"))
+    assert guardrail.seen == (
+        "response",
+        ("Acme Tools", "Acme Tools", "12", "hammers", "174", "174", "Invoice from Acme Tools"),
+    )
     assert isinstance(result, ExtractionResponse)
     assert result.model_dump(mode="json") == {
         **response.model_dump(mode="json"),
         "answers": {
             "vendor": {"type": "text", "value": "Acme Tools [GUARDRAILED]", "guess": "Acme Tools [GUARDRAILED]"},
             "items": {"type": "list", "value": ["12 [GUARDRAILED]", "hammers [GUARDRAILED]"]},
-            "total": {"type": "number", "value": 174, "guess": 174},
+            "total": {"type": "number", "value": None},
             "contact": {"type": "text", "value": None, "p_null": 0.98},
         },
         "state_text": "Invoice from Acme Tools [GUARDRAILED]",
@@ -198,3 +202,98 @@ async def test_a_response_guardrail_change_to_a_typed_answer_nulls_it_instead_of
         "notes": {"type": "list", "value": ["paid [DATE]"], "spans": [[70, 85]]},
         "received": {"type": "date", "value": "2026-02-27", "span": [90, 100]},
     }
+
+
+@pytest.mark.asyncio
+async def test_a_response_guardrail_that_masks_a_number_nulls_every_answer_carrying_it() -> None:
+    request_data: Final = {
+        "fields": {
+            "phone_text": {"type": "text"},
+            "phone_number": {"type": "number"},
+            "phone_list": {"type": "list", "items": "number"},
+            "phone_mean": {"type": "estimate"},
+            "phone_median": {"type": "estimate"},
+            "total": {"type": "number"},
+        }
+    }
+    response: Final = ExtractionResponse.model_validate(
+        {
+            "model": "invoice-reader",
+            "answers": {
+                "phone_text": {"type": "text", "value": "4155550123", "span": [10, 20]},
+                "phone_number": {"type": "number", "value": 4155550123, "guess": 4155550123, "span": [10, 20]},
+                "phone_list": {"type": "list", "value": [4155550123], "spans": [[10, 20]]},
+                "phone_mean": {"type": "estimate", "value": None, "mean": 4155550123, "p10": 4155550000, "p_null": 0.6},
+                "phone_median": {
+                    "type": "estimate",
+                    "value": None,
+                    "median": 4155550123,
+                    "p90": 4155550200,
+                    "p_null": 0.6,
+                },
+                "total": {"type": "number", "value": 174, "guess": 174},
+            },
+            "truncated": False,
+            "usage": {"input_tokens": 52, "output_tokens": 0},
+        }
+    )
+
+    result: Final = await ExtractionHandler().process_output_response(
+        response, _MaskingGuardrail("4155550123", "[PHONE]"), request_data=request_data
+    )
+
+    assert isinstance(result, ExtractionResponse)
+    assert {name: answer.model_dump(mode="json") for name, answer in result.answers.items()} == {
+        "phone_text": {"type": "text", "value": "[PHONE]", "span": [10, 20]},
+        "phone_number": {"type": "number", "value": None},
+        "phone_list": {"type": "list", "value": None},
+        "phone_mean": {"type": "estimate", "value": None, "p_null": 0.6},
+        "phone_median": {"type": "estimate", "value": None, "p_null": 0.6},
+        "total": {"type": "number", "value": 174, "guess": 174},
+    }
+
+
+_MANY_FIELDS: Final = 20_000
+
+
+@pytest.mark.asyncio
+async def test_a_request_with_many_field_instructions_is_guardrailed_in_linear_time() -> None:
+    data: Final = {
+        "model": "invoice-reader",
+        "fields": {
+            f"field_{index}": {"type": "text", "instructions": f"secret {index}"} for index in range(_MANY_FIELDS)
+        },
+    }
+
+    started: Final = time.perf_counter()
+    result: Final = await ExtractionHandler().process_input_messages(data, _MaskingGuardrail("secret", "[MASKED]"))
+    elapsed: Final = time.perf_counter() - started
+
+    assert result["fields"] == {
+        f"field_{index}": {"type": "text", "instructions": f"[MASKED] {index}"} for index in range(_MANY_FIELDS)
+    }
+    assert elapsed < 5
+
+
+@pytest.mark.asyncio
+async def test_a_response_with_many_text_answers_is_guardrailed_in_linear_time() -> None:
+    response: Final = ExtractionResponse.model_validate(
+        {
+            "model": "invoice-reader",
+            "answers": {
+                f"field_{index}": {"type": "text", "value": f"secret {index}"} for index in range(_MANY_FIELDS)
+            },
+            "truncated": False,
+            "usage": {"input_tokens": 52, "output_tokens": 0},
+        }
+    )
+
+    started: Final = time.perf_counter()
+    result: Final = await ExtractionHandler().process_output_response(response, _MaskingGuardrail("secret", "[MASKED]"))
+    elapsed: Final = time.perf_counter() - started
+
+    assert isinstance(result, ExtractionResponse)
+    assert {name: answer.value for name, answer in result.answers.items()} == {
+        f"field_{index}": f"[MASKED] {index}" for index in range(_MANY_FIELDS)
+    }
+    assert elapsed < 5
