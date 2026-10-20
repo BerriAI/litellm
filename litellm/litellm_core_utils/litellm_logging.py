@@ -647,11 +647,11 @@ class Logging(LiteLLMLoggingBaseClass):
         litellm_call_id: str,
         function_id: str,
         litellm_trace_id: str | None = None,
-        dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = None,
+        dynamic_input_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
-        dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
-        dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
+        dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
+        dynamic_async_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         applied_guardrails: list[str] | None = None,
         kwargs: dict | None = None,
         log_raw_request_response: bool = False,
@@ -724,15 +724,17 @@ class Logging(LiteLLMLoggingBaseClass):
         self.raw_request_only = raw_request_only
 
         # Initialize dynamic callbacks
-        self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
+        self.dynamic_input_callbacks: list[str | Callable[..., object] | CustomLogger] | None = dynamic_input_callbacks
         self.dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_success_callbacks
         )
         self.dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_success_callbacks
         )
-        self.dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = dynamic_failure_callbacks
-        self.dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = (
+        self.dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
+            dynamic_failure_callbacks
+        )
+        self.dynamic_async_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_failure_callbacks
         )
 
@@ -854,10 +856,26 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm.logging_callback_manager.get_custom_logger_key(callback)
         }
 
+    def add_dynamic_function_callbacks(
+        self,
+        *,
+        async_success: Callable[..., object],
+        failure: Callable[..., object],
+        async_failure: Callable[..., object],
+    ) -> None:
+        self.dynamic_async_success_callbacks = self._with_dynamic_callback(
+            self.dynamic_async_success_callbacks, async_success
+        )
+        self.dynamic_failure_callbacks = self._with_dynamic_callback(self.dynamic_failure_callbacks, failure)
+        self.dynamic_async_failure_callbacks = self._with_dynamic_callback(
+            self.dynamic_async_failure_callbacks, async_failure
+        )
+
     @staticmethod
     def _with_dynamic_callback(
-        callbacks: Sequence[str | Callable | CustomLogger] | None, callback: CustomLogger
-    ) -> list[str | Callable | CustomLogger]:
+        callbacks: Sequence[str | Callable[..., object] | CustomLogger] | None,
+        callback: Callable[..., object] | CustomLogger,
+    ) -> list[str | Callable[..., object] | CustomLogger]:
         existing: Final = tuple(callbacks or ())
         return [*existing, *(() if callback in existing else (callback,))]
 
@@ -894,9 +912,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _process_dynamic_callback_list(
         self,
-        callback_list: list[str | Callable | CustomLogger] | None,
+        callback_list: list[str | Callable[..., object] | CustomLogger] | None,
         dynamic_callbacks_type: Literal["input", "success", "failure", "async_success", "async_failure"],
-    ) -> list[str | Callable | CustomLogger] | None:
+    ) -> list[str | Callable[..., object] | CustomLogger] | None:
         """
         Helper function to initialize CustomLogger compatible callbacks in self.dynamic_* callbacks
 
@@ -908,7 +926,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if callback_list is None:
             return None
 
-        processed_list: Final[list[str | Callable | CustomLogger]] = []
+        processed_list: Final[list[str | Callable[..., object] | CustomLogger]] = []
         for callback in callback_list:
             if isinstance(callback, str) and callback in litellm._known_custom_logger_compatible_callbacks:
                 for callback_instance in self._resolve_dynamic_callback_string(callback):

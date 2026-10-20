@@ -1197,10 +1197,10 @@ def function_setup(
             for index in reversed(removed_async_items):
                 litellm.failure_callback.pop(index)
         ### DYNAMIC CALLBACKS ###
-        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_async_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = None
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
+        dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
+        dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
+        dynamic_async_failure_callbacks: Final[list[str | Callable[..., object] | CustomLogger] | None] = None
         if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):

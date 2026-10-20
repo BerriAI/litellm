@@ -1709,6 +1709,11 @@ class Router:
         self._release_global_callbacks()
 
     def bind_to_request_logging(self, logging_obj: LiteLLMLogging) -> None:
+        logging_obj.add_dynamic_function_callbacks(
+            async_success=self.deployment_callback_on_success,
+            failure=self.deployment_callback_on_failure,
+            async_failure=self.async_deployment_callback_on_failure,
+        )
         for selector in self._request_scoped_selectors:
             logging_obj.replace_global_callback(selector)
         for policy in self._request_policies_not_set_globally():

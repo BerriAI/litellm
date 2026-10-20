@@ -11,7 +11,7 @@ import redis
 import respx
 
 
-from collections.abc import Coroutine, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -2762,6 +2762,165 @@ async def test_a_request_in_flight_when_its_user_config_router_is_dropped_still_
 
     with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_provider_budget_routing.value):
         await request()
+
+
+async def _user_config_request(model: str, user_config: Mapping[str, object], arrives_with_logging_obj: bool) -> object:
+    return await (
+        await route_request(
+            {
+                "model": model,
+                "messages": list(_HELLO_MESSAGES),
+                "num_retries": 0,
+                **({"litellm_logging_obj": _proxy_logging_obj(model)} if arrives_with_logging_obj else {}),
+                "user_config": user_config,
+            },
+            None,
+            None,
+            "acompletion",
+        )
+    )
+
+
+def _ordered_pair(model_name: str, first_base: str, second_base: str) -> list[dict[str, object]]:
+    return [
+        {
+            "model_name": model_name,
+            "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test", "api_base": api_base, "order": order},
+        }
+        for order, api_base in ((1, first_base), (2, second_base))
+    ]
+
+
+@pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
+@pytest.mark.asyncio
+async def test_a_rate_limited_user_config_deployment_cools_down_for_the_next_requests(
+    monkeypatch: pytest.MonkeyPatch, arrives_with_logging_obj: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    rate_limited_base: Final = "https://rate-limited.example/v1"
+    healthy_base: Final = "https://healthy.example/v1"
+    user_config: Final = {"model_list": _ordered_pair("flaky", rate_limited_base, healthy_base)}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        rate_limited: Final = respx_mock.post(f"{rate_limited_base}/chat/completions").mock(
+            return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+        )
+        respx_mock.post(f"{healthy_base}/chat/completions").mock(return_value=_chat_completion_response("gpt-5.5"))
+        for _ in range(3):
+            await _user_config_request("flaky", user_config, arrives_with_logging_obj)
+            await asyncio.sleep(0.3)
+
+    assert rate_limited.call_count == 1
+
+
+async def _remaining_usage_headers_after_429_then_200s(
+    send: Callable[[], Awaitable[object]], api_base: str
+) -> list[tuple[object, object] | str]:
+    async def remaining_usage() -> tuple[object, object] | str:
+        try:
+            response: Final = await send()
+        except litellm.RateLimitError:
+            return "429"
+        finally:
+            await asyncio.sleep(0.3)
+        assert isinstance(response, litellm.ModelResponse)
+        headers: Final = response._hidden_params["additional_headers"]
+        return headers.get("x-ratelimit-remaining-requests"), headers.get("x-ratelimit-remaining-tokens")
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.post(f"{api_base}/chat/completions").mock(
+            side_effect=[
+                httpx.Response(429, json={"error": {"message": "slow down"}}),
+                _chat_completion_response("gpt-5.5"),
+                _chat_completion_response("gpt-5.5"),
+            ]
+        )
+        return [await remaining_usage() for _ in range(3)]
+
+
+@pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
+@pytest.mark.asyncio
+async def test_user_config_remaining_usage_headers_match_a_proxy_router_with_the_same_deployment(
+    monkeypatch: pytest.MonkeyPatch, arrives_with_logging_obj: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    await _wait_out_a_rate_limit_minute_rollover()
+    proxy_base: Final = "https://proxy-limited.example/v1"
+    user_config_base: Final = "https://user-config-limited.example/v1"
+
+    def deployment(model_name: str, api_base: str) -> dict[str, object]:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "openai/gpt-5.5",
+                "api_key": "sk-test",
+                "api_base": api_base,
+                "rpm": 10,
+                "tpm": 1000,
+            },
+        }
+
+    proxy_router: Final = litellm.Router(model_list=[deployment("proxy-limited", proxy_base)])
+    try:
+        proxy_router_headers: Final = await _remaining_usage_headers_after_429_then_200s(
+            lambda: proxy_router.acompletion(model="proxy-limited", messages=list(_HELLO_MESSAGES), num_retries=0),
+            proxy_base,
+        )
+    finally:
+        proxy_router.discard()
+
+    user_config: Final = {"model_list": [deployment("user-config-limited", user_config_base)]}
+    user_config_headers: Final = await _remaining_usage_headers_after_429_then_200s(
+        lambda: _user_config_request("user-config-limited", user_config, arrives_with_logging_obj), user_config_base
+    )
+
+    assert user_config_headers == proxy_router_headers
+
+
+async def _first_deployment_calls_over_successes_then_failures(
+    send: Callable[[], Awaitable[object]], first_base: str, second_base: str
+) -> int:
+    successes: Final = [_chat_completion_response("gpt-5.5") for _ in range(6)]
+    failures: Final = [httpx.Response(500, json={"error": {"message": "boom"}}) for _ in range(6)]
+    with respx.mock(assert_all_called=False) as respx_mock:
+        first: Final = respx_mock.post(f"{first_base}/chat/completions").mock(side_effect=[*successes, *failures])
+        respx_mock.post(f"{second_base}/chat/completions").mock(return_value=_chat_completion_response("gpt-5.5"))
+        for _ in range(len(successes) + len(failures)):
+            await send()
+            await asyncio.sleep(0.3)
+        return first.call_count
+
+
+@pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
+@pytest.mark.asyncio
+async def test_user_config_successes_keep_a_deployment_out_of_cooldown_like_a_proxy_router(
+    monkeypatch: pytest.MonkeyPatch, arrives_with_logging_obj: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    await _wait_out_a_rate_limit_minute_rollover()
+    proxy_router: Final = litellm.Router(
+        model_list=_ordered_pair("proxy-pair", "https://proxy-first.example/v1", "https://proxy-second.example/v1")
+    )
+    try:
+        proxy_router_calls: Final = await _first_deployment_calls_over_successes_then_failures(
+            lambda: proxy_router.acompletion(model="proxy-pair", messages=list(_HELLO_MESSAGES), num_retries=0),
+            "https://proxy-first.example/v1",
+            "https://proxy-second.example/v1",
+        )
+    finally:
+        proxy_router.discard()
+
+    user_config: Final = {
+        "model_list": _ordered_pair("user-pair", "https://user-first.example/v1", "https://user-second.example/v1")
+    }
+
+    user_config_calls: Final = await _first_deployment_calls_over_successes_then_failures(
+        lambda: _user_config_request("user-pair", user_config, arrives_with_logging_obj),
+        "https://user-first.example/v1",
+        "https://user-second.example/v1",
+    )
+
+    assert user_config_calls == proxy_router_calls
 
 
 @pytest.mark.asyncio
