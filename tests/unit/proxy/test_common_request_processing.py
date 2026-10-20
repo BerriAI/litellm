@@ -4054,21 +4054,14 @@ _TURN_AFTER_COMPACTION: Final = {"role": "user", "content": "what is the cat's n
 class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
     async def _failed_prompt_tokens(
         self,
-        monkeypatch: pytest.MonkeyPatch,
         route_type: Literal["acompletion", "aresponses"],
         logged_call_type: str,
         request_input: list[dict[str, str]],
     ) -> int:
-        processing_obj: Final = ProxyBaseLLMRequestProcessing(data={})
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4o", "input": request_input})
         cursor_caller: Final = ProxyUserAPIKeyAuth(request_route="/cursor/chat/completions")
         mock_request: Final = MagicMock(spec=Request)
         mock_request.headers = {}
-        raw_body: Final = {"model": "gpt-4o", "input": request_input}
-        monkeypatch.setattr(
-            litellm.proxy.common_request_processing,
-            "add_litellm_data_to_request",
-            AsyncMock(return_value={**raw_body, "litellm_metadata": {}, "proxy_server_request": {"body": raw_body}}),
-        )
 
         async def pass_through_pre_call_hook(
             user_api_key_dict: ProxyUserAPIKeyAuth,
@@ -4113,13 +4106,12 @@ class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
     )
     async def test_a_failed_call_counts_from_the_newest_compaction_only_when_dispatched_as_responses(
         self,
-        monkeypatch: pytest.MonkeyPatch,
         route_type: Literal["acompletion", "aresponses"],
         logged_call_type: str,
         trims_at_the_compaction: bool,
     ) -> None:
         async def prompt_tokens(request_input: list[dict[str, str]]) -> int:
-            return await self._failed_prompt_tokens(monkeypatch, route_type, logged_call_type, request_input)
+            return await self._failed_prompt_tokens(route_type, logged_call_type, request_input)
 
         resent: Final = await prompt_tokens([*_HISTORY_BEFORE_COMPACTION, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION])
         dispatched_after_trim: Final = await prompt_tokens([_COMPACTION_ITEM, _TURN_AFTER_COMPACTION])
