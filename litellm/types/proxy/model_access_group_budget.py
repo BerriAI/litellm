@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -17,3 +19,6 @@ class ModelAccessGroupBudget(LiteLLMBaseModel):
     access_group_name: str
     spend: float = 0.0
     max_budget: float | None = None
+
+    soft_budget: float | None = None
+    budget_reset_at: datetime | None = None

@@ -458,15 +458,13 @@ def debitable_model_access_groups(
     served_model_id: str | None,
     router: _DeploymentLookup | None,
 ) -> tuple[str, ...]:
-    """Groups to debit: the set attributed at auth time, narrowed to those the served model belongs to.
-
-    The router may fall back to a model outside the pool auth reserved against, so the
-    attributed set is the hard upper bound: a group absent from it is never debited.
-    """
+    """Use the served deployment for opt-in accounting, otherwise narrow the auth grant."""
     ordered: Final = coerce_model_access_groups(attributed)
-    if not ordered:
-        return ()
+    deployment: Final = router.get_model_info(id=served_model_id) if router is not None and served_model_id else None
+    model_info: Final = deployment.get("model_info") if deployment is not None else None
     served: Final = _served_model_access_groups(router=router, served_model_id=served_model_id)
+    if isinstance(model_info, Mapping) and model_info.get("access_group_spend_attribution") == "deployment":
+        return tuple(sorted(served or ()))
     if served is None:
         return ordered
     return tuple(group for group in ordered if group in served)
@@ -513,6 +511,7 @@ class DBSpendUpdateWriter:
         end_time: datetime,
         response_cost: float | None,
         project_id: str | None = None,
+        resolved_model_access_groups: Sequence[str] | None = None,
     ) -> bool:
         """Record the request's spend, answering whether its cost still needs charging.
 
@@ -604,6 +603,7 @@ class DBSpendUpdateWriter:
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
                     request_model_access_groups=get_request_model_access_groups(kwargs),
+                    resolved_model_access_groups=resolved_model_access_groups,
                 )
             )
 
@@ -1023,6 +1023,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         request_model_access_groups: Sequence[str] = (),
         project_id: str | None = None,
+        resolved_model_access_groups: Sequence[str] | None = None,
     ):
         """
         Runs all 13 spend-update helpers sequentially inside a single asyncio task.
@@ -1116,6 +1117,7 @@ class DBSpendUpdateWriter:
             served_model_id=payload_copy.get("model_id"),
             prisma_client=prisma_client,
             router=get_llm_router(),
+            resolved_model_access_groups=resolved_model_access_groups,
         )
 
         _agent_id_for_spend: Final = payload_copy.get("agent_id")
@@ -1479,6 +1481,7 @@ class DBSpendUpdateWriter:
         served_model_id: str | None,
         prisma_client: PrismaClient | None,
         router: _DeploymentLookup | None = None,
+        resolved_model_access_groups: Sequence[str] | None = None,
     ) -> None:
         """
         Update spend for every model access group this request is billed against.
@@ -1494,11 +1497,16 @@ class DBSpendUpdateWriter:
             if prisma_client is None:
                 return
 
-            for model_access_group in debitable_model_access_groups(
-                attributed=request_model_access_groups,
-                served_model_id=served_model_id,
-                router=router,
-            ):
+            groups: Final = (
+                tuple(dict.fromkeys(resolved_model_access_groups))
+                if resolved_model_access_groups is not None
+                else debitable_model_access_groups(
+                    attributed=request_model_access_groups,
+                    served_model_id=served_model_id,
+                    router=router,
+                )
+            )
+            for model_access_group in groups:
                 await self.spend_update_queue.add_update(
                     update=SpendUpdateQueueItem(
                         entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP,

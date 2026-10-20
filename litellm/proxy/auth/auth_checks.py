@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -356,6 +357,12 @@ def _end_user_table(repo: _PrismaTableHolder[_PrismaEndUserRow]) -> _PrismaAuthT
 
 
 class _PrismaMaxBudgetRow(Protocol):
+    @property
+    def soft_budget(self) -> float | None: ...
+
+    @property
+    def budget_reset_at(self) -> datetime | None: ...
+
     @property
     def max_budget(self) -> float | None: ...
 
@@ -2415,6 +2422,8 @@ def _model_access_group_budget(row: _PrismaModelAccessGroupBudgetRow) -> ModelAc
         access_group_name=row.access_group_name,
         spend=row.spend or 0.0,
         max_budget=None if budget_table is None else budget_table.max_budget,
+        soft_budget=None if budget_table is None else budget_table.soft_budget,
+        budget_reset_at=None if budget_table is None else budget_table.budget_reset_at,
     )
 
 

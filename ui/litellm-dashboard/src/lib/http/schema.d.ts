@@ -50021,6 +50021,12 @@ export interface components {
         };
         /** ModelInfo */
         litellm__types__router__ModelInfo: {
+            /**
+             * Access Group Spend Attribution
+             * @default permission
+             * @enum {string}
+             */
+            access_group_spend_attribution: "permission" | "deployment";
             /** Access Windows */
             access_windows?: components["schemas"]["ModelAccessWindow"][] | null;
             /** Allow Fail Open */

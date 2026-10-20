@@ -511,3 +511,47 @@ async def test_batch_database_updates_enqueues_nothing_without_access_groups():
 
     updates = await _drain(writer.spend_update_queue)
     assert [update for update in updates if update["entity_type"] is Litellm_EntityType.MODEL_ACCESS_GROUP] == []
+
+
+@pytest.mark.parametrize("attributed", [(), ("pool",), ("wrong-pool",), ("pool", "pool")])
+def test_deployment_accounting_charges_actual_groups_independently_of_grants(attributed):
+    from typing import Final
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "selected-by-smart-router",
+                "litellm_params": {"model": "openai/group-budget-probe", "api_key": "synthetic"},
+                "model_info": {
+                    "id": "actual",
+                    "access_groups": ["pool", "pool", "other"],
+                    "access_group_spend_attribution": "deployment",
+                },
+            }
+        ]
+    )
+    assert debitable_model_access_groups(attributed, "actual", router) == ("other", "pool")
+    assert debitable_model_access_groups((), "unknown", router) == ()
+
+
+@pytest.mark.asyncio
+async def test_resolved_group_charge_is_not_recomputed_after_yaml_reload():
+    from typing import Final
+
+    writer: Final = DBSpendUpdateWriter()
+    await writer._update_model_access_group_db(
+        response_cost=0.42,
+        request_model_access_groups=(),
+        served_model_id="deployment-1",
+        prisma_client=object(),
+        router=_FakeRouter({"deployment-1": ["replacement-group"]}),
+        resolved_model_access_groups=("original-group", "original-group"),
+    )
+    assert await _drain(writer.spend_update_queue) == [
+        SpendUpdateQueueItem(
+            entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP,
+            entity_id="original-group",
+            response_cost=0.42,
+        )
+    ]

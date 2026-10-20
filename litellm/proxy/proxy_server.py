@@ -3069,8 +3069,9 @@ def cost_tracking():
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
-        litellm.logging_callback_manager.add_litellm_callback(ProxyDBLogger(spend_event_producer))
-        litellm.logging_callback_manager.add_litellm_async_success_callback(ProxyDBLogger(spend_event_producer))
+        spend_logger: Final = ProxyDBLogger(spend_event_producer)
+        litellm.logging_callback_manager.add_litellm_callback(spend_logger)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(spend_logger)
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
 
 

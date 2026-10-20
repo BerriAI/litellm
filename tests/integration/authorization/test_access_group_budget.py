@@ -429,3 +429,195 @@ def test_reservation_refuses_a_concurrent_call_while_an_in_flight_call_holds_the
             wire,
             f"Budget has been exceeded! Model access group={group.name} Current cost: {_MAX_BUDGET}, Max budget: {_MAX_BUDGET}",
         )
+
+
+def test_yaml_deployment_accounting_includes_router_subcalls_and_survives_restart(tmp_path: Path) -> None:
+    group: Final = f"yaml-pool-{uuid.uuid4().hex}"
+    target: Final = f"target-{uuid.uuid4().hex}"
+    judge_name: Final = f"judge-{uuid.uuid4().hex}"
+    smart: Final = f"smart-{uuid.uuid4().hex}"
+
+    def classifier(request: Request) -> Reply:
+        response: Final = _billed(request)
+        if request.method == "GET":
+            return response
+        body: Final = json.loads(response.body)
+        return Reply(
+            body=json.dumps(
+                {
+                    **body,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": '{"tier":"COMPLEX"}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+            ).encode()
+        )
+
+    def receive_alert(request: Request) -> Reply:
+        assert request.method == "POST"
+        return Reply(body=b"{}")
+
+    with (
+        wire_server(_billed) as upstream,
+        wire_server(classifier) as judge,
+        wire_server(receive_alert) as alerts,
+        httpx.Client() as client,
+    ):
+        seed: Final = Gateway(client, "sk-local-group-budget-test", upstream.url)
+        deployments: Final = [
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": f"openai/{_PROVIDER_MODEL}",
+                    "api_base": f"{url}/v1",
+                    "api_key": "synthetic",
+                    "input_cost_per_token": _INPUT_RATE,
+                    "output_cost_per_token": _OUTPUT_RATE,
+                },
+                "model_info": {"id": name, "access_groups": [group], "access_group_spend_attribution": "deployment"},
+            }
+            for name, url in ((target, upstream.url), (judge_name, judge.url))
+        ]
+        config: Final = {
+            "model_list": [
+                *deployments,
+                {
+                    "model_name": smart,
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "classifier_type": "llm",
+                            "classifier_llm_config": {"model": judge_name, "timeout_ms": 20000},
+                            "tiers": {"SIMPLE": target, "MEDIUM": target, "COMPLEX": target, "REASONING": target},
+                        },
+                    },
+                },
+            ],
+            "general_settings": {
+                "database_url": "os.environ/DATABASE_URL",
+                "master_key": seed.key,
+                "store_model_in_db": True,
+                "alerting": ["webhook"],
+                "alert_types": ["budget_alerts"],
+            },
+            "litellm_settings": {"timezone": "UTC"},
+        }
+        path: Final = tmp_path / "yaml-groups.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(seed, tmp_path, {"WEBHOOK_URL": alerts.url}, config=path) as candidate:
+            created: Final = candidate.request(
+                "PUT", f"/access_group/{group}/budget", {"soft_budget": _CALL_COST / 2, "budget_duration": "1mo"}
+            )
+            assert created.status_code == 200, created.text
+            budget: Final = created.json()["budget"]
+            assert budget["max_budget"] is None
+            assert budget["budget_reset_at"][8:10] == "01"
+            with candidate.scenario() as scenario:
+                key: Final = scenario.key(models=["*"])
+                for stream in (False, True):
+                    response: Final = candidate.request(
+                        "POST",
+                        "/v1/chat/completions",
+                        {
+                            "model": smart,
+                            "stream": stream,
+                            "messages": [{"role": "user", "content": f"route {uuid.uuid4().hex}"}],
+                        },
+                        key=key,
+                    )
+                    assert response.status_code == 200, response.text
+                    assert "billed" in response.text
+
+                def call(index: int) -> int:
+                    result: Final = candidate.request(
+                        "POST",
+                        "/v1/chat/completions",
+                        {
+                            "model": target,
+                            "messages": [{"role": "user", "content": str(index)}],
+                        },
+                        key=key,
+                    )
+                    assert result.status_code == 200, result.text
+                    return result.status_code
+
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    assert tuple(executor.map(call, range(4))) == (200, 200, 200, 200)
+                assert len(_provider_calls(upstream)) == 6
+                assert len(_provider_calls(judge)) == 2
+                spent: Final = eventually(
+                    lambda: candidate.request("GET", f"/access_group/{group}/budget").json()["spend"],
+                    lambda value: value >= 8 * _CALL_COST - 1e-10,
+                    seconds=70,
+                )
+                assert spent == pytest.approx(8 * _CALL_COST)
+                notifications: Final = tuple(json.loads(request.body) for request in alerts.drain())
+                assert any(
+                    event.get("event") == "soft_budget_crossed"
+                    and event.get("key_alias") == group
+                    and event.get("event_group") == "model_access_group"
+                    for event in notifications
+                ), notifications
+        with owned_proxy(seed, tmp_path, {}, config=path) as restarted:
+            persisted: Final = restarted.request("GET", f"/access_group/{group}/budget")
+            assert persisted.status_code == 200, persisted.text
+            assert persisted.json()["spend"] == pytest.approx(8 * _CALL_COST)
+            assert persisted.json()["budget"]["budget_id"] == budget["budget_id"]
+            assert restarted.request("DELETE", f"/access_group/{group}/budget").status_code == 200
+            assert restarted.request("POST", "/budget/delete", {"id": budget["budget_id"]}).status_code == 200
+
+
+def test_yaml_image_group_counts_identical_generations_once_each(tmp_path: Path) -> None:
+    group: Final = f"image-pool-{uuid.uuid4().hex}"
+    name: Final = f"images-{uuid.uuid4().hex}"
+    price: Final = 0.25
+
+    def image(request: Request) -> Reply:
+        if request.method == "GET":
+            return Reply(body=b'{"object":"list","data":[]}')
+        assert request.target == "/images/generations"
+        body: Final = json.loads(request.body)
+        assert "access_group_spend_attribution" not in body
+        return Reply(body=b'{"created":1700000000,"data":[{"b64_json":"aW1n"}]}')
+
+    with wire_server(image) as upstream, httpx.Client() as client:
+        seed: Final = Gateway(client, "sk-local-image-budget-test", upstream.url)
+        config: Final = {
+            "model_list": [
+                {
+                    "model_name": name,
+                    "litellm_params": {
+                        "model": "openai/dall-e-3",
+                        "api_base": upstream.url,
+                        "api_key": "synthetic",
+                        "output_cost_per_image": price,
+                    },
+                    "model_info": {"access_groups": [group], "access_group_spend_attribution": "deployment"},
+                }
+            ],
+            "general_settings": {"database_url": "os.environ/DATABASE_URL", "master_key": seed.key},
+        }
+        path: Final = tmp_path / "image-group.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(seed, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            created: Final = candidate.request("PUT", f"/access_group/{group}/budget", {"soft_budget": 0.1})
+            assert created.status_code == 200, created.text
+            budget_id: Final = created.json()["budget"]["budget_id"]
+            scenario.cleanups.callback(scenario.delete_budget, budget_id)
+            scenario.cleanups.callback(candidate.request, "DELETE", f"/access_group/{group}/budget")
+            key: Final = scenario.key(models=["*"])
+            body: Final = {"model": name, "prompt": "a scripted sea otter", "size": "1024x1024", "n": 1}
+            for _ in range(2):
+                response: Final = candidate.request("POST", "/v1/images/generations", body, key=key)
+                assert response.status_code == 200, response.text
+            spent: Final = eventually(
+                lambda: candidate.request("GET", f"/access_group/{group}/budget").json()["spend"],
+                lambda value: value >= 2 * price,
+                seconds=70,
+            )
+            assert spent == pytest.approx(2 * price)
+            assert len(tuple(request for request in upstream.drain() if request.method == "POST")) == 2

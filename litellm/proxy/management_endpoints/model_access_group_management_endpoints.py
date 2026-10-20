@@ -19,9 +19,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -273,9 +275,67 @@ async def _delete_model_access_group_budget_row(
     return row is not None
 
 
+class _GroupDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    model_name: str
+    model_info: Mapping[str, object]
+
+
+def access_groups_from_deployments(deployments: Sequence[_GroupDeployment]) -> Mapping[str, AccessGroupInfo]:
+    memberships: Final = tuple(_deployment_groups(deployment) for deployment in deployments)
+    names: Final = frozenset[str]().union(*(groups for _, groups in memberships))
+    return {
+        group: AccessGroupInfo(
+            access_group=group,
+            model_names=sorted({name for name, groups in memberships if group in groups}),
+            deployment_count=sum(group in groups for _, groups in memberships),
+        )
+        for group in names
+    }
+
+
+def _deployment_groups(deployment: _GroupDeployment) -> tuple[str, frozenset[str]]:
+    declared: Final = deployment.model_info.get("access_groups")
+    return deployment.model_name, frozenset(coerce_model_access_groups(declared))
+
+
+async def get_all_access_groups(prisma_client: PrismaClient) -> Mapping[str, AccessGroupInfo]:
+    from litellm.proxy.proxy_server import llm_router
+
+    rows: Final = await _model_table(prisma_client).find_many()
+    database_ids: Final = frozenset(row.model_id for row in rows)
+    database: Final = tuple(
+        _GroupDeployment(model_name=row.model_name, model_info=dict(model_info_as_mapping(row.model_info) or {}))
+        for row in rows
+    )
+    live: Final = llm_router.get_model_list() or () if llm_router is not None else ()
+    configured: Final = tuple(_GroupDeployment.model_validate(deployment) for deployment in live)
+    config_only: Final = tuple(
+        deployment
+        for deployment in configured
+        if deployment.model_info.get("id") not in database_ids and deployment.model_info.get("db_model") is not True
+    )
+    return access_groups_from_deployments((*database, *config_only))
+
+
+async def _reject_config_membership_mutation(
+    access_group: str, database_groups: Mapping[str, AccessGroupInfo], prisma_client: PrismaClient
+) -> None:
+    all_groups: Final = await get_all_access_groups(prisma_client)
+    discovered: Final = all_groups.get(access_group)
+    database: Final = database_groups.get(access_group)
+    if discovered is not None and discovered.deployment_count > (database.deployment_count if database else 0):
+        raise _http_error(
+            400, "This group contains config deployments. Edit their access_groups in config.yaml instead."
+        )
+
+
 async def _raise_404_if_model_access_group_missing(access_group: str, prisma_client: PrismaClient) -> None:
-    access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
-    if access_group not in access_groups_map:
+    access_groups_map: Final = await get_all_access_groups(prisma_client=prisma_client)
+    if (
+        access_group not in access_groups_map
+        and await _model_access_group_budget_row(access_group, prisma_client) is None
+    ):
         raise _http_error(404, f"Access group '{access_group}' not found")
 
 
@@ -529,41 +589,14 @@ def remove_access_group_from_deployment(model_info: dict[str, Any], access_group
 
 async def get_all_access_groups_from_db(
     prisma_client: PrismaClient,
-) -> dict[str, AccessGroupInfo]:
-    """
-    Get all access groups from the database.
-
-    Returns:
-        Dict[str, AccessGroupInfo]: Dictionary mapping access_group name to info
-    """
-    # Get all deployments
-    deployments: Final = await ModelRepository(prisma_client).table.find_many()
-
-    # Build access group map
-    model_names_by_group: Final[dict[str, list[str]]] = {}
-
-    for deployment in deployments:
-        model_info = deployment.model_info or {}
-        access_groups = model_info.get(  # pyright: ignore[reportAttributeAccessIssue]  # Json reads back as a dict
-            "access_groups", []
+) -> Mapping[str, AccessGroupInfo]:
+    deployments: Final = await _model_table(prisma_client).find_many()
+    return access_groups_from_deployments(
+        tuple(
+            _GroupDeployment(model_name=row.model_name, model_info=dict(model_info_as_mapping(row.model_info) or {}))
+            for row in deployments
         )
-        model_name = deployment.model_name
-
-        for access_group in access_groups:
-            if access_group not in model_names_by_group:
-                model_names_by_group[access_group] = []
-
-            model_names_by_group[access_group].append(model_name)
-
-    # Convert to AccessGroupInfo objects
-    return {
-        access_group: AccessGroupInfo(
-            access_group=access_group,
-            model_names=sorted(frozenset(model_names)),
-            deployment_count=len(model_names),
-        )
-        for access_group, model_names in model_names_by_group.items()
-    }
+    )
 
 
 @router.post(
@@ -653,7 +686,7 @@ async def create_model_group(
 
     try:
         # Check if access group already exists
-        existing_access_groups: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        existing_access_groups: Final = await get_all_access_groups(prisma_client=prisma_client)
 
         if data.access_group in existing_access_groups:
             raise HTTPException(
@@ -744,11 +777,20 @@ async def list_access_groups(
         )
 
     try:
-        access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        access_groups_map: Final = await get_all_access_groups(prisma_client=prisma_client)
         budget_rows: Final = await _model_access_group_budget_rows(prisma_client)
 
         access_groups_list: Final = sorted(
-            (_with_budget(info, budget_rows.get(info.access_group)) for info in access_groups_map.values()),
+            (
+                _with_budget(info, budget_rows.get(info.access_group))
+                for info in {
+                    **{
+                        name: AccessGroupInfo(access_group=name, model_names=[], deployment_count=0)
+                        for name in budget_rows
+                    },
+                    **access_groups_map,
+                }.values()
+            ),
             key=lambda group: group.access_group,
         )
 
@@ -798,17 +840,20 @@ async def get_access_group_info(
         )
 
     try:
-        access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        access_groups_map: Final = await get_all_access_groups(prisma_client=prisma_client)
 
-        if access_group not in access_groups_map:
+        budget_row: Final = await _model_access_group_budget_row(access_group, prisma_client)
+        if access_group not in access_groups_map and budget_row is None:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Access group '{access_group}' not found"},
             )
 
         return _with_budget(
-            access_groups_map[access_group],
-            await _model_access_group_budget_row(access_group, prisma_client),
+            access_groups_map.get(
+                access_group, AccessGroupInfo(access_group=access_group, model_names=[], deployment_count=0)
+            ),
+            budget_row,
         )
 
     except HTTPException:
@@ -884,6 +929,7 @@ async def update_access_group(
     # Validation: Check if access group exists
     try:
         access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        await _reject_config_membership_mutation(access_group, access_groups_map, prisma_client)
         if access_group not in access_groups_map:
             raise HTTPException(
                 status_code=404,
@@ -1018,6 +1064,7 @@ async def delete_access_group(
     # Validation: Check if access group exists
     try:
         access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        await _reject_config_membership_mutation(access_group, access_groups_map, prisma_client)
         if access_group not in access_groups_map:
             raise HTTPException(
                 status_code=404,
