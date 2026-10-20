@@ -486,10 +486,13 @@ SystemMessageContent: TypeAlias = str | list[object]
 _system_content_adapter: Final = TypeAdapter[SystemMessageContent | None](SystemMessageContent | None)
 
 
-def _system_content(message: ChatCompletionSystemMessage) -> SystemMessageContent:
+def _system_content(message: ChatCompletionSystemMessage) -> SystemMessageContent | None:
     if "content" not in message:
         return ""
-    content: Final = _system_content_adapter.validate_python(message["content"])
+    try:
+        content: Final = _system_content_adapter.validate_python(message["content"])
+    except ValidationError:
+        return None
     return "" if content is None else content
 
 
@@ -497,6 +500,9 @@ def _message_cache_control(message: ChatCompletionSystemMessage) -> ChatCompleti
     if "cache_control" not in message:
         return None
     return message["cache_control"]
+
+
+_SystemPart: TypeAlias = tuple[SystemMessageContent, ChatCompletionCachedContent | None]
 
 
 def _with_message_cache_control(
@@ -516,10 +522,8 @@ def _as_system_message(message: AllMessageValues) -> AllMessageValues:
 
 
 def _text_blocks(
-    message: ChatCompletionSystemMessage,
+    content: SystemMessageContent, cache_control: ChatCompletionCachedContent | None
 ) -> list[object]:  # mutable-ok: content block lists are the wire format callers isinstance-check
-    content: Final = _system_content(message)
-    cache_control: Final = _message_cache_control(message)
     if not isinstance(content, str):
         return _with_message_cache_control(content, cache_control)
     if not content:
@@ -543,10 +547,9 @@ def _lone_text_block_text(blocks: list[object]) -> str | None:
             return None
 
 
-def _plain_text(message: ChatCompletionSystemMessage) -> str | None:
-    if _message_cache_control(message):
+def _plain_text(content: SystemMessageContent, cache_control: ChatCompletionCachedContent | None) -> str | None:
+    if cache_control:
         return None
-    content: Final = _system_content(message)
     text: Final = content if isinstance(content, str) else _lone_text_block_text(content)
     if text is None or text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
         return None
@@ -559,17 +562,17 @@ def _is_system_message(
     return message["role"] == "system"
 
 
-def _merged_system_content(run: Sequence[ChatCompletionSystemMessage]) -> SystemMessageContent:
-    texts: Final = tuple(_plain_text(message) for message in run)
+def _merged_system_content(parts: Sequence[_SystemPart]) -> SystemMessageContent:
+    texts: Final = tuple(itertools.starmap(_plain_text, parts))
     if all(text is not None for text in texts):
         return "\n\n".join(text for text in texts if text)
-    return list(itertools.chain.from_iterable(map(_text_blocks, run)))
+    return list(itertools.chain.from_iterable(itertools.starmap(_text_blocks, parts)))
 
 
-def _merged_system_run(run: Sequence[ChatCompletionSystemMessage]) -> ChatCompletionSystemMessage:
-    if len(run) == 1:
-        return run[0]
-    content: Final = _merged_system_content(run)
+def _merged_system_message(
+    run: Sequence[ChatCompletionSystemMessage], parts: Sequence[_SystemPart]
+) -> ChatCompletionSystemMessage:
+    content: Final = _merged_system_content(parts)
     named: Final = next((message for message in reversed(run) if "name" in message), None)
     if named is None:
         merged: Final[ChatCompletionSystemMessage] = {"role": "system", "content": content}
@@ -578,12 +581,20 @@ def _merged_system_run(run: Sequence[ChatCompletionSystemMessage]) -> ChatComple
     return with_name
 
 
+def _merged_run(run: tuple[AllMessageValues, ...]) -> tuple[AllMessageValues, ...]:
+    system_run: Final = tuple(message for message in run if _is_system_message(message))
+    if len(system_run) < 2:
+        return run
+    contents: Final = tuple((_system_content(message), _message_cache_control(message)) for message in system_run)
+    parts: Final = tuple((content, cache_control) for content, cache_control in contents if content is not None)
+    if len(parts) != len(contents):
+        return run
+    return (_merged_system_message(system_run, parts),)
+
+
 def _merged_system_runs(messages: Sequence[AllMessageValues]) -> Iterator[AllMessageValues]:
-    for is_system, run in itertools.groupby(messages, key=_is_system_message):
-        if is_system:
-            yield _merged_system_run(tuple(message for message in run if _is_system_message(message)))
-        else:
-            yield from run
+    runs: Final = (tuple(run) for _, run in itertools.groupby(messages, key=_is_system_message))
+    return itertools.chain.from_iterable(map(_merged_run, runs))
 
 
 _INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
@@ -616,11 +627,23 @@ def hoisted_instruction_indices(roles: Sequence[str | None]) -> tuple[int, ...]:
     return (*range(leading_length), *moved)
 
 
-def _move_later_developer_messages_up(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+def _hoisted_message_order(messages: Sequence[AllMessageValues]) -> tuple[int, ...]:
     hoisted: Final = hoisted_instruction_indices(tuple(message["role"] for message in messages))
     hoisted_set: Final = frozenset(hoisted)
-    rest: Final = (index for index in range(len(messages)) if index not in hoisted_set)
-    return tuple(messages[index] for index in (*hoisted, *rest))
+    return (*hoisted, *(index for index in range(len(messages)) if index not in hoisted_set))
+
+
+def moves_a_later_developer_message(messages: Sequence[AllMessageValues]) -> bool:
+    return _hoisted_message_order(messages) != tuple(range(len(messages)))
+
+
+def merge_consecutive_system_messages(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+    """
+    Translate `developer` role to `system` role in place and fold each run of
+    consecutive system messages into one, for chat templates that render a single
+    system message per run.
+    """
+    return tuple(_merged_system_runs(tuple(map(_as_system_message, messages))))
 
 
 def hoist_developer_messages_into_leading_system_message(
@@ -635,5 +658,5 @@ def hoist_developer_messages_into_leading_system_message(
     assistant's turn. Each run of consecutive system messages is then folded into
     one message in a single pass.
     """
-    translated: Final = tuple(map(_as_system_message, _move_later_developer_messages_up(messages)))
-    return tuple(_merged_system_runs(translated))
+    order: Final = _hoisted_message_order(messages)
+    return merge_consecutive_system_messages(tuple(messages[index] for index in order))

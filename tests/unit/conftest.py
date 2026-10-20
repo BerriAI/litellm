@@ -316,6 +316,20 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
 
 
+@pytest.fixture
+def declare_mid_conversation_system(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, bool], None]:
+    def declare(model_cost_key: str, supported: bool) -> None:
+        entry: Final = {
+            "litellm_provider": model_cost_key.split("/", 1)[0],
+            "mode": "chat",
+            "supports_mid_conversation_system": supported,
+        }
+        monkeypatch.setitem(litellm.model_cost, model_cost_key, entry)
+        litellm.get_model_info.cache_clear()
+
+    return declare
+
+
 NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
 
 

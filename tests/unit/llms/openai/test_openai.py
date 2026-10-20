@@ -2024,15 +2024,21 @@ def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
 
 
 @pytest.mark.parametrize(
-    ("custom_llm_provider", "api_base", "expected_roles"),
+    ("custom_llm_provider", "api_base", "declared", "expected_roles"),
     [
-        ("openai", "https://api.openai.com/v1", ["system", "user", "assistant", "system", "user"]),
-        ("azure_ai", "https://example.services.ai.azure.com/models", ["system", "user", "assistant", "user"]),
+        ("openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
+        ("azure_ai", "https://example.services.ai.azure.com/models", None, ["system", "user", "assistant", "system", "user"]),
+        ("azure_ai", "https://example.services.ai.azure.com/models", False, ["system", "user", "assistant", "user"]),
     ],
 )
-def test_openai_config_hoists_a_later_developer_message_only_off_openai(custom_llm_provider, api_base, expected_roles):
+def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_openai_that_rejects_it(
+    declare_mid_conversation_system, custom_llm_provider, api_base, declared, expected_roles
+):
+    if declared is not None:
+        declare_mid_conversation_system(f"{custom_llm_provider}/system-first-model", declared)
     messages = OpenAIConfig().translate_developer_role_to_system_role(
         messages=_developer_message_after_a_user_turn(),
+        model="system-first-model",
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
     )

@@ -799,6 +799,7 @@ def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
 def test_azure_keeps_a_later_developer_message_in_place_as_system(config):
     messages = config.translate_developer_role_to_system_role(
         messages=_developer_message_after_a_user_turn(),
+        model="my-deployment",
         custom_llm_provider="azure",
         api_base="https://example-resource.openai.azure.com",
     )

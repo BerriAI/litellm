@@ -200,6 +200,7 @@ class BaseConfig(ABC):
         self,
         messages: Sequence[AllMessageValues],
         *,
+        model: str,
         custom_llm_provider: str | None,
         api_base: str | None,
     ) -> Sequence[AllMessageValues]:
@@ -207,7 +208,7 @@ class BaseConfig(ABC):
         Translate `developer` role to `system` role for non-OpenAI providers.
 
         Overridden by OpenAI, which keeps developer messages in place on its own
-        endpoint and hoists them into one leading system message for OpenAI-compatible
+        endpoint and folds them into the system messages of OpenAI-compatible
         backends, and by the o-series and Azure configs.
         """
         return map_developer_role_to_system_role(messages=messages)

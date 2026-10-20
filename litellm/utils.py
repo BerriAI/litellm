@@ -3288,6 +3288,29 @@ def supports_mid_conversation_system(model: str, custom_llm_provider: str | None
     )
 
 
+_PROVIDERS_ASSUMED_SYSTEM_FIRST: Final = frozenset({LlmProviders.FIREWORKS_AI.value})
+
+
+def _declared_mid_conversation_system_support(model: str, custom_llm_provider: str | None) -> bool | None:
+    try:
+        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except ModelNotMappedError:
+        return None
+    declared: Final = model_info.get("supports_mid_conversation_system")
+    return declared if isinstance(declared, bool) else None
+
+
+def accepts_mid_conversation_system(model: str, custom_llm_provider: str | None) -> bool:
+    """
+    Whether an OpenAI-compatible backend renders a system message after the first turn: the model's
+    declared `supports_mid_conversation_system` when its info sets one, else every provider but Fireworks.
+    """
+    declared: Final = _declared_mid_conversation_system_support(model, custom_llm_provider)
+    if declared is not None:
+        return declared
+    return custom_llm_provider not in _PROVIDERS_ASSUMED_SYSTEM_FIRST
+
+
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports native structured outputs and return a boolean value.

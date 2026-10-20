@@ -1074,7 +1074,10 @@ def test_map_azure_model_group(model_group_header, expected_model):
     assert config._map_azure_model_group(model_group_header) == expected_model
 
 
-def test_translate_developer_role_hoists_a_later_developer_message_into_one_leading_system_message():
+def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_that_rejects_it(
+    declare_mid_conversation_system,
+):
+    declare_mid_conversation_system("azure_ai/system-first-model", False)
     messages = AzureAIStudioConfig().translate_developer_role_to_system_role(
         messages=[
             {"role": "system", "content": "You are terse."},
@@ -1083,6 +1086,7 @@ def test_translate_developer_role_hoists_a_later_developer_message_into_one_lead
             {"role": "developer", "content": "Answer with exactly one word."},
             {"role": "user", "content": "What is the capital of France?"},
         ],
+        model="system-first-model",
         custom_llm_provider="azure_ai",
         api_base="https://example.services.ai.azure.com/models",
     )

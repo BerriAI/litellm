@@ -41,6 +41,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         self,
         messages: Sequence[AllMessageValues],
         *,
+        model: str,
         custom_llm_provider: str | None,
         api_base: str | None,
     ) -> Sequence[AllMessageValues]:

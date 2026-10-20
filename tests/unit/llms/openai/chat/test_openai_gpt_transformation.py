@@ -1806,19 +1806,24 @@ def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
 
 
 @pytest.mark.parametrize(
-    ("config", "custom_llm_provider", "api_base", "expected_roles"),
+    ("config", "custom_llm_provider", "api_base", "declared", "expected_roles"),
     [
-        (OpenAIGPTConfig(), "openai", "https://api.openai.com/v1", ["system", "user", "assistant", "system", "user"]),
-        (OpenAIGPT5Config(), "openai", "https://api.openai.com/v1", ["system", "user", "assistant", "system", "user"]),
-        (OpenAIGPTConfig(), "openai", "http://vllm.internal:8000/v1", ["system", "user", "assistant", "user"]),
-        (OpenAIGPTConfig(), "groq", None, ["system", "user", "assistant", "user"]),
+        (OpenAIGPTConfig(), "openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPT5Config(), "openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "openai", "http://vllm.internal:8000/v1", None, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "openai", "http://vllm.internal:8000/v1", False, ["system", "user", "assistant", "user"]),
+        (OpenAIGPTConfig(), "groq", None, None, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "groq", None, False, ["system", "user", "assistant", "user"]),
     ],
 )
-def test_translate_developer_role_hoists_a_later_developer_message_only_off_openai(
-    config, custom_llm_provider, api_base, expected_roles
+def test_translate_developer_role_hoists_a_later_developer_message_only_for_a_model_off_openai_that_rejects_it(
+    declare_mid_conversation_system, config, custom_llm_provider, api_base, declared, expected_roles
 ):
+    if declared is not None:
+        declare_mid_conversation_system(f"{custom_llm_provider}/system-first-model", declared)
     messages = config.translate_developer_role_to_system_role(
         messages=_developer_message_after_a_user_turn(),
+        model="system-first-model",
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
     )

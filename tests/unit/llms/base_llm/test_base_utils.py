@@ -1,4 +1,50 @@
-from litellm.llms.base_llm.base_utils import hoist_developer_messages_into_leading_system_message
+from litellm.llms.base_llm.base_utils import (
+    hoist_developer_messages_into_leading_system_message,
+    merge_consecutive_system_messages,
+)
+
+
+class TestMergeConsecutiveSystemMessages:
+    def test_later_developer_message_stays_in_place_while_the_leading_run_folds(self):
+        messages = [
+            {"role": "system", "content": "You are Codex"},
+            {"role": "developer", "content": "Sandbox: read-only."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        assert list(merge_consecutive_system_messages(messages)) == [
+            {"role": "system", "content": "You are Codex\n\nSandbox: read-only."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "system", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+
+    def test_run_with_content_that_is_neither_text_nor_blocks_is_forwarded_unmerged(self):
+        messages = [
+            {"role": "system", "content": "You are Codex"},
+            {"role": "developer", "content": {"text": "not a content list"}},
+            {"role": "user", "content": "Hi there"},
+        ]
+        assert list(merge_consecutive_system_messages(messages)) == [
+            {"role": "system", "content": "You are Codex"},
+            {"role": "system", "content": {"text": "not a content list"}},
+            {"role": "user", "content": "Hi there"},
+        ]
+
+    def test_hoisted_developer_message_with_content_that_is_neither_text_nor_blocks_is_forwarded_unmerged(self):
+        messages = [
+            {"role": "system", "content": "You are Codex"},
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": 42},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {"role": "system", "content": "You are Codex"},
+            {"role": "system", "content": 42},
+            {"role": "user", "content": "Hi there"},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
 
 
 class TestHoistDeveloperMessagesIntoLeadingSystemMessage:

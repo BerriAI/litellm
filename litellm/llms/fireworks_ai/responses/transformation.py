@@ -21,6 +21,7 @@ from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.utils import accepts_mid_conversation_system
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -142,6 +143,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         instructions, folded_input = (
             _with_instruction_items_folded(validated_input, instructions_param)
             if isinstance(instructions_param, str | None)
+            and not accepts_mid_conversation_system(model, self.custom_llm_provider.value)
             else (instructions_param, _developer_items_as_system(validated_input))
         )
         instruction_entries: Final = () if instructions is None else (("instructions", instructions),)

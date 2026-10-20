@@ -10703,3 +10703,20 @@ def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_e
 
     assert optional_params["extra_body"] == {"kept": True}
     assert "cache_control_injection_points" not in optional_params
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "declared", "accepts"),
+    [
+        ("fireworks_ai", None, False),
+        ("fireworks_ai", True, True),
+        ("hosted_vllm", None, True),
+        ("hosted_vllm", False, False),
+    ],
+)
+def test_accepts_mid_conversation_system_follows_the_declared_flag_else_the_provider_default(
+    declare_mid_conversation_system, custom_llm_provider, declared, accepts
+):
+    if declared is not None:
+        declare_mid_conversation_system(f"{custom_llm_provider}/mid-conversation-probe", declared)
+    assert litellm.utils.accepts_mid_conversation_system("mid-conversation-probe", custom_llm_provider) is accepts
