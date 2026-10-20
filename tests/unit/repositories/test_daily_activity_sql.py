@@ -113,8 +113,6 @@ def test_where_clause_distinguishes_no_filter_from_empty_membership(
 
 
 def test_where_clause_scopes_tag_rows_to_one_team_without_user_agent_tags() -> None:
-    """The team filter binds after every existing filter, so it never renumbers them, and the
-    User-Agent tags the proxy stamps on every request are left out of a team's tag breakdown."""
     scope = replace(
         _scope(table=DailyActivityTable.TAG, entity_ids=None, api_keys=("key-1",), model="gpt-test"),
         team_id="team-a",
@@ -131,7 +129,6 @@ def test_where_clause_scopes_tag_rows_to_one_team_without_user_agent_tags() -> N
 
 @pytest.mark.parametrize("table", [table for table in DailyActivityTable if table is not DailyActivityTable.TAG])
 def test_scope_rejects_a_team_id_on_any_table_but_the_tag_table(table: DailyActivityTable) -> None:
-    """Only LiteLLM_DailyTagSpend records the sending team in a team_id column next to its own entity."""
     with pytest.raises(ValueError, match="team_id applies only to litellm_dailytagspend"):
         replace(_scope(table=table), team_id="team-a")
 

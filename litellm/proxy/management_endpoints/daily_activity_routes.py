@@ -102,7 +102,6 @@ async def _resolved_scope(
     date_error: Final[InvalidDateRange | None] = _date_range_error(query, user_aggregated=user_aggregated)
     if date_error is not None:
         raise_public(date_error)
-    # A malformed request is a 400 before any permission lookup, the same as a bad date range.
     group_by_error: Final[str | None] = group_by_tag_error(query)
     if group_by_error is not None:
         raise_public(InvalidDateRange(reason=group_by_error))
