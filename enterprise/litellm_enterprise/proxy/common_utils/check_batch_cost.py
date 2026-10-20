@@ -2,6 +2,7 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
+import json
 from collections.abc import Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
@@ -336,7 +337,7 @@ class CheckBatchCost:
             "so it will no longer be polled"
         )
 
-    async def _claim_job_for_costing(self, job: "_ManagedObjectRow") -> bool:
+    async def _claim_job_for_costing(self, job: "_ManagedObjectRow", response: "LiteLLMBatch") -> bool:
         """
         Atomically flip batch_processed from false to true, returning whether this pod won
         the row. Every pod and uvicorn worker schedules its own poller against the shared
@@ -350,10 +351,16 @@ class CheckBatchCost:
         """
         if not self._has_batch_processed_column:
             return True
+        from litellm_enterprise.proxy.hooks.managed_files import postgres_storable_json
+
         try:
             claimed: Final = await _managed_object_table(self.prisma_client).update_many(
                 where={"id": job.id, "batch_processed": False},
-                data={"batch_processed": True},
+                data={
+                    "batch_processed": True,
+                    "status": response.status if response.status != "completed" else "complete",
+                    "file_object": postgres_storable_json(response),
+                },
             )
         except Exception as db_err:
             verbose_proxy_logger.error(
@@ -362,7 +369,9 @@ class CheckBatchCost:
             return False
         return claimed > 0
 
-    async def _release_job_claim(self, job: "_ManagedObjectRow") -> None:
+    async def _release_job_claim(
+        self, job: "_ManagedObjectRow", original_status: str | None, original_file_object: object
+    ) -> None:
         """Give a claimed row back once billing it failed, so a later poll cycle retries it.
 
         Safe to match on batch_processed=True: while this poller is active the retrieve
@@ -374,7 +383,11 @@ class CheckBatchCost:
         try:
             await _managed_object_table(self.prisma_client).update_many(
                 where={"id": job.id, "batch_processed": True},
-                data={"batch_processed": False},
+                data={
+                    "batch_processed": False,
+                    "status": original_status,
+                    "file_object": json.dumps(original_file_object),
+                },
             )
         except Exception as db_err:
             verbose_proxy_logger.error(
@@ -671,8 +684,6 @@ class CheckBatchCost:
 
     @staticmethod
     def _get_input_file_id(job: "_ManagedObjectRow") -> Optional[str]:
-        import json
-
         from litellm.types.utils import LiteLLMBatch
 
         file_object = job.file_object
@@ -899,7 +910,9 @@ class CheckBatchCost:
             custom_llm_provider=str(llm_provider) if llm_provider else None,
         )
 
-        if not await self._claim_job_for_costing(job):
+        original_status: Final = job.status
+        original_file_object: Final = job.file_object
+        if not await self._claim_job_for_costing(job, response.model_copy(update={"usage": batch_result.usage})):
             verbose_proxy_logger.info(
                 f"CheckBatchCost: batch {batch_id} (job {job.id}) was claimed by another pod "
                 "in this window, so its cost is already being tracked there"
@@ -918,7 +931,7 @@ class CheckBatchCost:
                 batch_completion_cost=batch_result.completion_cost,
             )
         except Exception:
-            await self._release_job_claim(job)
+            await self._release_job_claim(job, original_status, original_file_object)
             raise
 
         # Record batch duration (completed_at - created_at)
@@ -1061,22 +1074,19 @@ class CheckBatchCost:
                 # Track this job for the final metrics summary
                 processed_models.append(tracked)
 
-                # mark the job as complete
-                try:
-                    update_data: dict = {
-                        "status": response.status if response.status != "completed" else "complete",
-                        "file_object": response.model_dump_json(),
-                    }
-                    if self._has_batch_processed_column:
-                        update_data["batch_processed"] = True
-                    await _managed_object_table(self.prisma_client).update(
-                        where={"id": job.id},
-                        data=update_data,
-                    )
-                except Exception as db_err:
-                    verbose_proxy_logger.error(
-                        f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
-                    )
+                if not self._has_batch_processed_column:
+                    try:
+                        await _managed_object_table(self.prisma_client).update(
+                            where={"id": job.id},
+                            data={
+                                "status": response.status if response.status != "completed" else "complete",
+                                "file_object": response.model_dump_json(),
+                            },
+                        )
+                    except Exception as db_err:
+                        verbose_proxy_logger.error(
+                            f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
+                        )
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
                 from litellm.proxy.openai_files_endpoints.common_utils import (
