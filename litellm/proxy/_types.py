@@ -2869,30 +2869,6 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter."
         ),
     )
-    maximum_spend_logs_size: str | None = Field(
-        None,
-        description=(
-            "Size rule for spend logs (e.g. '180GB'): when LiteLLM_SpendLogs plus LiteLLM_SpendLogToolIndex "
-            "(heap, indexes and TOAST, measured with pg_total_relation_size) hold more live data than this, the "
-            "cleanup job deletes the oldest spend logs first until they are under "
-            "maximum_spend_logs_cleanup_target_size. Independent of maximum_spend_logs_retention_period: a row is "
-            "deleted when either rule says so. Unset means no size rule."
-        ),
-    )
-    maximum_spend_logs_cleanup_target_size: str | None = Field(
-        None,
-        description=(
-            "Level a size-triggered cleanup run deletes down to (e.g. '20GB'). Must be below maximum_spend_logs_size. "
-            "Unset means the run stops as soon as the tables are back under maximum_spend_logs_size."
-        ),
-    )
-    maximum_spend_logs_size_check_interval: str | None = Field(
-        None,
-        description=(
-            "How often the size rule is checked (e.g. '10m'). Defaults to '1d'. Ignored when "
-            "maximum_spend_logs_cleanup_cron is set, which then drives both the age and the size cleanup."
-        ),
-    )
     use_spend_logs_partitioning: bool | None = Field(
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",

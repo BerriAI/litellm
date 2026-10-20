@@ -62,14 +62,6 @@ def size_in_bytes(value: str | int) -> int:
 
 
 @dataclass(frozen=True, slots=True)
-class SizeRule:
-    """The size cleanup rule as configured: start cleaning above `limit_bytes`, stop under `target_bytes`."""
-
-    limit_bytes: int
-    target_bytes: int
-
-
-@dataclass(frozen=True, slots=True)
 class StorageProbe:
     """
     What the catalog says about the spend-log tables, read without scanning them.
@@ -451,46 +443,6 @@ class SpendLogCleanup:
         """
         self.retention_seconds = self._retention_seconds_for("maximum_spend_logs_retention_period")
         return self.retention_seconds is not None
-
-    def _setting(self, setting_name: str) -> object:
-        return self.general_settings.get(setting_name)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped settings dict
-
-    def _size_bytes_setting(self, setting_name: str) -> int | None:
-        """Parse one size setting into bytes, or None when unset or unusable."""
-        raw: Final = self._setting(setting_name)
-        if raw is None:
-            return None
-        if not isinstance(raw, (str, int)):
-            verbose_proxy_logger.warning("Invalid %s value: %r, ignoring it", setting_name, raw)
-            return None
-        try:
-            return size_in_bytes(raw)
-        except ValueError as e:
-            verbose_proxy_logger.warning("Invalid %s value: %r (%s), ignoring it", setting_name, raw, e)
-            return None
-
-    def _size_rule(self) -> SizeRule | None:
-        """
-        The size rule from settings, or None when maximum_spend_logs_size is unset.
-
-        A target at or above the limit cannot be what the operator meant, so it is reported and the run
-        cleans only until it is back under the limit, which is also what an unset target means.
-        """
-        limit_bytes: Final = self._size_bytes_setting("maximum_spend_logs_size")
-        if limit_bytes is None:
-            return None
-        target_bytes: Final = self._size_bytes_setting("maximum_spend_logs_cleanup_target_size")
-        if target_bytes is None:
-            return SizeRule(limit_bytes=limit_bytes, target_bytes=limit_bytes)
-        if target_bytes >= limit_bytes:
-            verbose_proxy_logger.error(
-                "maximum_spend_logs_cleanup_target_size (%s bytes) must be below maximum_spend_logs_size (%s bytes); "
-                "cleaning down to maximum_spend_logs_size instead",
-                target_bytes,
-                limit_bytes,
-            )
-            return SizeRule(limit_bytes=limit_bytes, target_bytes=limit_bytes)
-        return SizeRule(limit_bytes=limit_bytes, target_bytes=target_bytes)
 
     async def _probe_storage(self, prisma_client: PrismaClient, deadline: float) -> StorageProbe | None:
         """Read what the spend-log tables weigh from the catalog, or None when the probe fails or has no budget."""

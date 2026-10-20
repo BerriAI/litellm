@@ -1680,7 +1680,7 @@ async def test_a_cleanup_delete_batch_renders_a_postgres_delete_span_for_its_tab
     assert await postgres_span_names() == ("postgres.delete LiteLLM_SpendLogs",)
 
 
-# --- size rule (maximum_spend_logs_size) ---------------------------------------------------------------
+# --- spend log storage measurement and the reclaimable-bytes state ---------------------------------------
 
 
 def _storage(allocated: int, live: int, dead: int, inserted: int | None = None, deleted: int | None = None) -> dict:
@@ -1691,12 +1691,6 @@ def _storage(allocated: int, live: int, dead: int, inserted: int | None = None, 
         "inserted_total": live + dead if inserted is None else inserted,
         "deleted_total": dead if deleted is None else deleted,
     }
-
-
-def _size_cleaner(settings: dict, **kwargs) -> SpendLogCleanup:
-    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_size": "1GB", **settings}, **kwargs)
-    cleaner.pod_lock_manager = None
-    return cleaner
 
 
 @pytest.mark.parametrize(
@@ -1722,18 +1716,6 @@ def test_size_in_bytes_rejects_what_cannot_be_a_size(value):
 
     with pytest.raises(ValueError, match="size"):
         size_in_bytes(value)
-
-
-def test_an_unset_size_means_no_size_rule_and_a_bad_target_falls_back_to_the_size(caplog):
-    assert SpendLogCleanup(general_settings={})._size_rule() is None
-    rule = _size_cleaner({"maximum_spend_logs_cleanup_target_size": "200MB"})._size_rule()
-    assert rule is not None
-    assert (rule.limit_bytes, rule.target_bytes) == (1024**3, 200 * 1024**2)
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-        rule_without_room = _size_cleaner({"maximum_spend_logs_cleanup_target_size": "2GB"})._size_rule()
-    assert rule_without_room is not None
-    assert rule_without_room.target_bytes == rule_without_room.limit_bytes == 1024**3
-    assert any("must be below maximum_spend_logs_size" in record.getMessage() for record in caplog.records)
 
 
 _RUN_STATE = SizeCleanupState(
