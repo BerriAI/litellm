@@ -113,7 +113,7 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
     """
     Deleting rows never shrinks the table file, so the size pass must stop on live bytes, not on
     pg_total_relation_size, taking the oldest rows first and keeping the tool index on the same cutoff. Once
-    autovacuum has turned the deleted rows into free space the catalog no longer shows them as dead, and the
+    VACUUM has turned the deleted rows into free space the catalog no longer shows them as dead, and the
     files still measure the same; the next check must read what the last run freed from its saved count and
     leave the table alone instead of calling the whole file live again.
     """
@@ -140,13 +140,15 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
             setup.execute(
                 sql.SQL(
                     'CREATE TABLE {} (request_id text, "startTime" timestamp NOT NULL, payload text, '
-                    'PRIMARY KEY (request_id, "startTime"))'
+                    'PRIMARY KEY (request_id, "startTime")) '
+                    'WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)'
                 ).format(logs)
             )
             setup.execute(
                 sql.SQL(
                     "CREATE TABLE {} (request_id text, tool_name text, start_time timestamp NOT NULL, "
-                    "PRIMARY KEY (request_id, tool_name))"
+                    "PRIMARY KEY (request_id, tool_name)) "
+                    "WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)"
                 ).format(index)
             )
             setup.execute(sql.SQL("CREATE TABLE {} (param_name text PRIMARY KEY, param_value jsonb)").format(config))
