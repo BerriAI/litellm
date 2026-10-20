@@ -3,9 +3,13 @@ Tests for litellm.acount_tokens() public API.
 """
 
 import asyncio
+import json
 import os
 from unittest.mock import AsyncMock, patch
 
+import httpx
+import pytest
+import respx
 
 import litellm
 from litellm.types.utils import TokenCountResponse
@@ -159,13 +163,22 @@ def test_acount_tokens_no_api_key_falls_back(monkeypatch):
 
 
 
-def test_acount_tokens_sends_chat_tool_use_to_anthropic_in_the_shape_claude_inference_sends():
+@pytest.fixture
+def httpx_transport_clients(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def test_acount_tokens_sends_chat_tool_use_to_anthropic_in_the_shape_claude_inference_sends(httpx_transport_clients):
     schema = {"type": "object", "properties": {"city": {"type": "string"}}}
-    with patch(
-        "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler.handle_count_tokens_request",
-        new_callable=AsyncMock,
-        return_value={"input_tokens": 52},
-    ) as mock_handler:
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 52})
+        )
         result = asyncio.run(
             litellm.acount_tokens(
                 model="anthropic/claude-opus-5-5",
@@ -186,7 +199,7 @@ def test_acount_tokens_sends_chat_tool_use_to_anthropic_in_the_shape_claude_infe
         )
 
     assert (result.error, result.total_tokens) == (False, 52)
-    sent = mock_handler.call_args.kwargs
-    assert list(sent["tools"]) == [{"name": "get_weather", "input_schema": schema, "type": "custom"}]
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["tools"] == [{"name": "get_weather", "input_schema": schema, "type": "custom"}]
     assert [message["role"] for message in sent["messages"]] == ["user", "assistant", "user"]
     assert sent["messages"][2]["content"] == [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]
