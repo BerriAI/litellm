@@ -531,6 +531,9 @@ class KeyManagementEventHooks:
 
         from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
+        # generate_key_fn remaps token to the hashed token_id. The plaintext sk- key stays on key.
+        plaintext_key: Final = response.get("key") or response.get("token") or ""
+
         ##########################
         # v2 integration for emails (enterprise)
         ##########################
@@ -547,11 +550,11 @@ class KeyManagementEventHooks:
             )
             if len(initialized_email_loggers) > 0:
                 event = SendKeyCreatedEmailEvent(
-                    virtual_key=response.get("key", ""),
+                    virtual_key=plaintext_key,
                     event="key_created",
                     event_group=Litellm_EntityType.KEY,
                     event_message="API Key Created",
-                    token=response.get("token", ""),
+                    token=plaintext_key,
                     spend=response.get("spend", 0.0),
                     max_budget=response.get("max_budget", 0.0),
                     user_id=response.get("user_id", None),
@@ -577,7 +580,7 @@ class KeyManagementEventHooks:
                 event="key_created",
                 event_group=Litellm_EntityType.KEY,
                 event_message="API Key Created",
-                token=response.get("token", ""),
+                token=plaintext_key,
                 spend=response.get("spend", 0.0),
                 max_budget=response.get("max_budget", 0.0),
                 user_id=response.get("user_id", None),
