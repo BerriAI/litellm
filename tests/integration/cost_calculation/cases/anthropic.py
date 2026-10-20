@@ -4478,6 +4478,7 @@ CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -4502,7 +4503,7 @@ CLAUDE_SONNET_5_5_MESSAGES_STREAM: Final = CostTrackingTestCase(
     response=SseResponse(
         content_type="text/event-stream",
         frames=(
-            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-sonnet-5-5","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global"},"diagnostics":null}}',
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-sonnet-5-5","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}}',
             'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
             'event: ping\ndata: {"type":"ping"}',
             'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}',
@@ -4877,6 +4878,7 @@ CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -4901,7 +4903,7 @@ CLAUDE_HAIKU_5_5_MESSAGES_STREAM: Final = CostTrackingTestCase(
     response=SseResponse(
         content_type="text/event-stream",
         frames=(
-            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-haiku-5-5","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global"},"diagnostics":null}}',
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-haiku-5-5","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}}',
             'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
             'event: ping\ndata: {"type":"ping"}',
             'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}',
@@ -5639,6 +5641,7 @@ CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -5663,7 +5666,7 @@ CLAUDE_FABLE_5_1_MESSAGES_STREAM: Final = CostTrackingTestCase(
     response=SseResponse(
         content_type="text/event-stream",
         frames=(
-            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-fable-5-1","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global"},"diagnostics":null}}',
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-fable-5-1","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}}',
             'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
             'event: ping\ndata: {"type":"ping"}',
             'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"scripted "}}',
@@ -5974,6 +5977,7 @@ CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
                 "output_tokens_details": {"thinking_tokens": 0},
                 "service_tier": "standard",
                 "inference_geo": "global",
+                "speed": "standard",
             },
             "diagnostics": None,
         },
@@ -5998,7 +6002,7 @@ CLAUDE_OPUS_5_5_MESSAGES_STREAM: Final = CostTrackingTestCase(
     response=SseResponse(
         content_type="text/event-stream",
         frames=(
-            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-opus-5-5","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global"},"diagnostics":null}}',
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-opus-5-5","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}}',
             'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
             'event: ping\ndata: {"type":"ping"}',
             'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}',
