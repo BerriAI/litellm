@@ -2383,12 +2383,18 @@ class Logging(LiteLLMLoggingBaseClass):
         self, exception: Exception, traceback_exception: str
     ) -> Coroutine[None, None, None]:
         shared_payload: Final = self.model_call_details.get("standard_logging_object")
+        attempt_marker: Final = self.model_call_details.get("current_attempt_api_call_start_time")
         attempt: Final = self.attempt_scoped_copy()
 
         async def dispatch() -> None:
             await attempt.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
             attempt_payload: Final = attempt.model_call_details.get("standard_logging_object")
-            if attempt_payload is not None and self.model_call_details.get("standard_logging_object") is shared_payload:
+            current_marker: Final = self.model_call_details.get("current_attempt_api_call_start_time")
+            if (
+                attempt_payload is not None
+                and self.model_call_details.get("standard_logging_object") is shared_payload
+                and (current_marker is attempt_marker or current_marker == attempt_marker)
+            ):
                 self.model_call_details["standard_logging_object"] = attempt_payload
 
         return dispatch()

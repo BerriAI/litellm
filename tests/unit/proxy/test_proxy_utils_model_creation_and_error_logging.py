@@ -2415,6 +2415,119 @@ class _ReplaceSharedFailurePayload(CustomLogger):
         self.replaced.set()
 
 
+class _OrderedAttemptFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempt_a_started: asyncio.Event = asyncio.Event()
+        self.attempt_b_started: asyncio.Event = asyncio.Event()
+        self.release_attempt_a: asyncio.Event = asyncio.Event()
+        self.release_attempt_b: asyncio.Event = asyncio.Event()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: real_datetime.datetime,
+        end_time: real_datetime.datetime,
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        from litellm.types.utils import StandardLoggingPayload
+
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
+        if payload["model_id"] == "deployment-a":
+            self.attempt_a_started.set()
+            await self.release_attempt_a.wait()
+            return
+        if payload["model_id"] == "deployment-b":
+            self.attempt_b_started.set()
+            await self.release_attempt_b.wait()
+
+
+@pytest.mark.asyncio
+async def test_latest_dropped_attempt_publishes_its_payload_after_earlier_dispatch_finishes() -> None:
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import Usage
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    marker_a: Final = request_start
+    marker_b: Final = request_start + real_datetime.timedelta(seconds=1)
+    recorder: Final = _OrderedAttemptFailureRecorder()
+    logging_obj: Final = Logging(
+        model="deployment-model-a",
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-attempt-order",
+        function_id="fn-lit145-attempt-order",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="deployment-model-a",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-a"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": marker_a,
+        "combined_usage_object": Usage(prompt_tokens=4, completion_tokens=1, total_tokens=5),
+        "response_cost": 0.001,
+    }
+
+    attempt_a: Final = asyncio.create_task(
+        logging_obj.dispatch_attempt_failure_handlers(httpx.ReadError("attempt A dropped"), "")
+    )
+    await asyncio.wait_for(recorder.attempt_a_started.wait(), timeout=10)
+
+    logging_obj.carry_failed_attempt_usage()
+    logging_obj.update_environment_variables(
+        model="deployment-model-b",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-b"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "model": "deployment-model-b",
+        "custom_llm_provider": "anthropic",
+        "current_attempt_api_call_start_time": marker_b,
+        "combined_usage_object": Usage(prompt_tokens=7, completion_tokens=2, total_tokens=9),
+        "response_cost": 0.002,
+    }
+
+    attempt_b: Final = asyncio.create_task(
+        logging_obj.dispatch_attempt_failure_handlers(httpx.ReadError("attempt B dropped"), "")
+    )
+    await asyncio.wait_for(recorder.attempt_b_started.wait(), timeout=10)
+    recorder.release_attempt_a.set()
+    await attempt_a
+    recorder.release_attempt_b.set()
+    await attempt_b
+
+    request_data: Final = {"litellm_logging_obj": logging_obj}
+    lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    terminal_kwargs: Final = {
+        key: value
+        for key, value in {**request_data, **lifted}.items()
+        if key != "litellm_logging_obj"
+    }
+    row: Final = get_logging_payload(
+        kwargs=terminal_kwargs,
+        response_obj=httpx.ReadError("attempt B dropped"),
+        start_time=request_start,
+        end_time=request_start + real_datetime.timedelta(seconds=1),
+    )
+
+    assert row["model_id"] == "deployment-b"
+    assert row["custom_llm_provider"] == "anthropic"
+    assert row["model"] == "deployment-model-b"
+
+
 @pytest.mark.asyncio
 async def test_dropped_stream_failure_does_not_overwrite_newer_terminal_payload() -> None:
     from litellm.exceptions import MidStreamFallbackError
