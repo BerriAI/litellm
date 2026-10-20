@@ -232,8 +232,8 @@ class MistralConfig(OpenAIGPTConfig):
             return True
         raise UnsupportedParamsError(
             message=(
-                f"{self.custom_llm_provider} does not support parameters: ['prompt_cache_key'], for model={model} "
-                f"at api_base={api_base}, since only the Mistral API (*.mistral.ai) takes it. To drop it, set "
+                f"{self.custom_llm_provider} does not support parameters: ['prompt_cache_key'], for model={model}, "
+                "since only the Mistral API (*.mistral.ai) takes it. To drop it, set "
                 "`litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
             ),
             llm_provider=self.custom_llm_provider,

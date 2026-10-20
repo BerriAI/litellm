@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 
@@ -1187,8 +1188,11 @@ def test_prompt_cache_key_reaches_a_mistral_hosted_endpoint(api_base: str) -> No
 def test_prompt_cache_key_for_another_host_is_rejected_without_drop_params(api_base: str) -> None:
     import litellm
 
-    with pytest.raises(litellm.UnsupportedParamsError, match="prompt_cache_key"):
+    with pytest.raises(litellm.UnsupportedParamsError, match="prompt_cache_key") as rejection:
         _transform_with_prompt_cache_key({"api_base": api_base})
+
+    upstream_host: Final = urlparse(api_base).hostname or api_base
+    assert upstream_host not in str(rejection.value)
 
 
 def test_prompt_cache_key_for_another_host_is_dropped_under_drop_params() -> None:
