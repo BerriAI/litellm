@@ -4,6 +4,7 @@ from functools import reduce
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
@@ -101,6 +102,20 @@ def response_timing_metrics(
     return {"_response_ms": total_response_time_ms, "litellm_overhead_time_ms": overhead_ms}
 
 
+_HIDDEN_PARAMS_DICT: Final = TypeAdapter(dict[str, object])
+
+
+def _existing_provider_response_model(result: object) -> str | None:
+    """The pricing model a response already carries, like the decisions path sets, wins over the response model."""
+    hidden_params: Final[object] = getattr(result, "_hidden_params", None)
+    value: Final[object] = (
+        getattr(hidden_params, "provider_response_model", None)
+        if isinstance(hidden_params, HiddenParams)
+        else _HIDDEN_PARAMS_DICT.validate_python(hidden_params or {}).get("provider_response_model")
+    )
+    return value if isinstance(value, str) and value else None
+
+
 def _provider_response_model(result: object) -> str | None:
     """The model the provider answered with, kept because the proxy later rewrites ``result.model`` to the alias the
     client asked for and cost-map lookups for the standard logging payload would otherwise miss."""
@@ -154,15 +169,10 @@ class ResponseMetadata:
                 preserve_litellm_internal_headers=True,
             ),
             "litellm_model_name": model,
-            "provider_response_model": self._get_hidden_param("provider_response_model")
+            "provider_response_model": _existing_provider_response_model(self.result)
             or _provider_response_model(self.result),
         }
         self._update_hidden_params(new_params)
-
-    def _get_hidden_param(self, key: str) -> object | None:
-        if isinstance(self._hidden_params, dict):
-            return self._hidden_params.get(key)
-        return getattr(self._hidden_params, key, None)
 
     def _update_hidden_params(self, new_params: Mapping[str, object]) -> None:
         """
