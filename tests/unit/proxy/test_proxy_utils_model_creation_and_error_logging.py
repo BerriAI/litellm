@@ -2135,6 +2135,143 @@ def test_a_timed_out_request_is_priced_at_the_rate_the_router_registered_for_the
     assert response_cost == pytest.approx(usage.prompt_tokens * 0.25)
 
 
+def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(monkeypatch):
+    """The router leaves one RetryAttemptRecord per failed attempt in metadata.previous_models, the
+    final attempt included; the earlier Timeout ones are billed (each at the deployment that served
+    it), a 429 attempt is not, and the final attempt is left to the failure row itself."""
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "dep-lit145-b",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.25, "output_cost_per_token": 1.0},
+    )
+    usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+    public_rate, _ = litellm.cost_per_token(model=FAILURE_USAGE_MODEL, prompt_tokens=24)
+
+    attempts = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={
+            "metadata": {
+                "attempted_retries": 3,
+                "previous_models": (
+                    {"deployment_id": "dep-lit145-a", "exception_type": "Timeout", "attempted_retries": 0},
+                    {"deployment_id": "dep-lit145-b", "exception_type": "RateLimitError", "attempted_retries": 1},
+                    {"deployment_id": "dep-lit145-b", "exception_type": "Timeout", "attempted_retries": 2},
+                    {"deployment_id": "dep-lit145-a", "exception_type": "Timeout", "attempted_retries": 3},
+                ),
+            }
+        },
+        estimated_usage=usage,
+        base_model=None,
+        deployment_id="dep-lit145-a",
+    )
+
+    assert [(a.attempted_retries, a.deployment_id) for a in attempts] == [(0, "dep-lit145-a"), (2, "dep-lit145-b")]
+    assert attempts[0].response_cost == pytest.approx(public_rate)
+    assert attempts[0].response_cost > 0
+    assert attempts[1].response_cost == pytest.approx(24 * 0.25)
+    assert all(a.usage is usage for a in attempts)
+
+
+def test_earlier_attempts_are_priced_from_the_prompt_estimate_not_the_final_streams_recovered_usage():
+    """A final attempt whose stream broke mid-flight lifts its recovered usage (prompt plus the chunks
+    delivered); the earlier timed-out attempts never produced output, so they are priced from the
+    input-only estimate and not from that recovered usage."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _estimated_prompt_usage, _failure_fields_to_lift
+
+    logging_obj = _dispatched_failure_logging_obj(
+        FAILURE_USAGE_MODEL,
+        get_litellm_params(
+            metadata={
+                "attempted_retries": 1,
+                "model_info": {"id": "dep-lit145-final"},
+                "previous_models": (
+                    {"deployment_id": "dep-lit145-final", "exception_type": "Timeout", "attempted_retries": 0},
+                ),
+            }
+        ),
+    )
+    recovered = litellm.Usage(prompt_tokens=500, completion_tokens=40, total_tokens=540)
+    logging_obj.model_call_details["combined_usage_object"] = recovered
+    logging_obj.model_call_details["response_cost"] = 0.01
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    estimate = _estimated_prompt_usage(logging_obj.model_call_details, {})
+    assert lifted["combined_usage_object"] is recovered
+    assert [(a.usage.prompt_tokens, a.usage.completion_tokens) for a in lifted["billed_failed_attempts"]] == [
+        (estimate.prompt_tokens, 0)
+    ]
+    assert estimate.prompt_tokens < recovered.prompt_tokens
+
+
+def test_attempts_already_summed_into_the_final_row_are_not_lifted_again():
+    """``Logging.carry_failed_attempt_usage`` moves a cut stream's usage into ``failed_attempts_usage``
+    and the final row already bills every entry of it, so no earlier attempt gets a row of its own."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    logging_obj = _dispatched_failure_logging_obj(
+        FAILURE_USAGE_MODEL,
+        get_litellm_params(
+            metadata={
+                "attempted_retries": 1,
+                "model_info": {"id": "dep-lit145-final"},
+                "previous_models": (
+                    {"deployment_id": "dep-lit145-final", "exception_type": "Timeout", "attempted_retries": 0},
+                ),
+            }
+        ),
+    )
+    logging_obj.model_call_details["failed_attempts_usage"] = (
+        (litellm.Usage(prompt_tokens=24, completion_tokens=3, total_tokens=27), 0.001),
+    )
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    assert lifted["combined_usage_object"].prompt_tokens == 24
+    assert "billed_failed_attempts" not in lifted
+
+
+def test_a_timed_out_attempt_from_the_group_a_fallback_left_is_still_billed():
+    """After a fallback hop the router restarts ``attempted_retries`` at 0 for the new model group and
+    re-logs the attempt that exhausted the previous group, so the final attempt (dep-b, retry 1) must be
+    told from the previous group's attempt with the same count (dep-a, retry 1), and the re-logged
+    record must bill once."""
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+
+    attempts = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={
+            "metadata": {
+                "attempted_retries": 1,
+                "model_info": {"id": "dep-lit145-b"},
+                "previous_models": (
+                    {"deployment_id": "dep-lit145-a", "exception_type": "Timeout", "attempted_retries": 0},
+                    {"deployment_id": "dep-lit145-a", "exception_type": "Timeout", "attempted_retries": 1},
+                    {"deployment_id": "dep-lit145-a", "exception_type": "Timeout", "attempted_retries": 1},
+                    {"deployment_id": "dep-lit145-b", "exception_type": "Timeout", "attempted_retries": 0},
+                    {"deployment_id": "dep-lit145-b", "exception_type": "Timeout", "attempted_retries": 1},
+                ),
+            }
+        },
+        estimated_usage=usage,
+        base_model=None,
+        deployment_id="dep-lit145-b",
+    )
+
+    assert [(a.attempted_retries, a.deployment_id) for a in attempts] == [
+        (0, "dep-lit145-a"),
+        (1, "dep-lit145-a"),
+        (0, "dep-lit145-b"),
+    ]
+    assert all(a.response_cost > 0 for a in attempts)
+
+
 def _dispatched_failure_logging_obj(model: str, litellm_params: dict) -> object:
     """A Logging object as the failure hook sees it: litellm_params in the real get_litellm_params()
     shape (every key present, ``litellm_metadata`` None on chat completions) and a first-handoff
