@@ -77,6 +77,8 @@ class ProviderConnection:
     request_timeout: float | None = None
     force_timeout: float | None = None
     stream_timeout: float | str | None = None
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     tenant_id: str | None = None
     client_id: str | None = None
@@ -89,6 +91,7 @@ class ProviderConnection:
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
     github_copilot_auth_type: str | None = None
+    github_copilot_host: str | None = None
     github_copilot_user_session: object | None = None
     token_exchange_endpoint: str | None = None
     token_exchange_profile: str | None = None
@@ -101,6 +104,7 @@ class ProviderConnection:
 class BedrockBatchConnection:
     # Bedrock rejects these names in request bodies, so register them as LiteLLM-owned
     aws_batch_role_arn: str | None = None
+    aws_bedrock_control_plane_endpoint: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
     s3_endpoint_url: str | None = None
@@ -183,6 +187,7 @@ class DeploymentOptions:
     tpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    kubernetes_pod_discovery: bool | None = None
     default_api_key_rpm_limit: int | None = None
     default_api_key_tpm_limit: int | None = None
     max_parallel_requests: int | None = None

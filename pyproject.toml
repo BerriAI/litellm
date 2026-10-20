@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.107.0"
+version = "1.108.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -29,6 +29,7 @@ dependencies = [
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
+    "anyio>=4.14.0,<5.0",
     "async-timeout>=4.0.3,<6.0; python_version < '3.11'",
     "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
     "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
@@ -74,11 +75,11 @@ proxy = [
     "boto3>=1.43.1,<2.0",
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
-    "mcp>=2.2.0,<3",
-    "httpx2>=2.5.0,<3",
+    "mcp>=2.3.0,<3",
+    "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.110",
-    "litellm-enterprise==0.1.78",
+    "litellm-proxy-extras==0.4.111",
+    "litellm-enterprise==0.1.79",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -87,6 +88,7 @@ proxy = [
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "expression>=5.6.0,<6.0",
+    "backports-zstd>=1.0.0,<2.0; python_version < '3.14'",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports are all guarded, so it runs on the base SDK plus these packages, and
@@ -123,7 +125,7 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
-mcp = ["mcp>=2.2.0,<3", "httpx2>=2.5.0,<3", "pydantic>=2.12.0,<3"]
+mcp = ["mcp>=2.3.0,<3", "httpx2>=2.10.0,<3", "pydantic>=2.12.0,<3"]
 # Driver for the MongoDB Atlas vector store; Atlas Vector Search has no HTTP query API.
 # The floor is 4.9 because that is the release AsyncMongoClient landed in.
 # SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
@@ -241,7 +243,7 @@ e2e-dev = [
     "locust==2.45.0",
     "anthropic==0.84.0",
     "psutil==7.2.2",
-    "mcp>=2.2.0,<3",
+    "mcp>=2.3.0,<3",
 ]
 admin-mcp = [
     "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
@@ -258,6 +260,7 @@ proxy-dev = [
     "opentelemetry-instrumentation-fastapi==0.54b1",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
+    "backports-zstd==1.8.0; python_version < '3.14'",
 ]
 ci = [
     "psutil==7.2.2",
@@ -266,7 +269,8 @@ ci = [
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
-    "Pillow==12.3.0",
+    "Pillow==12.3.0; python_version == '3.10'",
+    "Pillow==13.0.0; python_version >= '3.11'",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",
@@ -300,7 +304,7 @@ healthcheck = [
 benchmarks = [
     "pytest==9.0.3",
     "pytest-codspeed==4.3.0",
-    "mcp>=2.2.0,<3",
+    "mcp>=2.3.0,<3",
     "a2a-sdk==1.1.0",
 ]
 
@@ -360,6 +364,7 @@ override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
     "packaging>=24.0",
     "cryptography>=50.0.0,<51.0",
+    "mcp>=2.3.0,<3",
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
@@ -373,7 +378,7 @@ litellm-enterprise = { workspace = true }
 members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.commitizen]
-version = "1.107.0"
+version = "1.108.0"
 version_files = [
     "pyproject.toml:^version",
 ]

@@ -9,17 +9,20 @@ import json
 import unittest
 from collections.abc import Mapping
 from typing import Any, Final, Literal, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
 
 import litellm
+from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.router import RouterErrors
 from tests._master_key import MASTER_KEY
 
 
@@ -1076,6 +1079,9 @@ def _managed_files_over(table: _UniqueManagedObjectTable) -> tuple[MagicMock, Ma
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deprecatedverificationtoken.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deletedteamtable.find_first = AsyncMock(return_value=None)
     proxy_logging: Final = MagicMock()
     proxy_logging.get_proxy_hook = MagicMock(
         return_value=_PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=prisma_client)
@@ -1648,7 +1654,7 @@ class TestManagedResponsesWSFirstMessage:
 
         processed: list = []
 
-        async def fake_process(msg: str) -> None:
+        async def fake_process(msg: str, turn_admission: object = None) -> None:
             processed.append(msg)
 
         handler = ManagedResponsesWebSocketHandler(
@@ -1693,30 +1699,32 @@ class TestResponsesWSStreamingFirstMessage:
         backend_ws.send.assert_awaited_once_with(first)
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "expected_type"),
+    [
+        (ValueError("No deployments available - crossed budget: Exceeded budget for deployment"), 429, "rate_limit_exceeded"),
+        (litellm.BadRequestError(message="bad input", model="m", llm_provider="openai"), 400, "invalid_request_error"),
+        (RuntimeError("boom"), 500, "server_error"),
+        (ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}=['free']"), 401, "invalid_request_error"),
+        (ProxyException(message="Authentication Error", type="auth_error", param=None, code=401), 401, "invalid_request_error"),
+        (HTTPException(status_code=403, detail="key not allowed"), 403, "invalid_request_error"),
+    ],
+    ids=["crossed-budget", "bad-request", "unexpected", "tag-routing", "proxy-auth", "http-exception"],
+)
+def test_responses_ws_failure_frame_uses_the_http_status_for_the_same_failure(
+    failure: Exception, expected_status: int, expected_type: str
+):
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_frame
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    frame: Final = json.loads(_responses_ws_failure_frame(failure))
+
+    assert frame["status"] == expected_status
+    assert frame["error"]["type"] == expected_type
+    assert frame["error"]["message"] == handle_exception_on_proxy(failure).message
+
+
 class TestWSSessionCostTracking:
-    @pytest.mark.asyncio
-    async def test_router_budget_limiter_skips_aresponses_websocket_call_type(self):
-        """
-        RouterBudgetLimiting.async_log_success_event must not raise when
-        call_type='_aresponses_websocket', even when standard_logging_object is None.
-        Per-turn costs are tracked by individual aresponses calls inside the session;
-        the outer session wrapper fires with result=None.
-        """
-        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
-
-        limiter = RouterBudgetLimiting.__new__(RouterBudgetLimiting)
-        kwargs = {
-            "call_type": "_aresponses_websocket",
-            "standard_logging_object": None,
-            "litellm_params": {"custom_llm_provider": "vertex_ai"},
-        }
-        await limiter.async_log_success_event(
-            kwargs=kwargs,
-            response_obj=None,
-            start_time=None,
-            end_time=None,
-        )
-
     @pytest.mark.asyncio
     async def test_router_budget_limiter_skips_arealtime_call_type(self):
         """Same guard applies to _arealtime WS session wrappers."""
@@ -1996,7 +2004,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 "standard_logging_guardrail_information": [{"guardrail_name": "admission"}],
             },
         }
-        guard = _responses_ws_frame_guard(admitted, MagicMock(), proxy_logging_obj)
+        guard = _responses_ws_frame_guard(admitted, MagicMock(), proxy_logging_obj, MagicMock())
 
         first = await guard(json.dumps({"type": "response.create", "model": "alias", "input": "hi"}))
         second = await guard(json.dumps({"type": "response.create", "input": "again"}))
@@ -2027,7 +2035,7 @@ class TestResponsesWSFirstFrameModelAuth:
         rate_limiter.async_post_call_failure_hook = AsyncMock()
         user_api_key_dict = MagicMock()
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {}}, user_api_key_dict, proxy_logging_obj
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, user_api_key_dict, proxy_logging_obj, MagicMock()
         )
 
         with (
@@ -2059,7 +2067,7 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
         )
         tools = [{"type": "function", "name": "a"}, {"type": "function", "name": "b"}]
 
@@ -2078,7 +2086,7 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
         )
         metadata = {
             "user_api_key_metadata": {"disable_global_guardrails": True},
@@ -2109,6 +2117,7 @@ class TestResponsesWSFirstFrameModelAuth:
             {"model": "gpt-4o-mini", "litellm_metadata": {"guardrails": ["key-required"]}},
             MagicMock(),
             proxy_logging_obj,
+            MagicMock(),
         )
 
         await guard(json.dumps(frame))
@@ -2131,6 +2140,7 @@ class TestResponsesWSFirstFrameModelAuth:
             {"model": "gpt-4o-mini", "litellm_metadata": {"litellm_parent_otel_span": span}},
             MagicMock(),
             proxy_logging_obj,
+            MagicMock(),
         )
 
         guarded = await guard(json.dumps({"type": "response.create", "input": "hi"}))
@@ -2156,7 +2166,7 @@ class TestResponsesWSFirstFrameModelAuth:
         spend_logger = MagicMock(spec=ProxyDBLogger)
         spend_logger.async_post_call_failure_hook = AsyncMock()
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
         )
 
         with (
@@ -2189,7 +2199,7 @@ class TestResponsesWSFirstFrameModelAuth:
         spend_logger = MagicMock(spec=ProxyDBLogger)
         spend_logger.async_post_call_failure_hook = AsyncMock()
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
         )
         body = {
             "input": "forbidden",
@@ -2215,7 +2225,7 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
         )
         body = {"instructions": "SECRET system prompt", "input": "hi", "store": False}
         frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
@@ -2240,7 +2250,7 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
         )
 
         with patch.object(litellm, "callbacks", []):
@@ -2264,7 +2274,7 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
         )
 
         with patch.object(litellm, "callbacks", []), pytest.raises(ValueError, match="both at the top level"):
@@ -2283,7 +2293,7 @@ class TestResponsesWSFirstFrameModelAuth:
         spend_logger = MagicMock(spec=ProxyDBLogger)
         spend_logger.async_post_call_failure_hook = AsyncMock(side_effect=RuntimeError("db down"))
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
         )
 
         with patch.object(litellm, "callbacks", [spend_logger]), pytest.raises(ValueError, match="blocked"):
@@ -2359,6 +2369,345 @@ class TestResponsesWSFirstFrameModelAuth:
         assert booked["original_exception"] is failure
         assert booked["user_api_key_dict"] is user_api_key_dict
         assert booked["request_data"]["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("ending", ["refusal", "crash", "session_limit"])
+    async def test_close_time_failure_row_bills_the_guardrails_of_the_turns_the_deployment_refused(self, ending: str):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.close = AsyncMock()
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {"model_group": "gpt-4o-mini"}}, MagicMock())
+        )
+        guardrail_costs = {"two": 0.2, "three": 0.3, "four": 0.4}
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        later_refusal = RateLimitError(message="still over budget", llm_provider="", model="")
+        crash = RuntimeError("relay crashed")
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            recorded = [{"guardrail_cost": guardrail_costs[data["input"]]}]
+            return {
+                **data,
+                "litellm_metadata": {**data["litellm_metadata"], "standard_logging_guardrail_information": recorded},
+            }
+
+        def route_request(data, **kwargs):
+            async def relay():
+                for turn in ("two", "three", "four"):
+                    guarded = await data["responses_ws_frame_guard"](
+                        json.dumps({"type": "response.create", "input": turn})
+                    )
+                    if turn != "three":
+                        guarded.bill_refusal(refusal if turn == "two" else later_refusal)
+                if ending == "crash":
+                    raise crash
+                if ending == "session_limit":
+                    await asyncio.Event().wait()
+                return refusal
+
+            return relay()
+
+        row_written = asyncio.Event()
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=lambda **kwargs: row_written.set())
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands the relay its frame guard and returns its outcome
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route_request,
+            ),
+            patch(  # test-quality-ok: a short session limit stands in for the configured one so the cap fires mid-session
+                "litellm.proxy.response_api_endpoints.endpoints._resolve_responses_ws_session_limit_seconds",
+                return_value=0.05 if ending == "session_limit" else 3600.0,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
+            await asyncio.wait_for(row_written.wait(), timeout=1)
+
+        proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+        proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
+        booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+        assert booked["original_exception"] is (crash if ending == "crash" else refusal)
+        assert booked["request_data"]["litellm_metadata"] == {
+            "model_group": "gpt-4o-mini",
+            "standard_logging_guardrail_information": [{"guardrail_cost": 0.2}, {"guardrail_cost": 0.4}],
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "relay_outcome",
+        ["still_relaying", "already_returned", "returns_despite_the_cancel", "crashes_despite_the_cancel"],
+    )
+    async def test_session_limit_frees_the_slot_at_once_and_never_cuts_the_failure_row(self, relay_outcome: str):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        async def close_over_the_network(**kwargs):
+            await asyncio.sleep(0)
+
+        ws.close = AsyncMock(side_effect=close_over_the_network)
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        crash = RuntimeError("relay crashed")
+        row_may_finish = asyncio.Event()
+        row_written = asyncio.Event()
+
+        async def slow_failure_hook(**kwargs):
+            await row_may_finish.wait()
+            row_written.set()
+
+        def route_request(data, **kwargs):
+            async def relay():
+                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
+                guarded.bill_refusal(refusal)
+                if relay_outcome == "still_relaying":
+                    await asyncio.Event().wait()
+                if relay_outcome in ("returns_despite_the_cancel", "crashes_despite_the_cancel"):
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.Event().wait()
+                if relay_outcome == "crashes_despite_the_cancel":
+                    raise crash
+                return refusal
+
+            return relay()
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
+        async def release_over_the_network(user_api_key_dict):
+            await asyncio.sleep(0.01)
+
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(side_effect=release_over_the_network)
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands the relay its frame guard and returns its outcome
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route_request,
+            ),
+            patch(  # test-quality-ok: a short session limit stands in for the configured one so the cap fires mid-session
+                "litellm.proxy.response_api_endpoints.endpoints._resolve_responses_ws_session_limit_seconds",
+                return_value=0.05,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            endpoint = asyncio.ensure_future(
+                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
+            )
+            finished, _ = await asyncio.wait({endpoint}, timeout=1)
+            assert endpoint in finished
+            limit_close = call(code=1000, reason="Session duration limit reached")
+            crash_close = call(code=1011, reason="Internal server error")
+            crashed = relay_outcome == "crashes_despite_the_cancel"
+            assert ws.close.await_args_list == ([limit_close, crash_close] if crashed else [limit_close])
+            proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
+            assert not row_written.is_set()
+            row_may_finish.set()
+            await asyncio.wait_for(row_written.wait(), timeout=1)
+
+        assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"] is (crash if crashed else refusal)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("ending", ["client_closed", "crash"])
+    async def test_a_closed_socket_frees_its_slot_before_its_failure_row_and_waits_for_the_row(self, ending: str):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.close = AsyncMock()
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        crash = RuntimeError("relay crashed")
+        row_started = asyncio.Event()
+        row_may_finish = asyncio.Event()
+        row_written = asyncio.Event()
+
+        async def slow_failure_hook(**kwargs):
+            row_started.set()
+            await row_may_finish.wait()
+            row_written.set()
+
+        def route_request(data, **kwargs):
+            async def relay():
+                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
+                guarded.bill_refusal(refusal)
+                if ending == "crash":
+                    raise crash
+                return refusal
+
+            return relay()
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands the relay its frame guard and returns its outcome
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route_request,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            endpoint = asyncio.ensure_future(
+                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
+            )
+            await asyncio.wait_for(row_started.wait(), timeout=1)
+            proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
+            finished_early, _ = await asyncio.wait({endpoint}, timeout=0.05)
+            assert endpoint not in finished_early
+            row_may_finish.set()
+            finished, _ = await asyncio.wait({endpoint}, timeout=1)
+            assert endpoint in finished
+            assert row_written.is_set()
+
+        booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+        assert booked["original_exception"] is (crash if ending == "crash" else refusal)
+
+    @pytest.mark.asyncio
+    async def test_a_crashed_socket_whose_failure_row_cannot_be_built_still_gets_its_error_frame_and_close(self):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        sent = []
+        closes = []
+        ws.send_text = AsyncMock(side_effect=sent.append)
+        ws.close = AsyncMock(side_effect=lambda code, reason: closes.append((code, reason)))
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+
+        def route_request(data, **kwargs):
+            async def relay():
+                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
+                guarded.bill_refusal(refusal)
+                data["litellm_metadata"]["standard_logging_guardrail_information"] = "written by a broken callback"
+                raise RuntimeError("relay crashed")
+
+            return relay()
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: {
+                **data,
+                "litellm_metadata": {"standard_logging_guardrail_information": [{"guardrail_name": "turn-check"}]},
+            }
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock()
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands the relay its frame guard and returns its outcome
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route_request,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await asyncio.wait_for(
+                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock()), timeout=1
+            )
+
+        assert [json.loads(frame)["error"]["message"] for frame in sent] == ["relay crashed"]
+        assert closes == [(1011, "Internal server error")]
 
     @pytest.mark.asyncio
     async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(self):
@@ -3825,10 +4174,17 @@ class TestResponsesInputTokens:
         path: str = "/v1/responses/input_tokens",
         counter: AsyncMock | None = None,
         llm_router: litellm.Router | None = None,
+        response_id_security: object | None = None,
+        managed_files: object | None = None,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy.response_api_endpoints.endpoints import _proxy_llm_router, _proxy_token_counter
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _proxy_llm_router,
+            _proxy_managed_files_hook,
+            _proxy_response_id_security,
+            _proxy_token_counter,
+        )
         from litellm.types.utils import TokenCountResponse
 
         token_counter_mock = (
@@ -3846,6 +4202,10 @@ class TestResponsesInputTokens:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", request_route=path)
         app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
         app.dependency_overrides[_proxy_llm_router] = lambda: llm_router
+        if response_id_security is not None:
+            app.dependency_overrides[_proxy_response_id_security] = lambda: response_id_security
+        if managed_files is not None:
+            app.dependency_overrides[_proxy_managed_files_hook] = lambda: managed_files
         try:
             client = TestClient(app)
             response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
@@ -3854,6 +4214,8 @@ class TestResponsesInputTokens:
             app.dependency_overrides.pop(user_api_key_auth, None)
             app.dependency_overrides.pop(_proxy_token_counter, None)
             app.dependency_overrides.pop(_proxy_llm_router, None)
+            app.dependency_overrides.pop(_proxy_response_id_security, None)
+            app.dependency_overrides.pop(_proxy_managed_files_hook, None)
 
     def test_string_input_returns_openai_input_tokens_shape(self):
         response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "Hello, how are you?"})
@@ -3978,6 +4340,139 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools == [{"type": "web_search"}]
+        assert counter.await_args.kwargs["responses_request"]["tools"] == [{"type": "web_search"}]
+
+    @pytest.mark.parametrize(
+        ("tools", "expected"),
+        [
+            ([5], {}),
+            (
+                [5, {"type": "web_search"}],
+                {"tools": [{"type": "web_search"}], "tool_choice": "required", "parallel_tool_calls": False},
+            ),
+        ],
+    )
+    def test_tool_choice_leaves_the_count_with_the_tools_drop_params_drops(
+        self, tools: list[object], expected: dict[str, object]
+    ) -> None:
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": "hi",
+                "tools": tools,
+                "tool_choice": "required",
+                "parallel_tool_calls": False,
+                "drop_params": True,
+            }
+        )
+
+        assert response.status_code == 200, response.text
+        sent = counter.await_args.kwargs["responses_request"]
+        assert {name: sent[name] for name in ("tools", "tool_choice", "parallel_tool_calls") if name in sent} == expected
+
+    def test_previous_response_id_reaches_the_counter_authorized_next_to_the_id_the_client_held(self) -> None:
+        from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
+
+        class DecodingSecurity:
+            def authorize_response_id(self, response_id: str, user_api_key_dict: object) -> str:
+                return {"resp_client_form": "resp_raw"}[response_id]
+
+        response, counter = self._post_input_tokens(
+            {"model": "gpt-4o", "input": "hi", "previous_response_id": "resp_client_form"},
+            response_id_security=DecodingSecurity(),
+        )
+
+        assert response.status_code == 200, response.text
+        responses_request: Final = counter.await_args.kwargs["responses_request"]
+        assert (responses_request["previous_response_id"], responses_request[ADDRESSED_RESPONSE_ID_FIELD]) == (
+            "resp_raw",
+            "resp_client_form",
+        )
+
+    def test_managed_file_ids_reach_the_counter_with_the_mapping_inference_uses(self) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        mapping: Final = {"litellm-managed-file": {"deployment-a": "file-on-a"}}
+
+        class ManagedFiles(CustomLogger):
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                if call_type == "aresponses":
+                    data["model_file_id_mapping"] = mapping
+                return None
+
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+            },
+            managed_files=ManagedFiles(),
+        )
+
+        assert response.status_code == 200, response.text
+        assert counter.await_args.kwargs["responses_request"]["model_file_id_mapping"] == mapping
+
+    @pytest.mark.parametrize("caller_mapping", [5, "lots", [1], {"file-x": {"deployment-a": 7}}])
+    def test_a_caller_sent_model_file_id_mapping_does_not_break_the_count(
+        self, monkeypatch: pytest.MonkeyPatch, caller_mapping: object
+    ) -> None:
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
+        from litellm.proxy.proxy_server import count_request_tokens
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-files",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "test-key",
+                        "api_base": "https://count.test/v1",
+                    },
+                    "model_info": {"id": "deployment-a"},
+                }
+            ]
+        )
+        monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+        sent: Final[list[object]] = []  # mutable-ok: collects what the mock peer receives
+
+        def count_peer(request: httpx.Request) -> httpx.Response:
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 7}, request=request)
+
+        with patch.object(
+            openai_count_tokens_http,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+        ):
+            response, _ = self._post_input_tokens(
+                {"model": "gpt-files", "input": "hi", "model_file_id_mapping": caller_mapping},
+                counter=AsyncMock(side_effect=count_request_tokens),
+                llm_router=router,
+            )
+
+        assert (response.status_code, response.json().get("input_tokens")) == (200, 7), response.text
+        assert sent == [{"model": "gpt-4o-mini", "input": "hi"}]
+
+    def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        denied: Final = "User u1 does not have access to the file litellm-managed-file"
+
+        class ManagedFiles(CustomLogger):
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                raise HTTPException(status_code=403, detail=denied)
+
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+            },
+            managed_files=ManagedFiles(),
+        )
+
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["message"] == denied
+        counter.assert_not_awaited()
 
     def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self) -> None:
         router: Final = litellm.Router(
@@ -3999,6 +4494,7 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools is None
+        assert "tools" not in counter.await_args.kwargs["responses_request"]
 
     def test_malformed_tools_for_a_model_outside_the_router_get_a_clean_400(self) -> None:
         router: Final = litellm.Router(

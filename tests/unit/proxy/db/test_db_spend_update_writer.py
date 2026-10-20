@@ -19,7 +19,7 @@ from redis.exceptions import DataError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
-from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
+from litellm.constants import DB_SPEND_UPDATE_JOB_NAME, REDIS_UPDATE_BUFFER_KEY, SPEND_ROLLUP_LOCK_TIMEOUT_MS
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
@@ -29,12 +29,14 @@ from litellm.proxy.db.db_spend_update_writer import (
     _SpendTableName,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
+from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -2365,6 +2367,58 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
 
 
+class _InMemoryRedis:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.lists: dict[str, list[object]] = {}
+
+    async def async_set_cache(self, key: str, value: str, nx: bool = False, **kwargs: object) -> bool | None:
+        if nx and key in self.store:
+            return None
+        self.store[key] = json.dumps(value)
+        return True
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> str | None:
+        raw = self.store.get(key)
+        return json.loads(raw) if raw is not None else None
+
+    async def async_delete_cache(self, key: str) -> int:
+        return 1 if self.store.pop(key, None) is not None else 0
+
+    async def async_rpush_pipeline(self, rpush_list: list[RedisPipelineRpushOperation]) -> list[int]:
+        for op in rpush_list:
+            self.lists.setdefault(op["key"], []).extend(op["values"])
+        return [len(self.lists[op["key"]]) for op in rpush_list]
+
+    async def async_lpop_pipeline(self, lpop_list: list[RedisPipelineLpopOperation]) -> list[list[object] | None]:
+        return [self.lists.pop(op["key"], None) for op in lpop_list]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lock_held_by_another_pod", [False, True])
+async def test_commit_with_redis_writes_discovered_tools_on_leader_and_non_leader(lock_held_by_another_pod: bool):
+    redis = _InMemoryRedis()
+    if lock_held_by_another_pod:
+        assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=DB_SPEND_UPDATE_JOB_NAME)
+    db_writer = DBSpendUpdateWriter(redis_cache=redis)
+    db_writer.pod_lock_manager.redis_cache = redis
+    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tooltable.upsert = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    upserted = [c.kwargs["where"] for c in prisma_client.db.litellm_tooltable.upsert.await_args_list]
+    assert upserted == [{"tool_name": "get_weather"}]
+    assert (REDIS_UPDATE_BUFFER_KEY in redis.lists) is lock_held_by_another_pod, (
+        f"spend buffer left in redis={list(redis.lists)}, only the lock holder may drain it"
+    )
+
+
 @pytest.mark.asyncio
 async def test_commit_with_redis_requeues_all_on_db_failure():
     """
@@ -4130,28 +4184,57 @@ async def test_commit_spend_updates_raises_after_exhausting_lock_timeout_retries
     assert mock_prisma_client.db.tx.call_count == 3
 
 
+def _responses_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "native",
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test"},
+                "model_info": {"id": "dep-native"},
+            },
+            {
+                "model_name": "bridged",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-bridged"},
+            },
+            {
+                "model_name": "forced-bridge",
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test", "use_chat_completions_api": True},
+                "model_info": {"id": "dep-forced-bridge"},
+            },
+        ]
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "call_type, expects_flush",
-    [("aresponses", True), ("responses", True), ("acompletion", False)],
+    "call_type, model_id, expects_flush",
+    [
+        ("aresponses", "dep-bridged", True),
+        ("responses", "dep-bridged", True),
+        ("aresponses", "dep-forced-bridge", True),
+        ("aresponses", None, True),
+        ("aresponses", "dep-native", False),
+        ("responses", "dep-native", False),
+        ("acompletion", "dep-bridged", False),
+    ],
 )
-async def test_insert_spend_log_asks_for_an_immediate_flush_on_rows_other_workers_read_back(
-    call_type: str, expects_flush: bool
+async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bridge_reads_back(
+    call_type: str, model_id: str | None, expects_flush: bool
 ):
     """
-    A `previous_response_id` chained straight off the previous turn reads the DB, so a
-    Responses row cannot sit in this worker's queue until the monitor's next poll.
+    A `previous_response_id` chained straight off a bridged turn reads that turn's row from the
+    DB, so it cannot sit in this worker's queue until the monitor's next poll. A native Responses
+    provider holds the conversation itself, so its row waits for the batch write like a chat row.
     """
     db_writer = DBSpendUpdateWriter()
     prisma = _tool_usage_prisma()
     prisma.spend_log_flush_requested = asyncio.Event()
+    payload = {"request_id": "req-1", "call_type": call_type, "model_id": model_id}
 
-    await db_writer._insert_spend_log_to_db(
-        payload={"request_id": "req-1", "call_type": call_type},
-        prisma_client=prisma,
-    )
+    await db_writer._insert_spend_log_to_db(payload=payload, prisma_client=prisma, llm_router=_responses_router())
 
-    assert prisma.spend_log_transactions == [{"request_id": "req-1", "call_type": call_type}]
+    assert prisma.spend_log_transactions == [payload]
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
 
 

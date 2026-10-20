@@ -186,11 +186,13 @@ async def test_exchange_without_database_fails_before_nonce(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_exchange_rejects_tampered_signature(monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import HTTPException
-    from litellm.proxy.moyai_endpoints import _sign_connect_code
+    from litellm.proxy.moyai_endpoints import _b64url, _b64url_decode, _sign_connect_code
 
     await _exchange_env(monkeypatch)
     code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
-    tampered = code[:-2] + ("aa" if not code.endswith("aa") else "bb")
+    payload_b64, signature_b64 = code.split(".", 1)
+    signature = _b64url_decode(signature_b64)
+    tampered = f"{payload_b64}.{_b64url(bytes((signature[0] ^ 1,)) + signature[1:])}"
 
     with pytest.raises(HTTPException) as exc:
         await _exchange_call(tampered, "https://moyai.example.com")

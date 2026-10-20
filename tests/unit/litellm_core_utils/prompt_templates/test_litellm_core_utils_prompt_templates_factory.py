@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    _sanitize_anthropic_tool_use_id,
+    sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
@@ -541,25 +541,66 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
 
 _NATIVE_REDACTED_DATA: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
 _CONVERSE_REDACTED_DATA: Final = base64.b64encode(_NATIVE_REDACTED_DATA.encode()).decode()
+REASONING_PLACEMENTS: Final = pytest.mark.parametrize(
+    "placement", ["thinking_blocks", "content", "both", "first-block-in-content", "last-block-in-content"]
+)
+
+
+def _assistant_with_reasoning(
+    placement: str, reasoning: Sequence[Mapping[str, object]], text: str
+) -> Mapping[str, object]:
+    in_content: Final = {"role": "assistant", "content": [*reasoning, {"type": "text", "text": text}]}
+    return {
+        "thinking_blocks": {"role": "assistant", "content": text, "thinking_blocks": list(reasoning)},
+        "content": in_content,
+        "both": {**in_content, "thinking_blocks": list(reasoning)},
+        "first-block-in-content": {
+            "role": "assistant",
+            "content": [*reasoning[:1], {"type": "text", "text": text}],
+            "thinking_blocks": list(reasoning),
+        },
+        "last-block-in-content": {
+            "role": "assistant",
+            "content": [*reasoning[-1:], {"type": "text", "text": text}],
+            "thinking_blocks": list(reasoning),
+        },
+    }[placement]
+
+
+SPLIT_REASONING: Final = pytest.mark.parametrize(
+    ("in_content", "in_thinking_blocks"),
+    [((0, 2), (0, 1, 2)), ((0, 1, 2), (1,))],
+    ids=["middle-block-only-in-thinking-blocks", "outer-blocks-only-in-content"],
+)
+
+
+COPY_TEXT: Final = pytest.mark.parametrize("copy_text", ["", "First"], ids=["emptied", "trimmed"])
+
+
+def _assistant_with_split_reasoning(
+    reasoning: Sequence[Mapping[str, object]], in_content: Sequence[int], in_thinking_blocks: Sequence[int], text: str
+) -> Mapping[str, object]:
+    return {
+        "role": "assistant",
+        "content": [*(reasoning[index] for index in in_content), {"type": "text", "text": text}],
+        "thinking_blocks": [reasoning[index] for index in in_thinking_blocks],
+    }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
-@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@REASONING_PLACEMENTS
 async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(use_async: bool, placement: str):
     """A redacted_thinking block that Bedrock returned must go back as reasoningContent.redactedContent,
-    in order, ahead of text and toolUse. It used to collapse into an empty unsigned reasoningText and get dropped."""
+    in order, ahead of text and toolUse. It used to collapse into an empty unsigned reasoningText and get dropped.
+    Sent twice, when the history carries it in content and thinking_blocks, Bedrock 400s that it was modified."""
     bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
         {"reasoningText": {"text": "Let me look this up.", "signature": "sig-abc"}},
         {"redactedContent": _CONVERSE_REDACTED_DATA},
     ]
     thinking_blocks: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
     assistant_text: Final = "Checking the weather."
-    assistant_message: Final = (
-        {"role": "assistant", "content": assistant_text, "thinking_blocks": thinking_blocks}
-        if placement == "thinking_blocks"
-        else {"role": "assistant", "content": [*thinking_blocks, {"type": "text", "text": assistant_text}]}
-    )
+    assistant_message: Final = _assistant_with_reasoning(placement, thinking_blocks, assistant_text)
     messages: Final = [
         {"role": "user", "content": "What's the weather in Paris?"},
         {
@@ -591,6 +632,231 @@ async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(us
         {"text": assistant_text},
         {"toolUse": {"toolUseId": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}}},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@COPY_TEXT
+async def test_bedrock_converse_sends_a_signed_block_once_when_thinking_blocks_holds_other_text(
+    use_async: bool, copy_text: str
+):
+    bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
+        {"reasoningText": {"text": "First.", "signature": "sig-1"}},
+        {"redactedContent": _CONVERSE_REDACTED_DATA},
+    ]
+    reasoning: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [*reasoning, {"type": "text", "text": "hello"}],
+            "thinking_blocks": [{**reasoning[0], "thinking": copy_text}, reasoning[1]],
+        },
+        {"role": "user", "content": "again"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [*({"reasoningContent": block} for block in bedrock_reasoning_blocks), {"text": "hello"}],
+    }
+
+
+_WEATHER_TOOL_CALL: Final = {
+    "id": "tooluse_weather_1",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+
+
+def _block_split_across_assistant_messages(blocks: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {"role": "assistant", "content": list(blocks)},
+        {"role": "assistant", "content": None, "thinking_blocks": list(blocks), "tool_calls": [_WEATHER_TOOL_CALL]},
+        {"role": "tool", "tool_call_id": "tooluse_weather_1", "content": "18C, sunny"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_sends_a_block_once_when_two_assistant_messages_carry_it(use_async: bool):
+    bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
+        {"reasoningText": {"text": "Let me look this up.", "signature": "sig-abc"}},
+        {"redactedContent": _CONVERSE_REDACTED_DATA},
+    ]
+    reasoning: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
+    messages: Final = _block_split_across_assistant_messages(reasoning)
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            *({"reasoningContent": block} for block in bedrock_reasoning_blocks),
+            {"toolUse": {"toolUseId": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}}},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@SPLIT_REASONING
+async def test_bedrock_converse_keeps_reasoning_order_across_content_and_thinking_blocks(
+    use_async: bool, in_content: Sequence[int], in_thinking_blocks: Sequence[int]
+):
+    """A reasoning block only one of content and thinking_blocks carries goes back in its original place."""
+    bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
+        {"reasoningText": {"text": "First.", "signature": "sig-1"}},
+        {"redactedContent": _CONVERSE_REDACTED_DATA},
+        {"reasoningText": {"text": "Third.", "signature": "sig-3"}},
+    ]
+    reasoning: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_split_reasoning(reasoning, in_content, in_thinking_blocks, "hello"),
+        {"role": "user", "content": "again"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [*({"reasoningContent": block} for block in bedrock_reasoning_blocks), {"text": "hello"}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("entry", [None, "not a block"], ids=["none", "string"])
+async def test_bedrock_converse_skips_a_thinking_blocks_entry_that_is_not_a_block(use_async: bool, entry: object):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello", "thinking_blocks": [entry]},
+        {"role": "user", "content": "again"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert result[1] == {"role": "assistant", "content": [{"text": "hello"}]}
+
+
+MALFORMED_THINKING: Final = pytest.mark.parametrize(
+    "malformed",
+    [
+        {"type": "thinking", "thinking": {"a": 1}},
+        {"type": "thinking", "thinking": ["a"], "signature": ""},
+        {"type": "thinking", "thinking": "draft", "signature": ["a"]},
+    ],
+    ids=["dict-thinking", "list-thinking", "list-signature"],
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@REASONING_PLACEMENTS
+@MALFORMED_THINKING
+async def test_bedrock_converse_replays_redacted_thinking_once_beside_a_malformed_thinking_item(
+    use_async: bool, placement: str, malformed: dict[str, object]
+):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_reasoning(
+            placement, [{"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}, malformed], "hello"
+        ),
+        {"role": "user", "content": "again"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert result[1]["content"].count({"reasoningContent": {"redactedContent": _CONVERSE_REDACTED_DATA}}) == 1
+
+
+@REASONING_PLACEMENTS
+@MALFORMED_THINKING
+def test_anthropic_messages_pt_replays_redacted_thinking_once_beside_a_malformed_thinking_item(
+    placement: str, malformed: dict[str, object]
+):
+    redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_reasoning(placement, [redacted, malformed], "hello"),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[1]["content"].count(redacted) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_bedrock_converse_drops_a_cache_point_after_reasoning_only_under_drop_params(
+    use_async: bool, drop_params: bool
+):
+    """Bedrock 400s "Cache point cannot be inserted after reasoning block", so drop_params drops the
+    breakpoint and without it the request reaches Bedrock as sent."""
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "hello"},
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock", drop_params=drop_params
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(
+            messages=messages, model=model, llm_provider="bedrock", drop_params=drop_params
+        )
+    )
+
+    assert ({"cachePoint": {"type": "default"}} in result[1]["content"]) is not drop_params
 
 
 _SENT_REDACTED: Final = [{"reasoningContent": {"redactedContent": _CONVERSE_REDACTED_DATA}}]
@@ -813,17 +1079,17 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     )
 
 
+@REASONING_PLACEMENTS
 @pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
-def test_anthropic_messages_pt_replays_redacted_thinking_as_claude_native_data(data: str):
+def test_anthropic_messages_pt_replays_redacted_thinking_as_claude_native_data(data: str, placement: str):
     """Histories saved from Converse before its replies were decoded hold the data base64-wrapped, and the
-    Anthropic API, Vertex and Bedrock Invoke 400 on it with "Invalid `data` in `redacted_thinking` block"."""
+    Anthropic API, Vertex and Bedrock Invoke 400 on it with "Invalid `data` in `redacted_thinking` block".
+    A redacted block in the content list, the shape the Anthropic SDK replays, used to be dropped."""
+    signed: Final = {"type": "thinking", "thinking": "Let me look this up.", "signature": "sig-abc"}
+    redacted: Final = {"type": "redacted_thinking", "data": data}
     messages: Final = [
         {"role": "user", "content": "hi"},
-        {
-            "role": "assistant",
-            "content": "hello",
-            "thinking_blocks": [{"type": "redacted_thinking", "data": data, "cache_control": {"type": "ephemeral"}}],
-        },
+        _assistant_with_reasoning(placement, [signed, redacted], "hello"),
         {"role": "user", "content": "again"},
     ]
 
@@ -832,10 +1098,123 @@ def test_anthropic_messages_pt_replays_redacted_thinking_as_claude_native_data(d
     assert result[1] == {
         "role": "assistant",
         "content": [
-            {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA, "cache_control": {"type": "ephemeral"}},
+            signed,
+            {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA},
             {"type": "text", "text": "hello"},
         ],
     }
+
+
+@SPLIT_REASONING
+def test_anthropic_messages_pt_keeps_reasoning_order_across_content_and_thinking_blocks(
+    in_content: Sequence[int], in_thinking_blocks: Sequence[int]
+):
+    """A thinking block only one of content and thinking_blocks carries goes back in its original place."""
+    reasoning: Final = (
+        {"type": "thinking", "thinking": "First.", "signature": "sig-1"},
+        {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA},
+        {"type": "thinking", "thinking": "Third.", "signature": "sig-3"},
+    )
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_split_reasoning(reasoning, in_content, in_thinking_blocks, "hello"),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[1] == {"role": "assistant", "content": [*reasoning, {"type": "text", "text": "hello"}]}
+
+
+@COPY_TEXT
+def test_anthropic_messages_pt_sends_a_signed_block_once_when_thinking_blocks_holds_other_text(copy_text: str):
+    signed: Final = {"type": "thinking", "thinking": "First.", "signature": "sig-1"}
+    redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [signed, redacted, {"type": "text", "text": "hello"}],
+            "thinking_blocks": [{**signed, "thinking": copy_text}, redacted],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[1] == {"role": "assistant", "content": [signed, redacted, {"type": "text", "text": "hello"}]}
+
+
+
+def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_carry_it():
+    signed: Final = {"type": "thinking", "thinking": "Let me look this up.", "signature": "sig-abc"}
+    redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
+
+    result: Final = anthropic_messages_pt(
+        messages=_block_split_across_assistant_messages([signed, redacted]),
+        model="claude-sonnet-4-6",
+        llm_provider="anthropic",
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            signed,
+            redacted,
+            {"type": "tool_use", "id": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}},
+        ],
+    }
+
+@REASONING_PLACEMENTS
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_anthropic_messages_pt_drops_cache_control_from_thinking_blocks_only_under_drop_params(
+    placement: str, drop_params: bool
+):
+    """Claude 400s "thinking.cache_control: Extra inputs are not permitted" on a thinking or redacted_thinking
+    block, so drop_params drops the breakpoint and without it the request reaches Claude as sent. The streamed
+    list-position `index` is LiteLLM's own field and never reaches Claude."""
+    breakpoint_mark: Final = {"cache_control": {"type": "ephemeral"}}
+    signed: Final = {"type": "thinking", "thinking": "Let me look this up.", "signature": "sig-abc"}
+    redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_reasoning(
+            placement, [{**signed, **breakpoint_mark, "index": 0}, {**redacted, **breakpoint_mark, "index": 1}], "hello"
+        ),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic", drop_params=drop_params
+    )
+
+    sent_reasoning: Final = (
+        [signed, redacted] if drop_params else [{**signed, **breakpoint_mark}, {**redacted, **breakpoint_mark}]
+    )
+    assert result[1] == {"role": "assistant", "content": [*sent_reasoning, {"type": "text", "text": "hello"}]}
+
+
+@REASONING_PLACEMENTS
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("data", ["", "  ", None], ids=["empty", "whitespace", "null"])
+def test_anthropic_messages_pt_drops_a_blank_redacted_thinking_block_only_under_drop_params(
+    data: str | None, placement: str, drop_params: bool
+):
+    """Claude 400s "Invalid `data` in `redacted_thinking` block" on blank data, so drop_params drops the block
+    and without it the request reaches Claude as sent."""
+    blank: Final = {"type": "redacted_thinking", "data": data}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_reasoning(placement, [blank], "hello"),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic", drop_params=drop_params
+    )
+
+    sent_reasoning: Final = [] if drop_params else [blank]
+    assert result[1] == {"role": "assistant", "content": [*sent_reasoning, {"type": "text", "text": "hello"}]}
 
 
 def test_anthropic_messages_pt_keeps_signed_thinking_block():
@@ -4503,7 +4882,7 @@ def test_get_tool_calls_from_response_keeps_sanitized_concat_ids_distinct():
     )
 
     ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
-    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+    sanitized: Final = [sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
 
     assert len(sanitized) == len(set(sanitized))
     assert ids == ["a:b", "a:b__concat_2", "a_b__concat_1"]
@@ -4517,7 +4896,7 @@ def test_get_tool_calls_from_response_bumps_suffix_when_sibling_sanitizes_onto_i
     )
 
     ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
-    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+    sanitized: Final = [sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
 
     assert len(ids) == len(sanitized)
     assert len(sanitized) == len(set(sanitized))

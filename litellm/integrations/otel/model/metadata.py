@@ -269,6 +269,7 @@ class LLMCallEvent:
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
+    completion_start_seconds: float | None
     trace: TraceControls
     session_id: str | None
 
@@ -291,6 +292,7 @@ class LLMCallEvent:
             cache_hit=bool(payload.get("cache_hit")) if payload else False,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
+            completion_start_seconds=_epoch_seconds(kwargs.get("completion_start_time")),
             trace=trace,
             session_id=caller_session_id(kwargs, trace),
         )

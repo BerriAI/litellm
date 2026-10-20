@@ -297,6 +297,10 @@
           "format": "date",
           "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
         },
+        "explicit_cache_read_input_token_cost": {
+          "type": "number",
+          "minimum": 0
+        },
         "gemini_audio_only_live": {
           "type": "boolean"
         },
@@ -549,6 +553,7 @@
             "completion",
             "embedding",
             "evaluation",
+            "extraction",
             "guardrail",
             "image_edit",
             "image_generation",
@@ -950,6 +955,33 @@
           },
           "additionalProperties": false
         },
+        "search_free_requests": {
+          "type": "object",
+          "description": "Free Google Search grounding requests per period, shared across models in the same shared_group.",
+          "required": [
+            "count",
+            "period",
+            "shared_group"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "period": {
+              "type": "string",
+              "enum": [
+                "day",
+                "month"
+              ]
+            },
+            "shared_group": {
+              "type": "string",
+              "pattern": "\\S"
+            }
+          }
+        },
         "source": {
           "type": "string",
           "description": "URL of the provider pricing/model page this entry was taken from."
@@ -1229,9 +1261,16 @@
             "region": {
               "type": "string",
               "pattern": "\\S"
+            },
+            "litellm_provider": {
+              "type": "string",
+              "enum": [
+                "bedrock",
+                "bedrock_mantle"
+              ]
             }
           },
-          "description": "Model that counts tokens for this one, and the AWS region its count API runs in."
+          "description": "Model that counts tokens for this one, its counting provider, and the AWS region its count API runs in."
         },
         "token_count_tokenizer": {
           "type": "string",

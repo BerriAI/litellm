@@ -436,6 +436,7 @@ class LLMCallSpanData:
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
     time_to_first_chunk_seconds: float | None = None
+    completion_start_seconds: float | None = None
     # The requested output modality, set only on the routes that pin one (image
     # generation, speech, transcription, OCR), and the litellm route itself, which
     # keeps routes the convention folds into one operation distinguishable.
@@ -457,6 +458,7 @@ class LLMCallSpanData:
         payload: StandardLoggingPayload,
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
+        completion_start_seconds: float | None = None,
         request_route: str | None = None,
         request_purpose: str | None = None,
         trace: TraceControls | None = None,
@@ -489,6 +491,7 @@ class LLMCallSpanData:
         embedding_output: Final = (
             EmbeddingOutput.from_response(response) if operation is GenAIOperation.EMBEDDINGS else None
         )
+        cost_lookup_failed: Final = payload.get("response_cost_failure_debug_info") is not None and not cache_hit
         return cls(
             operation=operation,
             provider=resolve_provider(as_str(payload.get("custom_llm_provider"))),
@@ -499,7 +502,7 @@ class LLMCallSpanData:
             usage=LLMUsage.from_standard_logging_payload(payload),
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
-            response_cost=as_float(payload.get("response_cost")),
+            response_cost=None if cost_lookup_failed else as_float(payload.get("response_cost")),
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=None if cache_hit else ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
@@ -517,6 +520,7 @@ class LLMCallSpanData:
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
+            completion_start_seconds=completion_start_seconds,
             output_type=resolve_output_type(call_type),
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,

@@ -22,7 +22,7 @@ import json
 import random
 import re
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
 from types import MappingProxyType
@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
@@ -411,9 +412,19 @@ def _append_custom_keywords(base_keywords: list[str], custom_keywords: list[str]
     return [*base_keywords, *deduped_custom.values()]
 
 
-def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, Any]:
+class _ParentSessionKwargs(TypedDict, total=False):
+    litellm_session_id: ReadOnly[object]
+    litellm_trace_id: ReadOnly[object]
+
+
+def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> _ParentSessionKwargs:
     kwargs: Final = request_kwargs or {}
-    return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
+    session_id: Final = kwargs.get("litellm_session_id")
+    trace_id: Final = kwargs.get("litellm_trace_id")
+    return _ParentSessionKwargs(
+        **({"litellm_session_id": session_id} if session_id is not None else {}),
+        **({"litellm_trace_id": trace_id} if trace_id is not None else {}),
+    )
 
 
 def _response_cost_or_none(response: object) -> float | None:
@@ -2828,7 +2839,7 @@ class ComplexityRouter(CustomLogger):
             "originating_request_masked": masked_originating_request(request_kwargs),
             "body": {"model": llm_config.model, **payload},
         }
-        classify: Final = (
+        classify: Final[Callable[..., Awaitable[ModelResponse | ResponsesAPIResponse]]] = (
             self.litellm_router_instance.aresponses
             if encrypted_task is not None
             else self.litellm_router_instance.acompletion
