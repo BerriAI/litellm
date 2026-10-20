@@ -6471,6 +6471,7 @@ _CHAT_SURFACE_KWARGS: Final = (
     "mock_delay",
     "mock_timeout",
 )
+_SKIP_RESPONSES_API_BRIDGE: Final = "_skip_responses_api_bridge"
 _TEXT_COMPLETION_PROVIDERS: Final = frozenset(
     ("text-completion-openai", "text-completion-codestral", "text-completion-inception")
 )
@@ -6484,6 +6485,7 @@ class PlannedChat:
     kwargs: Mapping[str, object]
     non_default_params: Mapping[str, object]
     control_options: ControlOptions
+    skip_responses_api_bridge: bool
 
 
 def _optional_str(value: object) -> str | None:
@@ -6553,7 +6555,11 @@ def plan_chat(request: Mapping[str, object], logging_obj: LiteLLMLoggingObj) -> 
     )
     if resolved_provider in _TEXT_COMPLETION_PROVIDERS:
         return None
-    kwargs: Final = {key: value for key, value in request.items() if key not in _EXECUTE_CHAT_PARAMS}
+    kwargs: Final = {
+        key: value
+        for key, value in request.items()
+        if key not in _EXECUTE_CHAT_PARAMS and key != _SKIP_RESPONSES_API_BRIDGE
+    }
     tools: Final = validate_and_fix_openai_tools(tools=_object_list(request.get("tools")))
     messages: Final = get_completion_messages(
         messages=validate_and_fix_openai_messages(messages=_object_list(request.get("messages")) or []),
@@ -6593,6 +6599,7 @@ def plan_chat(request: Mapping[str, object], logging_obj: LiteLLMLoggingObj) -> 
         kwargs=MappingProxyType(kwargs),
         non_default_params=MappingProxyType(non_default_params),
         control_options=_resolve_control_options(kwargs, model),
+        skip_responses_api_bridge=request.get(_SKIP_RESPONSES_API_BRIDGE) is True,
     )
 
 
@@ -6602,7 +6609,7 @@ def _run_planned_chat(plan: PlannedChat, is_async: bool) -> ModelResponse | Cust
         kwargs={**plan.kwargs, "acompletion": is_async},
         non_default_params=dict(plan.non_default_params),
         control_options=plan.control_options,
-        skip_responses_api_bridge=False,
+        skip_responses_api_bridge=plan.skip_responses_api_bridge,
         prompt_id=None,
         prompt_variables=None,
     )
