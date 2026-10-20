@@ -6,13 +6,14 @@ from hashlib import sha256
 from typing import Final
 from uuid import uuid4
 
+import httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows, write_rows
 from integration._support.prisma_clients import connected_proxy_prisma
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
 
@@ -120,6 +121,36 @@ def _completed_routes(*, ready: bool = True) -> RoutedResponse:
     )
 
 
+def _batch_was_polled(upstream: ScenarioHandle) -> bool:
+    response: Final = httpx.get(f"{upstream.control_url}/__observations", timeout=15, trust_env=False)
+    response.raise_for_status()
+    observations: Final = TypeAdapter(dict[str, list[dict[str, JsonValue]]]).validate_json(response.content)
+    return any(
+        item.get("method") == "GET" and string_value(item["path"]).startswith(f"/{upstream.scenario_id}/batches/")
+        for item in observations["requests"]
+    )
+
+
+def _missing_output_routes() -> RoutedResponse:
+    return RoutedResponse(
+        content_type="application/x-routed",
+        routes={
+            **_completed_routes().routes,
+            "GET /files/file-out-$REQUEST_ID/content": JsonResponse(
+                content_type="application/json",
+                status=404,
+                body={
+                    "error": {
+                        "message": "No file found with id 'file-out-$REQUEST_ID'.",
+                        "type": "invalid_request_error",
+                        "code": "file_not_found",
+                    }
+                },
+            ),
+        },
+    )
+
+
 def _scripted_deployment(scenario: Scenario, marker: str, routes: RoutedResponse) -> tuple[str, ScenarioHandle]:
     scenario_id: Final = f"poll-{marker}-{sha256(os.urandom(16)).hexdigest()[:12]}"
     handle: Final = register_scenario(scenario_id, routes)
@@ -196,9 +227,12 @@ def test_uncostable_batches_do_not_starve_billable_batches(
             )
             for index in range(MAX_OBJECTS_PER_POLL_CYCLE)
         )
+        missing_output_id: Final = _submitted_batch_id(
+            gateway, key, _scripted_deployment(scenario, "missing-output", _missing_output_routes())[0]
+        )
         model, upstream = _scripted_deployment(scenario, "costable", _completed_routes(ready=False))
         costable_batch_id: Final = _submitted_batch_id(gateway, key, model)
-        for batch_id in (*gone_batch_ids, costable_batch_id):
+        for batch_id in (*gone_batch_ids, missing_output_id, costable_batch_id):
             scenario.cleanups.callback(
                 write_rows,
                 'DELETE FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id = %s',
@@ -210,6 +244,7 @@ def test_uncostable_batches_do_not_starve_billable_batches(
                 "created_at = NOW() - INTERVAL '30 days' WHERE unified_object_id = %s",
                 ("completed", costable_batch_id),
             )
+        assert eventually(lambda: _batch_was_polled(upstream), bool, seconds=120)
         register_scenario(upstream.scenario_id, _completed_routes(), control_url=upstream.control_url)
         spend_rows: Final = eventually(
             lambda: read_rows(
@@ -233,6 +268,11 @@ def test_uncostable_batches_do_not_starve_billable_batches(
             }
         ]
         assert _managed_rows((costable_batch_id,)) == [{"batch_processed": True}]
+        assert eventually(
+            lambda: _managed_rows((missing_output_id,)),
+            lambda rows: rows == [{"batch_processed": True}],
+            seconds=120,
+        ) == [{"batch_processed": True}]
         expected_blockers: Final = [{"batch_processed": not retryable}] * MAX_OBJECTS_PER_POLL_CYCLE
         blockers: Final = eventually(
             lambda: _managed_rows(gone_batch_ids), lambda rows: rows == expected_blockers, seconds=120

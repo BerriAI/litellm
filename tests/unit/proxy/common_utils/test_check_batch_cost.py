@@ -3219,6 +3219,89 @@ class TestMultiPodBatchCostClaim:
             ["batch-test-model"] if deployment_model == "openai/batch-test-model" else ["batch-test-model"] * successes
         )
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_source", ("batch", "output"))
+    async def test_a_404_for_another_identifier_preserves_recovery(self, error_source: str) -> None:
+        import base64
+
+        import httpx
+        import litellm
+        import respx
+
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.types.utils import SpecialEnums
+
+        class SpendRecorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.costs: tuple[float, ...] = ()
+
+            async def async_log_success_event(
+                self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+            ) -> None:
+                if kwargs["call_type"] == "aretrieve_batch":
+                    cost: Final = kwargs["response_cost"]
+                    assert isinstance(cost, float)
+                    self.costs += (cost,)
+
+        recorder: Final = SpendRecorder()
+        litellm.logging_callback_manager.add_litellm_async_success_callback(recorder)
+        litellm.register_model(
+            {
+                "batch-recovery-model": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token_batches": 0.01,
+                    "output_cost_per_token_batches": 0.02,
+                }
+            }
+        )
+        row: Final = _FakeManagedObjectRow()
+        row.unified_object_id = (
+            base64.urlsafe_b64encode(
+                SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format("model-123", "batch-456").encode()
+            )
+            .decode()
+            .rstrip("=")
+        )
+        router: Final = self._router()
+        response: Final = router.aretrieve_batch.return_value
+        error: Final = litellm.NotFoundError(
+            message=f"No object found with id '{'batch-456' if error_source == 'batch' else _CLAIM_OUTPUT_FILE_ID}0'.",
+            model="gpt-4",
+            llm_provider="openai",
+        )
+        router.aretrieve_batch.side_effect = (error, response) if error_source == "batch" else (response, response)
+        prisma: Final = self._prisma(row, [])
+        output: Final = json.dumps(
+            {
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "model": "batch-recovery-model",
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    },
+                },
+                "error": None,
+            }
+        ).encode()
+        with respx.mock:
+            route: Final = respx.get(f"https://api.openai.com/v1/files/{_CLAIM_OUTPUT_FILE_ID}/content")
+            route.mock(
+                side_effect=error if error_source == "output" else None,
+                return_value=None if error_source == "output" else httpx.Response(200, content=output),
+            )
+            await self._instance(prisma, router).check_batch_cost()
+            assert row.batch_processed is False
+            assert recorder.costs == ()
+            route.mock(return_value=httpx.Response(200, content=output))
+            await self._instance(prisma, router).check_batch_cost()
+            await self._instance(prisma, router).check_batch_cost()
+
+        assert row.batch_processed is True
+        assert row.status == "complete"
+        assert recorder.costs == (pytest.approx(10 * 0.01 + 5 * 0.02),)
+
     @staticmethod
     def _claim_calls(prisma) -> list:
         return [
@@ -4199,3 +4282,36 @@ async def test_failed_retirement_keeps_batch_available() -> None:
 
     assert row.batch_processed is False
     assert row.status == "in_progress"
+
+
+@pytest.mark.parametrize("resource_id", ("batch-123", "file-123", "gs://bucket/job/predictions.jsonl"))
+@pytest.mark.parametrize("other_id", ("{id}4", "prefix-{id}", "{id}/child", "{id}.backup", "{id}?generation=2"))
+def test_another_resource_in_a_404_is_not_permanent_loss(resource_id: str, other_id: str) -> None:
+    from litellm.exceptions import NotFoundError
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    error: Final = NotFoundError(
+        message=f"No object found with id '{other_id.format(id=resource_id)}'.", model="test", llm_provider="openai"
+    )
+    assert CheckBatchCost._is_batch_gone_at_provider(error, resource_id) is False
+    assert CheckBatchCost._is_output_file_gone_at_provider(error, resource_id) is False
+
+
+@pytest.mark.parametrize("resource_id", ("batch-123", "file-123", "gs://bucket/job/predictions.jsonl"))
+@pytest.mark.parametrize("message", ("No object found with id '{id}'.", 'File "{id}" does not exist', "{id} not found"))
+def test_a_404_naming_the_exact_resource_is_permanent_loss(resource_id: str, message: str) -> None:
+    from litellm.exceptions import NotFoundError
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    error: Final = NotFoundError(message=message.format(id=resource_id), model="test", llm_provider="openai")
+    assert CheckBatchCost._is_batch_gone_at_provider(error, resource_id) is True
+    assert CheckBatchCost._is_output_file_gone_at_provider(error, resource_id) is True
+
+
+@pytest.mark.parametrize("output_file_id", (None, ""))
+def test_a_404_without_an_output_identity_remains_retryable(output_file_id: str | None) -> None:
+    from litellm.exceptions import NotFoundError
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    error: Final = NotFoundError(message="Output file not found", model="test", llm_provider="openai")
+    assert CheckBatchCost._is_output_file_gone_at_provider(error, output_file_id) is False

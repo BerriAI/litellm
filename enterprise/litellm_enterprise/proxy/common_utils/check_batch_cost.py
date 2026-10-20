@@ -4,6 +4,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 
 import asyncio
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
@@ -37,6 +38,10 @@ if TYPE_CHECKING:
     from litellm.router import Router
     from litellm.types.router import Deployment
     from litellm.types.utils import LiteLLMBatch
+
+
+def _error_names_resource(error: Exception, resource_id: str) -> bool:
+    return resource_id in re.findall(r"""[^\s"'`]+""", str(error))
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
@@ -333,7 +338,7 @@ class CheckBatchCost:
 
         from litellm.exceptions import NotFoundError
 
-        return isinstance(error, (NotFoundError, openai.NotFoundError)) and batch_id in str(error)
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, batch_id)
 
     def _batch_deployment_exists(self, model_id: str) -> bool:
         """A 404 only proves the batch is gone when it came from the batch's own
@@ -354,7 +359,7 @@ class CheckBatchCost:
 
         if not output_file_id:
             return False
-        return isinstance(error, (NotFoundError, openai.NotFoundError)) and output_file_id in str(error)
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, output_file_id)
 
     async def _finalize_unbilled_terminal_job(
         self, job: "ManagedObjectRow", response: "LiteLLMBatch"
