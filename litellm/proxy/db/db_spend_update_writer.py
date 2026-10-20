@@ -1600,6 +1600,9 @@ class DBSpendUpdateWriter:
             window_spend_update_queue=self.window_spend_update_queue,
         )
 
+        # Per-pod queue that is never buffered in Redis, so every pod flushes its own, leader or not
+        await self._flush_tool_discovery_queue(prisma_client=prisma_client)
+
         # Only commit from redis to db if this pod is the leader
         if await self.pod_lock_manager.acquire_lock(
             cronjob_id=DB_SPEND_UPDATE_JOB_NAME,

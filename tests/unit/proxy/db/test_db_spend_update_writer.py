@@ -19,7 +19,7 @@ from redis.exceptions import DataError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
-from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
+from litellm.constants import DB_SPEND_UPDATE_JOB_NAME, SPEND_ROLLUP_LOCK_TIMEOUT_MS
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
@@ -29,6 +29,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     _SpendTableName,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -2363,6 +2364,48 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
+
+
+class _InMemoryRedisLockStore:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def async_set_cache(self, key: str, value: str, nx: bool = False, **kwargs: object) -> bool | None:
+        if nx and key in self.store:
+            return None
+        self.store[key] = json.dumps(value)
+        return True
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> str | None:
+        raw = self.store.get(key)
+        return json.loads(raw) if raw is not None else None
+
+    async def async_delete_cache(self, key: str) -> int:
+        return 1 if self.store.pop(key, None) is not None else 0
+
+    async def async_lpop_pipeline(self, lpop_list: list[object]) -> list[None]:
+        return [None] * len(lpop_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lock_held_by_another_pod", [False, True])
+async def test_commit_with_redis_writes_discovered_tools_to_the_tool_table(lock_held_by_another_pod: bool):
+    redis = _InMemoryRedisLockStore()
+    if lock_held_by_another_pod:
+        assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=DB_SPEND_UPDATE_JOB_NAME)
+    db_writer = DBSpendUpdateWriter(redis_cache=redis)
+    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tooltable.upsert = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    upserted = [c.kwargs["where"] for c in prisma_client.db.litellm_tooltable.upsert.await_args_list]
+    assert upserted == [{"tool_name": "get_weather"}]
 
 
 @pytest.mark.asyncio
