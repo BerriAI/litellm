@@ -475,6 +475,7 @@ async def acompletion(
     service_tier: str | None = None,
     store: bool | None = None,
     prompt_cache_key: str | None = None,
+    prompt_cache_retention: str | None = None,
     # set api_base, api_version, api_key
     base_url: str | None = None,
     api_version: str | None = None,
@@ -652,6 +653,7 @@ async def acompletion(
         "service_tier": service_tier,
         "store": store,
         "prompt_cache_key": prompt_cache_key,
+        "prompt_cache_retention": prompt_cache_retention,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -5351,6 +5353,7 @@ def completion(
     service_tier: str | None = None,
     store: bool | None = None,
     prompt_cache_key: str | None = None,
+    prompt_cache_retention: str | None = None,
     # soon to be deprecated params by OpenAI
     functions: list | None = None,
     function_call: str | None = None,
@@ -5473,6 +5476,7 @@ def completion(
             service_tier=service_tier,
             store=store,
             prompt_cache_key=prompt_cache_key,
+            prompt_cache_retention=prompt_cache_retention,
             base_url=base_url,
             api_version=api_version,
             api_key=api_key,
@@ -5804,6 +5808,7 @@ def completion(
             "service_tier": service_tier,
             "store": store,
             "prompt_cache_key": prompt_cache_key,
+            "prompt_cache_retention": prompt_cache_retention,
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
