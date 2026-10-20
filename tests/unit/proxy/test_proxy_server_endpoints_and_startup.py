@@ -13874,7 +13874,7 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
 
 
 @contextlib.contextmanager
-def _window_spend_enqueue_env(cached_objects: dict):
+def _window_spend_enqueue_env(cached_objects: dict, prisma_client=None):
     """Point increment_spend_counters at throwaway caches and a real
     WindowSpendUpdateQueue, and hand back the queue to inspect."""
     from litellm.caching.dual_cache import DualCache
@@ -13898,7 +13898,7 @@ def _window_spend_enqueue_env(cached_objects: dict):
     )
     ps.user_api_key_cache = user_api_key_cache
     ps.spend_counter_cache = DualCache()
-    ps.prisma_client = None
+    ps.prisma_client = prisma_client
     ps.proxy_logging_obj = proxy_logging_obj
     try:
         yield queue
@@ -14084,6 +14084,54 @@ async def test_team_window_spend_row_carries_the_request_start_time():
         enqueued = await _drain(queue)
 
     assert enqueued[0]["started_at"] == "2026-08-10T12:00:00.500000"
+
+
+def _prisma_with_rows(keys: dict | None = None, teams: dict | None = None):
+    """Key and team tables that answer find_unique from the given rows."""
+    client = MagicMock()
+    client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        side_effect=lambda where: (keys or {}).get(where["token"])
+    )
+    client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=lambda where: (teams or {}).get(where["team_id"]))
+    return client
+
+
+@pytest.mark.asyncio
+async def test_key_window_is_charged_when_the_cached_key_expired_before_the_request_ended():
+    """A stream that outlives user_api_key_cache_ttl finds no cached key when its
+    cost lands. Its spend still belongs to the key's budget windows."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    row = MagicMock()
+    row.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+
+    with _window_spend_enqueue_env({}, prisma_client=_prisma_with_rows(keys={"hashed-token": row})) as queue:
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
+        enqueued = await _drain(queue)
+
+    assert [(item["entity_type"], item["entity_id"], item["window_duration"]) for item in enqueued] == [
+        ("key", "hashed-token", "30d")
+    ]
+    assert enqueued[0]["spend"] == pytest.approx(0.25)
+
+
+@pytest.mark.asyncio
+async def test_team_window_is_charged_when_the_cached_team_expired_before_the_request_ended():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    row = MagicMock()
+    row.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
+
+    with _window_spend_enqueue_env({}, prisma_client=_prisma_with_rows(teams={"team-1": row})) as queue:
+        await increment_spend_counters(token=None, team_id="team-1", user_id=None, response_cost=1.5)
+        enqueued = await _drain(queue)
+
+    assert [(item["entity_type"], item["entity_id"], item["window_duration"]) for item in enqueued] == [
+        ("team", "team-1", "7d")
+    ]
+    assert enqueued[0]["spend"] == pytest.approx(1.5)
 
 
 def _mock_startup_prisma_client(health_check_error=None, connect_error=None):

@@ -3469,6 +3469,29 @@ def _cached_budget_limits(cached: object) -> object:
     return _UNTYPED_VALUE.validate_python(json.loads(stored)) if isinstance(stored, str) else stored
 
 
+async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str) -> object:
+    """budget_limits from the key or team row, for a request that outlived the
+    cached object (user_api_key_cache_ttl). Read only: re-caching here could race
+    a delete and put a just-deleted key back into the auth cache."""
+    if prisma_client is None:
+        return None
+    try:
+        row: Final[SupportsModelDump | None] = (
+            await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": entity_id})
+            if entity_type == Litellm_EntityType.KEY
+            else await TeamRepository(prisma_client).table.find_unique(where={"team_id": entity_id})
+        )
+    except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
+        verbose_proxy_logger.warning(
+            "Unable to read budget windows for %s=%s; this request's window spend is not counted: %s",
+            entity_type.value,
+            entity_id,
+            e,
+        )
+        return None
+    return None if row is None else _cached_budget_limits(row)
+
+
 async def _increment_spend_counters_batched(
     token: str | None,
     team_id: str | None,
@@ -3557,9 +3580,11 @@ async def _increment_spend_counters_batched(
         key_obj: Final[object] = _UNTYPED_VALUE.validate_python(
             await user_api_key_cache.async_get_cache(key=hashed_token)
         )
-        if key_obj is None:
-            return key_pending
-        key_budget_limits: Final = _cached_budget_limits(key_obj)
+        key_budget_limits: Final = (
+            _cached_budget_limits(key_obj)
+            if key_obj is not None
+            else await _stored_budget_limits(Litellm_EntityType.KEY, hashed_token)
+        )
         if not isinstance(key_budget_limits, list):
             return key_pending
         window_pending: Final = await asyncio.gather(
@@ -3616,9 +3641,11 @@ async def _increment_spend_counters_batched(
         team_obj: Final[object] = _UNTYPED_VALUE.validate_python(
             await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
         )
-        if team_obj is None:
-            return team_pending
-        team_budget_limits: Final = _cached_budget_limits(team_obj)
+        team_budget_limits: Final = (
+            _cached_budget_limits(team_obj)
+            if team_obj is not None
+            else await _stored_budget_limits(Litellm_EntityType.TEAM, scope_team_id)
+        )
         if not isinstance(team_budget_limits, list):
             return team_pending
         window_pending: Final = await asyncio.gather(
@@ -14717,6 +14744,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.litellm_completion_transformation.count_request import (
     ChatCountBridgeError,
     chat_count_request,
