@@ -418,7 +418,7 @@ def _jsonable_fallback(value: object) -> object:
 
 def _logged_request_message(caller_request: object) -> ChatCompletionUserMessage:
     caller_fields: Final = _LOGGED_FIELDS_ADAPTER.validate_python(
-        to_jsonable_python(caller_request, fallback=_jsonable_fallback)
+        to_jsonable_python(caller_request, fallback=_jsonable_fallback, bytes_mode="base64")
     )
     sent_fields: Final = json.dumps(
         dict((name, value) for name, value in caller_fields.items() if value not in (None, [], {}))
