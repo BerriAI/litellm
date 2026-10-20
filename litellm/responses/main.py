@@ -51,6 +51,11 @@ from litellm.responses.mcp.round_billing import (
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.reasoning_effort_capability import (
+    deployment_reasoning_effort_levels,
+    model_group_from_metadata,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -543,7 +548,7 @@ def _bridges_to_chat_completions(
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
 
 
-def _previous_response_client_ids(previous_response_id: str | None, kwargs: Mapping[str, object]) -> tuple[str, ...]:
+def previous_response_client_ids(previous_response_id: str | None, kwargs: Mapping[str, object]) -> tuple[str, ...]:
     """The forms of the previous response's id the client held, which its spend log row can be stored under."""
     if not previous_response_id:
         return ()
@@ -1557,9 +1562,22 @@ def responses(
             if current_reasoning is None and reasoning_effort is not None
             else current_reasoning
         )
+        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        deployment_reasoning: Final = cast(  # cast-ok: the resolver hands a Reasoning back in the shape it was given
+            Reasoning | None,
+            resolve_deployment_reasoning_effort(
+                request_reasoning,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
+                model_group=model_group_from_metadata(routing_kwargs.get("litellm_metadata")),
+                drop_params=litellm.drop_params is True
+                or normalize_drop_params(routing_kwargs.get("drop_params")) is True,
+            ).value,
+        )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
-                {k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"}
+                {k: v for k, v in {**local_vars, "reasoning": deployment_reasoning}.items() if k != "reasoning_effort"}
             )
         )
 
@@ -1576,7 +1594,7 @@ def responses(
             metadata=metadata,
             parallel_tool_calls=parallel_tool_calls,
             previous_response_id=previous_response_id,
-            reasoning=request_reasoning,
+            reasoning=deployment_reasoning,
             store=store,
             background=background,
             stream=stream,
@@ -1604,7 +1622,7 @@ def responses(
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             return litellm_completion_transformation_handler.response_api_handler(
-                _previous_response_client_ids(previous_response_id, kwargs),
+                previous_response_client_ids(previous_response_id, kwargs),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
@@ -1626,6 +1644,7 @@ def responses(
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=allowed_openai_params,
             drop_params=normalize_drop_params(request_drop_params),
+            declared_reasoning_efforts=deployment_reasoning_effort_levels(deployment_model_info) or (),
         )
 
         litellm_logging_obj.update_from_kwargs(

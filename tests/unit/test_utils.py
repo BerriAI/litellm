@@ -866,6 +866,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_token_cost",
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
+        "explicit_cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
         "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
@@ -964,6 +965,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
@@ -2356,7 +2358,6 @@ def test_register_model_with_scientific_notation():
     _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
 @pytest.mark.usefixtures("isolated_openai_model_sets")
 @respx.mock
 def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
@@ -4801,9 +4802,12 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypatch):
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+@pytest.mark.parametrize("rate", (0.0, 0.000123))
+@pytest.mark.parametrize("updated_rate", (None, 0.0, 0.000456))
+def test_reapply_runtime_registrations_replays_register_model_overrides(
+    monkeypatch: pytest.MonkeyPatch, rate: float, updated_rate: float | None
+) -> None:
     """
     register_model is the documented way to override pricing for a model. A
     price-data reload swaps litellm.model_cost for a freshly fetched catalog,
@@ -4834,10 +4838,16 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
                 "openai/gpt-4o": {
                     "litellm_provider": "openai",
                     "mode": "chat",
-                    "input_cost_per_token": 0.000123,
+                    "input_cost_per_token": rate,
                 }
             }
         )
+
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": True, "input_cost_per_token": None}})
+        litellm.register_model(
+            {"openai/gpt-4o": {"input_cost_per_token": str(updated_rate) if updated_rate is not None else None}}
+        )
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": False}})
 
         litellm.model_cost = {
             "openai/gpt-4o": {
@@ -4850,15 +4860,16 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
         _invalidate_model_cost_lowercase_map()
         reapply_runtime_model_cost_registrations()
 
-        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000123
+        expected_rate: Final = rate if updated_rate is None else updated_rate
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == expected_rate
+        assert litellm.model_cost["openai/gpt-4o"]["supports_function_calling"] is False
         assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
     finally:
         litellm.model_cost = saved_model_cost
         _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkeypatch):
     """
     Per-request custom pricing describes one call, so it must not be re-asserted
@@ -7778,6 +7789,51 @@ def test_register_model_without_a_provider_never_inherits_another_providers_entr
 
 
 @pytest.mark.parametrize(
+    "registered_prices, billed_cache_read_rate",
+    [
+        pytest.param({"input_cost_per_token": 2e-06}, 2.5e-07, id="inherits-builtin-explicit-rate"),
+        pytest.param({"cache_read_input_token_cost": 1e-07}, 1e-07, id="own-cache-read-price-wins"),
+        pytest.param(
+            {"cache_read_input_token_cost": 1e-07, "explicit_cache_read_input_token_cost": 5e-08},
+            5e-08,
+            id="own-explicit-price-wins",
+        ),
+    ],
+)
+def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
+    monkeypatch: pytest.MonkeyPatch, registered_prices: dict[str, float], billed_cache_read_rate: float
+) -> None:
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    key: Final = "dashscope/qwen-register-explicit-cache-test"
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.model_cost[key] = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "explicit_cache_read_input_token_cost": 2.5e-07,
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        litellm.register_model({key: registered_prices}, persist_across_reloads=False)
+        explicit_hit: Final = ModelResponse(
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                prompt_tokens_details={"cached_tokens": 1000, "cache_type": "ephemeral"},
+            )
+        )
+
+        assert litellm.completion_cost(completion_response=explicit_hit, model=key) == pytest.approx(
+            1000 * billed_cache_read_rate
+        )
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
     "model, litellm_params, expects_native_config",
     [
         ("gemini-2.5-flash", None, True),
@@ -10610,6 +10666,27 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
         assert prefixed_info["key"] == f"vertex_ai/{model}", model
 
 
+@pytest.mark.parametrize(
+    "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
+)
+def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from litellm import utils as model_utils
+    from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+
+    rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    alias: Final = "openai.test-converse-alias"
+    entry: Final = AliasedCostEntry({"litellm_provider": "bedrock_converse", "mode": "chat"}, (key, alias))
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, key: entry, alias: entry})
+    litellm.register_model({key: rates}, persist_across_reloads=False)
+
+    registrations: Final = dict(
+        model_utils.runtime_model_cost_registrations("bedrock/converse/openai.test-converse", "bedrock")
+    )
+    assert registrations[key] == rates
+    assert dict(model_utils.runtime_model_cost_registrations(alias, "bedrock"))[alias] == rates
+    assert model_utils.runtime_model_cost_registrations("bedrock/converse/openai.other-converse", "bedrock") == ()
+
+
 def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
     """LIT-9880: the hook hands a tool_config point on for the provider step, and OpenAI has no
     step that consumes it, so it must not ride along in extra_body and 400 at OpenAI."""
@@ -10623,3 +10700,18 @@ def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_e
 
     assert optional_params["extra_body"] == {"kept": True}
     assert "cache_control_injection_points" not in optional_params
+
+
+def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_litellm_proxy():
+    """A litellm_proxy deployment calls the downstream proxy through the OpenAI SDK, and that proxy
+    applies cache_control_injection_points itself, so the point must ride along in extra_body."""
+    point: Final = {"location": "tool_config", "control": {"type": "ephemeral"}}
+    optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="litellm_proxy",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[point],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
