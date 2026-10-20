@@ -172,14 +172,21 @@ class SpanEmitter:
         self._mappers: list[AttributeMapper] = (
             list(mappers) if mappers is not None else resolve_mappers(config.mapper_names)
         )
-        self._shed_first: Final = (
-            frozenset[str]()
-            if any(isinstance(mapper, LangfuseMapper) for mapper in self._mappers)
-            else frozenset({User.ID})
-        )
+        self._writes_langfuse_trace: Final = any(isinstance(mapper, LangfuseMapper) for mapper in self._mappers)
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.
         self._emitted: OrderedDict[tuple[str, SpanRole], None] = OrderedDict()
+
+    def _shed_first(self, data: SpanData) -> frozenset[str]:
+        """The keys that leave a full span before any other attribute: ``user.id``, unless it is a caller's
+        ``trace_user_id`` written by the Langfuse vocabulary."""
+        callers_trace_user: Final = (
+            self._writes_langfuse_trace
+            and isinstance(data, LLMCallSpanData)
+            and data.trace.user_id is not None
+            and not data.trace.user_id_is_end_user
+        )
+        return frozenset() if callers_trace_user else frozenset({User.ID})
 
     # -- low-level helpers --------------------------------------------------- #
 
@@ -310,7 +317,7 @@ class SpanEmitter:
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
         budget: Final = attribute_budget(span, reserved, frozenset(mapped))
-        for key, value in fit_indexed_messages(mapped, budget, self._shed_first).items():
+        for key, value in fit_indexed_messages(mapped, budget, self._shed_first(data)).items():
             span.set_attribute(key, value)
         if error:
             stamped: Final = stamp_error(span, error)

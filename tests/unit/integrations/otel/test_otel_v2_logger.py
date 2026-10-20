@@ -14,6 +14,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -53,6 +54,7 @@ from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
 )
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls  # noqa: E402
 from litellm.integrations.otel.model.utils import to_ns, to_seconds  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import (  # noqa: E402
@@ -349,18 +351,33 @@ def test_llm_call_span_withholds_an_end_user_the_metadata_allowlist_drops(metada
     assert not {"end-1", "caller-1"} & {str(value) for value in span.attributes.values()}
 
 
-def test_user_id_costs_no_other_attribute_at_the_span_limit(monkeypatch):
+def _end_user_spans(monkeypatch, mapper_names, limit, message_counts):
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(limit))
+    logger, exporter = _logger_with(mapper_names=mapper_names, capture_message_content=CaptureMessageContent.SPAN_ONLY)
+    for count in message_counts:
+        messages = [{"role": "user", "content": f"m{index}"} for index in range(count)]
+        _emit_llm(logger, _user_kwargs({"user_api_key_end_user_id": "end-1"}, messages, f"call_{count}"))
+    return exporter.get_finished_spans()
+
+
+@pytest.mark.parametrize(
+    ("mapper_names", "limits", "message_counts"),
+    [
+        (["genai", "openinference"], [128], range(40, 70)),
+        (["genai", "openinference", "langfuse"], [128], range(30, 60)),
+        (["genai", "langfuse"], range(30, 45), [1]),
+    ],
+    ids=["openinference", "langfuse-with-indexed-messages", "langfuse-at-a-lower-limit"],
+)
+def test_user_id_costs_no_other_attribute_at_the_span_limit(monkeypatch, mapper_names, limits, message_counts):
     def spans() -> list:
-        logger, exporter = _logger_with(
-            mapper_names=["genai", "openinference"], capture_message_content=CaptureMessageContent.SPAN_ONLY
+        return list(
+            chain.from_iterable(_end_user_spans(monkeypatch, mapper_names, limit, message_counts) for limit in limits)
         )
-        for count in range(40, 70):
-            messages = [{"role": "user", "content": f"m{index}"} for index in range(count)]
-            _emit_llm(logger, _user_kwargs({"user_api_key_end_user_id": "end-1"}, messages, f"call_{count}"))
-        return list(exporter.get_finished_spans())
 
     with_user_id: Final = spans()
     monkeypatch.delitem(GenAIMapper._LLM_CALL_ATTRS, User.ID)
+    monkeypatch.setattr("litellm.integrations.otel.model.metadata.request_trace_controls", caller_trace_controls)
     without_user_id: Final = spans()
     assert {span.attributes.get(User.ID) for span in with_user_id} == {"end-1", None}
     for with_user, without in zip(with_user_id, without_user_id, strict=True):
