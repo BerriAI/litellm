@@ -13,6 +13,7 @@ from litellm.decisions.call import (
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
+    log_caller_request,
     prepare_call,
     send,
 )
@@ -24,6 +25,7 @@ _SYSTEMONE_QUESTIONS_ADAPTER: Final[TypeAdapter[SystemOneQuestions | None]] = Ty
 _OPENAI_QUESTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionQuestions | None]] = TypeAdapter(
     OpenAIDecisionQuestions | None
 )
+_SYSTEMONE_FIELDS: Final = frozenset({"state"})
 
 
 def _request_fields(
@@ -59,6 +61,14 @@ def _prepare_decisions_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    log_caller_request(
+        kwargs,
+        {
+            "input": decision_input,
+            "questions": questions,
+            **{key: kwargs[key] for key in _SYSTEMONE_FIELDS if key in kwargs},
+        },
+    )
     return prepare_call(
         model=model,
         fields=_request_fields(decision_input, questions, kwargs),
