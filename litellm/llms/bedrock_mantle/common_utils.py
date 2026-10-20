@@ -45,6 +45,10 @@ def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
     return None, model
 
 
+def is_mantle_claude_model(model: str) -> bool:
+    return "claude" in model.lower()
+
+
 def resolve_mantle_region(params: Mapping[str, object]) -> str:
     region: Final = params.get("aws_region_name")
     if isinstance(region, str) and region:
