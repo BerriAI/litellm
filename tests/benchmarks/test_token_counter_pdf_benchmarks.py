@@ -38,3 +38,18 @@ def test_pdf_invocation_scan_ignores_unterminated_comments():
     page: Final = _pdf_page(b"/a %" * (4 * 1024 * 1024 // 4))
 
     _price_pdf_pages((page,), len)
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize(
+    "comments",
+    [
+        b"%comment\r\n" * 23,
+        b"% a   \r\n" * 40,
+    ],
+    ids=["23-crlf-comments", "40-crlf-comments-with-trailing-spaces"],
+)
+def test_pdf_invocation_scan_with_crlf_comments(comments: bytes):
+    page: Final = _pdf_page(b"BT /F1 " + comments + b"12 Tf (hello) Tj ET")
+
+    _price_pdf_pages((page,), len)

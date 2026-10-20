@@ -351,9 +351,11 @@ Type for a function that counts tokens in a string.
 EXTRAPOLATION_SAMPLES: Final = 16
 PDF_PAGE_MAX_EXACT_CONTENT_BYTES: Final = 64 * 1024
 PDF_LITERAL_STRING_OPERAND: Final = rb"\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\)?)*\)?"
-PDF_STRING_OPERAND: Final = re.compile(PDF_LITERAL_STRING_OPERAND + rb"|<[0-9A-Fa-f\s]+>")
+PDF_STRING_OPERAND: Final = re.compile(PDF_LITERAL_STRING_OPERAND + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*")
+PDF_LITERAL_ESCAPE: Final = re.compile(rb"\\([nrtbf()\\]|[0-7]{1,3}|\r\n?|\n|[\s\S])")
+PDF_INLINE_IMAGE: Final = re.compile(rb"\bBI\b[\s\S]*?(?:\bID\s[\s\S]*?(?:\sEI\b|\Z)|\Z)")
 PDF_XOBJECT_INVOCATION: Final = re.compile(
-    PDF_LITERAL_STRING_OPERAND + rb"|%[^\r\n]*(?:\r\n?|\n|\Z)|/([^\s/\[\]()<>{}%]+)(?:\s|%[^\r\n]*(?:\r\n?|\n|\Z))+Do\b"
+    PDF_LITERAL_STRING_OPERAND + rb"|%[^\r\n]*(?:[\r\n]|\Z)|/([^\s/\[\]()<>{}%]+)(?:\s|%[^\r\n]*(?:[\r\n]|\Z))+Do\b"
 )
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
@@ -966,7 +968,7 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
         cached: Final = form_metrics_memo.get(identity)
         if cached is not None:
             return cached
-        content: Final = resolved.get_data()
+        content: Final = PDF_INLINE_IMAGE.sub(b" ", resolved.get_data())
         form_resources: Final = _pdf_resolve_object(resolved.get("/Resources"))
         resources: Final = form_resources if isinstance(form_resources, _PdfResourceDictionary) else inherited_resources
         metrics: Final = stream_metrics(content, resources, ancestors | {identity})
@@ -991,15 +993,50 @@ def _evenly_spaced_page_indices(page_count: int) -> tuple[int, ...]:
 
 
 def _pdf_string_operand_bytes(content: bytes) -> int:
-    return sum(match.end() - match.start() for match in PDF_STRING_OPERAND.finditer(content))
+    return sum(len(operand) for operand in _pdf_decoded_string_operands(content))
 
 
 def _pdf_string_operand_sample(content: bytes) -> bytes:
-    return bytes(
-        islice(
-            chain.from_iterable(match.group(0) for match in PDF_STRING_OPERAND.finditer(content)),
-            PDF_PAGE_MAX_EXACT_CONTENT_BYTES,
-        )
+    return bytes(islice(chain.from_iterable(_pdf_decoded_string_operands(content)), PDF_PAGE_MAX_EXACT_CONTENT_BYTES))
+
+
+def _pdf_decode_literal_escape(match: re.Match[bytes]) -> bytes:
+    escape: Final = match.group(1)
+    if escape is None:
+        return b""
+    if escape == b"n":
+        return b"\n"
+    if escape == b"r":
+        return b"\r"
+    if escape == b"t":
+        return b"\t"
+    if escape == b"b":
+        return b"\b"
+    if escape == b"f":
+        return b"\f"
+    if escape in (b"(", b")", b"\\"):
+        return escape
+    if escape in (b"\r", b"\n", b"\r\n"):
+        return b""
+    if escape[:1] in b"01234567":
+        return bytes((int(escape, 8) & 0xFF,))
+    return escape
+
+
+def _pdf_decode_string_operand(operand: bytes) -> bytes:
+    if operand.startswith(b"<"):
+        digits: Final = re.sub(rb"\s+", b"", operand[1:-1])
+        padded_digits: Final = digits if len(digits) % 2 == 0 else digits + b"0"
+        return bytes.fromhex(padded_digits.decode("ascii"))
+    literal: Final = operand[1:-1] if operand.endswith(b")") else operand[1:]
+    return PDF_LITERAL_ESCAPE.sub(_pdf_decode_literal_escape, literal)
+
+
+def _pdf_decoded_string_operands(content: bytes) -> Iterable[bytes]:
+    return (
+        _pdf_decode_string_operand(match.group(0))
+        for match in PDF_STRING_OPERAND.finditer(content)
+        if not match.group(0).startswith(b"%")
     )
 
 
@@ -1008,9 +1045,9 @@ def _pdf_bounded_operand_sample(samples: Iterable[bytes]) -> bytes:
 
 
 def _pdf_page_text_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
-    """Oversized pages use bounded string-operand sampling and scale its token estimate to the full page."""
+    """Oversized pages use bounded decoded string samples scaled to the full decoded operand text."""
     contents: Final = page.get_contents()
-    content: Final = contents.get_data() if contents is not None else b""
+    content: Final = PDF_INLINE_IMAGE.sub(b" ", contents.get_data() if contents is not None else b"")
     content_bytes, operand_bytes, form_samples = _pdf_page_content_metrics(page, content)
     if content_bytes > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
         sample: Final = _pdf_bounded_operand_sample(

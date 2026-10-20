@@ -3,8 +3,10 @@
 import asyncio
 import base64
 import importlib
+import io
 import json
 import os
+import random
 import subprocess
 import sys
 import threading
@@ -18,6 +20,7 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import anyio.to_thread
+from pypdf import PdfReader
 import pytest
 import tiktoken
 from tokenizers import Regex, Tokenizer, models, pre_tokenizers
@@ -1962,11 +1965,11 @@ def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[st
     assert strip == 328
 
 
-def _fake_pdf_page(content_bytes: int | bytes) -> SimpleNamespace:
+def _fake_pdf_page(content_bytes: int | bytes, include_xobjects: bool = False) -> SimpleNamespace:
     content: Final = b"x" * content_bytes if isinstance(content_bytes, int) else content_bytes
 
-    def get_page_resource(_: str) -> None:
-        return None
+    def get_page_resource(key: str) -> object | None:
+        return {"/XObject": {}} if include_xobjects and key == "/Resources" else None
 
     return SimpleNamespace(
         mediabox=SimpleNamespace(width=612.0, height=792.0),
@@ -1987,7 +1990,8 @@ def test_long_pdf_reads_text_from_a_bounded_number_of_pages():
 def test_dense_pdf_page_is_priced_from_its_size_without_extracting_its_text():
     string_operand: Final = b"(Revenue grew eleven percent)"
     text_operator: Final = string_operand + b" Tj\n"
-    content: Final = text_operator * (2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(string_operand) + 1)
+    decoded_operand_bytes: Final = len(string_operand) - 2
+    content: Final = text_operator * (2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // decoded_operand_bytes + 1)
     page: Final = _fake_pdf_page(content_bytes=content)
 
     priced: Final = _price_pdf_pages((page,), len)
@@ -2030,7 +2034,7 @@ def test_oversized_pdf_form_xobject_is_priced_without_extracting_its_text():
     assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
         PDF_PAGE_MAX_EXACT_CONTENT_BYTES
     )
-    assert priced >= len(string_operand) * repetitions
+    assert priced >= (len(string_operand) - 2) * repetitions
 
 
 def test_repeated_pdf_form_draws_are_priced_with_multiplicity():
@@ -2054,7 +2058,7 @@ def test_repeated_pdf_form_draws_are_priced_with_multiplicity():
     assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
         PDF_PAGE_MAX_EXACT_CONTENT_BYTES
     )
-    assert priced >= len(string_operand) * repetitions * 1_000
+    assert priced >= (len(string_operand) - 2) * repetitions * 1_000
 
 
 def test_oversized_nested_pdf_form_xobject_is_priced_without_extracting_its_text():
@@ -2084,7 +2088,7 @@ def test_oversized_nested_pdf_form_xobject_is_priced_without_extracting_its_text
     assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
         PDF_PAGE_MAX_EXACT_CONTENT_BYTES
     )
-    assert priced >= len(string_operand) * repetitions
+    assert priced >= (len(string_operand) - 2) * repetitions
 
 
 def test_exponential_pdf_form_draws_avoid_full_text_extraction():
@@ -2196,7 +2200,7 @@ def test_pdf_pages_with_shared_resources_price_only_the_form_they_draw():
     blank_data_url: Final = _pdf_data_url_with_shared_xobjects((b"",) * page_count, ())
     priced: Final = _count_inline_pdf_tokens(data_url, len)
     rendering_tokens: Final = _count_inline_pdf_tokens(blank_data_url, len)
-    string_operand_bytes: Final = page_count * len(string_operand) * repetitions
+    string_operand_bytes: Final = page_count * (len(string_operand) - 2) * repetitions
 
     assert priced is not None
     assert rendering_tokens is not None
@@ -2228,7 +2232,7 @@ def test_pdf_form_without_resources_inherits_page_xobjects():
     blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
     priced: Final = _count_inline_pdf_tokens(data_url, len)
     rendering_tokens: Final = _count_inline_pdf_tokens(blank_data_url, len)
-    string_operand_bytes: Final = len(string_operand) * repetitions
+    string_operand_bytes: Final = (len(string_operand) - 2) * repetitions
 
     assert priced is not None
     assert rendering_tokens is not None
@@ -2277,7 +2281,7 @@ def test_pdf_form_invocations_allow_comments_and_escaped_names():
     priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
 
     assert priced is not None
-    assert priced >= 2 * len(string_operand) * repetitions
+    assert priced >= 2 * (len(string_operand) - 2) * repetitions
 
 
 def test_pdf_percent_inside_literal_does_not_hide_form_invocation():
@@ -2298,10 +2302,94 @@ def test_pdf_percent_inside_literal_does_not_hide_form_invocation():
     priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
 
     assert priced is not None
-    assert priced >= len(string_operand) * repetitions
+    assert priced >= (len(string_operand) - 2) * repetitions
     assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
         PDF_PAGE_MAX_EXACT_CONTENT_BYTES
     )
+
+
+@pytest.mark.parametrize(
+    "comments",
+    [
+        b"%comment\r\n" * 23,
+        b"% a   \r\n" * 40,
+    ],
+    ids=["23-crlf-comments", "40-crlf-comments-with-trailing-spaces"],
+)
+def test_pdf_invocation_comment_separators_are_priceable(comments: bytes):
+    content: Final = b"BT /F1 " + comments + b"12 Tf (hello) Tj ET"
+    page: Final = _fake_pdf_page(content_bytes=content, include_xobjects=True)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+
+    priced: Final = _price_pdf_pages((page,), len)
+    expected: Final = _price_pdf_pages((blank_page,), len)
+
+    assert priced == expected
+
+
+@pytest.mark.parametrize("inline_image_in_form", [False, True], ids=["page-stream", "form-stream"])
+def test_pdf_inline_image_bytes_do_not_push_content_over_the_limit(inline_image_in_form: bool):
+    image_data: Final = random.Random(42).randbytes(270_000)
+    inline_image: Final = (
+        b"BI /W 270000 /H 1 /BPC 8 /CS /RGB ID " + image_data + b" EI\nBT /F1 9 Tf (Hello world) Tj ET\n"
+    )
+    form: Final = _pdf_stream(
+        inline_image,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    page_content: Final = b"/Fm1 Do\n" if inline_image_in_form else inline_image
+    page_xobjects: Final = b"<< /Fm1 6 0 R >>" if inline_image_in_form else b"<< >>"
+    form_objects: Final = (form,) if inline_image_in_form else ()
+    data_url: Final = _pdf_data_url_with_xobjects(page_content, page_xobjects, form_objects)
+    pdf_bytes: Final = base64.b64decode(data_url.removeprefix(PDF_DATA_URL_PREFIX))
+    page: Final = PdfReader(io.BytesIO(pdf_bytes)).pages[0]
+    page_text: Final = page.extract_text() or ""
+
+    def count_function(value: str) -> int:
+        return len(value)
+
+    expected: Final = count_function(page_text)
+    count_calls: Final = MagicMock(side_effect=count_function)
+    priced: Final = _count_inline_pdf_tokens(data_url, count_calls)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, count_function)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == expected
+    count_calls.assert_called_once_with(page_text)
+
+
+def test_pdf_comments_are_not_counted_as_string_operands():
+    comment: Final = b"% (lots of text)\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(comment) + 1
+    content: Final = comment * repetitions + b"(x) Tj\n"
+    page: Final = _fake_pdf_page(content_bytes=content)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+    blank_page.extract_text.return_value = ""
+
+    priced: Final = _price_pdf_pages((page,), len)
+    blank_price: Final = _price_pdf_pages((blank_page,), len)
+
+    assert priced - blank_price == len(b"x")
+
+
+def test_oversized_hex_pdf_strings_price_like_literal_text():
+    literal_operand: Final = b"(Hello world)"
+    hex_operand: Final = b"<48656c6c6f20776f726c64>"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(hex_operand + b" Tj\n") + 1
+    literal_page: Final = _fake_pdf_page(content_bytes=(literal_operand + b" Tj\n") * repetitions)
+    hex_page: Final = _fake_pdf_page(content_bytes=(hex_operand + b" Tj\n") * repetitions)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+
+    literal_price: Final = _price_pdf_pages((literal_page,), len)
+    hex_price: Final = _price_pdf_pages((hex_page,), len)
+    blank_price: Final = _price_pdf_pages((blank_page,), len)
+    literal_text_tokens: Final = literal_price - blank_price
+    hex_text_tokens: Final = hex_price - blank_price
+
+    assert hex_text_tokens * 5 <= literal_text_tokens * 6
+    assert literal_text_tokens * 5 <= hex_text_tokens * 6
 
 
 def test_oversized_pdf_text_uses_a_sampled_token_estimate():
