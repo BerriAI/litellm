@@ -13,6 +13,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamin
 from litellm.types.utils import CostBreakdown
 
 Dispatch: TypeAlias = Coroutine[object, object, object]
+Parked: TypeAlias = tuple[object, ...]
 RestoresHeaders: TypeAlias = Callable[[ResponsesAPIStreamingResponse], None]
 
 _PARKED_DISPATCH: Final = "_deferred_stream_complete_args"
@@ -28,10 +29,6 @@ class _DispatchesSuccessHandlers(Protocol):
         cache_hit: object = None,
         prefer_async_handlers: bool = False,
     ) -> None: ...
-
-
-async def _run_dispatch(dispatch: Dispatch) -> None:
-    await dispatch
 
 
 def _event_loop_running() -> bool:
@@ -83,18 +80,19 @@ class _BilledRounds:
 class StreamedRoundBilling:
     """One success row per streamed auto-execute request, billed for every round it ran.
 
-    Each round's iterator parks its success dispatch on the shared logging object rather than sending it. When a
-    round completes, before its tools run, it is folded into the rounds before it and a dispatch for every round so
-    far stays parked, so a client disconnect still bills them. Only the request's final response is dispatched,
-    through the proxy's deferred release when the proxy armed one."""
+    Each round's iterator parks its success dispatch on the shared logging object rather than sending it, either as a
+    ready dispatch or, for a stream bridged through chat completions, as the assembled response and its cache hit.
+    When a round completes, before its tools run, it is folded into the rounds before it and a dispatch for every
+    round so far stays parked, so a client disconnect still bills them. Only the request's final response is
+    dispatched, through the proxy's deferred release when the proxy armed one."""
 
     def __init__(self, logging_obj: LiteLLMLoggingObj) -> None:
         self._logging_obj: Final = logging_obj
         self._dispatcher: Final[_DispatchesSuccessHandlers] = logging_obj
         self._billed: _BilledRounds | None = None
-        self._banked_dispatch: Dispatch | None = None
+        self._banked: Parked | None = None
         if getattr(logging_obj, _DISPATCH_RELEASE, None) is None:
-            setattr(logging_obj, _DISPATCH_RELEASE, _run_dispatch)
+            setattr(logging_obj, _DISPATCH_RELEASE, self._run_parked)
 
     def complete_round(
         self,
@@ -103,25 +101,27 @@ class StreamedRoundBilling:
         client_output: Sequence[object],
         restore_headers: RestoresHeaders,
     ) -> None:
-        round_dispatch: Final = self._take_parked()
+        round_parked: Final = self._take_parked()
         priced: Final = _priced(response)
         breakdown: Final = self._logging_obj.cost_breakdown
         if self._billed is None:
             self._billed = _BilledRounds(priced, breakdown)
-            self._bank(round_dispatch)
+            self._bank(round_parked)
             return
         billed: Final = self._billed.with_round(priced, breakdown)
-        self._close(round_dispatch)
-        self._close(self._banked_dispatch)
+        self._close(round_parked)
+        self._close(self._banked)
         self._logging_obj.model_call_details.pop("combined_usage_object", None)
         self._logging_obj.model_call_details.pop("response_cost", None)
         self._billed = billed
         self._logging_obj.cost_breakdown = billed.breakdown
         self._bank(
             None
-            if round_dispatch is None
-            else self._dispatch(
-                completed, billed.response.model_copy(update={"output": list(client_output)}), restore_headers
+            if round_parked is None
+            else (
+                self._dispatch(
+                    completed, billed.response.model_copy(update={"output": list(client_output)}), restore_headers
+                ),
             )
         )
 
@@ -139,7 +139,7 @@ class StreamedRoundBilling:
         self, completed: ResponsesAPIStreamingResponse, response: ResponsesAPIResponse, restore_headers: RestoresHeaders
     ) -> ResponsesAPIResponse:
         parked: Final = self._take_parked()
-        self._banked_dispatch = None
+        self._banked = None
         if self._billed is None or self._billed.rounds == 1:
             if parked is not None:
                 self._release(parked)
@@ -148,19 +148,19 @@ class StreamedRoundBilling:
         charged: Final = response.model_copy(update={"usage": self._billed.response.usage})
         charged.hidden_params = {**self._billed.response.hidden_params}
         if parked is not None:
-            self._release(self._dispatch(completed, charged, restore_headers))
+            self._release((self._dispatch(completed, charged, restore_headers),))
         return charged
 
     def finish(self) -> None:
         parked: Final = self._take_parked()
-        self._banked_dispatch = None
+        self._banked = None
         if parked is not None:
             self._release(parked)
             return
         self._disarm()
 
     def release_abandoned(self) -> None:
-        if getattr(self._logging_obj, _DISPATCH_RELEASE, None) is not _run_dispatch:
+        if not self._owns_release():
             return
         if _event_loop_running():
             self.finish()
@@ -169,14 +169,14 @@ class StreamedRoundBilling:
 
     def abandon(self) -> None:
         self._close(self._take_parked())
-        self._close(self._banked_dispatch)
-        self._banked_dispatch = None
+        self._close(self._banked)
+        self._banked = None
         self._disarm()
 
-    def _bank(self, dispatch: Dispatch | None) -> None:
-        self._banked_dispatch = dispatch
-        if dispatch is not None:
-            setattr(self._logging_obj, _PARKED_DISPATCH, (dispatch,))
+    def _bank(self, parked: Parked | None) -> None:
+        self._banked = parked
+        if parked is not None:
+            setattr(self._logging_obj, _PARKED_DISPATCH, parked)
 
     def _dispatch(
         self, completed: ResponsesAPIStreamingResponse, response: ResponsesAPIResponse, restore_headers: RestoresHeaders
@@ -193,28 +193,45 @@ class StreamedRoundBilling:
             prefer_async_handlers=True,
         )
 
-    def _take_parked(self) -> Dispatch | None:
-        parked: Final[tuple[object, ...] | None] = getattr(self._logging_obj, _PARKED_DISPATCH, None)
+    def _take_parked(self) -> Parked | None:
+        parked: Final[Parked | None] = getattr(self._logging_obj, _PARKED_DISPATCH, None)
+        if not isinstance(parked, tuple):
+            return None
+        setattr(self._logging_obj, _PARKED_DISPATCH, None)
+        return parked
+
+    async def _run_parked(self, *parked: object) -> None:
         match parked:
             case (dispatch,) if asyncio.iscoroutine(dispatch):
-                setattr(self._logging_obj, _PARKED_DISPATCH, None)
-                return dispatch
+                await dispatch
+            case (assembled, cache_hit):
+                await self._dispatcher.dispatch_success_handlers(
+                    assembled, cache_hit=cache_hit, start_time=None, end_time=None, prefer_async_handlers=True
+                )
             case _:
-                return None
+                return
 
-    def _release(self, dispatch: Dispatch) -> None:
+    def _owns_release(self) -> bool:
         release: Final[object] = getattr(self._logging_obj, _DISPATCH_RELEASE, None)
-        if release is not None and release is not _run_dispatch:
-            setattr(self._logging_obj, _PARKED_DISPATCH, (dispatch,))
+        return release == self._run_parked
+
+    def _release(self, parked: Parked) -> None:
+        if getattr(self._logging_obj, _DISPATCH_RELEASE, None) is not None and not self._owns_release():
+            setattr(self._logging_obj, _PARKED_DISPATCH, parked)
             return
         setattr(self._logging_obj, _DISPATCH_RELEASE, None)
-        spawn_logging_task(asyncio.get_running_loop(), dispatch, task_name="Responses MCP stream success logging")
+        spawn_logging_task(
+            asyncio.get_running_loop(), self._run_parked(*parked), task_name="Responses MCP stream success logging"
+        )
 
     def _disarm(self) -> None:
-        if getattr(self._logging_obj, _DISPATCH_RELEASE, None) is _run_dispatch:
+        if self._owns_release():
             setattr(self._logging_obj, _DISPATCH_RELEASE, None)
 
     @staticmethod
-    def _close(dispatch: Dispatch | None) -> None:
-        if dispatch is not None:
-            dispatch.close()
+    def _close(parked: Parked | None) -> None:
+        match parked:
+            case (dispatch,) if asyncio.iscoroutine(dispatch):
+                dispatch.close()
+            case _:
+                return

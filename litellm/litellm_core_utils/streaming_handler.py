@@ -225,6 +225,8 @@ def _provider_hidden_params(
 
 
 class CustomStreamWrapper:
+    _earlier_rounds_spend: tuple[Usage, float] | None = None
+
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
         return self._hidden_params
@@ -2311,6 +2313,9 @@ class CustomStreamWrapper:
             return
         await asyncio.wait((self._failure_logging,), timeout=timeout)
 
+    def bill_failure_after_earlier_rounds(self, usage: Usage, response_cost: float) -> None:
+        self._earlier_rounds_spend = (usage, response_cost)
+
     def _record_partial_usage_for_failure(self) -> None:
         """
         A stream that breaks mid-flight still billed the provider for the chunks
@@ -2337,10 +2342,18 @@ class CustomStreamWrapper:
             if self.model:
                 partial_response.model = self.model
             backfill_missing_cache_usage_fields(usage)
-            self.logging_obj.model_call_details["combined_usage_object"] = usage
-            self.logging_obj.model_call_details["response_cost"] = (
-                self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
+            partial_cost: Final = self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
+            if self._earlier_rounds_spend is None:
+                self.logging_obj.model_call_details["combined_usage_object"] = usage
+                self.logging_obj.model_call_details["response_cost"] = partial_cost
+                return
+            from litellm.cost_calculator import BaseTokenUsageProcessor
+
+            earlier_usage, earlier_cost = self._earlier_rounds_spend
+            self.logging_obj.model_call_details["combined_usage_object"] = (
+                BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[earlier_usage, usage])
             )
+            self.logging_obj.model_call_details["response_cost"] = earlier_cost + partial_cost
         except Exception as recover_error:
             verbose_logger.debug(
                 "could not recover partial usage for interrupted stream: %s",
