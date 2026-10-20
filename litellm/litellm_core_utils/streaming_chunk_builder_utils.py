@@ -1290,7 +1290,7 @@ def _text_of(choice: TextChoices) -> str:
 def _index_of(choice: TextChoices) -> int:
     try:
         return int(choice.index or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 

@@ -2426,6 +2426,7 @@ def test_stream_chunk_builder_keeps_the_usage_a_chat_chunk_reports_in_a_text_com
         (None, None, ({"index": 0, "text": "Hello world", "finish_reason": "stop"},)),
         ("0", 0, ({"index": 0, "text": "Hello world", "finish_reason": "stop"},)),
         ("0", "0", ({"index": 0, "text": "Hello world", "finish_reason": "stop"},)),
+        (float("inf"), 0, ({"index": 0, "text": "Hello world", "finish_reason": "stop"},)),
         (
             0,
             "1",
@@ -2435,10 +2436,10 @@ def test_stream_chunk_builder_keeps_the_usage_a_chat_chunk_reports_in_a_text_com
             ),
         ),
     ],
-    ids=["none", "string_then_int", "strings", "int_then_string"],
+    ids=["none", "string_then_int", "strings", "infinity_then_int", "int_then_string"],
 )
-def test_stream_chunk_builder_rebuilds_text_completion_choice_indexes_that_are_none_or_strings_as_ints(
-    first_index: int | str | None,
+def test_stream_chunk_builder_rebuilds_text_completion_choice_indexes_that_are_not_ints_as_ints(
+    first_index: float | str | None,
     second_index: int | str | None,
     expected: tuple[Mapping[str, object], ...],
 ) -> None:
