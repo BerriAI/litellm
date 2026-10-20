@@ -1,9 +1,11 @@
 import asyncio
 import copy
+import datetime
 import importlib
 import itertools
 import random
 import time
+import uuid
 from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -2981,6 +2983,70 @@ async def test_bad_request_error_does_not_cool_down_a_deployment(
 
     assert len(route.calls) == 1
     assert tuple(cooldown_deployments) == ()
+
+
+async def _complete_like_the_proxy(router: Router, model: str) -> object:
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.datetime.now(),
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id=str(uuid.uuid4()),
+    )
+    response: Final = await router.acompletion(**request, litellm_logging_obj=logging_obj)
+    return response._hidden_params.get("model_id")
+
+
+@pytest.mark.asyncio
+async def test_fallback_deployment_stays_up_while_the_primary_is_in_cooldown(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://primary.test/v1/chat/completions").mock(
+        return_value=httpx.Response(503, json={"error": {"message": "down", "type": "server_error"}})
+    )
+    backup_route: Final = respx_mock.post("https://backup.test/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "https://primary.test/v1"},
+                "model_info": {"id": "primary-dep"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "https://backup.test/v1"},
+                "model_info": {"id": "backup-dep"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        allowed_fails=litellm.allowed_fails,
+        num_retries=0,
+    )
+
+    served_by: Final = [await _complete_like_the_proxy(router, "primary") for _ in range(20)]
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        litellm_router_instance=router,
+        parent_otel_span=None,
+    )
+
+    assert served_by == ["backup-dep"] * 20
+    assert len(backup_route.calls) == 20
+    assert tuple(cooldown_deployments) == ("primary-dep",)
 
 
 @pytest.mark.parametrize("use_policy", [False, True], ids=["allowed_fails", "allowed_fails_policy"])
