@@ -1251,6 +1251,12 @@ def transform_request_body(
 _transform_request_body = transform_request_body
 
 
+def _pop_kms_key_name(optional_params: object) -> str | None:
+    params: Final = cast(dict[str, object], optional_params)  # cast-ok: optional_params is keyed by param name
+    kms_key_name: Final = params.pop("kms_key_name", None)
+    return kms_key_name if isinstance(kms_key_name, str) else None
+
+
 def sync_transform_request_body(
     gemini_api_key: str | None,
     messages: list[AllMessageValues],
@@ -1285,6 +1291,7 @@ def sync_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        kms_key_name=_pop_kms_key_name(optional_params),  # pyright: ignore[reportUnknownArgumentType]  # optional_params is an untyped dict here
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
@@ -1357,6 +1364,7 @@ async def async_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        kms_key_name=_pop_kms_key_name(optional_params),  # pyright: ignore[reportUnknownArgumentType]  # optional_params is an untyped dict here
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,

@@ -22,6 +22,7 @@ from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     cached_messages_end_on_supported_turn,
+    scope_cache_key_to_encryption_key,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
@@ -315,6 +316,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        kms_key_name: str | None = None,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -392,8 +394,9 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
+        generated_cache_key: Final = scope_cache_key_to_encryption_key(
+            local_cache_obj.get_cache_key(messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model),
+            kms_key_name,
         )
         google_cache_name: Final = self.check_cache(
             cache_key=generated_cache_key,
@@ -419,6 +422,7 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
+            kms_key_name=kms_key_name,
         )
 
         cached_content_request_body["tools"] = tools
@@ -473,6 +477,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        kms_key_name: str | None = None,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -545,8 +550,9 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
+        generated_cache_key: Final = scope_cache_key_to_encryption_key(
+            local_cache_obj.get_cache_key(messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model),
+            kms_key_name,
         )
         google_cache_name: Final = await self.async_check_cache(
             cache_key=generated_cache_key,
@@ -573,6 +579,7 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
+            kms_key_name=kms_key_name,
         )
 
         cached_content_request_body["tools"] = tools
