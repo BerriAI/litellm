@@ -5352,11 +5352,12 @@ export interface paths {
          *     estimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote
          *     URLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`
          *     starting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any
-         *     provider is called. Other keys go to the provider as sent, so a field missing a setting its type needs, an empty
-         *     `state` with no images or a key the provider does not take comes back with the provider's own error. `model` is
-         *     any extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
-         *     provider's format. Streaming is not supported, so `stream: true` is rejected with a 400 unless `drop_params` is
-         *     set.
+         *     provider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`
+         *     included, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`
+         *     drops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its
+         *     type needs or an empty `state` with no images comes back with the provider's own error. `model` is any
+         *     extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
+         *     provider's format.
          */
         post: operations["extraction_extraction_post"];
         delete?: never;
@@ -20255,11 +20256,12 @@ export interface paths {
          *     estimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote
          *     URLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`
          *     starting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any
-         *     provider is called. Other keys go to the provider as sent, so a field missing a setting its type needs, an empty
-         *     `state` with no images or a key the provider does not take comes back with the provider's own error. `model` is
-         *     any extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
-         *     provider's format. Streaming is not supported, so `stream: true` is rejected with a 400 unless `drop_params` is
-         *     set.
+         *     provider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`
+         *     included, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`
+         *     drops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its
+         *     type needs or an empty `state` with no images comes back with the provider's own error. `model` is any
+         *     extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
+         *     provider's format.
          */
         post: operations["extraction_v1_extraction_post"];
         delete?: never;

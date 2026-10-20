@@ -2926,7 +2926,7 @@ if docs_url != "/" and root_redirect_url is not None:
 user_api_base = None
 user_model = None
 user_debug = False
-user_max_tokens = None
+user_max_tokens: int | None = None
 user_request_timeout = None
 user_temperature = None
 user_config: Final = None
@@ -9758,10 +9758,9 @@ async def initialize(
         user_api_base, \
         user_debug, \
         user_detailed_debug, \
-        user_user_max_tokens, \
+        user_max_tokens, \
         user_request_timeout, \
         user_temperature, \
-        user_headers, \
         experimental, \
         llm_model_list, \
         llm_router, \
@@ -9839,7 +9838,6 @@ async def initialize(
             general_settings,
         ) = await proxy_config.load_config(router=llm_router, config_file_path=config)
     if headers:  # model-specific param
-        user_headers = headers
         dynamic_config[user_model]["headers"] = headers
     if api_base:  # model-specific param
         user_api_base = api_base
@@ -9847,6 +9845,7 @@ async def initialize(
     if api_version:
         os.environ["AZURE_API_VERSION"] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
+        user_max_tokens = max_tokens
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
         user_temperature = temperature

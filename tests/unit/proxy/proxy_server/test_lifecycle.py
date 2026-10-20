@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -51,6 +52,7 @@ from litellm.proxy.proxy_server import (
 )
 
 from litellm.proxy.management_helpers.audit_logs import track_audit_task
+from litellm.types.utils import ModelResponse
 
 from .conftest import normalize
 
@@ -656,6 +658,27 @@ async def test_initialize_from_worker_config_drops_legacy_telemetry_key():
     assert ps.user_request_timeout == 77
     with pytest.raises(TypeError):
         await initialize_from_worker_config({"this_is_not_a_real_kwarg": True})
+
+
+def test_chat_completions_carry_the_max_tokens_the_proxy_started_with(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ps, "user_max_tokens", None)
+    cleanup_router_config_variables()
+    asyncio.run(
+        initialize(
+            config=os.path.join(os.path.dirname(__file__), "..", "test_configs", "test_config_no_auth.yaml"),
+            max_tokens=100,
+        )
+    )
+    acompletion: Final = AsyncMock(return_value=ModelResponse())
+    monkeypatch.setattr(ps.llm_router, "acompletion", acompletion)
+
+    response: Final = TestClient(ps.app).post(
+        "/v1/chat/completions",
+        json={"model": "test_openai_models", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert acompletion.call_args.kwargs["max_tokens"] == 100
 
 
 # ---------------------------------------------------------------------------

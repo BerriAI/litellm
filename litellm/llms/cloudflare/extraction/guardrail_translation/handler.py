@@ -5,8 +5,14 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal
 
 from pydantic import Field, JsonValue, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.types.extraction import ExtractionAnswer, ExtractionBase64Image, ExtractionResponse
+from litellm.types.extraction import (
+    EXTRACTION_STATE_REWRITTEN_METADATA_KEY,
+    ExtractionAnswer,
+    ExtractionBase64Image,
+    ExtractionResponse,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -17,6 +23,7 @@ if TYPE_CHECKING:
 _FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, Mapping[str, object]]]] = TypeAdapter(
     Mapping[str, Mapping[str, object]]
 )
+_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[ExtractionBase64Image | JsonValue, ...]]] = TypeAdapter(
     tuple[Annotated[ExtractionBase64Image | JsonValue, Field(union_mode="left_to_right")], ...]
 )
@@ -30,12 +37,42 @@ class _AnswerText:
     text: str
 
 
-def _instructions(fields: Mapping[str, Mapping[str, object]]) -> tuple[tuple[str, str], ...]:
+_SPEC_TEXT_KEYS: Final = ("instructions", "unit")
+
+
+@dataclass(frozen=True, slots=True)
+class _SpecText:
+    name: str
+    key: str
+    text: str
+
+
+def _spec_texts_of(name: str, spec: Mapping[str, object]) -> tuple[_SpecText, ...]:
     return tuple(
-        (name, instructions)
-        for name, spec in fields.items()
-        if isinstance(instructions := spec.get("instructions"), str)
+        _SpecText(name=name, key=key, text=text) for key in _SPEC_TEXT_KEYS if isinstance(text := spec.get(key), str)
     )
+
+
+def _spec_texts(fields: Mapping[str, Mapping[str, object]]) -> tuple[_SpecText, ...]:
+    return tuple(chain.from_iterable(_spec_texts_of(name, spec) for name, spec in fields.items()))
+
+
+def _guardrailed_spec(
+    name: str, spec: Mapping[str, object], scanned: Sequence[tuple[_SpecText, str]]
+) -> Mapping[str, object]:
+    return {**spec, **{text.key: guardrailed for text, guardrailed in scanned if text.name == name}}
+
+
+def _metadata_key(data: Mapping[str, object]) -> Literal["metadata", "litellm_metadata"]:
+    return get_metadata_variable_name_from_kwargs(data)
+
+
+def _metadata(data: Mapping[str, object]) -> Mapping[str, object]:
+    return _METADATA_ADAPTER.validate_python(data.get(_metadata_key(data)) or {})
+
+
+def _is_text_answer(answer: ExtractionAnswer, spec: Mapping[str, object] | None) -> bool:
+    return answer.type == "text" or (answer.type == "list" and (spec is None or spec.get("items") == "text"))
 
 
 def _image_urls(images: object) -> tuple[str, ...]:
@@ -77,10 +114,16 @@ def _scans_of(
 
 
 def _guardrailed_answer(
-    name: str, answer: ExtractionAnswer, scanned: Sequence[tuple[_AnswerText, str]], drop_spans: bool
+    name: str,
+    answer: ExtractionAnswer,
+    scanned: Sequence[tuple[_AnswerText, str]],
+    drop_spans: bool,
+    is_text: bool,
 ) -> ExtractionAnswer:
-    value_scans: Final = _scans_of(name, "value", scanned)
-    guess_scans: Final = _scans_of(name, "guess", scanned)
+    if not is_text and any(text.name == name and text.text != guardrailed for text, guardrailed in scanned):
+        return answer.model_copy(update={"value": None, "guess": None, "span": None, "spans": None})
+    value_scans: Final = _scans_of(name, "value", scanned if is_text else ())
+    guess_scans: Final = _scans_of(name, "guess", scanned if is_text else ())
     update: Final = {
         **({"value": _guardrailed_value(answer.value, value_scans)} if value_scans else {}),
         **({"guess": _guardrailed_value(answer.guess, guess_scans)} if guess_scans else {}),
@@ -121,12 +164,12 @@ class ExtractionHandler(BaseTranslation):
         state: Final = data.get("state")
         states: Final = (state,) if isinstance(state, str) and state else ()
         fields: Final = _FIELDS_ADAPTER.validate_python(data.get("fields") or {})
-        instructions: Final = _instructions(fields)
+        spec_texts: Final = _spec_texts(fields)
         images: Final = _image_urls(data.get("images"))
-        if not states and not instructions and not images:
+        if not states and not spec_texts and not images:
             return data
         scanned: Final = await _scanned_texts(
-            (*states, *(text for _, text in instructions)),
+            (*states, *(text.text for text in spec_texts)),
             data.get("model"),
             guardrail_to_apply,
             data,
@@ -134,14 +177,17 @@ class ExtractionHandler(BaseTranslation):
             litellm_logging_obj,
             images,
         )
-        scanned_instructions: Final = dict(zip((name for name, _ in instructions), scanned[len(states) :]))
+        scanned_specs: Final = tuple(zip(spec_texts, scanned[len(states) :]))
+        state_rewritten: Final = bool(states) and scanned[0] != states[0]
         return {
             **data,
             **({"state": scanned[0]} if states else {}),
-            "fields": {
-                name: {**spec, "instructions": scanned_instructions[name]} if name in scanned_instructions else spec
-                for name, spec in fields.items()
-            },
+            **(
+                {_metadata_key(data): {**_metadata(data), EXTRACTION_STATE_REWRITTEN_METADATA_KEY: True}}
+                if state_rewritten
+                else {}
+            ),
+            "fields": {name: _guardrailed_spec(name, spec, scanned_specs) for name, spec in fields.items()},
         }
 
     async def process_output_response(
@@ -158,22 +204,32 @@ class ExtractionHandler(BaseTranslation):
             chain.from_iterable(_answer_texts(name, answer) for name, answer in response.answers.items())
         )
         state_texts: Final = (response.state_text,) if response.state_text else ()
-        if not texts and not state_texts:
-            return response
-        scanned: Final = await _scanned_texts(
-            (*(text.text for text in texts), *state_texts),
-            response.model,
-            guardrail_to_apply,
-            request_data or {},
-            "response",
-            litellm_logging_obj,
+        request: Final = request_data or {}
+        scanned: Final = (
+            await _scanned_texts(
+                (*(text.text for text in texts), *state_texts),
+                response.model,
+                guardrail_to_apply,
+                request,
+                "response",
+                litellm_logging_obj,
+            )
+            if texts or state_texts
+            else ()
         )
         pairs: Final = tuple(zip(texts, scanned))
-        state_text: Final = scanned[-1] if state_texts else response.state_text
+        state_text: Final = next(iter(scanned[len(texts) :]), response.state_text)
+        specs: Final = _FIELDS_ADAPTER.validate_python(request.get("fields") or {})
         return response.model_copy(
             update={
                 "answers": {
-                    name: _guardrailed_answer(name, answer, pairs, drop_spans=state_text != response.state_text)
+                    name: _guardrailed_answer(
+                        name,
+                        answer,
+                        pairs,
+                        drop_spans=state_text != response.state_text,
+                        is_text=_is_text_answer(answer, specs.get(name)),
+                    )
                     for name, answer in response.answers.items()
                 },
                 **({"state_text": state_text} if state_texts else {}),

@@ -9,15 +9,17 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.decisions.call import log_caller_request
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.extraction.transformation import BaseExtractionConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.extraction import (
+    EXTRACTION_STATE_REWRITTEN_METADATA_KEY,
+    ExtractionAnswer,
     ExtractionBase64Image,
     ExtractionField,
     ExtractionOptions,
@@ -25,7 +27,7 @@ from litellm.types.extraction import (
     ExtractionResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders, all_litellm_params
+from litellm.types.utils import LlmProviders, is_litellm_owned_kwarg
 from litellm.utils import (
     ProviderConfigManager,
     client,  # pyright: ignore[reportUnknownVariableType]  # client is an untyped decorator
@@ -37,13 +39,17 @@ ExtractionImages: TypeAlias = Sequence[str | ExtractionBase64Image | Mapping[str
 ExtractionOptionsParam: TypeAlias = ExtractionOptions | Mapping[str, object]
 
 _REQUEST_ADAPTER: Final[TypeAdapter[ExtractionRequestBody]] = TypeAdapter(ExtractionRequestBody)
+_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _HANDLER: Final = BaseLLMHTTPHandler()
-_LITELLM_ONLY_KWARGS: Final = frozenset((*all_litellm_params, *GenericLiteLLMParams.model_fields))
-_LITELLM_KWARGS: Final = frozenset((*_LITELLM_ONLY_KWARGS, *OPENAI_CHAT_COMPLETION_PARAMS))
-_UNSUPPORTED_OPENAI_PARAMS: Final = (
-    frozenset(OPENAI_CHAT_COMPLETION_PARAMS)
-    - _LITELLM_ONLY_KWARGS
-    - frozenset(("user", "extra_headers", "base_url", "default_headers", "deployment_id"))
+_LOCAL_KWARGS: Final = frozenset(
+    (
+        *GenericLiteLLMParams.model_fields,
+        "extra_headers",
+        "base_url",
+        "default_headers",
+        "deployment_id",
+        "additional_drop_params",
+    )
 )
 
 
@@ -102,14 +108,19 @@ def _request_fields(
     return MappingProxyType({name: value for name, value in sent.items() if value is not None})
 
 
-def _unsupported_openai_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            name
-            for name, value in kwargs.items()
-            if name in _UNSUPPORTED_OPENAI_PARAMS and value is not None and value is not False
-        )
+def _is_unsupported(name: str, value: object, policy: DropPolicy) -> bool:
+    return (
+        value is not None
+        and value is not False
+        and name not in _LOCAL_KWARGS
+        and not is_litellm_owned_kwarg(name)
+        and not policy.drops(name)
     )
+
+
+def _unsupported_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    policy: Final = drop_policy(kwargs)
+    return tuple(sorted(name for name, value in kwargs.items() if _is_unsupported(name, value, policy)))
 
 
 def _prepare_call(
@@ -123,10 +134,7 @@ def _prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> _ExtractionCall:
-    provider_fields: Final = MappingProxyType(
-        {**{name: value for name, value in kwargs.items() if name not in _LITELLM_KWARGS}, **request_fields}
-    )
-    log_caller_request(kwargs, provider_fields)
+    log_caller_request(kwargs, request_fields)
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -134,8 +142,8 @@ def _prepare_call(
         api_key=api_key,
     )
     provider_config: Final = _provider_config(model, provider)
-    unsupported: Final = _unsupported_openai_params(kwargs)
-    if unsupported and not drops_unsupported_params(kwargs.get("drop_params")):
+    unsupported: Final = _unsupported_params(kwargs)
+    if unsupported:
         raise litellm.UnsupportedParamsError(
             message=(
                 f"{provider} does not support parameters: {list(unsupported)}, for model={model}. "
@@ -146,7 +154,7 @@ def _prepare_call(
             llm_provider=provider,
         )
     try:
-        request: Final = _REQUEST_ADAPTER.validate_python(provider_fields)
+        request: Final = _REQUEST_ADAPTER.validate_python(request_fields)
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Extraction request: {error}", model=model, llm_provider=provider
@@ -190,8 +198,26 @@ def _prepare_call(
     )
 
 
+def _state_rewritten_by_guardrail(litellm_params: Mapping[str, object]) -> bool:
+    metadata: Final = litellm_params.get(get_metadata_variable_name_from_kwargs(litellm_params))
+    return (
+        isinstance(metadata, Mapping)
+        and _METADATA_ADAPTER.validate_python(metadata).get(EXTRACTION_STATE_REWRITTEN_METADATA_KEY) is True
+    )
+
+
+def _without_spans(answers: Mapping[str, ExtractionAnswer]) -> Mapping[str, ExtractionAnswer]:
+    return {name: answer.model_copy(update={"span": None, "spans": None}) for name, answer in answers.items()}
+
+
 def _formatted_response(response: ExtractionResponse, call: _ExtractionCall) -> ExtractionResponse:
-    formatted: Final = response.model_copy(update={"model": call.requested_model})
+    spans_index_hidden_text: Final = response.state_text is None and _state_rewritten_by_guardrail(call.litellm_params)
+    formatted: Final = response.model_copy(
+        update={
+            "model": call.requested_model,
+            **({"answers": _without_spans(response.answers)} if spans_index_hidden_text else {}),
+        }
+    )
     formatted.set_hidden_params(
         {
             "model": f"{call.custom_llm_provider}/{call.model}",

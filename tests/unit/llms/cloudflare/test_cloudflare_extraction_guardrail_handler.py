@@ -29,6 +29,24 @@ class _TaggingGuardrail(CustomGuardrail):
         return GenericGuardrailAPIInputs(texts=[f"{text} [GUARDRAILED]" for text in texts])
 
 
+class _MaskingGuardrail(CustomGuardrail):
+    def __init__(self, secret: str, mask: str) -> None:
+        super().__init__(guardrail_name="masking")
+        self.secret = secret
+        self.mask = mask
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=[text.replace(self.secret, self.mask) for text in inputs.get("texts", [])]
+        )
+
+
 @pytest.mark.parametrize("call_type", (CallTypes.extraction, CallTypes.aextraction))
 def test_extraction_call_types_resolve_to_the_extraction_handler(call_type: CallTypes) -> None:
     assert get_guardrail_translation_mapping(call_type) is ExtractionHandler
@@ -51,14 +69,14 @@ async def test_request_state_and_field_instructions_are_guardrailed_on_a_copy() 
 
     assert guardrail.seen == (
         "request",
-        ("Invoice from Acme Tools, contact jane@acme.example", "Who sent the invoice?"),
+        ("Invoice from Acme Tools, contact jane@acme.example", "Who sent the invoice?", "USD"),
     )
-    assert result == {
-        **data,
+    assert {key: value for key, value in result.items() if key != "metadata"} == {
+        **{key: value for key, value in data.items() if key != "metadata"},
         "state": "Invoice from Acme Tools, contact jane@acme.example [GUARDRAILED]",
         "fields": {
             "vendor": {"type": "text", "instructions": "Who sent the invoice? [GUARDRAILED]"},
-            "total": {"type": "number", "unit": "USD"},
+            "total": {"type": "number", "unit": "USD [GUARDRAILED]"},
         },
     }
     assert data["state"] == "Invoice from Acme Tools, contact jane@acme.example"
@@ -144,4 +162,39 @@ async def test_spans_into_the_callers_own_state_survive_a_response_guardrail() -
         "type": "text",
         "value": "Acme Tools [GUARDRAILED]",
         "span": [19, 29],
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_response_guardrail_change_to_a_typed_answer_nulls_it_instead_of_breaking_its_type() -> None:
+    guardrail: Final = _MaskingGuardrail("2026-03-03", "[DATE]")
+    request_data: Final = {
+        "fields": {
+            "invoice_date": {"type": "date"},
+            "due_dates": {"type": "list", "items": "date"},
+            "notes": {"type": "list", "items": "text"},
+        }
+    }
+    response: Final = ExtractionResponse.model_validate(
+        {
+            "model": "invoice-reader",
+            "answers": {
+                "invoice_date": {"type": "date", "value": "2026-03-03", "guess": "2026-03-03", "span": [30, 40]},
+                "due_dates": {"type": "list", "value": ["2026-03-03", "2026-04-02"], "spans": [[30, 40], [50, 60]]},
+                "notes": {"type": "list", "value": ["paid 2026-03-03"], "spans": [[70, 85]]},
+                "received": {"type": "date", "value": "2026-02-27", "span": [90, 100]},
+            },
+            "truncated": False,
+            "usage": {"input_tokens": 52, "output_tokens": 0},
+        }
+    )
+
+    result: Final = await ExtractionHandler().process_output_response(response, guardrail, request_data=request_data)
+
+    assert isinstance(result, ExtractionResponse)
+    assert {name: answer.model_dump(mode="json") for name, answer in result.answers.items()} == {
+        "invoice_date": {"type": "date", "value": None},
+        "due_dates": {"type": "list", "value": None},
+        "notes": {"type": "list", "value": ["paid [DATE]"], "spans": [[70, 85]]},
+        "received": {"type": "date", "value": "2026-02-27", "span": [90, 100]},
     }

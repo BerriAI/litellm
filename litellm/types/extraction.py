@@ -23,6 +23,7 @@ ExtractionFieldType: TypeAlias = Literal[
 ExtractionFieldName: TypeAlias = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")]
 JsonNumber: TypeAlias = StrictInt | StrictFloat
 ExtractionBound: TypeAlias = JsonNumber | StrictStr
+EXTRACTION_STATE_REWRITTEN_METADATA_KEY: Final = "extraction_state_rewritten_by_guardrail"
 
 
 def _is_none(value: object) -> bool:

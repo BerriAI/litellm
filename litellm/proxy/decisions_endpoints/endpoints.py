@@ -90,6 +90,7 @@ _EXTRACTION_REQUEST_BODY: Final = inline_request_body(
     },
 )
 _ApiName: TypeAlias = Literal["Decisions", "Extraction"]
+_RouteType: TypeAlias = Literal["adecisions", "asystemone", "aextraction"]
 
 
 async def _invalid_request(
@@ -115,7 +116,9 @@ async def _invalid_request(
 _FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "images", "assets", "audio", "videos"})
 
 
-def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, object]:
+def _fields_checked_before_routing(data: Mapping[str, object], route_type: _RouteType) -> Mapping[str, object]:
+    if route_type == "aextraction":
+        return data
     return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
 
 
@@ -138,7 +141,7 @@ async def _process_decisions(
     body_adapter: (
         TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody] | TypeAdapter[ExtractionRequestBody]
     ),
-    route_type: Literal["adecisions", "asystemone", "aextraction"],
+    route_type: _RouteType,
 ) -> object:
     from litellm.proxy.proxy_server import (
         general_settings as proxy_general_settings,
@@ -164,13 +167,14 @@ async def _process_decisions(
     api_name: Final[_ApiName] = "Extraction" if route_type == "aextraction" else "Decisions"
     data: Final = await _request_data(request, user_api_key_dict, api_name)
     try:
-        body_adapter.validate_python(_fields_checked_before_routing(data))
+        body_adapter.validate_python(_fields_checked_before_routing(data, route_type))
     except ValidationError as error:
         raise await _invalid_request(raw_data=data, error=error, user_api_key_dict=user_api_key_dict, api_name=api_name)
     general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_general_settings)
     user_api_base: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_api_base)
     user_model: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_model)
     user_temperature: Final = _OPTIONAL_FLOAT_ADAPTER.validate_python(proxy_user_temperature)
+    takes_generation_settings: Final = route_type != "aextraction"
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -185,9 +189,9 @@ async def _process_decisions(
             select_data_generator=None,
             model=None,
             user_model=user_model,
-            user_temperature=user_temperature,
+            user_temperature=user_temperature if takes_generation_settings else None,
             user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
+            user_max_tokens=user_max_tokens if takes_generation_settings else None,
             user_api_base=user_api_base,
             version=version,
         )
@@ -322,11 +326,12 @@ async def extraction(
     estimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote
     URLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`
     starting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any
-    provider is called. Other keys go to the provider as sent, so a field missing a setting its type needs, an empty
-    `state` with no images or a key the provider does not take comes back with the provider's own error. `model` is
-    any extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
-    provider's format. Streaming is not supported, so `stream: true` is rejected with a 400 unless `drop_params` is
-    set.
+    provider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`
+    included, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`
+    drops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its
+    type needs or an empty `state` with no images comes back with the provider's own error. `model` is any
+    extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
+    provider's format.
     """
     return await _process_decisions(
         request=request,

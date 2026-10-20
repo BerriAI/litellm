@@ -8,7 +8,7 @@ import sys
 from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 import respx
@@ -19,6 +19,8 @@ from pydantic import TypeAdapter
 from starlette.routing import Match
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
 from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features
 from litellm.proxy._types import UserAPIKeyAuth
@@ -33,6 +35,8 @@ from litellm.proxy.proxy_server import (
 )
 from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionRequestBody
 from litellm.types.extraction import ExtractionRequestBody
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs
 from tests._master_key import MASTER_KEY
 
 if sys.version_info >= (3, 14):
@@ -1319,7 +1323,9 @@ _EXTRACTION_REQUEST: Final[Mapping[str, object]] = {
 }
 
 
-def _route_invoice_reader_to_clairic(monkeypatch: pytest.MonkeyPatch, drop_params: bool = False) -> None:
+def _route_invoice_reader_to_clairic(
+    monkeypatch: pytest.MonkeyPatch, drop_params: bool = False, additional_drop_params: tuple[str, ...] = ()
+) -> None:
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
@@ -1332,6 +1338,7 @@ def _route_invoice_reader_to_clairic(monkeypatch: pytest.MonkeyPatch, drop_param
                         "api_key": "cloudflare-key",
                         "api_base": "https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
                         "drop_params": drop_params,
+                        **({"additional_drop_params": list(additional_drop_params)} if additional_drop_params else {}),
                     },
                 }
             ]
@@ -1389,20 +1396,96 @@ def test_proxy_extraction_refuses_a_malformed_body_before_calling_clairic(
     assert not upstream.called
 
 
-def test_proxy_extraction_sends_keys_it_does_not_know_to_clairic_as_sent(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+@pytest.mark.parametrize(
+    ("key", "value"),
+    (
+        ("language", "en"),
+        ("priority", 1),
+        ("extra_body", {"language": "en"}),
+        ("temperature", 0.5),
+        ("user", "end-user-1"),
+    ),
+)
+def test_proxy_extraction_refuses_a_key_clairic_does_not_take_before_calling_clairic(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, key: str, value: object
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
     _route_invoice_reader_to_clairic(monkeypatch)
     upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(json={"result": _CLAIRIC_RESULT, "success": True})
 
-    response: Final = client.post("/v1/extraction", json={**_EXTRACTION_REQUEST, "language": "en"})
+    response: Final = client.post("/v1/extraction", json={**_EXTRACTION_REQUEST, key: value})
+
+    assert response.status_code == 400, response.text
+    assert f"does not support parameters: ['{key}']" in response.text
+    assert not upstream.called
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "additional_drop_params"),
+    ((True, ()), (False, ("language", "temperature", "user"))),
+    ids=("drop_params", "additional_drop_params"),
+)
+def test_proxy_extraction_sends_only_the_clairic_request_when_the_deployment_drops_other_keys(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    drop_params: bool,
+    additional_drop_params: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_invoice_reader_to_clairic(monkeypatch, drop_params, additional_drop_params)
+    upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(json={"result": _CLAIRIC_RESULT, "success": True})
+
+    response: Final = client.post(
+        "/v1/extraction", json={**_EXTRACTION_REQUEST, "language": "en", "temperature": 0.2, "user": "end-user-1"}
+    )
 
     assert response.status_code == 200, response.text
-    assert json.loads(upstream.calls[0].request.content) == {
-        **_EXTRACTION_REQUEST,
-        "language": "en",
-        "model": "clairic",
-    }
+    assert json.loads(upstream.calls[0].request.content) == {**_EXTRACTION_REQUEST, "model": "clairic"}
+
+
+def test_proxy_extraction_leaves_out_the_cli_generation_defaults(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_max_tokens", 256)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_temperature", 0.2)
+    _route_invoice_reader_to_clairic(monkeypatch)
+    upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(json={"result": _CLAIRIC_RESULT, "success": True})
+
+    response: Final = client.post("/v1/extraction", json=_EXTRACTION_REQUEST)
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {**_EXTRACTION_REQUEST, "model": "clairic"}
+
+
+class _PreCallRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: object, data: dict, call_type: str
+    ) -> dict:
+        self.calls += 1
+        return data
+
+
+def test_proxy_extraction_refuses_a_remote_image_before_any_pre_call_hook_runs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    recorder: Final = _PreCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    _route_invoice_reader_to_clairic(monkeypatch)
+    upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(json={"result": _CLAIRIC_RESULT, "success": True})
+
+    response: Final = client.post(
+        "/v1/extraction", json={**_EXTRACTION_REQUEST, "images": ["https://example.com/invoice.png"]}
+    )
+
+    assert response.status_code == 400, response.text
+    assert recorder.calls == 0
+    assert not upstream.called
 
 
 def test_proxy_extraction_refuses_stream_before_calling_clairic_unless_the_deployment_drops_params(
@@ -1431,6 +1514,99 @@ def test_proxy_extraction_answers_a_dropped_stream_with_one_json_body(
     assert response.headers["content-type"].startswith("application/json")
     assert response.json() == {**_CLAIRIC_RESULT, "model": "invoice-reader"}
     assert json.loads(upstream.calls[0].request.content) == {**_EXTRACTION_REQUEST, "model": "clairic"}
+
+
+class _RequestEmailMasker(CustomGuardrail):
+    def __init__(self, email: str) -> None:
+        super().__init__(guardrail_name="mask-email", event_hook=GuardrailEventHooks.pre_call, default_on=True)
+        self.email = email
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=[text.replace(self.email, "[EMAIL]") for text in inputs.get("texts", [])]
+        )
+
+
+_EMAIL_STATE: Final = "Questions go to billing@acme.example today. The vendor is Acme Tools."
+_MASKED_EMAIL_STATE: Final = "Questions go to [EMAIL] today. The vendor is Acme Tools."
+_VENDOR_IN_MASKED_STATE: Final = {
+    "type": "text",
+    "value": "Acme Tools",
+    "span": [_MASKED_EMAIL_STATE.index("Acme Tools"), _MASKED_EMAIL_STATE.index("Acme Tools") + len("Acme Tools")],
+}
+
+
+def _clairic_vendor_result(state_text: str | None = None) -> Mapping[str, object]:
+    return {
+        "model": "clairic",
+        "answers": {"vendor": _VENDOR_IN_MASKED_STATE},
+        "truncated": False,
+        "usage": {"input_tokens": 52, "output_tokens": 0},
+        **({"state_text": state_text} if state_text is not None else {}),
+    }
+
+
+@pytest.mark.parametrize(
+    ("guardrail_email", "sent_state", "returned_vendor"),
+    (
+        ("billing@acme.example", _MASKED_EMAIL_STATE, {"type": "text", "value": "Acme Tools"}),
+        ("nobody@example.com", _EMAIL_STATE, _VENDOR_IN_MASKED_STATE),
+    ),
+    ids=("state_masked", "state_untouched"),
+)
+def test_proxy_extraction_drops_spans_into_a_state_only_its_request_guardrail_saw(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    guardrail_email: str,
+    sent_state: str,
+    returned_vendor: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_RequestEmailMasker(guardrail_email)])
+    _route_invoice_reader_to_clairic(monkeypatch)
+    upstream: Final = respx_mock.post(_CLAIRIC_UPSTREAM).respond(
+        json={"result": _clairic_vendor_result(), "success": True}
+    )
+
+    response: Final = client.post(
+        "/v1/extraction",
+        json={"model": "invoice-reader", "state": _EMAIL_STATE, "fields": {"vendor": {"type": "text"}}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content)["state"] == sent_state
+    assert response.json()["answers"] == {"vendor": returned_vendor}
+
+
+def test_proxy_extraction_keeps_spans_into_the_masked_state_it_returns(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_RequestEmailMasker("billing@acme.example")])
+    _route_invoice_reader_to_clairic(monkeypatch)
+    respx_mock.post(_CLAIRIC_UPSTREAM).respond(
+        json={"result": _clairic_vendor_result(state_text=_MASKED_EMAIL_STATE), "success": True}
+    )
+
+    response: Final = client.post(
+        "/v1/extraction",
+        json={
+            "model": "invoice-reader",
+            "state": _EMAIL_STATE,
+            "fields": {"vendor": {"type": "text"}},
+            "options": {"return_state_text": True},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    assert body["answers"] == {"vendor": _VENDOR_IN_MASKED_STATE}
+    assert body["state_text"][slice(*body["answers"]["vendor"]["span"])] == "Acme Tools"
 
 
 @pytest.mark.parametrize("path", ("/v1/extraction", "/extraction"))
