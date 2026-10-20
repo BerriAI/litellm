@@ -2020,6 +2020,7 @@ async def test_partitioned_size_pass_drops_the_oldest_partitions_first_and_skips
 
     partition_manager = MagicMock()
     partition_manager.is_partitioned = AsyncMock(return_value=True)
+    partition_manager.ensure_partitions = AsyncMock()
     partition_manager.drop_oldest_partitions_while = AsyncMock(side_effect=_drop)
     cleaner = _size_cleaner(
         {"use_spend_logs_partitioning": True, "maximum_spend_logs_cleanup_target_size": "512MB"},
@@ -2029,6 +2030,7 @@ async def test_partitioned_size_pass_drops_the_oldest_partitions_first_and_skips
     with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
         await cleaner.cleanup_spend_logs_by_size(client)
 
+    partition_manager.ensure_partitions.assert_awaited_once(), "a size-only setup still needs tomorrow's partition"
     partition_manager.drop_oldest_partitions_while.assert_awaited_once()
     assert verdicts == [False]
     assert db.deletes.await_count == 0
@@ -2038,6 +2040,37 @@ async def test_partitioned_size_pass_drops_the_oldest_partitions_first_and_skips
     assert (saves[-1].inserted_total, saves[-1].deleted_total, saves[-1].allocated_bytes) == (25, 0, 256 * 1024**2), (
         "the saved counters must be the post-drop ones, or the next check reads the drop as a statistics reset"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_remeasure_after_a_partition_drop_stops_the_pass_instead_of_deleting_on_old_numbers(caplog):
+    db = MagicMock()
+    _wire_tx(db)
+    db.execute_raw = AsyncMock(return_value=1000)
+    saves = _wire_size_probes(db, [_storage(10 * 1024**3, live=1000, dead=0)], cutoff=datetime.now(timezone.utc))
+    client = MagicMock()
+    client.db = db
+
+    async def _drop(prisma_client, now, remaining_timeout_ms, still_over_target):
+        db.query_raw = AsyncMock(side_effect=RuntimeError("connection reset"))
+        assert await still_over_target() is False
+        return ("LiteLLM_SpendLogs_p20260601",)
+
+    partition_manager = MagicMock()
+    partition_manager.is_partitioned = AsyncMock(return_value=True)
+    partition_manager.ensure_partitions = AsyncMock()
+    partition_manager.drop_oldest_partitions_while = AsyncMock(side_effect=_drop)
+    cleaner = _size_cleaner(
+        {"use_spend_logs_partitioning": True, "maximum_spend_logs_cleanup_target_size": "512MB"},
+        partition_manager=partition_manager,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await cleaner.cleanup_spend_logs_by_size(client)
+
+    assert db.deletes.await_count == 0, "the row step ran on the pre-drop measurement"
+    assert saves == [], "a count saved from pre-drop counters reads the drop as a statistics reset next check"
+    assert any("could not be re-measured after dropping partitions" in r.getMessage() for r in caplog.records)
 
 
 def test_drop_oldest_partitions_while_only_drops_fully_elapsed_partitions_oldest_first():

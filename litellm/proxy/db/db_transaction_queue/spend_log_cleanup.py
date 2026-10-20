@@ -1082,9 +1082,12 @@ class SpendLogCleanup:
         latest: Final[list[SpendLogStorage]] = [before]  # mutable-ok: last measurement, rewritten per partition drop
         baseline: Final[list[StorageProbe]] = [probe]  # mutable-ok: counters after the last drop
 
+        remeasure_failed: Final[list[bool]] = [False]  # mutable-ok: set when a post-drop probe fails
+
         async def still_over_target() -> bool:
             measured: Final = await self._probe_storage(prisma_client, deadline)
             if measured is None:
+                remeasure_failed[0] = True
                 return False
             kept: Final = min(1.0, measured.allocated_bytes / max(latest[0].allocated_bytes, 1))
             latest[0] = SpendLogStorage(
@@ -1099,6 +1102,15 @@ class SpendLogCleanup:
         partitions_dropped: Final = await self._drop_oldest_partitions_for_size(
             prisma_client, deadline, still_over_target
         )
+        if remeasure_failed[0]:
+            verbose_proxy_logger.warning(
+                "Spend-log storage could not be re-measured after dropping partitions %s; the row step and the saved "
+                "count wait for the next check rather than run on the pre-drop numbers",
+                partitions_dropped,
+            )
+            return SizePassReport(
+                rule=rule, before=before, after=latest[0], partitions_dropped=partitions_dropped, results=()
+            )
         base: Final = latest[0]
         rows_to_delete: Final = max(0, math.ceil((base.estimated_live_bytes - rule.target_bytes) / base.bytes_per_row))
 
@@ -1134,6 +1146,7 @@ class SpendLogCleanup:
             return ()
         if not await self.partition_manager.is_partitioned(prisma_client, remaining_timeout_ms):
             return ()
+        await self.partition_manager.ensure_partitions(prisma_client, remaining_timeout_ms)
         dropped: Final = await self.partition_manager.drop_oldest_partitions_while(
             prisma_client, datetime.now(timezone.utc), remaining_timeout_ms, still_over_target
         )
