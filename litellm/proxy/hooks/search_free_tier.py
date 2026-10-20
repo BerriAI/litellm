@@ -34,8 +34,9 @@ def freed_units(allowance: int, units: int, total_after: int) -> int:
     return max(0, min(units, allowance - (total_after - units)))
 
 
-def search_free_tier_key(allowance: SearchFreeRequests, now: datetime) -> str:
-    return f"litellm:search_free_tier:{allowance['shared_group']}:{now.strftime(_PERIOD_STAMP[allowance['period']])}"
+def search_free_tier_key(provider: str, allowance: SearchFreeRequests, now: datetime) -> str:
+    period_stamp: Final = now.strftime(_PERIOD_STAMP[allowance["period"]])
+    return f"litellm:search_free_tier:{provider}:{allowance['shared_group']}:{period_stamp}"
 
 
 def search_free_tier_ttl(allowance: SearchFreeRequests, now: datetime) -> int:
@@ -107,7 +108,8 @@ async def apply_search_free_tier(
             "apply_search_free_tier is on but the proxy has no Redis, grounding is billed at full price"
         )
         return response_cost
-    key: Final = search_free_tier_key(allowance, now)
+    provider: Final = sl_object["custom_llm_provider"] or model_info["litellm_provider"]
+    key: Final = search_free_tier_key(provider, allowance, now)
     try:
         total_after: Final = await counter.async_increment(key, units, ttl=search_free_tier_ttl(allowance, now))
     except Exception:  # noqa: BLE001  # any counter failure means full price, never a lost spend row
