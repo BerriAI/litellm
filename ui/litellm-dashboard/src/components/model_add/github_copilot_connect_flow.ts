@@ -34,8 +34,22 @@ export type ConnectFlowEvent =
 
 export const initialConnectFlowState: ConnectFlowState = { kind: "starting", attempt: 0 };
 
-const safeVerificationUri = (uri: string): string =>
-  uri.startsWith("https://github.com/") ? uri : GITHUB_DEVICE_LOGIN_URL;
+const safeVerificationUri = (uri: string): string => {
+  try {
+    const url = new URL(uri);
+    const usesHttps = url.protocol === "https:";
+    const hasCredentials = url.username !== "" || url.password !== "";
+    const hasNoPort = url.port === "";
+    const hostIsAllowed =
+      url.hostname === "github.com" || /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.ghe\.com$/.test(url.hostname);
+    const urlHasAllowedAuthority = !hasCredentials && hasNoPort && hostIsAllowed;
+    const isSafeUrl = usesHttps && urlHasAllowedAuthority;
+
+    return isSafeUrl ? uri : GITHUB_DEVICE_LOGIN_URL;
+  } catch {
+    return GITHUB_DEVICE_LOGIN_URL;
+  }
+};
 
 const afterPoll = (
   state: Extract<ConnectFlowState, { kind: "awaiting" }>,

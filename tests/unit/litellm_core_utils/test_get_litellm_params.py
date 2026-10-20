@@ -317,6 +317,10 @@ class TestGetLitellmParamsExplicitFields:
         result = get_litellm_params(no_log=True)
         assert result["no-log"] is True
 
+    def test_github_copilot_host_is_registered_as_a_litellm_param(self):
+        result: Final = get_litellm_params(github_copilot_host="octo.ghe.com")
+        assert result["github_copilot_host"] == "octo.ghe.com"
+
 
 class TestGetLitellmParamsDataResidency:
     """Verify that data_residency is inferred from OpenAI regional api_base."""
