@@ -1210,3 +1210,39 @@ class TestCoerceNumericFormFields:
             numeric_fields=self.numeric_fields,
         )
         assert result == {"n": 3, "temperature": None, "image": buffer}
+
+
+@pytest.mark.asyncio
+async def test_form_data_metadata_with_lone_surrogate_escape_is_rejected_like_a_json_body():
+    """``json.loads`` accepts ``"\\ud800"`` and yields a lone surrogate that no
+    provider or database can utf-8 encode. The JSON body path already answers
+    400, so the multipart ``metadata`` field must too, instead of letting the
+    value through to the spend log writers."""
+    mock_request = MagicMock()
+    mock_request.form = AsyncMock(
+        return_value=FormData({"model": "whisper-1", "metadata": '{"tags": ["poison-\\ud800-tag"]}'})
+    )
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+    mock_request.state._cached_headers = None
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _read_request_body(mock_request)
+
+    assert exc_info.value.code == "400"
+    assert "metadata" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_form_data_metadata_keeps_non_ascii_and_valid_surrogate_pairs():
+    mock_request = MagicMock()
+    mock_request.form = AsyncMock(
+        return_value=FormData({"model": "whisper-1", "metadata": '{"tags": ["caf\\u00e9", "\\ud83d\\ude00"]}'})
+    )
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+    mock_request.state._cached_headers = None
+
+    result = await _read_request_body(mock_request)
+
+    assert result["metadata"]["tags"] == ["café", "😀"]
