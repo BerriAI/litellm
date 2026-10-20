@@ -17405,6 +17405,28 @@ class TestPreviousResponseReuse:
         assert decision["conversation_continuing"] is True, decision
 
     @pytest.mark.asyncio
+    async def test_tool_continuation_reuses_default_model_when_only_it_served_the_previous_response(
+        self, mock_router_instance, basic_config
+    ):
+        router = self._router(
+            mock_router_instance,
+            basic_config,
+            tiers={"SIMPLE": "gpt-4o-mini"},
+            default_model="gpt-4o",
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"previous_response_id": self._encoded_response_id("deployment-4o")},
+            messages=[{"role": "tool", "content": "search results", "tool_call_id": "call_1"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o", result.routing_decision
+        decision = result.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "previous_response_reuse", decision
+        assert decision["conversation_continuing"] is True, decision
+
+    @pytest.mark.asyncio
     async def test_unencoded_previous_response_id_still_falls_back_to_default(
         self, mock_router_instance, basic_config
     ):

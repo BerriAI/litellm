@@ -3453,11 +3453,17 @@ class ComplexityRouter(CustomLogger):
             return default_model, self._tier_for_model(default_model)
         return None
 
+    @staticmethod
+    def _deployment_model_id(deployment: Mapping[str, object]) -> str | None:
+        model_info: Final = deployment.get("model_info")
+        deployment_id: Final = cast(  # cast-ok: the isinstance check in the condition narrows model_info to a Mapping with str keys
+            "Mapping[str, object]", model_info
+        ).get("id") if isinstance(model_info, Mapping) else None
+        return None if deployment_id is None else str(deployment_id)
+
     def _group_has_deployment_id(self, group: str, model_id: str) -> bool:
         for deployment in self._group_deployments(group):
-            model_info: Final = deployment.get("model_info")
-            deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
-            if deployment_id is not None and str(deployment_id) == model_id:
+            if self._deployment_model_id(deployment) == model_id:
                 return True
         return False
 
@@ -4419,7 +4425,12 @@ class ComplexityRouter(CustomLogger):
         marker_pairs: Final = self._reminder_markers_for_request(request_kwargs)
         conversation_continuing: Final = (
             _conversation_is_continuing(resolved_messages)
-            or _previous_response_id_from_request_kwargs(request_kwargs) is not None
+            or _previous_response_id_from_request_kwargs(
+                cast(  # cast-ok: the hook's bare kwargs dict is the str-keyed request mapping
+                    Mapping[str, object], request_kwargs
+                )
+            )
+            is not None
         )
 
         use_session_affinity: Final = self._uses_tier_pin
@@ -4732,7 +4743,11 @@ class ComplexityRouter(CustomLogger):
         classifier_images: Final = self._classifier_image_parts(resolved_messages)
 
         if user_message is None and not classifier_images:
-            previous_response: Final = self._previous_response_model(request_kwargs)
+            previous_response: Final = self._previous_response_model(
+                cast(  # cast-ok: the hook's bare kwargs dict is the str-keyed request mapping
+                    Mapping[str, object], request_kwargs
+                )
+            )
             if previous_response is not None:
                 reused_model, reused_tier = previous_response
                 reused_params: Final = self._litellm_params_for_model(reused_tier, reused_model)
