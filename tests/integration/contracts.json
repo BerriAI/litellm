@@ -191,7 +191,10 @@
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_denial_prevents_provider_and_preserves_allowed_control": [
       "other.observability.guardrails.denial_prevents_provider_with_allowed_control"
     ],
-    "tests/integration/mcp/test_mcp_protocol_errors.py::test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller": [
+    "tests/integration/mcp/test_mcp_protocol_errors.py::test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller[67108864]": [
+      "other.mcp.transport.large_sse_tool_result_reaches_caller"
+    ],
+    "tests/integration/mcp/test_mcp_protocol_errors.py::test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller[4096]": [
       "other.mcp.transport.large_sse_tool_result_reaches_caller"
     ],
     "tests/integration/mcp/test_mcp_protocol_errors.py::test_jsonrpc_error_and_malformed_tool_result_remain_errors": [

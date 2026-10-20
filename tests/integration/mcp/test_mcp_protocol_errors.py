@@ -168,9 +168,11 @@ def test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_calle
             config=config,
             remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL"),
         ) as gateway:
-            names: Final = tool_names(gateway, key, "big")
+            listed: Final = gateway.client.get("/mcp-rest/tools/list", headers={"x-litellm-api-key": key})
+            assert listed.status_code == 200, listed.text[:500]
+            assert {tool["name"] for tool in listed.json()["tools"]} == {"add"}
             for size in (512, len(payload), 512):
-                response: Final = call_tool(gateway, key, "big", names["add"], {"size": size})
+                response: Final = call_tool(gateway, key, "big", "add", {"size": size})
                 assert response.status_code == 200, response.text[:500]
                 body: Final = response.json()
                 assert body["isError"] is (size > limit), response.text[:500]
