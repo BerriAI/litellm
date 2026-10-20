@@ -188,7 +188,7 @@ _TURN_AFTER_COMPACTION: Final = {"role": "user", "content": "what is the cat's n
 
 
 async def _cursor_stream_failure_prompt_tokens(
-    monkeypatch: pytest.MonkeyPatch, request_input: list[Mapping[str, str]]
+    monkeypatch: pytest.MonkeyPatch, request_input: list[Mapping[str, str]], fails_after_output: bool
 ) -> int:
     import litellm.proxy.proxy_server as ps
     from litellm.integrations.custom_logger import CustomLogger
@@ -221,8 +221,17 @@ async def _cursor_stream_failure_prompt_tokens(
             "output": [],
         },
     }
+    output_delta: Final = {
+        "type": "response.output_text.delta",
+        "sequence_number": 1,
+        "item_id": "msg_partial",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "Biscuit",
+    }
     failed: Final = {"type": "error", "error": {"message": "upstream broke", "code": "server_error", "type": None}}
-    wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in (created, failed))
+    events: Final = (created, output_delta, failed) if fails_after_output else (created, failed)
+    wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in events)
     recorder: Final = _FailureRowRecorder()
     router: Final = litellm.Router(
         model_list=[
@@ -250,16 +259,17 @@ async def _cursor_stream_failure_prompt_tokens(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fails_after_output", [False, True])
 async def test_a_failed_cursor_stream_counts_its_input_from_the_newest_compaction_item(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fails_after_output: bool
 ) -> None:
     """Cursor's route maps to no call type, yet it dispatches a Responses call, which sends
     the provider only the newest compaction item onward, so the failure row counts that much."""
     resent: Final = await _cursor_stream_failure_prompt_tokens(
-        monkeypatch, [*_HISTORY_BEFORE_COMPACTION, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION]
+        monkeypatch, [*_HISTORY_BEFORE_COMPACTION, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION], fails_after_output
     )
     dispatched_after_trim: Final = await _cursor_stream_failure_prompt_tokens(
-        monkeypatch, [_COMPACTION_ITEM, _TURN_AFTER_COMPACTION]
+        monkeypatch, [_COMPACTION_ITEM, _TURN_AFTER_COMPACTION], fails_after_output
     )
 
     assert resent == dispatched_after_trim

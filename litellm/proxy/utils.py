@@ -935,7 +935,7 @@ def _system_prompt_text(system_input: object) -> str:
     return "".join(_prompt_block_text(block) for block in system_input)
 
 
-def _count_request_input_tokens(model: str, request_input: object, system_input: object) -> int:
+def count_request_input_tokens(model: str, request_input: object, system_input: object) -> int:
     system_text: Final = _system_prompt_text(system_input)
     system_tokens: Final = litellm.token_counter(model=model, text=system_text) if system_text else 0
     if isinstance(request_input, str):
@@ -956,7 +956,7 @@ def _estimate_dispatched_failure_usage(model: str, request_input: object, system
     the same tokenizer fallback interrupted streams use, so the spend log's
     failure row records what was sent instead of zero."""
     try:
-        input_tokens: Final = _count_request_input_tokens(
+        input_tokens: Final = count_request_input_tokens(
             model=model, request_input=request_input, system_input=system_input
         )
     except Exception:

@@ -2071,29 +2071,29 @@ def test_a_system_prompt_reads_the_same_whatever_shape_it_arrived_in(system_inpu
 
 
 def test_a_system_prompt_is_counted_on_top_of_the_request():
-    from litellm.proxy.utils import _count_request_input_tokens
+    from litellm.proxy.utils import count_request_input_tokens
 
-    without = _count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", None)
-    with_system = _count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", "be brief")
+    without = count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", None)
+    with_system = count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", "be brief")
 
     assert without > 0
     assert with_system > without
 
 
 def test_a_request_with_nothing_in_it_counts_zero():
-    from litellm.proxy.utils import _count_request_input_tokens
+    from litellm.proxy.utils import count_request_input_tokens
 
-    assert _count_request_input_tokens(FAILURE_USAGE_MODEL, [], None) == 0
-    assert _count_request_input_tokens(FAILURE_USAGE_MODEL, None, None) == 0
+    assert count_request_input_tokens(FAILURE_USAGE_MODEL, [], None) == 0
+    assert count_request_input_tokens(FAILURE_USAGE_MODEL, None, None) == 0
 
 
 def test_a_failed_dispatch_is_estimated_as_input_only():
-    from litellm.proxy.utils import _count_request_input_tokens, _estimate_dispatched_failure_usage
+    from litellm.proxy.utils import count_request_input_tokens, _estimate_dispatched_failure_usage
 
     usage = _estimate_dispatched_failure_usage(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
 
     assert usage is not None
-    assert usage.prompt_tokens == _count_request_input_tokens(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
+    assert usage.prompt_tokens == count_request_input_tokens(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
     assert usage.completion_tokens == 0
     assert usage.total_tokens == usage.prompt_tokens
 
