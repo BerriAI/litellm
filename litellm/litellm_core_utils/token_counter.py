@@ -6,8 +6,9 @@ import math
 import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from functools import reduce
 from itertools import accumulate
-from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
 import anyio
 import anyio.lowlevel
@@ -825,6 +826,26 @@ class _PdfContentStream(Protocol):
     def get_data(self) -> bytes: ...
 
 
+@runtime_checkable
+class _PdfResourceDictionary(Protocol):
+    def get(self, key: str) -> object: ...
+
+
+@runtime_checkable
+class _PdfXObjectDictionary(_PdfResourceDictionary, Protocol):
+    def values(self) -> Iterable[object]: ...
+
+
+@runtime_checkable
+class _PdfFormXObject(_PdfResourceDictionary, Protocol):
+    def get_data(self) -> bytes: ...
+
+
+@runtime_checkable
+class _PdfIndirectReference(Protocol):
+    def get_object(self) -> object: ...
+
+
 class _PdfMediaBox(Protocol):
     @property
     def width(self) -> float: ...
@@ -833,13 +854,74 @@ class _PdfMediaBox(Protocol):
     def height(self) -> float: ...
 
 
-class _PdfPage(Protocol):
+class _PdfPage(_PdfResourceDictionary, Protocol):
     @property
     def mediabox(self) -> _PdfMediaBox: ...
 
     def get_contents(self) -> _PdfContentStream | None: ...
 
     def extract_text(self) -> str: ...
+
+
+def _pdf_resolve_object(value: object) -> object:
+    return value.get_object() if isinstance(value, _PdfIndirectReference) else value
+
+
+def _pdf_collect_form_xobject_streams(
+    xobjects: Iterable[object],
+    visited: frozenset[int],
+) -> tuple[tuple[bytes, ...], frozenset[int]]:
+    return reduce(_pdf_collect_form_xobject, xobjects, ((), visited))
+
+
+def _pdf_collect_form_xobject(
+    collected: tuple[tuple[bytes, ...], frozenset[int]],
+    xobject: object,
+) -> tuple[tuple[bytes, ...], frozenset[int]]:
+    collected_streams, visited = collected
+    xobject_streams, updated_visited = _pdf_form_xobject_content_streams(xobject, visited)
+    return (collected_streams + xobject_streams, updated_visited)
+
+
+def _pdf_form_xobject_content_streams(
+    xobject: object,
+    visited: frozenset[int],
+) -> tuple[tuple[bytes, ...], frozenset[int]]:
+    resolved: Final = _pdf_resolve_object(xobject)
+    identity: Final = id(resolved)
+    if identity in visited:
+        return (), visited
+    visited_with_xobject: Final = visited | {identity}
+    if not isinstance(resolved, _PdfFormXObject):
+        return (), visited_with_xobject
+    if resolved.get("/Subtype") != "/Form":
+        return (), visited_with_xobject
+    content: Final = resolved.get_data()
+    resources: Final = _pdf_resolve_object(resolved.get("/Resources"))
+    if not isinstance(resources, _PdfResourceDictionary):
+        return (content,), visited_with_xobject
+    xobjects: Final = _pdf_resolve_object(resources.get("/XObject"))
+    if not isinstance(xobjects, _PdfXObjectDictionary):
+        return (content,), visited_with_xobject
+    nested_streams, final_visited = _pdf_collect_form_xobject_streams(xobjects.values(), visited_with_xobject)
+    return ((content, *nested_streams), final_visited)
+
+
+def _pdf_page_form_xobject_content_streams(page: _PdfPage) -> tuple[bytes, ...]:
+    resources: Final = _pdf_resolve_object(page.get("/Resources"))
+    if not isinstance(resources, _PdfResourceDictionary):
+        return ()
+    xobjects: Final = _pdf_resolve_object(resources.get("/XObject"))
+    if not isinstance(xobjects, _PdfXObjectDictionary):
+        return ()
+    streams, _ = _pdf_collect_form_xobject_streams(xobjects.values(), frozenset())
+    return streams
+
+
+def _pdf_page_content_streams(page: _PdfPage) -> tuple[bytes, ...]:
+    contents: Final = page.get_contents()
+    content: Final = contents.get_data() if contents is not None else b""
+    return (content, *_pdf_page_form_xobject_content_streams(page))
 
 
 def _evenly_spaced_page_indices(page_count: int) -> tuple[int, ...]:
@@ -853,12 +935,12 @@ def _pdf_string_operand_bytes(content: bytes) -> int:
 
 
 def _pdf_page_text_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
-    """A page whose content stream is too large to extract cheaply is priced at one token per byte of its string
+    """A page whose content streams are too large to extract cheaply is priced at one token per byte of their string
     operands, which no byte-level tokenizer undercuts."""
-    contents: Final = page.get_contents()
-    content: Final = contents.get_data() if contents is not None else b""
-    if len(content) > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
-        return _pdf_string_operand_bytes(content)
+    content_streams: Final = _pdf_page_content_streams(page)
+    content_bytes: Final = sum(len(content) for content in content_streams)
+    if content_bytes > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
+        return sum(_pdf_string_operand_bytes(content) for content in content_streams)
     return count_function(page.extract_text() or "")
 
 
