@@ -11,6 +11,7 @@ import respx
 
 import litellm
 from litellm.a2a_protocol.providers.pydantic_ai_agents.config import PydanticAIProviderConfig
+from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
     PydanticAITransformation,
 )
@@ -240,7 +241,12 @@ async def test_provider_config_non_streaming_defaults_to_sixty_second_timeout(ag
         "id": "req-5",
         "result": {"kind": "message", "role": "agent", "parts": [{"kind": "text", "text": "ok"}], "messageId": ANY},
     }
-    assert request.extensions["timeout"] == {"connect": 60.0, "read": 60.0, "write": 60.0, "pool": 60.0}
+    assert request.extensions["timeout"] == {
+        "connect": min(60.0, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS),
+        "read": 60.0,
+        "write": 60.0,
+        "pool": 60.0,
+    }
     assert request.headers["content-type"] == "application/json"
 
 
@@ -259,7 +265,12 @@ async def test_provider_config_non_streaming_forwards_timeout_and_ignores_unrela
 
     request: Final = agent_route.calls.last.request
     assert response["id"] == "req-5"
-    assert request.extensions["timeout"] == {"connect": 5.5, "read": 5.5, "write": 5.5, "pool": 5.5}
+    assert request.extensions["timeout"] == {
+        "connect": min(5.5, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS),
+        "read": 5.5,
+        "write": 5.5,
+        "pool": 5.5,
+    }
     assert request.headers["x-trace-id"] == "abc-123"
 
 
