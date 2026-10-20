@@ -60,7 +60,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         provider_specific_entry: Final = (
             as_str_mapping(model_info.get("provider_specific_entry")) if model_info is not None else None
         )
-        requires_deployment_api: Final = model_info is None or (
+        requires_deployment_api: Final = (
             provider_specific_entry is not None and provider_specific_entry.get("transcription_deployment_api") == 1
         )
         resolved_api_version: Final = (

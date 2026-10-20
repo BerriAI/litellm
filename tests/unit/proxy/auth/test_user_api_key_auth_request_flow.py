@@ -11937,6 +11937,59 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path", ("/realtime/translations", "/v1/realtime/translations", "/openai/v1/realtime/translations")
+)
+@pytest.mark.parametrize("query", (b"", b"model=gpt-realtime-translate"), ids=("default_model", "explicit_model"))
+async def test_translation_websocket_auth_enforces_the_default_model_budget(
+    monkeypatch: pytest.MonkeyPatch, path: str, query: bytes
+) -> None:
+    from fastapi import WebSocket
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    model: Final = "gpt-realtime-translate"
+    token: Final = UserAPIKeyAuth(
+        token="test-key",
+        models=[model],
+        model_max_budget={model: {"max_budget": 5.0, "budget_duration": "1d"}},
+    )
+    limiter, _ = await _real_model_budget_limiter(key_spend={model: 10.0})
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(user_api_key_dict=token, model=model)
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return token
+
+    attrs: Final = {
+        **_proxy_server_attrs_for_custom_auth(user_custom_auth=authenticate),
+        "prisma_client": None,
+        "model_max_budget_limiter": limiter,
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    websocket: Final = WebSocket(
+        scope={
+            "type": "websocket",
+            "path": path,
+            "headers": [(b"authorization", b"Bearer sk-test")],
+            "query_string": query,
+        },
+        receive=AsyncMock(),
+        send=AsyncMock(),
+    )
+
+    with pytest.raises(HTTPException) as denied:
+        await user_api_key_auth_websocket(websocket)
+
+    assert denied.value.status_code == 403
+    assert model in str(denied.value.detail)
+    assert "budget" in str(denied.value.detail).lower()
+
+
+@pytest.mark.asyncio
 async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_one_redis_mget():
     from fastapi import Request
     from starlette.datastructures import URL

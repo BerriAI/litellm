@@ -879,9 +879,7 @@ async def test_usage_meter_snapshot_stored_in_model_call_details():
     backend_ws.send = AsyncMock()
     backend_ws.recv = AsyncMock(
         side_effect=[
-            json.dumps(
-                {"type": "session.created", "session": {"turn_detection": {"type": None}}}
-            ).encode(),
+            json.dumps({"type": "session.created", "session": {"turn_detection": {"type": None}}}).encode(),
             json.dumps(
                 {"type": "response.output_audio.delta", "delta": base64.b64encode(b"x" * 24000).decode()}
             ).encode(),
@@ -1211,10 +1209,11 @@ async def test_transcription_session_update_enforces_authorized_nested_model():
 
 @pytest.mark.asyncio
 async def test_translation_session_update_rejects_disallowed_nested_transcription_model() -> None:
-    backend_ws = MagicMock()
+    client_ws: Final = MagicMock(send_text=AsyncMock(), close=AsyncMock())
+    backend_ws: Final = MagicMock()
     backend_ws.send = AsyncMock()
-    streaming = RealTimeStreaming(
-        MagicMock(),
+    streaming: Final = RealTimeStreaming(
+        client_ws,
         backend_ws,
         MagicMock(),
         model="gpt-realtime-translate",
@@ -1222,24 +1221,29 @@ async def test_translation_session_update_rejects_disallowed_nested_transcriptio
         translation_session=True,
     )
 
-    with pytest.raises(Exception, match=r"gpt-live-transcribe.*not available"):
-        await streaming._send_to_backend(
-            json.dumps(
-                {
-                    "type": "session.update",
-                    "session": {
-                        "type": "translation",
-                        "audio": {
-                            "input": {
-                                "transcription": {"model": "gpt-live-transcribe"},
-                            }
-                        },
+    sent: Final = await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "type": "translation",
+                    "audio": {
+                        "input": {
+                            "transcription": {"model": "gpt-live-transcribe"},
+                        }
                     },
-                }
-            )
+                },
+            }
         )
+    )
+    assert sent is False
     backend_ws.send.assert_not_awaited()
     assert streaming._is_transcription_session is False
+    error: Final = json.loads(client_ws.send_text.await_args.args[0])
+    assert error["type"] == "error"
+    assert error["error"]["type"] == "permission_error"
+    assert "gpt-live-transcribe" in error["error"]["message"]
+    assert client_ws.close.await_args.kwargs["code"] == 1008
 
 
 @pytest.mark.asyncio

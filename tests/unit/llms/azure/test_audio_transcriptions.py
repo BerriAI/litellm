@@ -172,7 +172,7 @@ async def test_azure_transcription_parses_response_formats(
     [
         ("whisper-1", "/openai/v1/audio/transcriptions"),
         ("gpt-transcribe", "/openai/deployments/gpt-transcribe/audio/transcriptions"),
-        ("custom-transcribe-deployment", "/openai/deployments/custom-transcribe-deployment/audio/transcriptions"),
+        ("custom-transcribe-deployment", "/openai/v1/audio/transcriptions"),
     ],
 )
 def test_azure_transcription_alias_uses_model_route(

@@ -289,6 +289,7 @@ async def acreate_realtime_translation_client_secret(
 
     model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=requested_model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -492,6 +493,7 @@ async def arealtime_translation_calls(
 
     model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=requested_model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )

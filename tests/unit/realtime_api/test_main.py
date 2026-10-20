@@ -1223,6 +1223,47 @@ async def test_openai_realtime_http_routes_send_the_federated_bearer_for_a_keyle
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("flow", ("client_secret", "calls"))
+async def test_translation_http_routes_preserve_explicit_azure_provider(flow: str) -> None:
+    expected_path: Final = "/openai/v1/realtime/translations/" + {
+        "client_secret": "client_secrets",
+        "calls": "calls",
+    }[flow]
+
+    def send_response(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "azure-deployment.example"
+        assert request.url.path == expected_path
+        return httpx.Response(200, json={"value": "ek-test", "routed_path": request.url.path})
+
+    params: Final[Mapping[str, object]] = {
+        "model": "translation-deployment",
+        "custom_llm_provider": "azure",
+        "api_base": "https://azure-deployment.example/openai/v1/",
+        "api_key": "test-key",
+        "client": AsyncHTTPHandler(transport=httpx.MockTransport(send_response)),
+        "litellm_logging_obj": Logging(
+            model="translation-deployment",
+            messages=[],
+            stream=False,
+            call_type="acreate_realtime_translation_client_secret",
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="test-translation-routing",
+            function_id="test-translation-routing",
+        ),
+    }
+    response: Final = await (
+        realtime_main.acreate_realtime_translation_client_secret.__wrapped__(**params)
+        if flow == "client_secret"
+        else realtime_main.arealtime_translation_calls.__wrapped__(
+            openai_ephemeral_key="ek-test", sdp_body=b"v=0", **params
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"value": "ek-test", "routed_path": expected_path}
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_keyless_deployment(
     federated_deployment: dict[str, str],

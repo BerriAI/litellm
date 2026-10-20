@@ -727,10 +727,25 @@ class RealTimeStreaming:
         backend, False if the provider transformation produced no output and
         the message was effectively dropped.
         """
-        message = await self._apply_nested_transcription_model_policy(message)
+        from litellm.proxy._types import ProxyException
+
+        try:
+            authorized_message: Final = await self._apply_nested_transcription_model_policy(message)
+        except ProxyException as denied:
+            denial_message: Final = redact_internal_details_from_client_message(denied.message)
+            try:
+                await self.websocket.send_text(realtime_error_event(denial_message, error_type="permission_error"))
+            finally:
+                await self.websocket.close(
+                    code=1008,
+                    reason=websocket_close_reason(
+                        denial_message, fallback="Nested transcription model is not authorized"
+                    ),
+                )
+            return False
         if self.provider_config:
             transformed: Final = self.provider_config.transform_realtime_request(
-                message, self.model, self.session_configuration_request
+                authorized_message, self.model, self.session_configuration_request
             )
             sent = False
             for msg in transformed:
@@ -766,14 +781,14 @@ class RealTimeStreaming:
                         self._content_sent_after_setup = True
                     sent = True
             if sent:
-                self._capture_translation_input_audio(message)
+                self._capture_translation_input_audio(authorized_message)
             return sent
-        await self.backend_ws.send(message)
+        await self.backend_ws.send(authorized_message)
         if self._usage_meter is not None:
-            sent_event: Final = self._parse_backend_event(message)
+            sent_event: Final = self._parse_backend_event(authorized_message)
             if sent_event is not None:
                 self._usage_meter.observe_client_event(sent_event)
-        self._capture_translation_input_audio(message)
+        self._capture_translation_input_audio(authorized_message)
         return True
 
     async def _apply_nested_transcription_model_policy(self, message: str) -> str:
