@@ -5,9 +5,11 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 import json
 import logging
 import unittest
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -613,6 +615,87 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
 
     assert response == {"input_tokens": 7}
     assert counter.await_args.kwargs["request"].tools is None
+
+
+def _count_on_claude(
+    monkeypatch: pytest.MonkeyPatch, peer: Callable[[httpx.Request], httpx.Response], headers: Mapping[str, str]
+) -> httpx.Response:
+    from fastapi import FastAPI
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.anthropic_endpoints.endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    claude: Final = {"model": "anthropic/claude-zeta-9", "api_key": "test-key", "api_base": "https://count-tokens.test"}
+    monkeypatch.setattr(
+        proxy_server, "llm_router", Router(model_list=[{"model_name": "count-log-claude", "litellm_params": claude}])
+    )
+    monkeypatch.setattr(
+        anthropic_count_tokens_handler,
+        "get_async_httpx_client",
+        lambda *args, **kwargs: AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    return TestClient(app).post(
+        "/v1/messages/count_tokens",
+        json={"model": "count-log-claude", "messages": [{"role": "user", "content": "Hello"}]},
+        headers=dict(headers),
+    )
+
+
+def test_count_tokens_logs_one_line_with_the_callers_call_id_model_and_count(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _count_on_claude(
+        monkeypatch,
+        lambda request: httpx.Response(200, json={"input_tokens": 77}, request=request),
+        {"x-litellm-call-id": "count-log-msg-claude"},
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-msg-claude",
+            "request_model": "count-log-claude",
+            "model_used": "claude-zeta-9",
+            "input_tokens": 77,
+            "count_source": "provider",
+            "status_code": 200,
+        },
+    )
+
+
+def test_count_tokens_provider_rejection_logs_its_status_and_answers_the_same_error(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    rejection: Final = {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "messages.0.content.0: invalid base64 data"},
+    }
+
+    response: Final = _count_on_claude(
+        monkeypatch,
+        lambda request: httpx.Response(400, json=rejection, request=request),
+        {"x-litellm-call-id": "count-log-msg-error"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"] == rejection["error"]
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-msg-error",
+            "request_model": "count-log-claude",
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
 
 
 class TestEventLoggingBatchEndpoint:

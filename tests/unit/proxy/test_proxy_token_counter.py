@@ -10,6 +10,7 @@ import json
 import logging
 import threading
 import traceback
+import uuid
 from collections.abc import Callable, Coroutine, Mapping
 from functools import partial
 from pathlib import Path
@@ -364,6 +365,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -444,6 +446,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1262,6 +1265,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1319,6 +1323,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1376,6 +1381,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -3892,3 +3898,85 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     ]
     assert [sorted(message) for message in messages if isinstance(message, dict)] == [["content", "role"]] * 3
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
+
+
+_COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"model": "count-log-gpt", "messages": [{"role": "user", "content": "Hello, how many tokens is this?"}]}
+)
+
+
+def _utils_token_counter(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, JsonValue], headers: Mapping[str, str]
+) -> httpx.Response:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {"model_name": "count-log-gpt", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"}}
+            ]
+        ),
+    )
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-test"))
+    return TestClient(app).post("/utils/token_counter", json=dict(body), headers=dict(headers))
+
+
+def test_utils_token_counter_logs_one_line_with_the_callers_call_id_model_and_count(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _utils_token_counter(monkeypatch, _COUNTED_HELLO, {"x-litellm-call-id": "count-log-utils"})
+
+    assert response.status_code == 200, response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-utils",
+            "request_model": "count-log-gpt",
+            "model_used": "gpt-4o-mini",
+            "input_tokens": response.json()["total_tokens"],
+            "count_source": "local_estimate",
+            "status_code": 200,
+        },
+    )
+
+
+def test_utils_token_counter_logs_a_generated_call_id_when_the_client_sends_none(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _utils_token_counter(monkeypatch, _COUNTED_HELLO, {})
+
+    assert response.status_code == 200, response.text
+    (line,) = token_count_log_lines()
+    assert str(uuid.UUID(str(line["litellm_call_id"]))) == line["litellm_call_id"]
+
+
+def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _utils_token_counter(
+        monkeypatch, {**_COUNTED_HELLO, "prompt": "and a prompt"}, {"x-litellm-call-id": "count-log-utils-error"}
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "error": {
+            "message": "prompt cannot be sent with messages or contents. Set drop_params to count them without the prompt",
+            "type": "invalid_request_error",
+            "param": "prompt",
+            "code": "400",
+        }
+    }
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-utils-error",
+            "request_model": "count-log-gpt",
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )

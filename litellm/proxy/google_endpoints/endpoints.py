@@ -21,6 +21,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
+from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
@@ -286,6 +287,7 @@ async def google_count_tokens(request: Request, model_name: str):
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
 
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     data: Final = await read_request_body(request=request)
     try:
         token_request: Final = _google_count_tokens_request(model_name, data)
@@ -298,13 +300,15 @@ async def google_count_tokens(request: Request, model_name: str):
         )
 
     try:
-        token_response: Final = await internal_token_counter(request=token_request, call_endpoint=True)
+        token_response: Final = await internal_token_counter(
+            request=token_request, call_endpoint=True, litellm_call_id=litellm_call_id
+        )
     except ProxyException as error:
         return _google_error_response(request, error)
     except HTTPException as error:
         return _google_error_response(request, proxy_exception_from_http_exception(error, {}))
     except Exception as error:
-        log_llm_api_exception(error, resolve_litellm_call_id(request.headers.get("x-litellm-call-id")))
+        log_llm_api_exception(error, litellm_call_id)
         return _google_error_response(
             request,
             ProxyException(message="Internal server error", type="internal_server_error", param=None, code=500),

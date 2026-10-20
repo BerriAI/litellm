@@ -3,9 +3,11 @@
 Test to verify the Google GenAI proxy API endpoints
 """
 
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from litellm.types.utils import TokenCountResponse
@@ -240,3 +242,45 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
         assert body["promptTokensDetails"] == []
         assert body["litellm_count_source"] == "token_count_model"
         assert body["litellm_count_model"] == "us.anthropic.claude-opus-5-5"
+
+
+@pytest.mark.parametrize("path", ["/v1beta/models/count-log-claude:countTokens", "/models/count-log-claude:countTokens"])
+def test_google_count_tokens_logs_one_line_with_the_callers_call_id_model_and_count(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], path: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm import Router
+    from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    claude: Final = {"model": "anthropic/claude-zeta-9", "api_key": "test-key", "api_base": "https://count-tokens.test"}
+    monkeypatch.setattr(
+        proxy_server, "llm_router", Router(model_list=[{"model_name": "count-log-claude", "litellm_params": claude}])
+    )
+    monkeypatch.setattr(
+        anthropic_count_tokens_handler,
+        "get_async_httpx_client",
+        lambda *args, **kwargs: AsyncHTTPHandler(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"input_tokens": 77}, request=request)
+            )
+        ),
+    )
+
+    response: Final = _build_test_client().post(
+        path,
+        json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
+        headers={"x-litellm-call-id": "count-log-gemini"},
+    )
+
+    assert (response.status_code, response.json()["totalTokens"]) == (200, 77), response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-gemini",
+            "request_model": "count-log-claude",
+            "model_used": "claude-zeta-9",
+            "input_tokens": 77,
+            "count_source": "provider",
+            "status_code": 200,
+        },
+    )

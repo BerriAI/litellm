@@ -19017,6 +19017,7 @@ export interface paths {
          * @description Args:
          *         request: TokenCountRequest
          *         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
+         *         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
          *
          *     Returns:
          *         TokenCountResponse
@@ -76240,7 +76241,9 @@ export interface operations {
             query?: {
                 call_endpoint?: boolean;
             };
-            header?: never;
+            header?: {
+                "x-litellm-call-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

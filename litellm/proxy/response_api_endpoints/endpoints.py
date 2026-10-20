@@ -1391,7 +1391,12 @@ class _TokenCountPayload(TypedDict):
 
 class _TokenCounter(Protocol):
     def __call__(
-        self, *, request: TokenCountRequest, call_endpoint: bool, responses_request: Mapping[str, object] | None
+        self,
+        *,
+        request: TokenCountRequest,
+        call_endpoint: bool,
+        responses_request: Mapping[str, object] | None,
+        litellm_call_id: str | None,
     ) -> Awaitable[TokenCountResponse]: ...
 
 
@@ -1683,7 +1688,10 @@ async def responses_input_tokens(
     )
     try:
         token_response: Final = await token_counter(
-            request=token_request, call_endpoint=True, responses_request=responses_request
+            request=token_request,
+            call_endpoint=True,
+            responses_request=responses_request,
+            litellm_call_id=request.headers.get(LITELLM_CALL_ID_HEADER),
         )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:

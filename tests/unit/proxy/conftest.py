@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import inspect
+import logging
 import os
 import tempfile
 import warnings
@@ -17,6 +18,7 @@ from prisma.errors import ClientNotConnectedError
 
 import litellm
 import litellm.proxy.proxy_server
+from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
@@ -422,6 +424,30 @@ def fresh_agent_read_through(monkeypatch):
     )
     monkeypatch.setattr(registry_read_through, "agent_registry_read_through", read_through)
     return read_through
+
+
+TOKEN_COUNT_LOG_FIELDS: Final = (
+    "litellm_call_id",
+    "request_model",
+    "model_used",
+    "input_tokens",
+    "count_source",
+    "status_code",
+)
+
+
+@pytest.fixture
+def token_count_log_lines(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Callable[[], tuple[dict[str, object], ...]]]:
+    """The structured fields of every INFO token count line the proxy logger writes while the test runs."""
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with caplog.at_level(logging.INFO, logger=verbose_proxy_logger.name):
+        yield lambda: tuple(
+            {field: record.__dict__[field] for field in TOKEN_COUNT_LOG_FIELDS}
+            for record in caplog.records
+            if record.levelno == logging.INFO and "count_source" in record.__dict__
+        )
 
 
 @pytest.fixture

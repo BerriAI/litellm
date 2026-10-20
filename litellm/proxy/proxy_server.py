@@ -548,6 +548,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
     get_budget_reset_time,
 )
+from litellm.proxy.common_utils.token_count_log import logged_token_count
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
@@ -15179,16 +15180,21 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountResponse,
 )
-async def token_counter(request: TokenCountRequest, call_endpoint: bool = False):
+async def token_counter(
+    request: TokenCountRequest,
+    call_endpoint: bool = False,
+    litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
+):
     """
     Args:
         request: TokenCountRequest
         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
+        litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
 
     Returns:
         TokenCountResponse
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint)
+    return await count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=litellm_call_id)
 
 
 async def count_request_tokens(
@@ -15199,6 +15205,31 @@ async def count_request_tokens(
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     responses_request: Mapping[str, object] | None = None,
+    litellm_call_id: str | None = None,
+) -> TokenCountResponse:
+    return await logged_token_count(
+        _count_request_tokens(
+            request=request,
+            call_endpoint=call_endpoint,
+            messages_format=messages_format,
+            output_format=output_format,
+            context_management=context_management,
+            request_litellm_params=request_litellm_params,
+            responses_request=responses_request,
+        ),
+        litellm_call_id=resolve_litellm_call_id(litellm_call_id),
+        request_model=request.model,
+    )
+
+
+async def _count_request_tokens(
+    request: TokenCountRequest,
+    call_endpoint: bool,
+    messages_format: TokenCountMessagesFormat,
+    output_format: JsonValue,
+    context_management: JsonValue,
+    request_litellm_params: Mapping[str, JsonValue],
+    responses_request: Mapping[str, object] | None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages

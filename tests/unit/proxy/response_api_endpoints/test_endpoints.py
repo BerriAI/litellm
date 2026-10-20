@@ -7,7 +7,7 @@ import contextlib
 import dataclasses
 import json
 import unittest
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 import litellm
+from litellm.constants import EMPTY_MAPPING
 from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -4173,6 +4174,7 @@ class TestResponsesInputTokens:
         llm_router: litellm.Router | None = None,
         response_id_security: object | None = None,
         managed_files: object | None = None,
+        headers: Mapping[str, str] = EMPTY_MAPPING,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -4205,7 +4207,7 @@ class TestResponsesInputTokens:
             app.dependency_overrides[_proxy_managed_files_hook] = lambda: managed_files
         try:
             client = TestClient(app)
-            response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
+            response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876", **headers})
             return response, token_counter_mock
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
@@ -4449,6 +4451,54 @@ class TestResponsesInputTokens:
 
         assert (response.status_code, response.json().get("input_tokens")) == (200, 7), response.text
         assert sent == [{"model": "gpt-4o-mini", "input": "hi"}]
+
+    @pytest.mark.parametrize(
+        "path", ["/v1/responses/input_tokens", "/responses/input_tokens", "/openai/v1/responses/input_tokens"]
+    )
+    def test_count_logs_one_line_with_the_callers_call_id_model_and_count(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+        path: str,
+    ) -> None:
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
+        from litellm.proxy.proxy_server import count_request_tokens
+
+        gpt: Final = {"model": "openai/gpt-4o-mini", "api_key": "test-key", "api_base": "https://count.test/v1"}
+        router: Final = litellm.Router(model_list=[{"model_name": "count-log-gpt", "litellm_params": gpt}])
+        monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+        monkeypatch.setattr(
+            openai_count_tokens_http,
+            "get_async_httpx_client",
+            lambda *args, **kwargs: AsyncHTTPHandler(
+                transport=httpx.MockTransport(
+                    lambda request: httpx.Response(
+                        200, json={"object": "response.input_tokens", "input_tokens": 7}, request=request
+                    )
+                )
+            ),
+        )
+
+        response, _ = self._post_input_tokens(
+            {"model": "count-log-gpt", "input": "hi"},
+            path=path,
+            counter=AsyncMock(side_effect=count_request_tokens),
+            llm_router=router,
+            headers={"x-litellm-call-id": "count-log-responses"},
+        )
+
+        assert (response.status_code, response.json().get("input_tokens")) == (200, 7), response.text
+        assert token_count_log_lines() == (
+            {
+                "litellm_call_id": "count-log-responses",
+                "request_model": "count-log-gpt",
+                "model_used": "gpt-4o-mini",
+                "input_tokens": 7,
+                "count_source": "provider",
+                "status_code": 200,
+            },
+        )
 
     def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
         from litellm.integrations.custom_logger import CustomLogger
