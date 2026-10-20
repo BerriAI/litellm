@@ -2284,6 +2284,75 @@ async def test_a_creator_lookup_that_keeps_failing_still_bills_the_response_once
     assert metadata["user_api_key_team_id"] == ("team-alpha" if team_logging != "none" else None)
 
 
+_TEAM_MODEL_BUDGET: Final = {"gpt-5": {"max_budget": 2.0, "budget_duration": "7d"}}
+_LOADED_KEY_ATTRIBUTION: Final = {"user_api_key_alias": "prod-key", "user_api_key_max_budget": 5.0}
+_LOADED_TEAM_ATTRIBUTION: Final = {
+    "user_api_key_team_alias": "Team Alpha",
+    "user_api_key_team_max_budget": 50.0,
+    "user_api_key_team_model_max_budget": _TEAM_MODEL_BUDGET,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failing_lookup, key_is_live, loaded_attribution",
+    [
+        ("litellm_verificationtoken.find_unique", True, _LOADED_TEAM_ATTRIBUTION),
+        ("litellm_teamtable.find_unique", True, _LOADED_KEY_ATTRIBUTION),
+        ("litellm_deprecatedverificationtoken.find_unique", False, _LOADED_TEAM_ATTRIBUTION),
+        ("litellm_deletedverificationtoken.find_first", False, _LOADED_TEAM_ATTRIBUTION),
+    ],
+    ids=["live key", "live team", "rotated key", "deleted key"],
+)
+async def test_a_creator_lookup_that_fails_keeps_the_aliases_and_budgets_of_the_rows_that_did_load(
+    failing_lookup: str, key_is_live: bool, loaded_attribution: Mapping[str, object]
+):
+    """One failed creator lookup must not strip what the other rows give the charge: the team's per-model budget
+    only counts a billed charge whose event carries it, and the aliases name who spent it."""
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(
+            _StoredResponse(
+                id="job-attributed",
+                unified_object_id="resp_attributed",
+                status="queued",
+                api_key=_CREATING_KEY_HASH,
+                team_id="team-alpha",
+            ),
+        )
+    )
+    billed_logger: Final = _RecordingBilledLogger()
+    poller: Final = _poller_over(table, billed_logger)
+    poller.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=(
+            SimpleNamespace(key_alias="prod-key", organization_id=None, spend=4.0, max_budget=5.0, metadata={})
+            if key_is_live
+            else None
+        )
+    )
+    poller.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            team_alias="Team Alpha",
+            organization_id=None,
+            spend=40.0,
+            max_budget=50.0,
+            model_max_budget=_TEAM_MODEL_BUDGET,
+            metadata={},
+        )
+    )
+    table_name, method = failing_lookup.split(".")
+    setattr(
+        getattr(poller.prisma_client.db, table_name),
+        method,
+        AsyncMock(side_effect=RuntimeError("database unavailable")),
+    )
+
+    await poller.bill_if_finished(response_id="resp_attributed", response=_terminal_response())
+
+    assert table.statuses == {"job-attributed": "completed"}
+    (billed,) = billed_logger.billed
+    assert {field: billed.metadata.get(field) for field in loaded_attribution} == loaded_attribution
+
+
 @pytest.mark.asyncio
 async def test_a_team_logging_setting_the_logger_rejects_still_bills_the_response_once(monkeypatch: pytest.MonkeyPatch):
     """A team whose stored callback settings the logger rejects, such as an os.environ reference it no

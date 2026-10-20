@@ -149,8 +149,8 @@ class ManagedObjectCreatorAttribution:
     metadata come along too, so the billed event reaches the key's and team's logging callbacks
     like that read did. A rotated key's metadata is read from the live key its rotations lead
     to, and a deleted key's or team's from its deleted row. A lookup that fails leaves the
-    creator's settings unread and the attribution to what the managed row stores, so the
-    response still bills.
+    creator's settings unread and the attribution to the rows that still load, so the
+    response still bills and still counts toward their budgets.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
@@ -170,7 +170,7 @@ class ManagedObjectCreatorAttribution:
                 f"settings: {e}"
             )
             return ResponseCreator(
-                metadata=_response_creator_metadata(job, _CreatorRows(key=None, team=None, user=None)),
+                metadata=_response_creator_metadata(job, await self._rows(job, object_id)),
                 key_metadata={},
                 team_id=getattr(job, "team_id", None),
                 team_metadata={},
