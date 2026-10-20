@@ -36,6 +36,7 @@ from litellm import (
     responses_with_retries,
 )
 from litellm import main as litellm_main
+from litellm._logging import session_id_var, trace_id_var
 from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
 from litellm.constants import CONTROL_OPTIONS_KEY
@@ -10566,6 +10567,49 @@ async def test_async_completion_with_a_caller_sent_retry_marker_still_logs_the_f
 
     assert route.call_count == 1
     assert tuple(recorder.outcomes) == ("failure:AuthenticationError",)
+
+
+_ANTHROPIC_STREAM_EVENTS: Final = (
+    {
+        "type": "message_start",
+        "message": {**_RETRY_ANTHROPIC_OK, "content": [], "stop_reason": None},
+    },
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}},
+    {"type": "content_block_stop", "index": 0},
+    {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 1}},
+    {"type": "message_stop"},
+)
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_retry_keeps_the_call_ids_while_the_caller_reads_the_stream(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    sse_body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in _ANTHROPIC_STREAM_EVENTS)
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[
+            _provider_error(429, {"retry-after": "0"}),
+            httpx.Response(200, content=sse_body.encode(), headers={"content-type": "text/event-stream"}),
+        ]
+    )
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        stream: Final = await _completion_with_retries_kwargs(
+            False, _ANTHROPIC, num_retries=1, stream=True, litellm_session_id="retried-stream-session"
+        )
+        ids_while_reading: Final = (trace_id_var.get(), session_id_var.get())
+        text: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+    assert route.call_count == 2
+    assert text == "ok"
+    assert ids_while_reading[1] == "retried-stream-session"
+    assert ids_while_reading[0] != "outer-trace"
 
 
 @pytest.mark.asyncio

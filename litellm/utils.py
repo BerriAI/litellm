@@ -2423,7 +2423,7 @@ def client(original_function):
             if acompletion_retried:
                 kwargs["num_retries"] = num_retries
                 try:
-                    return await litellm.acompletion_with_retries(
+                    result = await litellm.acompletion_with_retries(
                         *args,
                         original_function=litellm.acompletion,
                         _initial_exception=e,
@@ -2443,6 +2443,8 @@ def client(original_function):
                     raise
                 except Exception as retry_unavailable:
                     verbose_logger.debug("acompletion retries did not run: %s", retry_unavailable)
+                else:
+                    return result
 
             traceback_exception: Final = traceback.format_exc()
             # Reuse the timestamp taken right when the deployment call itself failed, before
