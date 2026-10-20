@@ -192,6 +192,31 @@ def _non_string_voice_names(config: Mapping[str, object], path: str) -> Iterator
     )
 
 
+def _non_mapping_speech_config_wrappers(voice: Mapping[str, object]) -> Iterator[str]:
+    return (
+        key
+        for key in ("speechConfig", "speech_config")
+        if voice.get(key) is not None and as_str_mapping(voice.get(key)) is None
+    )
+
+
+def _speaker_entries(config: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    multi_speaker_config: Final = as_str_mapping(config.get("multiSpeakerVoiceConfig"))
+    speakers: Final = multi_speaker_config.get("speakerVoiceConfigs") if multi_speaker_config is not None else None
+    items: Final = _SPEAKER_CONFIG_ITEMS.validate_python(speakers) if isinstance(speakers, list) else ()
+    return (entry for item in items if (entry := as_str_mapping(item)) is not None)
+
+
+def _prebuilt_voices_replaced_by_speaker_id(config: Mapping[str, object]) -> Iterator[str]:
+    return (
+        "multiSpeakerVoiceConfig.speakerVoiceConfigs.voiceConfig.prebuiltVoiceConfig"
+        for entry in _speaker_entries(config)
+        if entry.get("speakerId") is not None
+        and (voice_config := as_str_mapping(entry.get("voiceConfig"))) is not None
+        and voice_config.get("prebuiltVoiceConfig") is not None
+    )
+
+
 class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     """
     Configuration for Google Cloud/Vertex AI Text-to-Speech
@@ -362,9 +387,12 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         )
 
         speech_config: Final = VertexAITextToSpeechConfig._get_dict_value(voice, "speechConfig", "speech_config")
+        mapped_config: Final = mapped_gemini_speech_config(voice)
         unsendable: Final = sorted(
             {
-                *_fields_cloud_tts_cannot_send(mapped_gemini_speech_config(voice), _CLOUD_TTS_SPEECH_CONFIG_FIELDS, ""),
+                *_fields_cloud_tts_cannot_send(mapped_config, _CLOUD_TTS_SPEECH_CONFIG_FIELDS, ""),
+                *_prebuilt_voices_replaced_by_speaker_id(mapped_config),
+                *_non_mapping_speech_config_wrappers(voice),
                 *_non_string_voice_names(voice, ""),
                 *_non_string_voice_names(speech_config or {}, "speechConfig."),
             }

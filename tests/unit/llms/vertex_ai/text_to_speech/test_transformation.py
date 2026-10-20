@@ -423,6 +423,23 @@ class TestVertexAITextToSpeechConfig:
             ({"multiSpeakerVoiceConfig": [{"speaker": "Ryan"}]}, "multiSpeakerVoiceConfig"),
             ({"name": 5}, "name"),
             ({"speechConfig": {"voice": ["Puck"]}}, "speechConfig.voice"),
+            ({"speechConfig": "Puck"}, "speechConfig"),
+            ({"speech_config": [{"voice_config": {"prebuilt_voice_config": {"voice_name": "Puck"}}}]}, "speech_config"),
+            (
+                {
+                    "multiSpeakerVoiceConfig": {
+                        "speakerVoiceConfigs": [
+                            {
+                                "speakerAlias": "Ryan",
+                                "speakerId": "Umbriel",
+                                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}},
+                            },
+                            {"speakerAlias": "Katie", "speakerId": "Kore"},
+                        ]
+                    }
+                },
+                "multiSpeakerVoiceConfig.speakerVoiceConfigs.voiceConfig.prebuiltVoiceConfig",
+            ),
         ],
     )
     def test_gemini_tts_cloud_tts_rejects_voice_fields_it_cannot_send(
@@ -445,6 +462,7 @@ class TestVertexAITextToSpeechConfig:
             ({"voiceConfig": {"replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "UklG"}}}, "Kore"),
             ({"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck", "style": "calm"}}}, "Puck"),
             ({"voiceConfig": "Puck"}, "Kore"),
+            ({"speechConfig": "Puck"}, "Kore"),
         ],
     )
     def test_gemini_tts_cloud_tts_drops_voice_fields_it_cannot_send_with_drop_params(
