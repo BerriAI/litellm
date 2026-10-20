@@ -5,6 +5,7 @@ import asyncio
 import os
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn, Protocol
 from urllib.parse import SplitResult, urlsplit, urlunsplit
@@ -61,8 +62,8 @@ class _AsyncHTTPClient(Protocol):
         self,
         url: str,
         *,
-        json: dict[str, object] | None = None,
-        headers: dict[str, str] | None = None,
+        json: dict[str, object] | None = None,  # mutable-ok: injected HTTP handler requires dict payloads
+        headers: dict[str, str] | None = None,  # mutable-ok: injected HTTP handler requires dict headers
         timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response: ...
 
@@ -81,7 +82,9 @@ class TrendAIGuardrail(CustomGuardrail):
         response_content_chunk_size_bytes: int = RESPONSE_CONTENT_CHUNK_SIZE_BYTES,
         async_handler: _AsyncHTTPClient | None = None,
         guardrail_name: str | None = None,
-        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
+        event_hook: (  # mutable-ok: CustomGuardrail accepts lists of hooks
+            GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None
+        ) = None,
         default_on: bool = False,
     ) -> None:
         resolved_api_key: Final = api_key or os.environ.get("TMV1_API_KEY")
@@ -109,7 +112,7 @@ class TrendAIGuardrail(CustomGuardrail):
         self.api_url: str = _build_apply_guardrails_url(resolved_api_base)
         self.app_name: str = app_name or os.environ.get("TMV1_APPLICATION_NAME", "litellm")
         self.fallback_on_error: Literal["block", "allow"] = fallback_on_error
-        self.timeout: float = timeout
+        self.timeout = timeout
         self.stream_overlap_size: int = stream_overlap_size
         self.response_content_chunk_size_bytes: int = response_content_chunk_size_bytes
         self.async_handler: _AsyncHTTPClient = async_handler or get_async_httpx_client(
@@ -125,7 +128,7 @@ class TrendAIGuardrail(CustomGuardrail):
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail contract
-        return [  # mutable-ok: CustomGuardrail contract
+        return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
@@ -167,7 +170,7 @@ class TrendAIGuardrail(CustomGuardrail):
             return inputs
         redacted_inputs: Final[GenericGuardrailAPIInputs] = {
             **inputs,
-            "texts": list(redact_request_texts(texts, prompt, redacted)),  # mutable-ok: GenericGuardrailAPIInputs field
+            "texts": list(redact_request_texts(texts, prompt, redacted)),
         }
         return redacted_inputs
 
@@ -183,7 +186,7 @@ class TrendAIGuardrail(CustomGuardrail):
         model: Final = inputs.get("model") or _RESPONSE_MODEL
         started_at: Final = time.time()
         scans: Final = tuple([await self._scan_response_windows(text, model) for text in texts])
-        all_scans: Final = tuple(scan for text_scans in scans for scan in text_scans)
+        all_scans: Final = tuple(chain.from_iterable(scans))
         verdict: Final = _window_verdict(all_scans)
         self._record_scan(
             verdict,
@@ -201,7 +204,7 @@ class TrendAIGuardrail(CustomGuardrail):
             self._raise_redaction_failure(request_data, started_at, event_type=None)
         redacted_inputs: Final[GenericGuardrailAPIInputs] = {
             **inputs,
-            "texts": list(merged_texts),  # mutable-ok: GenericGuardrailAPIInputs field
+            "texts": list(merged_texts),
         }
         return redacted_inputs
 
@@ -339,14 +342,14 @@ class TrendAIGuardrail(CustomGuardrail):
     ) -> None:
         ended_at: Final = time.time()
         self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # base signature takes an untyped dict
-            guardrail_json_response=dict(guardrail_json_response),  # mutable-ok: base signature takes a plain dict
+            guardrail_json_response=dict(guardrail_json_response),
             request_data=request_data,
             guardrail_status=guardrail_status,
             start_time=started_at,
             end_time=ended_at,
             duration=ended_at - started_at,
             event_type=event_type,
-            masked_entity_count=dict(masked_entity_count) or None,  # mutable-ok: base signature takes a plain dict
+            masked_entity_count=dict(masked_entity_count) or None,
         )
 
     def _build_request_headers(self, request_type: str | None = None) -> Mapping[str, str]:
@@ -370,8 +373,8 @@ class TrendAIGuardrail(CustomGuardrail):
         try:
             response: Final = await self.async_handler.post(
                 self.api_url,
-                json=dict(payload),  # mutable-ok: httpx takes a plain dict
-                headers=dict(self._build_request_headers(request_type)),  # mutable-ok: httpx takes a plain dict
+                json=dict(payload),
+                headers=dict(self._build_request_headers(request_type)),
                 timeout=self.timeout,
             )
             response.raise_for_status()
@@ -436,9 +439,8 @@ def _window_verdict(scans: Sequence[TrendAIWindowScan]) -> TrendAIScanResult:
     terminal: Final = next((scan.result for scan in scans if not isinstance(scan.result, TrendAIAllow)), None)
     if terminal is not None:
         return terminal
-    counts: Final = tuple(
-        pair for scan in scans if isinstance(scan.result, TrendAIAllow) for pair in scan.result.masked_entity_count
-    )
+    allowed_counts: Final = (scan.result.masked_entity_count for scan in scans if isinstance(scan.result, TrendAIAllow))
+    counts: Final = tuple(chain.from_iterable(allowed_counts))
     return TrendAIAllow(masked_entity_count=tuple(sorted(_merge_entity_counts(_NO_ENTITIES, counts).items())))
 
 
