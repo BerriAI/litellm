@@ -1056,9 +1056,6 @@ def _replay_live_router_model_cost() -> None:
 set_live_deployment_replay(_replay_live_router_model_cost)
 
 
-RETRY_BREADCRUMB_LIMIT: Final = 4
-
-
 class FallbackAwareStreamWrapper(CustomStreamWrapper):
     """Base for the Router's chat-completion stream wrappers, which are built around the
     attempt the Router picked first and have to repoint themselves when a fallback takes over."""
@@ -9504,19 +9501,21 @@ class Router:
         model_group: Final = kwargs.get("model")
         model_info: Final = request_metadata.get("model_info")
         deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+        base_model: Final = model_info.get("base_model") if isinstance(model_info, Mapping) else None
+        deployment_model: Final = request_metadata.get("deployment")
         attempted_retries: Final = request_metadata.get("attempted_retries")
         attempt_record: Final[RetryAttemptRecord] = {
             "model_group": model_group if isinstance(model_group, str) else None,
             "deployment_id": deployment_id if isinstance(deployment_id, str) else None,
+            "model": deployment_model if isinstance(deployment_model, str) else None,
+            "base_model": base_model if isinstance(base_model, str) else None,
             "exception_type": type(e).__name__,
             "exception_string": str(e),
             "attempted_retries": attempted_retries if type(attempted_retries) is int else None,
         }
         earlier_breadcrumbs: Final = request_metadata.get("previous_models")
         kept_breadcrumbs: Final[tuple[object, ...]] = (
-            tuple(earlier_breadcrumbs)[-(RETRY_BREADCRUMB_LIMIT - 1) :]
-            if isinstance(earlier_breadcrumbs, (list, tuple))
-            else ()
+            tuple(earlier_breadcrumbs) if isinstance(earlier_breadcrumbs, (list, tuple)) else ()
         )
         breadcrumbs: Final = (*kept_breadcrumbs, attempt_record)
         earlier: Final = request_metadata.get("request_retry_count")

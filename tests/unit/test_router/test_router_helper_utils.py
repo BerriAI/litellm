@@ -837,7 +837,12 @@ def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> 
             "model": "gpt-3.5-turbo",
             "api_key": "sk-must-not-be-recorded",
             "messages": [{"role": "user", "content": "hi"}],
-            metadata_key: {"model_info": {"id": "deployment-1"}, "attempted_retries": 2, "user_api_key": "sk-proxy"},
+            metadata_key: {
+                "model_info": {"id": "deployment-1", "base_model": "azure/gpt-3.5-turbo"},
+                "deployment": "azure/my-35-deployment",
+                "attempted_retries": 2,
+                "user_api_key": "sk-proxy",
+            },
         },
         e=rate_limit_error,
     )
@@ -845,6 +850,8 @@ def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> 
         {
             "model_group": "gpt-3.5-turbo",
             "deployment_id": "deployment-1",
+            "model": "azure/my-35-deployment",
+            "base_model": "azure/gpt-3.5-turbo",
             "exception_type": "RateLimitError",
             "exception_string": "litellm.RateLimitError: slow down",
             "attempted_retries": 2,

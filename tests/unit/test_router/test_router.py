@@ -15195,7 +15195,7 @@ async def test_cyclic_fallback_graph_does_not_amplify_one_request():
 
 
 _FLAT_ATTEMPT_RECORD_KEYS = frozenset(
-    {"model_group", "deployment_id", "exception_type", "exception_string", "attempted_retries"}
+    {"model_group", "deployment_id", "model", "base_model", "exception_type", "exception_string", "attempted_retries"}
 )
 _BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
 
@@ -15335,12 +15335,14 @@ async def test_retry_records_stay_per_request_and_flat_across_failing_requests()
 
 
 @pytest.mark.asyncio
-async def test_retry_records_keep_only_the_last_four_attempts():
+async def test_retry_records_keep_every_attempt_of_the_request():
+    """Each record is flat and small, and the proxy bills every earlier timed-out attempt from these
+    records, so a request that retried more than a handful of times must not lose its first attempts."""
     router = _always_failing_router(num_retries=6)
 
     records = await _fail_one_proxy_shaped_request(router, "request-1")
 
-    assert [record["attempted_retries"] for record in records] == [3, 4, 5, 6]
+    assert [record["attempted_retries"] for record in records] == [0, 1, 2, 3, 4, 5, 6]
 
 
 @pytest.mark.asyncio

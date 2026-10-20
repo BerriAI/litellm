@@ -2199,6 +2199,74 @@ def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(mo
     assert all(a.usage is usage for a in attempts)
 
 
+def test_an_earlier_attempt_on_another_model_is_priced_at_that_models_rate_not_the_final_models(monkeypatch):
+    """After a fallback hop the final attempt runs on another model group, so the records of the group
+    that timed out first name their own deployment model (and its ``base_model`` when the deployment
+    name is not in the cost map). Each is billed at that model's input rate, not at the final model's."""
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    for pricing_model, provider, input_rate in (
+        ("lit145-final-model", "openai", 0.5),
+        ("lit145-first-model", "openai", 0.02),
+        ("azure/lit145-first-model", "azure", 0.02),
+    ):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            pricing_model,
+            {"litellm_provider": provider, "mode": "chat", "input_cost_per_token": input_rate, "output_cost_per_token": 1.0},
+        )
+    usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+
+    attempts = _billed_earlier_attempts(
+        model_call_details={"model": "openai/lit145-final-model", "custom_llm_provider": "openai"},
+        litellm_params={
+            "metadata": {
+                "attempted_retries": 1,
+                "model_info": {"id": "dep-lit145-final"},
+                "previous_models": (
+                    {
+                        "deployment_id": "dep-lit145-first",
+                        "model": "openai/lit145-first-model",
+                        "base_model": None,
+                        "exception_type": "Timeout",
+                        "attempted_retries": 0,
+                    },
+                    {
+                        "deployment_id": "dep-lit145-first-azure",
+                        "model": "azure/lit145-first-deployment",
+                        "base_model": "azure/lit145-first-model",
+                        "exception_type": "Timeout",
+                        "attempted_retries": 1,
+                    },
+                    {
+                        "deployment_id": "dep-lit145-final",
+                        "model": "openai/lit145-final-model",
+                        "base_model": None,
+                        "exception_type": "Timeout",
+                        "attempted_retries": 0,
+                    },
+                    {
+                        "deployment_id": "dep-lit145-final",
+                        "model": "openai/lit145-final-model",
+                        "base_model": None,
+                        "exception_type": "Timeout",
+                        "attempted_retries": 1,
+                    },
+                ),
+            }
+        },
+        estimated_usage=usage,
+        base_model=None,
+        deployment_id="dep-lit145-final",
+    )
+
+    assert [(a.attempted_retries, a.deployment_id, a.response_cost) for a in attempts] == [
+        (0, "dep-lit145-first", pytest.approx(24 * 0.02)),
+        (1, "dep-lit145-first-azure", pytest.approx(24 * 0.02)),
+        (0, "dep-lit145-final", pytest.approx(24 * 0.5)),
+    ]
+
+
 def test_earlier_attempts_are_priced_from_the_prompt_estimate_not_the_final_streams_recovered_usage():
     """A final attempt whose stream broke mid-flight lifts its recovered usage (prompt plus the chunks
     delivered); the earlier timed-out attempts never produced output, so they are priced from the
