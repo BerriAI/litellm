@@ -54,7 +54,7 @@ from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 
 if TYPE_CHECKING:
-    from .litellm_logging import EarlierRoundsSpend
+    from .litellm_logging import BilledRoundsSpend
 
 # Constants for special delta attribute names
 AUDIO_ATTRIBUTE: Final = "audio"
@@ -254,7 +254,7 @@ def _provider_hidden_params(
 
 
 class CustomStreamWrapper:
-    _earlier_rounds_spend: "EarlierRoundsSpend | None" = None
+    _earlier_rounds_spend: "BilledRoundsSpend | None" = None
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -2418,7 +2418,7 @@ class CustomStreamWrapper:
             return
         await asyncio.wait((self._failure_logging,), timeout=timeout)
 
-    def bill_failure_after_earlier_rounds(self, earlier: "EarlierRoundsSpend") -> None:
+    def bill_failure_after_earlier_rounds(self, earlier: "BilledRoundsSpend") -> None:
         self._earlier_rounds_spend = earlier
 
     def _record_partial_usage_for_failure(self) -> None:

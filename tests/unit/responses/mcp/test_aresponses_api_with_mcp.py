@@ -20,10 +20,11 @@ from mcp.types import Tool as MCPTool
 
 # Import required modules
 import litellm
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.xai.common_utils import xai_reported_cost_in_usd
 from litellm.proxy._experimental.mcp_server import mcp_server_manager
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
 from litellm.proxy.utils import _failure_fields_to_lift
@@ -2634,10 +2635,62 @@ async def test_stream_auto_execute_bills_both_rounds_with_one_fixed_margin_on_th
     assert recorder.logged == ()
     assert len(recorder.failed) == 1
     assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71 + 149, 19 + 5)
-    assert recorder.failed[0]["response_cost"] == pytest.approx(
-        _round_cost(_ROUND_ONE_BODY) + _round_cost(_ROUND_TWO_BODY) - _FIXED_MARGIN
+    charged_once: Final = _round_cost(_ROUND_ONE_BODY) + _round_cost(_ROUND_TWO_BODY) - _FIXED_MARGIN
+    assert recorder.failed[0]["response_cost"] == pytest.approx(charged_once)
+    assert recorder.failed[0]["cost_breakdown"]["total_cost"] == pytest.approx(charged_once)
+
+
+_XAI_MODEL: Final = "xai/grok-4.7"
+_XAI_RESPONSES_URL: Final = r"https://api\.x\.ai/v1/responses"
+
+
+def _xai_round(body: Mapping[str, object], cost_in_usd_ticks: int) -> Mapping[str, object]:
+    usage: Final = cast(Mapping[str, object], body["usage"])
+    stated: Final = {**usage, "cost_in_usd_ticks": cost_in_usd_ticks, "context_details": {"cached_tokens": 3}}
+    return MappingProxyType({**body, "model": "grok-4.7", "usage": stated})
+
+
+def _xai_round_cost(body: Mapping[str, object]) -> float:
+    usage: Final = cast(Mapping[str, object], body["usage"])
+    stated: Final = {**usage, "cost": xai_reported_cost_in_usd(usage["cost_in_usd_ticks"])}
+    return litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate({**body, "usage": stated}),
+        model=_XAI_MODEL,
+        custom_llm_provider="xai",
+        call_type="aresponses",
     )
-    _assert_breakdown_agrees_with_the_billed_cost(recorder.failed[0])
+
+
+@pytest.mark.asyncio
+async def test_xai_stream_auto_execute_bills_each_round_at_its_own_price_with_one_fixed_margin(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"xai": {"fixed_amount": _FIXED_MARGIN}})
+    rounds: Final = (_xai_round(_ROUND_ONE_BODY, 12_400_000), _xai_round(_ROUND_TWO_BODY, 8_800_000))
+    _serve_responses(respx_mock, monkeypatch, tuple(_streamed(body) for body in rounds), _XAI_RESPONSES_URL)
+    recorder: Final = _RoundRecorder()
+
+    with _echo_tool_served("PING"):
+        events: Final = await _drain(
+            await litellm.aresponses(
+                model=_XAI_MODEL,
+                input="Call echo with PING",
+                tools=[dict(_ECHO_MCP_TOOL)],
+                api_key="xai-mcp-rounds",
+                stream=True,
+                litellm_logging_obj=_rounds_logging_obj(recorder, "mcp-xai-stream-rounds"),
+            )
+        )
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    charged_once: Final = _xai_round_cost(rounds[0]) + _xai_round_cost(rounds[1]) - _FIXED_MARGIN
+    client: Final = _final_response(events)
+    assert len(recorder.logged) == 1
+    assert recorder.logged[0]["response_cost"] == pytest.approx(charged_once)
+    assert recorder.logged[0]["cost_breakdown"]["total_cost"] == pytest.approx(charged_once)
+    assert client.usage is not None
+    assert client.usage.cost == pytest.approx(charged_once)
+    assert json.loads(events[-1].model_dump_json())["response"]["usage"]["context_details"] == {"cached_tokens": 6}
 
 
 async def _stop_reading_once_the_follow_up_answers(logging_obj: Logging) -> None:
@@ -2903,6 +2956,40 @@ async def test_bridged_stream_auto_execute_deferred_for_a_post_call_guardrail_lo
 
     assert logged_before_release == ()
     _assert_one_bridged_row_bills_both_rounds_once(recorder.logged, _final_response(events))
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_auto_execute_blocked_by_a_post_call_guardrail_bills_both_rounds_on_the_failure_row(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"anthropic": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_responses(
+        respx_mock, monkeypatch, (_bridged_echo_call_round(), _bridged_echo_answer_round()), _ANTHROPIC_MESSAGES_URL
+    )
+    recorder: Final = _RoundRecorder()
+    logging_obj: Final = _rounds_logging_obj(recorder, "mcp-bridged-stream-rounds-blocked")
+    blocked: Final = GuardrailRaisedException(guardrail_name="output-policy", message="blocked")
+
+    with _echo_tool_served("PING"):
+        stream: Final = await _open_bridged_stream_auto_execute(logging_obj)
+        ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+            response=stream, route_type="aresponses", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+        )
+        await _drain(stream)
+    ProxyLogging._discard_deferred_stream_logging_for_failure({"litellm_logging_obj": logging_obj}, blocked)
+    ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+    await logging_obj.async_failure_handler(blocked, "blocked by output-policy")
+    await _settle(lambda: len(recorder.failed) > 0)
+
+    charged_once: Final = _bridged_round_cost(533, 40) + _bridged_round_cost(470, 4) - _FIXED_MARGIN
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (533 + 470, 40 + 4)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(charged_once)
+    assert recorder.failed[0]["cost_breakdown"]["total_cost"] == pytest.approx(charged_once)
 
 
 @pytest.mark.asyncio

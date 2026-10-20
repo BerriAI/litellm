@@ -42,7 +42,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
-    EarlierRoundsSpend,
+    BilledRoundsSpend,
     Logging,
     StandardLoggingPayloadSetup,
     _extract_response_obj_and_hidden_params,
@@ -6774,7 +6774,7 @@ def test_failure_after_earlier_rounds_keeps_their_fixed_margin_when_the_failed_r
     logging_obj.model_call_details["litellm_params"] = {}
 
     logging_obj.record_failure_after_earlier_rounds(
-        EarlierRoundsSpend(Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.3, earlier_breakdown),
+        BilledRoundsSpend(Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.3, earlier_breakdown),
         Usage(prompt_tokens=7, completion_tokens=0, total_tokens=7),
         0.0,
     )

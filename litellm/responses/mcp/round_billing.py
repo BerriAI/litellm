@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from types import MappingProxyType
 from typing import Final, TypeVar
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
@@ -46,15 +46,18 @@ def _summed_mapping(first: Mapping[str, object], final: Mapping[str, object]) ->
     return MappingProxyType({key: _summed_entry(key, first, final) for key in keys})
 
 
+def _summed_usage(first: BaseModel, final: BaseModel) -> object:
+    return to_jsonable_python(_summed_mapping(first.model_dump(), final.model_dump()), fallback=dict)
+
+
 def merged_round_usage(first: ResponseAPIUsage | None, final: ResponseAPIUsage | None) -> ResponseAPIUsage | None:
     if first is None or final is None:
         return final if first is None else first
-    return ResponseAPIUsage.model_validate(_summed_mapping(first.model_dump(), final.model_dump()))
+    return ResponseAPIUsage.model_validate(_summed_usage(first, final))
 
 
 def merged_chat_usage(first: Usage, final: Usage) -> Usage:
-    summed: Final = _summed_mapping(first.model_dump(), final.model_dump())
-    return Usage.model_validate(to_jsonable_python(summed, fallback=dict))
+    return Usage.model_validate(_summed_usage(first, final))
 
 
 def _chat_usage(round_response: ResponsesAPIResponse | ModelResponse) -> Usage | None:
@@ -105,6 +108,16 @@ def _less_repeated_fixed_margin(summed: Mapping[str, object], repeated: float) -
     return MappingProxyType({**summed, **charged_once})
 
 
+def breakdown_of_both_rounds(
+    first_breakdown: CostBreakdown | None, final_breakdown: CostBreakdown | None, repeated_fixed_margin: float
+) -> CostBreakdown | None:
+    if first_breakdown is None or final_breakdown is None:
+        return None
+    return _COST_BREAKDOWN.validate_python(
+        _less_repeated_fixed_margin(_summed_mapping(first_breakdown, final_breakdown), repeated_fixed_margin)
+    )
+
+
 def summed_cost_breakdown(
     first: ResponsesAPIResponse | ModelResponse,
     first_breakdown: CostBreakdown | None,
@@ -119,13 +132,8 @@ def summed_cost_breakdown(
         return None
     if served_from_cache(first):
         return final_breakdown
-    if first_breakdown is None or final_breakdown is None:
-        return None
-    return _COST_BREAKDOWN.validate_python(
-        _less_repeated_fixed_margin(
-            _summed_mapping(first_breakdown, final_breakdown),
-            _repeated_fixed_margin(first, first_breakdown, final, final_breakdown),
-        )
+    return breakdown_of_both_rounds(
+        first_breakdown, final_breakdown, _repeated_fixed_margin(first, first_breakdown, final, final_breakdown)
     )
 
 

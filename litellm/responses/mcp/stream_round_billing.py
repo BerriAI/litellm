@@ -1,11 +1,11 @@
 import asyncio
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, Protocol, TypeAlias
 
 from litellm.litellm_core_utils.hidden_params import served_from_cache
-from litellm.litellm_core_utils.litellm_logging import EarlierRoundsSpend
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, BilledRoundsSpend, UncachedPrice
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.mcp.round_billing import billed_for_every_round, merged_chat_usage, summed_cost_breakdown
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator, spawn_logging_task
@@ -13,12 +13,12 @@ from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamingResponse
 from litellm.types.utils import CostBreakdown, ModelResponse, Usage
 
-Dispatch: TypeAlias = Coroutine[object, object, object]
 Parked: TypeAlias = tuple[object, ...]
 RestoresHeaders: TypeAlias = Callable[[ResponsesAPIStreamingResponse], None]
 
 _PARKED_DISPATCH: Final = "_deferred_stream_complete_args"
 _DISPATCH_RELEASE: Final = "_on_deferred_stream_complete"
+_SERVED_FROM_CACHE: Final = UncachedPrice(cost=0.0, cost_breakdown=None)
 
 
 class _DispatchesSuccessHandlers(Protocol):
@@ -40,15 +40,9 @@ def _event_loop_running() -> bool:
     return True
 
 
-def _round_cost(response: ResponsesAPIResponse) -> float:
-    if served_from_cache(response) or response.usage is None:
-        return 0.0
-    return response.usage.cost or 0.0
-
-
-def _priced(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
+def _priced(response: ResponsesAPIResponse, price: UncachedPrice) -> ResponsesAPIResponse:
     priced: Final = response.model_copy()
-    priced.hidden_params = {**response.hidden_params, "response_cost": _round_cost(response)}
+    priced.hidden_params = {**response.hidden_params, "response_cost": price.cost or 0.0}
     return priced
 
 
@@ -84,6 +78,15 @@ class _BilledRounds:
     def cost(self) -> float:
         cost: Final = self.response.hidden_params.get("response_cost")
         return float(cost) if isinstance(cost, (int, float)) else 0.0
+
+    @property
+    def spend(self) -> BilledRoundsSpend:
+        usage: Final = (
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(self.response.usage)
+            if self.chat_usage is None
+            else self.chat_usage
+        )
+        return BilledRoundsSpend(usage, self.cost, self.breakdown)
 
     def with_round(
         self, priced: ResponsesAPIResponse, breakdown: CostBreakdown | None, chat_usage: Usage | None
@@ -130,14 +133,14 @@ class StreamedRoundBilling:
         restore_headers: RestoresHeaders,
     ) -> None:
         round_parked: Final = self._take_parked()
-        priced: Final = _priced(response)
-        breakdown: Final = self._logging_obj.cost_breakdown
+        price: Final = self._price(response, round_parked)
+        priced: Final = _priced(response, price)
         chat_usage: Final = _bridged_round_usage(round_parked)
         if self._billed is None:
-            self._billed = _BilledRounds(priced, breakdown, chat_usage)
+            self._billed = _BilledRounds(priced, price.cost_breakdown, chat_usage)
             self._bank(round_parked)
             return
-        billed: Final = self._billed.with_round(priced, breakdown, chat_usage)
+        billed: Final = self._billed.with_round(priced, price.cost_breakdown, chat_usage)
         self._close(round_parked)
         self._close(self._banked)
         self._logging_obj.model_call_details.pop("combined_usage_object", None)
@@ -151,7 +154,7 @@ class StreamedRoundBilling:
                 self._dispatch(
                     completed,
                     billed.response.model_copy(update={"output": list(client_output)}),
-                    billed.chat_usage,
+                    billed,
                     restore_headers,
                 ),
             )
@@ -160,14 +163,10 @@ class StreamedRoundBilling:
     def record_billed_rounds(self, follow_up: object) -> None:
         if self._billed is None:
             return
-        billed_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
-            self._billed.response.usage
-        )
-        self._logging_obj.record_partial_usage_for_failure(billed_usage, self._billed.cost)
+        spend: Final = self._billed.spend
+        self._logging_obj.record_partial_usage_for_failure(spend.usage, spend.cost)
         if isinstance(follow_up, BaseResponsesAPIStreamingIterator):
-            follow_up.bill_failure_after_earlier_rounds(
-                EarlierRoundsSpend(billed_usage, self._billed.cost, self._billed.breakdown)
-            )
+            follow_up.bill_failure_after_earlier_rounds(spend)
 
     def charge_final_round(
         self, completed: ResponsesAPIStreamingResponse, response: ResponsesAPIResponse, restore_headers: RestoresHeaders
@@ -182,7 +181,7 @@ class StreamedRoundBilling:
         charged: Final = response.model_copy(update={"usage": self._billed.response.usage})
         charged.hidden_params = {**self._billed.response.hidden_params}
         if parked is not None:
-            self._release((self._dispatch(completed, charged, self._billed.chat_usage, restore_headers),))
+            self._release((self._dispatch(completed, charged, self._billed, restore_headers),))
         return charged
 
     def finish(self) -> None:
@@ -207,6 +206,15 @@ class StreamedRoundBilling:
         self._banked = None
         self._disarm()
 
+    def _price(self, response: ResponsesAPIResponse, round_parked: Parked | None) -> UncachedPrice:
+        if served_from_cache(response):
+            return _SERVED_FROM_CACHE
+        match round_parked:
+            case (ModelResponse() as assembled, bool()):
+                return self._logging_obj.uncached_price(assembled)
+            case _:
+                return self._logging_obj.uncached_price(response)
+
     def _bank(self, parked: Parked | None) -> None:
         self._banked = parked
         if parked is not None:
@@ -216,18 +224,21 @@ class StreamedRoundBilling:
         self,
         completed: ResponsesAPIStreamingResponse,
         response: ResponsesAPIResponse,
-        chat_usage: Usage | None,
+        billed: _BilledRounds,
         restore_headers: RestoresHeaders,
-    ) -> Dispatch:
+    ) -> BilledRoundsDispatch:
         logged_response: Final = response.model_copy()
         logged_response.hidden_params = {**response.hidden_params}
         logged: Final = completed.model_copy(update={"response": logged_response})
         restore_headers(logged)
-        return self._log_success(
-            logged,
-            datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline start_time
-            _logged_cache_hit(response, chat_usage),
-            chat_usage,
+        return BilledRoundsDispatch(
+            self._log_success(
+                logged,
+                datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline start_time
+                _logged_cache_hit(response, billed.chat_usage),
+                billed.chat_usage,
+            ),
+            billed.spend,
         )
 
     async def _log_success(
@@ -256,6 +267,8 @@ class StreamedRoundBilling:
 
     async def _run_parked(self, *parked: object) -> None:
         match parked:
+            case (BilledRoundsDispatch(dispatch=dispatch),):
+                await dispatch
             case (dispatch,) if asyncio.iscoroutine(dispatch):
                 await dispatch
             case (assembled, cache_hit):
@@ -285,6 +298,8 @@ class StreamedRoundBilling:
     @staticmethod
     def _close(parked: Parked | None) -> None:
         match parked:
+            case (BilledRoundsDispatch(dispatch=dispatch),):
+                dispatch.close()
             case (dispatch,) if asyncio.iscoroutine(dispatch):
                 dispatch.close()
             case _:
