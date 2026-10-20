@@ -3449,12 +3449,6 @@ class ProxyLogging:
         request_data.pop("standard_logging_object", None)
 
         ### LOGGING ###
-        # Read before _handle_logging_proxy_only_error: its pre_call stamps first_api_call_start_time
-        # on a request the provider never saw, which must not turn a pre-handoff 499 into a billed one.
-        _handed_off_before_logging: Final = (
-            getattr(request_data.get("litellm_logging_obj"), "model_call_details", {}).get("first_api_call_start_time")
-            is not None
-        )
         if self._is_proxy_only_llm_api_error(
             original_exception=original_exception,
             error_type=error_type,
@@ -3470,8 +3464,7 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data,
-                provider_billed=_handed_off_before_logging and _provider_billed_the_failure(original_exception),
+                request_data, provider_billed=_provider_billed_the_failure(original_exception)
             )
         )
 

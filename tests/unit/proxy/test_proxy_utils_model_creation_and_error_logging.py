@@ -830,9 +830,8 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
 
     @pytest.mark.asyncio
     async def test_client_disconnect_before_provider_handoff_is_not_priced(self):
-        """The proxy-only error handler's own pre_call stamps first_api_call_start_time on every
-        failure it logs, so the handoff check must be read before it runs: a caller that hung up
-        while the request was still in pre-call hooks never cost the provider anything."""
+        """A caller that hung up while the request was still in pre-call hooks never reached the
+        provider, so there is no handoff instant on the logging object and the 499 row is not priced."""
         from datetime import datetime
         from unittest.mock import AsyncMock, patch
 
@@ -868,7 +867,8 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                 user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
             )
 
-        assert logging_obj.model_call_details["first_api_call_start_time"] is not None
+        assert request_data.get("first_api_call_start_time") is None
+        assert "combined_usage_object" not in request_data
         assert request_data.get("response_cost", 0.0) == 0.0
 
     @pytest.mark.asyncio
