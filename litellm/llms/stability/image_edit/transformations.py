@@ -10,8 +10,6 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
@@ -30,15 +28,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _StabilityImageEditResponse(TypedDict):
-    finish_reason: ReadOnly[NotRequired[object]]
-    image: ReadOnly[NotRequired[str | None]]
-
-
-_STABILITY_IMAGE_EDIT_RESPONSE: Final = TypeAdapter(_StabilityImageEditResponse)
 
 
 class StabilityImageEditConfig(BaseImageEditConfig):
@@ -286,10 +275,8 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        validated_response: Final = _STABILITY_IMAGE_EDIT_RESPONSE.validate_python(response_data)
-
         # Check finish_reason
-        finish_reason: Final = validated_response.get("finish_reason", "")
+        finish_reason: Final = response_data.get("finish_reason", "")
         if finish_reason == "CONTENT_FILTERED":
             raise self.get_error_class(
                 error_message="Content was filtered by Stability AI safety systems",
@@ -302,7 +289,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             model_response.data = []
 
         # Extract image from response
-        image_b64: Final = validated_response.get("image")
+        image_b64: Final = response_data.get("image")
         if image_b64:
             model_response.data.append(
                 ImageObject(

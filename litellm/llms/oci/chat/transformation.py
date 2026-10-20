@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -188,7 +188,6 @@ def _normalize_tool_choice(selected_params: dict) -> None:
 _TOOL_CHOICE_MODES: Final = frozenset({"auto", "none", "required", "any"})
 _TOOLS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
-_OCI_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, JsonValue], config=ConfigDict(strict=True))
 
 
 def _as_json_object(value: object) -> Mapping[str, object] | None:
@@ -715,12 +714,11 @@ class OCIChatConfig(BaseConfig):
                 status_code=raw_response.status_code,
             )
 
-        validated_response_json: Final = _OCI_JSON_OBJECT_ADAPTER.validate_python(response_json)
         vendor: Final = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
-            model_response = handle_cohere_response(validated_response_json, model, model_response, raw_response)
+            model_response = handle_cohere_response(response_json, model, model_response, raw_response)
         else:
-            model_response = handle_generic_response(validated_response_json, model, model_response, raw_response)
+            model_response = handle_generic_response(response_json, model, model_response, raw_response)
 
         model_response.hidden_params["additional_headers"] = raw_response.headers
         return model_response
@@ -871,10 +869,9 @@ class OCIStreamWrapper(CustomStreamWrapper):
                 message=f"Chunk cannot be parsed as JSON: {e}",
             )
 
-        validated_dict_chunk: Final = _OCI_JSON_OBJECT_ADAPTER.validate_python(dict_chunk)
-        if validated_dict_chunk.get("apiFormat") == "COHERE":
+        if dict_chunk.get("apiFormat") == "COHERE":
             result: Final = handle_cohere_stream_chunk(
-                validated_dict_chunk,
+                dict_chunk,
                 prior_tool_calls_emitted=self._cohere_tool_calls_emitted,
                 prior_text_emitted=self._cohere_text_emitted,
             )
@@ -889,7 +886,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
                         self._cohere_text_emitted = True
                         break
             return self._emit_chunk(result)
-        return self._emit_chunk(handle_generic_stream_chunk(validated_dict_chunk))
+        return self._emit_chunk(handle_generic_stream_chunk(dict_chunk))
 
 
 __all__ = [

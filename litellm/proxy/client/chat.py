@@ -7,7 +7,6 @@ from pydantic import ConfigDict, TypeAdapter
 
 from .exceptions import StreamError, UnauthorizedError
 
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _SSE_LINE: Final[TypeAdapter[bytes | bytearray]] = TypeAdapter(
     bytes | bytearray, config=ConfigDict(arbitrary_types_allowed=True, strict=True, hide_input_in_errors=True)
 )
@@ -60,7 +59,7 @@ class ChatClient:
         frequency_penalty: float | None = None,
         user: str | None = None,
         return_request: bool = False,
-    ) -> dict[str, object] | requests.Request:
+    ) -> dict[str, Any] | requests.Request:
         """
         Create a chat completion.
 
@@ -115,7 +114,7 @@ class ChatClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return _JSON_OBJECT.validate_python(response.json())
+            return response.json()
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

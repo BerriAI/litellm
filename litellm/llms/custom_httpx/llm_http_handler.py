@@ -8506,7 +8506,7 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetched_source_data = _JSON_OBJECT.validate_python(prefetch_resp.json())
+            prefetched_source_data = prefetch_resp.json()
 
         try:
             url, data, files = video_provider_config.transform_video_edit_request(
@@ -8604,7 +8604,7 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetched_source_data = _JSON_OBJECT.validate_python(prefetch_resp.json())
+            prefetched_source_data = prefetch_resp.json()
 
         try:
             url, data, files = video_provider_config.transform_video_edit_request(
