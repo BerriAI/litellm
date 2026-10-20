@@ -95,6 +95,7 @@ from pydantic import AnyUrl, TypeAdapter
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
+    MCP_MAX_SSE_EVENT_SIZE_BYTES,
     MCP_NPM_CACHE_DIR,
     MCP_TOOL_LISTING_MAX_PAGES,
     MCP_TOOL_LISTING_TIMEOUT,
@@ -647,6 +648,7 @@ class MCPClient:
         transport_ctx: Final = streamable_http_client(
             url=self.server_url,
             http_client=http_client,
+            max_sse_event_size=MCP_MAX_SSE_EVENT_SIZE_BYTES,
         )
         return transport_ctx, http_client
 
