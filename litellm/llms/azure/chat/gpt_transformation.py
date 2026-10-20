@@ -106,6 +106,7 @@ class AzureOpenAIConfig(BaseConfig):
         model: str,
         custom_llm_provider: str | None,
         api_base: str | None,
+        model_info: object,
     ) -> Sequence[AllMessageValues]:
         """
         Azure OpenAI accepts `system` messages at any position, so a developer message

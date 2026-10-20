@@ -14,6 +14,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.utils import declared_mid_conversation_system_support, deployment_model_info
 
 
 class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -78,11 +79,13 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],  # mutable-ok: overrides the base class signature
     ) -> dict[str, object]:  # mutable-ok: overrides the base class signature
-        folded: Final = instruction_items_folded(
-            model,
-            self.custom_llm_provider.value,
-            self._validate_input_param(input),
-            response_api_optional_request_params,
+        declared: Final = declared_mid_conversation_system_support(
+            model, self.custom_llm_provider.value, deployment_model_info(litellm_params)
+        )
+        folded: Final = (
+            instruction_items_folded(self._validate_input_param(input), response_api_optional_request_params, "user")
+            if declared is False
+            else None
         )
         placed_input, placed_params = folded or (input, response_api_optional_request_params)
         return super().transform_responses_api_request(

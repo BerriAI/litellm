@@ -652,6 +652,7 @@ def test_translate_developer_role_leaves_a_later_developer_message_in_place_for_
         model="fireworks-qwen",
         custom_llm_provider="litellm_proxy",
         api_base="http://inner-proxy:4000",
+        model_info=None,
     )
 
     assert list(translated) == [

@@ -1826,6 +1826,7 @@ def test_translate_developer_role_hoists_a_later_developer_message_only_for_a_mo
         model="system-first-model",
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
+        model_info=None,
     )
     assert [message["role"] for message in messages] == expected_roles
     assert "Answer with exactly one word." in [message["content"] for message in messages if message["role"] == "system"][-1]

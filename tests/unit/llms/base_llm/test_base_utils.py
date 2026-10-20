@@ -135,7 +135,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "A", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
-                    {"type": "text", "text": "B", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                    {"type": "text", "text": "\n\nB", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
                 ],
             },
         ]
@@ -150,7 +150,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "A"},
-                    {"type": "text", "text": "B", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "\n\nB", "cache_control": {"type": "ephemeral"}},
                 ],
             },
         ]
@@ -166,7 +166,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "Cached prompt", "cache_control": {"type": "ephemeral"}},
-                    {"type": "text", "text": "Additional instructions"},
+                    {"type": "text", "text": "\n\nAdditional instructions"},
                 ],
             },
             {"role": "user", "content": "Hello"},
@@ -184,7 +184,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "Cached prompt", "cache_control": {"type": "ephemeral"}},
-                    {"type": "text", "text": "Answer with exactly one word."},
+                    {"type": "text", "text": "\n\nAnswer with exactly one word."},
                 ],
             },
             {"role": "user", "content": "Hi there"},
@@ -203,8 +203,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "Base"},
-                    {"type": "text", "text": "Rule"},
-                    {"type": "text", "text": "Cached", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "\n\nRule"},
+                    {"type": "text", "text": "\n\nCached", "cache_control": {"type": "ephemeral"}},
                 ],
             },
             {"role": "user", "content": "Hello"},
@@ -230,7 +230,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "x-anthropic-billing-header: cc_version=1.0;"},
-                    {"type": "text", "text": "Guardrail advisory: request was flagged"},
+                    {"type": "text", "text": "\n\nGuardrail advisory: request was flagged"},
                 ],
             }
         ]
@@ -287,7 +287,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Turn 3"},
         ]
 
-    def test_developer_message_that_closes_the_conversation_stays_in_place(self):
+    def test_developer_message_that_closes_the_conversation_after_an_assistant_turn_becomes_a_user_turn(self):
         messages = [
             {"role": "system", "content": "You are terse."},
             {"role": "user", "content": "Hi there"},
@@ -298,12 +298,10 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "system", "content": "You are terse."},
             {"role": "user", "content": "Hi there"},
             {"role": "assistant", "content": "Hello! How can I help?"},
-            {"role": "system", "content": "Reply with the single word PONG and nothing else."},
+            {"role": "user", "content": "Reply with the single word PONG and nothing else."},
         ]
 
-    def test_only_the_closing_developer_run_after_an_assistant_turn_stays_in_place_and_is_folded_into_one_message(
-        self,
-    ):
+    def test_only_the_closing_developer_run_after_an_assistant_turn_becomes_user_turns(self):
         messages = [
             {"role": "system", "content": "Base"},
             {"role": "user", "content": "Turn 1"},
@@ -318,7 +316,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Turn 1"},
             {"role": "user", "content": "Turn 2"},
             {"role": "assistant", "content": "Reply 2"},
-            {"role": "system", "content": "Closing B\n\nClosing C"},
+            {"role": "user", "content": "Closing B"},
+            {"role": "user", "content": "Closing C"},
         ]
 
     def test_developer_message_that_closes_the_conversation_after_a_user_turn_is_hoisted(self):
@@ -379,7 +378,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "You are Codex"},
-                    {"type": "text", "text": "Rule 1"},
+                    {"type": "text", "text": "\n\nRule 1"},
                     {"type": "text", "text": "Rule 2"},
                 ],
             },
@@ -415,7 +414,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "content": [
                     {"type": "text", "text": "Rule 1"},
                     {"type": "text", "text": "Rule 2", "cache_control": {"type": "ephemeral"}},
-                    {"type": "text", "text": "Answer with exactly one word."},
+                    {"type": "text", "text": "\n\nAnswer with exactly one word."},
                 ],
             },
             {"role": "user", "content": "What is the capital of France?"},
@@ -436,7 +435,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "Rule 1", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-                    {"type": "text", "text": "Answer with exactly one word."},
+                    {"type": "text", "text": "\n\nAnswer with exactly one word."},
                 ],
             },
             {"role": "user", "content": "What is the capital of France?"},
@@ -462,7 +461,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 "role": "system",
                 "content": [
                     {"type": "text", "text": "Cached", "cache_control": {"type": "ephemeral"}},
-                    {"type": "text", "text": "Extra"},
+                    {"type": "text", "text": "\n\nExtra"},
                 ],
             },
             {"role": "user", "content": "Hello"},

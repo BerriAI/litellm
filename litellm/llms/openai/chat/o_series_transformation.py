@@ -44,6 +44,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         model: str,
         custom_llm_provider: str | None,
         api_base: str | None,
+        model_info: object,
     ) -> Sequence[AllMessageValues]:
         """
         O-series models support `developer` role.

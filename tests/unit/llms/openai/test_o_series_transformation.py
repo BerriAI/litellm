@@ -190,7 +190,11 @@ def test_translate_developer_role_keeps_developer_messages_untouched():
     ]
     assert (
         OpenAIOSeriesConfig().translate_developer_role_to_system_role(
-            messages=messages, model="my-reasoning-deployment", custom_llm_provider="openai", api_base=None
+            messages=messages,
+            model="my-reasoning-deployment",
+            custom_llm_provider="openai",
+            api_base=None,
+            model_info=None,
         )
         == messages
     )

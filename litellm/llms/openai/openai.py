@@ -216,9 +216,10 @@ class OpenAIConfig(BaseConfig):
         model: str,
         custom_llm_provider: str | None,
         api_base: str | None,
+        model_info: object,
     ) -> Sequence[AllMessageValues]:
         return translate_developer_role_for_openai_compatible_endpoint(
-            messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+            messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
         )
 
     def _gpt_config_for_model(self, model: str) -> OpenAIGPTConfig:

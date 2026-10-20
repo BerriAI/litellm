@@ -802,6 +802,7 @@ def test_azure_keeps_a_later_developer_message_in_place_as_system(config):
         model="my-deployment",
         custom_llm_provider="azure",
         api_base="https://example-resource.openai.azure.com",
+        model_info=None,
     )
     assert [message["role"] for message in messages] == ["system", "user", "assistant", "system", "user"]
     assert messages[3]["content"] == "Answer with exactly one word."

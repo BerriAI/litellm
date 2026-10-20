@@ -2368,27 +2368,13 @@ _CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN: Final = (
 )
 
 
-def test_translate_developer_role_hoists_a_later_developer_message_into_one_leading_system_message():
+def test_translate_developer_role_keeps_a_later_developer_message_in_place_for_an_undeclared_fireworks_model():
     messages = FireworksAIConfig().translate_developer_role_to_system_role(
         messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
-        model="accounts/fireworks/models/unlisted-system-first-model",
+        model="accounts/fireworks/models/unlisted-model",
         custom_llm_provider="fireworks_ai",
         api_base=None,
-    )
-
-    assert [message["role"] for message in messages] == ["system", "user", "user"]
-    assert messages[0]["content"] == "You are Codex\n\nAnswer with exactly one word."
-
-
-def test_translate_developer_role_keeps_a_later_developer_message_in_place_for_a_model_that_accepts_it(
-    declare_mid_conversation_system,
-):
-    declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/accepts-later-system", True)
-    messages = FireworksAIConfig().translate_developer_role_to_system_role(
-        messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
-        model="accounts/fireworks/models/accepts-later-system",
-        custom_llm_provider="fireworks_ai",
-        api_base=None,
+        model_info=None,
     )
 
     assert list(messages) == [
@@ -2397,3 +2383,61 @@ def test_translate_developer_role_keeps_a_later_developer_message_in_place_for_a
         {"role": "system", "content": "Answer with exactly one word."},
         {"role": "user", "content": "What is the capital of France?"},
     ]
+
+
+def test_translate_developer_role_leaves_a_leading_system_and_developer_pair_unmerged_for_an_undeclared_model():
+    messages = FireworksAIConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are Codex"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        model="accounts/fireworks/models/unlisted-model",
+        custom_llm_provider="fireworks_ai",
+        api_base=None,
+        model_info=None,
+    )
+
+    assert list(messages) == [
+        {"role": "system", "content": "You are Codex"},
+        {"role": "system", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize("model", ["qwen3p8-max", "accounts/fireworks/models/qwen3p8-max"])
+def test_translate_developer_role_hoists_a_later_developer_message_for_the_system_first_qwen3p8_model(
+    local_model_cost_map, model
+):
+    messages = FireworksAIConfig().translate_developer_role_to_system_role(
+        messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
+        model=model,
+        custom_llm_provider="fireworks_ai",
+        api_base=None,
+        model_info=None,
+    )
+
+    assert list(messages) == [
+        {"role": "system", "content": "You are Codex\n\nAnswer with exactly one word."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("deployment_declared", "expected_roles"),
+    [(False, ["system", "user", "user"]), (True, ["system", "user", "system", "user"])],
+)
+def test_translate_developer_role_follows_the_deployment_model_info_over_the_cost_map(
+    declare_mid_conversation_system, deployment_declared, expected_roles
+):
+    declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/shared-backend", not deployment_declared)
+    messages = FireworksAIConfig().translate_developer_role_to_system_role(
+        messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
+        model="accounts/fireworks/models/shared-backend",
+        custom_llm_provider="fireworks_ai",
+        api_base=None,
+        model_info={"id": "deployment-a", "supports_mid_conversation_system": deployment_declared},
+    )
+
+    assert [message["role"] for message in messages] == expected_roles

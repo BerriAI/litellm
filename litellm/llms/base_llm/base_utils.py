@@ -24,6 +24,7 @@ from litellm.types.llms.openai import (
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionToolCallChunk,
+    ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
     CountContextManagement,
@@ -562,11 +563,21 @@ def _is_system_message(
     return message["role"] == "system"
 
 
+def _with_leading_separator(blocks: tuple[object, ...]) -> tuple[object, ...]:
+    first: Final = as_str_mapping(blocks[0])
+    text: Final = None if first is None else first.get("text")
+    if first is None or not isinstance(text, str) or text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
+        return blocks
+    return ({**first, "text": f"\n\n{text}"}, *blocks[1:])
+
+
 def _merged_system_content(parts: Sequence[_SystemPart]) -> SystemMessageContent:
     texts: Final = tuple(itertools.starmap(_plain_text, parts))
     if all(text is not None for text in texts):
         return "\n\n".join(text for text in texts if text)
-    return list(itertools.chain.from_iterable(itertools.starmap(_text_blocks, parts)))
+    block_runs: Final = tuple(blocks for blocks in itertools.starmap(_text_blocks, parts) if blocks)
+    separated: Final = (*block_runs[:1], *map(_with_leading_separator, block_runs[1:]))
+    return list(itertools.chain.from_iterable(separated))
 
 
 def _merged_system_message(
@@ -627,14 +638,22 @@ def hoisted_instruction_indices(roles: Sequence[str | None]) -> tuple[int, ...]:
     return (*range(leading_length), *moved)
 
 
+def closing_instruction_indices(roles: Sequence[str | None]) -> frozenset[int]:
+    closing_start: Final = _closing_instruction_block_start(roles, _leading_instruction_block_length(roles))
+    return frozenset(range(closing_start, len(roles)))
+
+
 def _hoisted_message_order(messages: Sequence[AllMessageValues]) -> tuple[int, ...]:
     hoisted: Final = hoisted_instruction_indices(tuple(message["role"] for message in messages))
     hoisted_set: Final = frozenset(hoisted)
     return (*hoisted, *(index for index in range(len(messages)) if index not in hoisted_set))
 
 
-def moves_a_later_developer_message(messages: Sequence[AllMessageValues]) -> bool:
-    return _hoisted_message_order(messages) != tuple(range(len(messages)))
+def _developer_message_as_user(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "developer":
+        return message
+    as_user: Final[ChatCompletionUserMessage] = {"role": "user", "content": message["content"]}
+    return as_user
 
 
 def merge_system_message_runs(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
@@ -650,13 +669,15 @@ def hoist_developer_messages_into_leading_system_message(
     messages: Sequence[AllMessageValues],
 ) -> Sequence[AllMessageValues]:
     """
-    Translate `developer` role to `system` role for OpenAI-compatible backends whose
-    chat template allows a single system message and only at the start: developer
-    messages that arrive after the first user turn move into the leading system
-    block, except a developer message that closes the conversation right after an
-    assistant turn, which stays in place so the request does not end on the
-    assistant's turn. Each run of consecutive system messages is then folded into
-    one message in a single pass.
+    Place instructions for an OpenAI-compatible model whose chat template allows a single
+    system message and only at the start: developer messages after the first user turn move
+    into the leading system block, a developer message that closes the conversation right
+    after an assistant turn becomes a user turn so the request does not end on the
+    assistant's turn, and each run of consecutive system messages folds into one.
     """
     order: Final = _hoisted_message_order(messages)
-    return merge_system_message_runs(tuple(messages[index] for index in order))
+    closing: Final = closing_instruction_indices(tuple(message["role"] for message in messages))
+    placed: Final = tuple(
+        _developer_message_as_user(messages[index]) if index in closing else messages[index] for index in order
+    )
+    return merge_system_message_runs(placed)

@@ -39,8 +39,6 @@ from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
     hoist_developer_messages_into_leading_system_message,
     map_developer_role_to_system_role,
-    merge_system_message_runs,
-    moves_a_later_developer_message,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -63,7 +61,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     chat_completion_tool_call_from_dict,
 )
-from litellm.utils import accepts_mid_conversation_system, convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, declared_mid_conversation_system_support
 
 from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
@@ -96,18 +94,27 @@ def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: st
     return hostname == "openai.com" or hostname.endswith(".openai.com")
 
 
+def _roles(messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
+    return tuple(message["role"] for message in messages)
+
+
 def translate_developer_role_for_openai_compatible_endpoint(
     messages: Sequence[AllMessageValues],
     *,
     model: str,
     custom_llm_provider: str | None,
     api_base: str | None,
+    model_info: object,
 ) -> Sequence[AllMessageValues]:
+    in_place: Final = map_developer_role_to_system_role(messages=messages)
     if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
-        return map_developer_role_to_system_role(messages=messages)
-    if moves_a_later_developer_message(messages) and not accepts_mid_conversation_system(model, custom_llm_provider):
-        return hoist_developer_messages_into_leading_system_message(messages=messages)
-    return merge_system_message_runs(messages)
+        return in_place
+    placed: Final = hoist_developer_messages_into_leading_system_message(messages=messages)
+    if _roles(placed) == _roles(in_place):
+        return in_place
+    if declared_mid_conversation_system_support(model, custom_llm_provider, model_info) is not False:
+        return in_place
+    return placed
 
 
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
@@ -477,16 +484,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         model: str,
         custom_llm_provider: str | None,
         api_base: str | None,
+        model_info: object,
     ) -> Sequence[AllMessageValues]:
         """
-        OpenAI accepts `system` messages at any position, so on its own endpoint a
-        developer message only changes role. OpenAI-compatible backends render a chat
-        template, so there each run of system messages is folded into one, and a later
-        developer message is hoisted into the leading one only for a model that rejects
-        a system message after the first turn.
+        A developer message only changes role, except on a model whose deployment or cost
+        map declares `supports_mid_conversation_system` false, where the instructions are
+        placed in one leading system message for its chat template.
         """
         return translate_developer_role_for_openai_compatible_endpoint(
-            messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+            messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
         )
 
     def _targets_openai_hosted_endpoint(

@@ -216,6 +216,27 @@ def test_hosted_vllm_responses_folds_a_later_developer_item_into_instructions_fo
     assert tuple(body["input"]) == (_LATER_DEVELOPER_INPUT[0], _LATER_DEVELOPER_INPUT[2])
 
 
+def test_hosted_vllm_responses_folds_for_a_deployment_declared_system_first_and_sends_a_closing_developer_as_user():
+    assistant_turn: Final = {"type": "message", "role": "assistant", "content": "Paris"}
+    mock_client: Final = _make_mock_http_client(_make_mock_responses_api_response("PONG"))
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client", return_value=mock_client):
+        litellm.responses(
+            model="hosted_vllm/Qwen/Qwen3-8B",
+            instructions="You are a terse assistant.",
+            input=[*_LATER_DEVELOPER_INPUT, assistant_turn, {"role": "developer", "content": "Reply with PONG."}],
+            model_info={"id": "deployment-1", "supports_mid_conversation_system": False},
+            api_base="https://test-vllm.example.com/v1",
+        )
+    body: Final = _sent_body(mock_client)
+    assert body["instructions"] == "You are a terse assistant.\n\nAnswer with exactly one word."
+    assert tuple(body["input"]) == (
+        _LATER_DEVELOPER_INPUT[0],
+        _LATER_DEVELOPER_INPUT[2],
+        assistant_turn,
+        {"role": "user", "content": "Reply with PONG.", "type": "message"},
+    )
+
+
 def test_hosted_vllm_responses_forwards_a_later_developer_item_in_place_for_an_undeclared_model():
     mock_client: Final = _make_mock_http_client(_make_mock_responses_api_response("Paris"))
     with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client", return_value=mock_client):

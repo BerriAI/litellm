@@ -10706,17 +10706,35 @@ def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_e
 
 
 @pytest.mark.parametrize(
-    ("custom_llm_provider", "declared", "accepts"),
+    ("cost_map_declared", "deployment_declared", "expected"),
     [
-        ("fireworks_ai", None, False),
-        ("fireworks_ai", True, True),
-        ("hosted_vllm", None, True),
-        ("hosted_vllm", False, False),
+        (None, None, None),
+        (False, None, False),
+        (True, None, True),
+        (True, False, False),
+        (False, True, True),
+        (None, False, False),
     ],
 )
-def test_accepts_mid_conversation_system_follows_the_declared_flag_else_the_provider_default(
-    declare_mid_conversation_system, custom_llm_provider, declared, accepts
+def test_declared_mid_conversation_system_support_prefers_the_deployment_over_the_cost_map(
+    declare_mid_conversation_system, cost_map_declared, deployment_declared, expected
 ):
-    if declared is not None:
-        declare_mid_conversation_system(f"{custom_llm_provider}/mid-conversation-probe", declared)
-    assert litellm.utils.accepts_mid_conversation_system("mid-conversation-probe", custom_llm_provider) is accepts
+    if cost_map_declared is not None:
+        declare_mid_conversation_system("hosted_vllm/mid-conversation-probe", cost_map_declared)
+    deployment_model_info = (
+        {"id": "deployment-1"}
+        if deployment_declared is None
+        else {"id": "deployment-1", "supports_mid_conversation_system": deployment_declared}
+    )
+    assert (
+        litellm.utils.declared_mid_conversation_system_support(
+            "mid-conversation-probe", "hosted_vllm", deployment_model_info
+        )
+        is expected
+    )
+
+
+def test_declared_mid_conversation_system_support_is_none_when_the_model_lookup_raises(monkeypatch):
+    monkeypatch.setitem(litellm.model_cost, "hosted_vllm/unreadable-probe", "not a model info entry")
+    litellm.get_model_info.cache_clear()
+    assert litellm.utils.declared_mid_conversation_system_support("unreadable-probe", "hosted_vllm", None) is None

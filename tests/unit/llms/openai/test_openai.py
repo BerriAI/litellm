@@ -2041,5 +2041,6 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
         model="system-first-model",
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
+        model_info=None,
     )
     assert [message["role"] for message in messages] == expected_roles

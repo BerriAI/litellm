@@ -217,6 +217,7 @@ def _get_cached_audio_utils():
     return _audio_utils_module
 
 
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -3288,27 +3289,40 @@ def supports_mid_conversation_system(model: str, custom_llm_provider: str | None
     )
 
 
-_PROVIDERS_ASSUMED_SYSTEM_FIRST: Final = frozenset({LlmProviders.FIREWORKS_AI.value})
+class _DeploymentModelInfo(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    model_info: Mapping[str, object] | None = None
 
 
-def _declared_mid_conversation_system_support(model: str, custom_llm_provider: str | None) -> bool | None:
-    try:
-        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except ModelNotMappedError:
-        return None
-    declared: Final = model_info.get("supports_mid_conversation_system")
-    return declared if isinstance(declared, bool) else None
+def deployment_model_info(litellm_params: object) -> Mapping[str, object] | None:
+    """The deployment's own ``model_info`` read off its litellm params."""
+    return _DeploymentModelInfo.model_validate(litellm_params).model_info
 
 
-def accepts_mid_conversation_system(model: str, custom_llm_provider: str | None) -> bool:
+def _deployment_declared_mid_conversation_system_support(model_info: object) -> bool | None:
+    match model_info:
+        case {"supports_mid_conversation_system": bool(declared)}:
+            return declared
+        case _:
+            return None
+
+
+def declared_mid_conversation_system_support(
+    model: str, custom_llm_provider: str | None, model_info: object
+) -> bool | None:
     """
-    Whether an OpenAI-compatible backend renders a system message after the first turn: the model's
-    declared `supports_mid_conversation_system` when its info sets one, else every provider but Fireworks.
+    The `supports_mid_conversation_system` the deployment's own model_info declares, else the one the
+    cost map declares for the model, else None when neither sets it.
     """
-    declared: Final = _declared_mid_conversation_system_support(model, custom_llm_provider)
-    if declared is not None:
-        return declared
-    return custom_llm_provider not in _PROVIDERS_ASSUMED_SYSTEM_FIRST
+    deployment_declared: Final = _deployment_declared_mid_conversation_system_support(model_info)
+    if deployment_declared is not None:
+        return deployment_declared
+    if is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system"):
+        return False
+    if supports_mid_conversation_system(model, custom_llm_provider):
+        return True
+    return None
 
 
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:

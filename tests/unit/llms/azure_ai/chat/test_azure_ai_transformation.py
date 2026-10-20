@@ -1089,6 +1089,7 @@ def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_t
         model="system-first-model",
         custom_llm_provider="azure_ai",
         api_base="https://example.services.ai.azure.com/models",
+        model_info=None,
     )
 
     assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
