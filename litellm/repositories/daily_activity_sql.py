@@ -110,9 +110,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
 
 
 # Same rule as common_daily_activity._is_user_agent_tag
-_NOT_USER_AGENT_TAG: Final = (
-    "NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')"
-)
+_NOT_USER_AGENT_TAG: Final = "NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')"
 
 
 def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) -> str:
