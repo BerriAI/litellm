@@ -1192,7 +1192,7 @@ class CheckBatchCost:
                         continue
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to track cost for batch {batch_id} "
-                        f"(job {job.id}); leaving it unprocessed so the next poll retries: {tracking_err}"
+                        f"(job {job.id}): {tracking_err}"
                     )
                     self._record_error(prom_logger, "cost_tracking_error")
                     continue
