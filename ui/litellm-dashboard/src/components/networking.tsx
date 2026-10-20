@@ -1381,6 +1381,7 @@ const dailyActivityQuery = (
       : {}),
     timezone: new Date().getTimezoneOffset().toString(),
     include_current_utc_day: entity === "user" && req.includeCurrentUtcDay ? "true" : undefined,
+    group_by: entity === "team" ? req.groupBy : undefined,
     ...extra,
   };
 };

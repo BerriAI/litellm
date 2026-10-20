@@ -610,6 +610,101 @@ describe("EntityUsage", () => {
     expect(screen.queryByText(/^team-user-spend:/)).not.toBeInTheDocument();
   });
 
+  const tagSpendFor = (tags: Record<string, { spend: number; api_requests: number }>) => ({
+    results: [
+      {
+        date: "2025-01-01",
+        metrics: { ...emptySpendMetrics },
+        breakdown: {
+          models: {},
+          model_groups: {},
+          mcp_servers: {},
+          providers: {},
+          api_keys: {},
+          entities: Object.fromEntries(
+            Object.entries(tags).map(([tag, { spend, api_requests }]) => [
+              tag,
+              {
+                metrics: { ...emptySpendMetrics, spend, api_requests, successful_requests: api_requests },
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            ]),
+          ),
+        },
+      },
+    ],
+    metadata: { total_spend: 0, total_api_requests: 0 },
+  });
+
+  it("shows one selected team's spend per tag from a group_by=tag request", async () => {
+    mockTeamDailyActivityCall.mockImplementation((request: { groupBy?: string }) =>
+      Promise.resolve(
+        request.groupBy === "tag"
+          ? tagSpendFor({
+              "project:rag-v2": { spend: 0.25, api_requests: 1 },
+              "cost-center:cc-42": { spend: 0.5, api_requests: 2 },
+            })
+          : mockSpendData,
+      ),
+    );
+    const user = userEvent.setup();
+    render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
+    expect(screen.queryByTestId("team-tag-spend-card")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Team Multi Select" }));
+
+    const card = await screen.findByTestId("team-tag-spend-card");
+    expect(within(card).getByRole("heading", { name: "Spend Per Tag" })).toBeInTheDocument();
+    const rows = (await within(card).findAllByRole("row")).slice(1);
+    expect(rows.map((row) => within(row).getAllByRole("cell")[0].textContent)).toEqual([
+      "cost-center:cc-42",
+      "project:rag-v2",
+    ]);
+    expect(within(rows[0]).getByText("$0.5000")).toBeInTheDocument();
+    expect(mockTeamDailyActivityCall).toHaveBeenCalledWith(
+      expect.objectContaining({ entityIds: ["team-1"], groupBy: "tag" }),
+    );
+  });
+
+  it("asks for tag spend only for exactly one team in the team view", async () => {
+    render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+    });
+    expect(screen.queryByTestId("team-tag-spend-card")).not.toBeInTheDocument();
+
+    cleanup();
+    render(
+      <EntityUsage
+        {...defaultProps}
+        entityType="team"
+        selectedEntities={["team-1", "team-2"]}
+        onSelectedEntitiesChange={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+    });
+    expect(screen.queryByTestId("team-tag-spend-card")).not.toBeInTheDocument();
+
+    cleanup();
+    render(
+      <EntityUsage
+        {...defaultProps}
+        entityType="tag"
+        selectedEntities={["tag-1"]}
+        onSelectedEntitiesChange={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+    expect(screen.queryByTestId("team-tag-spend-card")).not.toBeInTheDocument();
+
+    expect(mockTeamDailyActivityCall).not.toHaveBeenCalledWith(expect.objectContaining({ groupBy: "tag" }));
+  });
+
   it("should render with organization entity type and call organization API", async () => {
     render(<StatefulEntityUsage {...defaultProps} entityType="organization" />);
 
