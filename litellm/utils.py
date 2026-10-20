@@ -4808,6 +4808,12 @@ def pre_process_optional_params(passed_params: dict, non_default_params: dict, c
     return optional_params
 
 
+def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tuple[str, ...]:
+    from litellm.router_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+
+    return deployment_reasoning_effort_levels(model_info) or ()
+
+
 def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -5336,11 +5342,21 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "openai":
-        optional_params = litellm.OpenAIConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
+        optional_params = (
+            litellm.OpenAIGPT5Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+            )
+            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
+            else litellm.OpenAIConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
         )
     elif custom_llm_provider == "nebius":
         optional_params = litellm.NebiusConfig().map_openai_params(
@@ -5364,6 +5380,7 @@ def get_optional_params(
                 optional_params=optional_params,
                 model=_azure_detection_model,
                 drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
             )
         else:
             verbose_logger.debug(
@@ -5385,11 +5402,21 @@ def get_optional_params(
                 drop_params=bool(drop_params),
             )
     elif provider_config is not None:
-        optional_params = provider_config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
+        optional_params = (
+            provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+            )
+            if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig)
+            else provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(

@@ -192,6 +192,7 @@ def _build_responses_kwargs(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
+        drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
     )
 
     # Normalize reasoning effort based on model capabilities
@@ -209,6 +210,7 @@ def _build_responses_kwargs(
                 effort,
                 model=model,
                 custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
+                deployment_model_info=forwarded_kwargs.get("model_info"),
             )
             if normalized != effort:
                 responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}

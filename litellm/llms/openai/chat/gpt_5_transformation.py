@@ -1,6 +1,7 @@
 """Support for OpenAI gpt-5 model family."""
 
 import re
+from collections.abc import Collection
 from typing import ClassVar, Final
 
 import litellm
@@ -305,6 +306,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
@@ -333,7 +336,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 if "reasoning_effort" in optional_params:
                     optional_params["reasoning_effort"] = normalized
 
-        if requested_effort is not None and self.refuses_reasoning_effort_level(model, requested_effort):
+        if (
+            requested_effort is not None
+            and requested_effort not in declared_reasoning_efforts
+            and self.refuses_reasoning_effort_level(model, requested_effort)
+        ):
             if litellm.drop_params or drop_params:
                 non_default_params.pop("reasoning_effort", None)
                 optional_params.pop("reasoning_effort", None)

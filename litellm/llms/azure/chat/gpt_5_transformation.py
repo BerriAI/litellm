@@ -1,5 +1,6 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
+from collections.abc import Collection
 from typing import ClassVar, Final
 
 import litellm
@@ -86,6 +87,8 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         model: str,
         drop_params: bool,
         api_version: str = "",
+        *,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict:
         return OpenAIGPT5Config.map_openai_params(
             self,
@@ -93,6 +96,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
         )
 
     def transform_request(
