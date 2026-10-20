@@ -7,6 +7,7 @@ gets the answer.
 
 from __future__ import annotations
 
+import json
 from typing import Final
 
 import httpx
@@ -16,6 +17,14 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 STREAM_TIMEOUT_SECONDS: Final = 0.5
 UPSTREAM_FIRST_BYTE_SECONDS: Final = 2.0
+CONVERSE_ANSWER: Final = json.dumps(
+    {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        "metrics": {"latencyMs": 1},
+    }
+).encode()
 
 _TIMEOUT_EXTENSION: Final = TypeAdapter(dict[str, float | None])
 

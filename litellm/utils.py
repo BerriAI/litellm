@@ -3290,6 +3290,19 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
+class _RegisteredPricingFields:
+    """Explicitly registered rates per cost-map key, tied to the ``litellm.model_cost`` object they were
+    registered on so a replaced catalog starts without them, as the entries they describe do."""
+
+    cost_map: object = None
+    fields: dict[str, dict[str, object]] = {}  # mutable-ok: rebuilt whenever litellm.model_cost is replaced
+
+
+def _registered_pricing_fields() -> dict[str, dict[str, object]]:
+    if _RegisteredPricingFields.cost_map is not litellm.model_cost:
+        _RegisteredPricingFields.cost_map = litellm.model_cost
+        _RegisteredPricingFields.fields = {}
+    return _RegisteredPricingFields.fields
 
 
 @dataclass(frozen=True, slots=True)
@@ -3399,9 +3412,8 @@ def runtime_model_cost_registrations(
         names["split_model"],
         names["stripped_model_name"],
     )
-    registered: Final = (
-        (key, _runtime_registered_model_cost.get(key)) for key in dict.fromkeys(candidates)
-    )
+    registered_fields: Final = _registered_pricing_fields()
+    registered: Final = ((key, registered_fields.get(key)) for key in dict.fromkeys(candidates))
     return tuple(
         (key, MappingProxyType({name: value for name, value in entry.items() if value is not None}))
         for key, entry in registered
@@ -3516,7 +3528,10 @@ def register_model(
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
         for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = dict(_registered_value)
+            _runtime_registered_model_cost[_registered_key] = update_dictionary(
+                dict(_runtime_registered_model_cost.get(_registered_key, {})),
+                _RATE_TABLE.validate_python(_registered_value),
+            )
 
     _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 
@@ -3584,6 +3599,15 @@ def register_model(
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        _registered_pricing_fields().update(
+            {
+                name: {
+                    **_registered_pricing_fields().get(name, {}),
+                    **{field: field_value for field, field_value in value.items() if field_value is not None},
+                }
+                for name in dict.fromkeys((str(model_cost_key), _key_str))
+            }
+        )
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()
