@@ -9,7 +9,6 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
@@ -38,7 +37,6 @@ else:
     LiteLLMLoggingObj = Any
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class GeminiRetrievedContext(TypedDict, total=False):
     """Passage Gemini retrieved from a File Search store."""
 
@@ -47,30 +45,26 @@ class GeminiRetrievedContext(TypedDict, total=False):
     title: ReadOnly[str]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class GeminiGroundingChunk(TypedDict, total=False):
     """One source Gemini grounded its answer on."""
 
     retrievedContext: ReadOnly[GeminiRetrievedContext]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class GeminiGroundingSegment(TypedDict, total=False):
     """Span of the generated answer a grounding support refers to."""
 
     text: ReadOnly[str]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class GeminiGroundingSupport(TypedDict, total=False):
     """Citation linking an answer span to the grounding chunks that back it."""
 
     segment: ReadOnly[GeminiGroundingSegment]
     groundingChunkIndices: ReadOnly[Sequence[int]]
-    confidenceScores: ReadOnly[Sequence[int | float]]
+    confidenceScores: ReadOnly[Sequence[float]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class GeminiFileSearchGroundingMetadata(TypedDict, total=False):
     """Grounding metadata Gemini returns for a File Search candidate."""
 
@@ -78,31 +72,24 @@ class GeminiFileSearchGroundingMetadata(TypedDict, total=False):
     groundingSupports: ReadOnly[Sequence[GeminiGroundingSupport]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class GeminiFileSearchCandidate(TypedDict, total=False):
     """One candidate of a Gemini File Search ``generateContent`` response."""
 
     groundingMetadata: ReadOnly[GeminiFileSearchGroundingMetadata]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class GeminiFileSearchResponse(TypedDict, total=False):
     """Body of a ``generateContent`` call made with the File Search tool."""
 
     candidates: ReadOnly[Sequence[GeminiFileSearchCandidate]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class GeminiFileSearchStore(TypedDict, total=False):
     """Body of a Gemini ``fileSearchStores`` create response."""
 
     name: ReadOnly[str]
     displayName: ReadOnly[str]
     createTime: ReadOnly[str]
-
-
-_FILE_SEARCH_RESPONSE: Final = TypeAdapter(GeminiFileSearchResponse)
-_FILE_SEARCH_STORE: Final = TypeAdapter(GeminiFileSearchStore)
 
 
 class GeminiVectorStoreConfig(BaseVectorStoreConfig):
@@ -250,7 +237,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Extracts grounding metadata and citations from the response.
         """
         try:
-            response_data: Final = _FILE_SEARCH_RESPONSE.validate_python(response.json())
+            response_data: Final[GeminiFileSearchResponse] = response.json()
             results: Final[list[VectorStoreSearchResult]] = []
 
             # Extract candidates and grounding metadata
@@ -359,7 +346,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Transform Gemini's fileSearchStore response to standard format.
         """
         try:
-            response_data: Final = _FILE_SEARCH_STORE.validate_python(response.json())
+            response_data: Final[GeminiFileSearchStore] = response.json()
 
             # Extract store name (format: fileSearchStores/xxxxxxx)
             store_name: Final = response_data.get("name", "")

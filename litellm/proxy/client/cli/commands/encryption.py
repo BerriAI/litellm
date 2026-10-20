@@ -1,11 +1,11 @@
 """CLI commands for the at-rest credential encryption migration."""
 
-from typing import Final, TypedDict
+from typing import Final
 
 import click
 import rich
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict
 
 from ...http_client import HTTPClient
 from .auth import cli_context_obj
