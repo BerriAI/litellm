@@ -29,7 +29,7 @@ from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelResponseStream, Usage
 
 
 @pytest.fixture(autouse=True)
@@ -382,6 +382,64 @@ async def test_async_post_call_streaming_hook_invokes_per_chunk_callback(proxy_l
     )
     assert isinstance(out, str)
     assert out.startswith("modified-")
+
+
+class _RequestOnlyGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="request-only", event_hook=GuardrailEventHooks.pre_call, default_on=True)
+        self.asked: List[GuardrailEventHooks] = []
+
+    def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:
+        self.asked.append(event_type)
+        return super().should_run_guardrail(data=data, event_type=event_type)
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_streaming_hook_does_not_ask_a_request_only_guardrail(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    guardrail = _RequestOnlyGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    chunk = ModelResponseStream(
+        id="rid",
+        choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}],
+        created=0,
+        model="gpt-4o-mini",
+    )
+    out = await proxy_logging.async_post_call_streaming_hook(
+        data={"messages": [{"role": "user", "content": "hi"}]},
+        response=chunk,
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+    assert out is chunk
+    assert guardrail.asked == []
+
+
+class _PerChunkRewriter(CustomLogger):
+    async def async_post_call_streaming_hook(self, user_api_key_dict, response):  # type: ignore[override]
+        return f"modified-{response}"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_streaming_hook_skips_a_request_only_guardrail_beside_a_per_chunk_callback(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    guardrail = _RequestOnlyGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail, _PerChunkRewriter()])
+    chunk = ModelResponseStream(
+        id="rid",
+        choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}],
+        created=0,
+        model="gpt-4o-mini",
+    )
+    out = await proxy_logging.async_post_call_streaming_hook(
+        data={"messages": [{"role": "user", "content": "hi"}]},
+        response=chunk,
+        user_api_key_dict=make_user_api_key_auth(),
+        str_so_far="say ",
+    )
+    assert out == "modified-say hi"
+    assert guardrail.asked == []
 
 
 @pytest.mark.asyncio

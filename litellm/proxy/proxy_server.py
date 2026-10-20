@@ -10420,10 +10420,10 @@ async def async_data_generator(
         # ``async_post_call_streaming_iterator_hook`` or has
         # ``apply_guardrail``; the per-chunk hook (which builds ``str_so_far``
         # and calls ``async_post_call_streaming_hook``) is only needed when
-        # there is an active CustomGuardrail or a class that overrides the
-        # per-chunk hook. Coalescing them into a single flag forced wasted
-        # ``get_response_string`` work per chunk on every deployment that
-        # happened to ship a streaming-iterator override (the default).
+        # a class overrides the per-chunk hook. Coalescing them into a single
+        # flag forced wasted ``get_response_string`` work per chunk on every
+        # deployment that happened to ship a streaming-iterator override (the
+        # default).
         needs_per_chunk_hook: Final = proxy_logging_obj.needs_per_chunk_streaming_hook()
         is_raw_sse_stream: Final = bool(request_data.get("_litellm_raw_sse_stream"))
         strip_stream_usage: Final = bool(request_data.get("_litellm_strip_stream_usage"))

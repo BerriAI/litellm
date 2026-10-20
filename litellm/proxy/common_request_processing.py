@@ -4391,15 +4391,15 @@ class ProxyBaseLLMRequestProcessing:
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
-        # is needed. When no callback overrides ``async_post_call_streaming_hook``,
-        # no CustomGuardrail is active, and cost injection is disabled, the
-        # per-chunk hook returns the chunk unchanged, ``str_so_far`` is never
-        # consumed, and cost injection is a no-op -- so the per-chunk coroutine
-        # await, response-string materialization, and cost-injection call are
-        # pure overhead on the streaming hot path (the default config).
+        # is needed. When no callback overrides ``async_post_call_streaming_hook``
+        # and cost injection is disabled, the per-chunk hook returns the chunk
+        # unchanged, ``str_so_far`` is never consumed, and cost injection is a
+        # no-op -- so the per-chunk coroutine await, response-string
+        # materialization, and cost-injection call are pure overhead on the
+        # streaming hot path (the default config).
         caps: Final = ProxyLogging.callback_capabilities()
         cost_injection_enabled: Final = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
-        fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
+        fast_path = not caps.has_streaming_chunk_override and not cost_injection_enabled
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
         client_disconnected = False
