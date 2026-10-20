@@ -2401,6 +2401,8 @@ def client(original_function):
                             return await litellm.acompletion_with_retries(*args, _initial_exception=e, **kwargs)
                         except openai.APIError as retry_err:
                             e = retry_err
+                        except Exception as retry_unavailable:
+                            verbose_logger.debug("acompletion retries did not run: %s", retry_unavailable)
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict

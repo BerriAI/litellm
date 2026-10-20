@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError, AsyncOpenAI
+from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 
@@ -47,6 +47,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
+from litellm.types.router import RetryPolicy
 from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
@@ -9626,3 +9627,406 @@ async def test_atranscription_ignores_a_non_string_base_url_when_api_base_is_set
 
     assert route.called
     assert response.text == "four score"
+
+
+def _make_rate_limit_error(retry_after: str | None = None) -> litellm.RateLimitError:
+    headers = {"retry-after": retry_after} if retry_after else {}
+    resp = MagicMock()
+    resp.headers = headers
+    resp.status_code = 429
+    err = litellm.RateLimitError(
+        message="Rate limit reached",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 429
+    err.response = resp
+    return err
+
+
+def _make_auth_error() -> litellm.AuthenticationError:
+    resp = MagicMock()
+    resp.headers = {}
+    resp.status_code = 401
+    err = litellm.AuthenticationError(
+        message="Invalid API Key",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 401
+    return err
+
+
+def _make_bad_request_error() -> litellm.BadRequestError:
+    resp = MagicMock()
+    resp.headers = {}
+    resp.status_code = 400
+    err = litellm.BadRequestError(
+        message="Invalid argument",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 400
+    return err
+
+
+def _make_service_unavailable_error() -> litellm.ServiceUnavailableError:
+    resp = MagicMock()
+    resp.headers = {}
+    resp.status_code = 503
+    err = litellm.ServiceUnavailableError(
+        message="The server is temporarily overloaded",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 503
+    return err
+
+
+def _make_internal_server_error() -> litellm.InternalServerError:
+    resp = MagicMock()
+    resp.headers = {}
+    resp.status_code = 500
+    err = litellm.InternalServerError(
+        message="Internal server error",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 500
+    return err
+
+
+def test_completion_with_retries_honors_retry_after():
+    """Verify completion_with_retries reads Retry-After and applies jitter."""
+    calls = []
+
+    def mock_completion(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise _make_rate_limit_error(retry_after="2")
+        return {"status": "ok"}
+
+    with patch("time.sleep") as mock_sleep:
+        res = completion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=3,
+            original_function=mock_completion,
+        )
+        assert res == {"status": "ok"}
+        assert len(calls) == 2
+        mock_sleep.assert_called_once()
+        sleep_arg = mock_sleep.call_args[0][0]
+        assert 2.0 <= sleep_arg <= 2.8
+
+
+def test_completion_with_retries_non_transient_auth_error_fails_immediately():
+    """Non-transient errors like 401 should fail on attempt 1 without retrying."""
+    calls = []
+
+    def mock_completion(*args, **kwargs):
+        calls.append(1)
+        raise _make_auth_error()
+
+    with patch("time.sleep") as mock_sleep:
+        with pytest.raises(litellm.AuthenticationError):
+            completion_with_retries(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        assert len(calls) == 1
+        mock_sleep.assert_not_called()
+
+
+def test_completion_with_retries_bad_request_fails_immediately():
+    """Non-transient errors like 400 Bad Request should fail on attempt 1 without retrying."""
+    calls = []
+
+    def mock_completion(*args, **kwargs):
+        calls.append(1)
+        raise _make_bad_request_error()
+
+    with patch("time.sleep") as mock_sleep:
+        with pytest.raises(litellm.BadRequestError):
+            completion_with_retries(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        assert len(calls) == 1
+        mock_sleep.assert_not_called()
+
+
+def test_completion_with_retries_service_unavailable_503():
+    """503 Service Unavailable should be retried with exponential backoff."""
+    calls = []
+
+    def mock_completion(*args, **kwargs):
+        calls.append(1)
+        if len(calls) < 3:
+            raise _make_service_unavailable_error()
+        return {"status": "recovered"}
+
+    with patch("time.sleep") as mock_sleep:
+        res = completion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=3,
+            original_function=mock_completion,
+        )
+        assert res == {"status": "recovered"}
+        assert len(calls) == 3
+        assert mock_sleep.call_count == 2
+
+
+def test_completion_with_retries_internal_server_error_500():
+    """500 Internal Server Error should be retried."""
+    calls = []
+
+    def mock_completion(*args, **kwargs):
+        calls.append(1)
+        if len(calls) < 2:
+            raise _make_internal_server_error()
+        return {"status": "recovered"}
+
+    with patch("time.sleep") as mock_sleep:
+        res = completion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=2,
+            original_function=mock_completion,
+        )
+        assert res == {"status": "recovered"}
+        assert len(calls) == 2
+        mock_sleep.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_retries_honors_retry_after():
+    """Verify acompletion_with_retries reads Retry-After and applies jitter."""
+    calls = []
+
+    async def mock_acompletion(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise _make_rate_limit_error(retry_after="3")
+        return {"status": "ok"}
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        res = await acompletion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=3,
+            original_function=mock_acompletion,
+        )
+        assert res == {"status": "ok"}
+        assert len(calls) == 2
+        mock_sleep.assert_called_once()
+        sleep_arg = mock_sleep.call_args[0][0]
+        assert 3.0 <= sleep_arg <= 3.8
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_retries_non_transient_auth_error_fails_immediately():
+    """Async 401 should fail on attempt 1 without retrying."""
+    calls = []
+
+    async def mock_acompletion(*args, **kwargs):
+        calls.append(1)
+        raise _make_auth_error()
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with pytest.raises(litellm.AuthenticationError):
+            await acompletion_with_retries(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                num_retries=3,
+                original_function=mock_acompletion,
+            )
+        assert len(calls) == 1
+        mock_sleep.assert_not_called()
+
+
+def test_completion_with_retries_connection_error_with_constant_retry():
+    """Verify APIConnectionError (no status_code) retries and constant_retry waits 0.0s."""
+    calls = []
+
+    def mock_completion(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"))
+        return {"status": "recovered"}
+
+    with patch("time.sleep") as mock_sleep:
+        res = completion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=2,
+            retry_strategy="constant_retry",
+            original_function=mock_completion,
+        )
+        assert res == {"status": "recovered"}
+        assert len(calls) == 2
+        mock_sleep.assert_called_once_with(0.0)
+
+
+_RETRY_HOST: Final = "https://retry-upstream.invalid"
+_RETRY_RESPONSES_OK: Final = {
+    "id": "resp-retry",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "test-model",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg-retry",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+_RETRY_ANTHROPIC_OK: Final = {
+    "id": "msg-retry",
+    "type": "message",
+    "role": "assistant",
+    "model": "test-model",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _RetryUpstream:
+    model: str
+    api_base: str
+    url: str
+    ok_body: Mapping[str, object]
+
+
+_RESPONSES_BRIDGE: Final = _RetryUpstream(
+    "openai/responses/test-model", f"{_RETRY_HOST}/v1", f"{_RETRY_HOST}/v1/responses", _RETRY_RESPONSES_OK
+)
+_ANTHROPIC: Final = _RetryUpstream(
+    "anthropic/test-model", _RETRY_HOST, f"{_RETRY_HOST}/v1/messages", _RETRY_ANTHROPIC_OK
+)
+
+
+@pytest.fixture
+def retry_upstream(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=False) as upstream:
+        yield upstream
+
+
+async def _completion_with_retries_kwargs(sync_mode: bool, upstream: _RetryUpstream, **kwargs: object) -> object:
+    request: Final = {
+        "model": upstream.model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": upstream.api_base,
+        "api_key": "test-key",
+        **kwargs,
+    }
+    if sync_mode:
+        return litellm.completion(**request)
+    return await litellm.acompletion(**request)
+
+
+def _provider_error(status_code: int, headers: Mapping[str, str] | None = None) -> httpx.Response:
+    return httpx.Response(status_code, json={"error": {"message": "upstream says no", "type": "x"}}, headers=headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("retry_strategy", [None, "constant_retry"])
+@pytest.mark.parametrize("upstream", [_RESPONSES_BRIDGE, _ANTHROPIC], ids=["responses-bridge", "anthropic"])
+async def test_completion_num_retries_waits_for_provider_retry_after(
+    retry_upstream: respx.MockRouter, sync_mode: bool, retry_strategy: str | None, upstream: _RetryUpstream
+):
+    route: Final = retry_upstream.post(upstream.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "7"}), httpx.Response(200, json=upstream.ok_body)]
+    )
+    strategy: Final = {} if retry_strategy is None else {"retry_strategy": retry_strategy}
+
+    with patch("time.sleep") as sync_sleep, patch("asyncio.sleep", new_callable=AsyncMock) as async_sleep:
+        await _completion_with_retries_kwargs(sync_mode, upstream, num_retries=1, **strategy)
+
+    waits: Final = [call.args[0] for call in (*sync_sleep.call_args_list, *async_sleep.call_args_list) if call.args[0]]
+    assert route.call_count == 2
+    assert len(waits) == 1
+    assert 7 <= waits[0] < 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "retry_kwargs",
+    [{"num_retries": 2}, {"num_retries": 2, "retry_policy": RetryPolicy()}],
+    ids=["num-retries", "unconfigured-retry-policy"],
+)
+async def test_completion_num_retries_does_not_retry_auth_error(
+    retry_upstream: respx.MockRouter, sync_mode: bool, retry_kwargs: Mapping[str, object]
+):
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(return_value=_provider_error(401))
+
+    with pytest.raises(litellm.AuthenticationError):
+        await _completion_with_retries_kwargs(sync_mode, _RESPONSES_BRIDGE, **retry_kwargs)
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("status_code", "retry_kwargs", "expected_error"),
+    [
+        (500, {"num_retries": 3}, litellm.InternalServerError),
+        (400, {"retry_policy": RetryPolicy(BadRequestErrorRetries=3)}, litellm.BadRequestError),
+    ],
+    ids=["transient-500", "retry-policy-400"],
+)
+async def test_completion_num_retries_exhausts_configured_attempts(
+    retry_upstream: respx.MockRouter,
+    sync_mode: bool,
+    status_code: int,
+    retry_kwargs: Mapping[str, object],
+    expected_error: type[Exception],
+):
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(return_value=_provider_error(status_code))
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(expected_error):
+            await _completion_with_retries_kwargs(sync_mode, _RESPONSES_BRIDGE, **retry_kwargs)
+
+    assert route.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_acompletion_keeps_provider_error_when_tenacity_is_missing(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "tenacity", None)
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(
+        return_value=_provider_error(429, {"retry-after": "7"})
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        await _completion_with_retries_kwargs(False, _RESPONSES_BRIDGE, num_retries=1)
+
+    assert route.call_count == 1

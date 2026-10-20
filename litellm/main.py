@@ -79,6 +79,9 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.exception_mapping_utils import (
+    _get_response_headers,  # pyright: ignore[reportPrivateUsage]  # shared provider header extractor
+)
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
@@ -171,6 +174,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     TranscriptionResponse,
     Usage,
+    _get_retry_after_from_exception_header,  # pyright: ignore[reportPrivateUsage]  # shared Retry-After parser
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     calculate_retry_after,
@@ -6386,21 +6390,17 @@ def _compute_retry_wait(
     num_retries: int,
     retry_strategy: str,
 ) -> float:
-    if retry_strategy != "exponential_backoff_retry":
-        return 0.0
-    remaining: Final[int] = max(0, num_retries - attempt_number)
-    headers: Final[httpx.Headers | None] = (
-        httpx.Headers(exc.response.headers)
-        if isinstance(exc, openai.APIStatusError) and getattr(exc.response, "headers", None)
-        else None
-    )
-    return float(
-        calculate_retry_after(
-            remaining_retries=remaining,
-            max_retries=num_retries,
-            response_headers=headers,
+    headers: Final[httpx.Headers | None] = _get_response_headers(exc) if isinstance(exc, Exception) else None
+    if retry_strategy == "exponential_backoff_retry":
+        return float(
+            calculate_retry_after(
+                remaining_retries=max(0, num_retries - attempt_number),
+                max_retries=num_retries,
+                response_headers=headers,
+            )
         )
-    )
+    retry_after: Final[int | None] = _get_retry_after_from_exception_header(headers)
+    return float(retry_after) if retry_after is not None and 0 < retry_after <= 60 else 0.0
 
 
 def _build_retry_predicate(retry_policy_override: bool) -> Callable[[BaseException], bool]:
