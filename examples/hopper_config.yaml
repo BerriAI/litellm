@@ -1,0 +1,9 @@
+model_list:
+  - model_name: gemma-4-31b
+    litellm_params:
+      model: hopper/gemma-4-31b
+      api_key: os.environ/HOPPER_API_KEY
+  - model_name: deepseek-v4.1-flash
+    litellm_params:
+      model: hopper/deepseek-v4.1-flash
+      api_key: os.environ/HOPPER_API_KEY

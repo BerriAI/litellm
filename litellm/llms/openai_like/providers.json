@@ -249,5 +249,9 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "hopper": {
+    "base_url": "https://api.withhopper.com/v1",
+    "api_key_env": "HOPPER_API_KEY"
   }
 }
