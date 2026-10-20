@@ -16,6 +16,7 @@ SECRET_KEY: Final = "synthetic-secret-key-for-testing"
 REGION: Final = "us-east-1"
 PROMPT: Final = "synthetic inference component request"
 CONTENT: Final = ("sagemaker ", "wire control")
+USAGE: Final[Mapping[str, int]] = MappingProxyType({"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15})
 NO_CACHE: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache": {"no-cache": True}})
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MARKER_PREFIX: Final = "marker-"
@@ -69,27 +70,61 @@ def _event_header(name: str, value: str) -> bytes:
     return struct.pack("!B", len(name_bytes)) + name_bytes + b"\x07" + struct.pack("!H", len(value_bytes)) + value_bytes
 
 
+def _frame(headers: bytes, body: bytes) -> bytes:
+    prelude: Final = struct.pack("!II", 12 + len(headers) + len(body) + 4, len(headers))
+    message: Final = prelude + struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF) + headers + body
+    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
+
+
 def _payload_part(body: bytes) -> bytes:
     headers: Final = (
         _event_header(":event-type", "PayloadPart")
         + _event_header(":content-type", "application/octet-stream")
         + _event_header(":message-type", "event")
     )
-    prelude: Final = struct.pack("!II", 12 + len(headers) + len(body) + 4, len(headers))
-    message: Final = prelude + struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF) + headers + body
-    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
+    return _frame(headers, body)
+
+
+def model_stream_error(message: str, error_code: str) -> bytes:
+    headers: Final = (
+        _event_header(":exception-type", "ModelStreamError")
+        + _event_header(":content-type", "application/json")
+        + _event_header(":message-type", "exception")
+    )
+    return _frame(headers, json.dumps({"Message": message, "ErrorCode": error_code}).encode())
 
 
 def container_reply(identity: str, stream: bool) -> Reply:
     if not stream:
         return Reply(body=_completion(identity))
-    chunks: Final = (
+    return event_stream_reply(
+        (
+            _chunk(identity, {"role": "assistant", "content": CONTENT[0]}, None),
+            _chunk(identity, {"content": CONTENT[1]}, None),
+            _chunk(identity, {}, "stop", usage=dict(USAGE)),
+        )
+    )
+
+
+def event_stream_reply(payloads: tuple[bytes, ...], *, then: tuple[bytes, ...] = ()) -> Reply:
+    return Reply(chunks=(*map(_payload_part, payloads), *then), content_type="application/vnd.amazon.eventstream")
+
+
+def vllm_stream_events(identity: str) -> tuple[bytes, ...]:
+    usage_event: Final = {
+        "id": identity,
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": SERVED_MODEL,
+        "choices": [],
+        "usage": dict(USAGE),
+    }
+    return (
         _chunk(identity, {"role": "assistant", "content": CONTENT[0]}, None),
         _chunk(identity, {"content": CONTENT[1]}, None),
-        _chunk(identity, {}, "stop", usage={"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15}),
-    )
-    return Reply(
-        chunks=tuple(_payload_part(chunk) for chunk in chunks), content_type="application/vnd.amazon.eventstream"
+        _chunk(identity, {}, "stop"),
+        f"data: {json.dumps(usage_event, separators=(',', ':'))}\n\n".encode(),
+        b"data: [DONE]\n\n",
     )
 
 
