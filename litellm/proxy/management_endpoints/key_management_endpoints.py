@@ -6274,8 +6274,7 @@ async def regenerate_key_fn(
     - key: str (path parameter) - The key to regenerate
     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
         - key: Optional[str] - The key to regenerate.
-        - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-        - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
+        - new_key: Optional[str] - The new key to use. Must start with 'sk-' and be at least 16 characters long.
         - key_alias: Optional[str] - User-friendly key alias
         - user_id: Optional[str] - User ID associated with key
         - team_id: Optional[str] - Team ID associated with key
@@ -6355,21 +6354,21 @@ async def regenerate_key_fn(
                 allow_safe_presets=True,
             )
 
-        # Premium-gate bypass for master-key rotation must verify the
-        # caller actually holds the master key, not just that the request
-        # body has a ``new_master_key`` field. A presence-only check let
-        # any non-premium caller skip the enterprise gate by sending any
-        # value in that field.
         regenerate_target_key: Final = data.key if data and data.key else key
-        is_master_key_regeneration: Final = (
-            data is not None
-            and data.new_master_key is not None
-            and is_master_key(api_key=regenerate_target_key, _master_key=master_key)
-        )
+        if master_key is not None and is_master_key(api_key=regenerate_target_key, _master_key=master_key):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        "Rotating the master key through /key/regenerate is no longer supported. "
+                        "Set the new value in LITELLM_MASTER_KEY or general_settings.master_key and restart every "
+                        "proxy instance. If LITELLM_SALT_KEY is not set, first set it to your current master key. "
+                        "See https://docs.litellm.ai/docs/proxy/master_key_rotations"
+                    )
+                },
+            )
 
-        if (
-            premium_user is not True and not is_master_key_regeneration
-        ):  # allow master key regeneration for non-premium users
+        if premium_user is not True:
             raise ValueError(
                 f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
             )
@@ -6390,27 +6389,6 @@ async def regenerate_key_fn(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "DB not connected. prisma_client is None"},
-            )
-
-        _is_master_key_valid: Final = is_master_key(api_key=key, _master_key=master_key)
-
-        if master_key is not None and data and _is_master_key_valid:
-            if data.new_master_key is None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"error": "New master key is required."},
-                )
-            await rotate_master_key(
-                prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
-                current_master_key=master_key,
-                new_master_key=data.new_master_key,
-            )
-            return GenerateKeyResponse(
-                key=data.new_master_key,
-                token=data.new_master_key,
-                key_name=data.new_master_key,
-                expires=None,
             )
 
         if "sk" not in key:

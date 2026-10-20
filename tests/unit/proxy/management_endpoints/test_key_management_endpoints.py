@@ -15931,16 +15931,13 @@ async def test_regenerate_user_id_rebind_guard(
 
 
 @pytest.mark.asyncio
-async def test_regenerate_premium_gate_requires_actual_master_key():
-    # ``regenerate_key_fn``'s decorator wraps the underlying ValueError
-    # into a ProxyException with empty ``message``. The exception type
-    # alone confirms the premium gate fired.
+async def test_regenerate_premium_gate_rejects_non_master_key():
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         regenerate_key_fn,
     )
 
-    data = RegenerateKeyRequest(key="sk-not-master", new_master_key="anything")
+    data = RegenerateKeyRequest(key="sk-not-master")
 
     with (
         patch("litellm.proxy.proxy_server.premium_user", False),
@@ -15956,25 +15953,22 @@ async def test_regenerate_premium_gate_requires_actual_master_key():
 
 
 @pytest.mark.asyncio
-async def test_regenerate_premium_gate_allows_actual_master_key_holder():
+async def test_regenerate_rejects_master_key():
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         regenerate_key_fn,
     )
 
     master = "sk-the-real-master-key"
-    data = RegenerateKeyRequest(key=master, new_master_key="sk-new-master")
+    data = RegenerateKeyRequest(key=master)
 
     with (
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch("litellm.proxy.proxy_server.master_key", master),
         patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
-        patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.rotate_master_key",
-            new_callable=AsyncMock,
-        ),
+        pytest.raises(ProxyException) as exc_info,
     ):
-        result = await regenerate_key_fn(
+        await regenerate_key_fn(
             key=master,
             data=data,
             user_api_key_dict=UserAPIKeyAuth(
@@ -15984,7 +15978,13 @@ async def test_regenerate_premium_gate_allows_actual_master_key_holder():
             ),
         )
 
-    assert result.token == "sk-new-master"
+    assert exc_info.value.code == "400"
+    assert exc_info.value.message == (
+        "{'error': 'Rotating the master key through /key/regenerate is no longer supported. "
+        "Set the new value in LITELLM_MASTER_KEY or general_settings.master_key and restart every proxy instance. "
+        "If LITELLM_SALT_KEY is not set, first set it to your current master key. "
+        "See https://docs.litellm.ai/docs/proxy/master_key_rotations'}"
+    )
 
 
 @pytest.mark.asyncio
@@ -23214,6 +23214,8 @@ def test_key_info_unexpected_database_exception_sanitized(
         proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+
+
 def test_key_info_missing_key_preserves_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -23304,6 +23306,3 @@ def test_key_info_database_not_connected_sanitized_500(
         assert "Database not connected" in caplog.text
     finally:
         proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
-
-
-
