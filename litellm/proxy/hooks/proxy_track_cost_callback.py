@@ -58,6 +58,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import BilledFailedAttempt, ProxyUpdateSpend
+from litellm.types.integrations.slack_alerting import CallInfo, Litellm_EntityType
+from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.utils import (
     CallTypes,
     LiteLLMBatch,
