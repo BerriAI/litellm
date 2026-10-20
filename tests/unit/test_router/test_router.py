@@ -13323,12 +13323,18 @@ def test_credentials_for_a_mixed_group_name_keep_resolving_to_its_first_deployme
     assert credentials is not None and credentials["api_base"] == "https://chat-sku.openai.azure.com"
 
 
+_AZURE_CHAT_SKU_REJECTS_BATCH: Final = httpx.Response(
+    400,
+    json={"error": {"code": "invalid_deployment_type", "message": "The current deployment is not supported for batch jobs"}},
+)
+
+
 @pytest.mark.asyncio
-async def test_acreate_batch_on_a_mixed_group_never_falls_back_to_chat_while_its_batch_deployment_cools_down(
+async def test_acreate_batch_on_a_mixed_group_reaches_chat_as_on_main_while_its_batch_deployment_cools_down(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A rate-limited batch deployment goes into cooldown. The group's chat deployment cannot run batches, so
-    the next create must answer with the cooldown instead of reaching the chat deployment."""
+    """While the batch deployment cools down, a create goes where main sends it, so the caller keeps getting
+    Azure's 400 instead of a router 429 that main never returned for this request."""
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router = litellm.Router(
         model_list=[
@@ -13337,20 +13343,56 @@ async def test_acreate_batch_on_a_mixed_group_never_falls_back_to_chat_while_its
         ],
         num_retries=0,
     )
+    _cool_down(router, *(d["model_info"]["id"] for d in router.model_list if d["model_info"]["mode"] == "batch"))
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        chat_route = respx_mock.post(host="chat-sku.openai.azure.com").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
-        )
-        respx_mock.post(host="batch-sku.openai.azure.com").mock(
-            return_value=httpx.Response(429, json={"error": {"code": "429", "message": "Rate limit exceeded"}})
-        )
-        with pytest.raises(openai.RateLimitError):
-            await _create_batches(router, "gpt-mixed", attempts=1)
-        with pytest.raises(RouterRateLimitError):
+        chat_route = respx_mock.post(host="chat-sku.openai.azure.com").mock(return_value=_AZURE_CHAT_SKU_REJECTS_BATCH)
+        with pytest.raises(openai.BadRequestError):
             await _create_batches(router, "gpt-mixed", attempts=1)
 
-    assert chat_route.call_count == 0
+    assert chat_route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_with_tags_that_match_only_the_chat_deployment_reaches_it_as_on_main(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Tag routing runs before the batch filter, so tags that leave only the chat deployment get Azure's 400 as
+    on main instead of a router error saying no deployment matches the tags."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    chat: Final = _azure_sku_deployment("gpt-mixed", "chat-sku", "chat")
+    batch: Final = _azure_sku_deployment("gpt-mixed", "batch-sku", "batch")
+    router = litellm.Router(
+        model_list=[
+            {**chat, "litellm_params": {**chat["litellm_params"], "tags": ["chat-pin"]}},
+            {**batch, "litellm_params": {**batch["litellm_params"], "tags": ["batch-pin"]}},
+        ],
+        enable_tag_filtering=True,
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route = respx_mock.post(host="chat-sku.openai.azure.com").mock(return_value=_AZURE_CHAT_SKU_REJECTS_BATCH)
+        batch_route = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        with pytest.raises(openai.BadRequestError):
+            await router.acreate_batch(
+                model="gpt-mixed",
+                input_file_id="file-batch-input",
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+                litellm_metadata={"tags": ["chat-pin"]},
+            )
+        await router.acreate_batch(
+            model="gpt-mixed",
+            input_file_id="file-batch-input",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+            litellm_metadata={"tags": ["batch-pin"]},
+        )
+
+    assert (chat_route.call_count, batch_route.call_count) == (1, 1)
 
 
 def _openai_deployment(model_group: str, host: str, mode: str, **model_info: object) -> dict[str, object]:

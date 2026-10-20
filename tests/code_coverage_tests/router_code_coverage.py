@@ -145,6 +145,7 @@ ignored_function_names = [
     "is_batch_capable",  # Tested through the mixed-group acreate_batch and model group info tests in test_router.py
     "deployments_the_caller_may_use",  # Tested through the usage-based-routing team batch create test in test_router.py
     "deployment_supported_endpoints",  # Tested through the model group info batch endpoint tests in test_router.py
+    "_endpoint_paths",  # Read by deployment_supported_endpoints, tested through the malformed endpoint list group info test in test_router.py
     "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py

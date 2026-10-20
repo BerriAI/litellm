@@ -14380,12 +14380,7 @@ class Router:
 
         # Health-check-based filtering (before cooldown)
         healthy_deployments = await self._async_filter_health_check_unhealthy_deployments(
-            healthy_deployments=list(
-                without_deployments_that_cannot_batch(
-                    cast(Sequence[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are dicts
-                    caller_deployments=lambda: request_deployments,
-                )
-            ),
+            healthy_deployments=healthy_deployments,
             parent_otel_span=parent_otel_span,
             health_check_probe=health_check_probe,
         )
@@ -14461,8 +14456,12 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
+        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
+            list[dict[str, object]], healthy_deployments
+        )
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            cast(list[dict], healthy_deployments), target_order=_target_order
+            list(without_deployments_that_cannot_batch(batch_candidates, caller_deployments=lambda: batch_candidates)),
+            target_order=_target_order,
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
@@ -15620,12 +15619,7 @@ class Router:
 
         # Health-check-based filtering (before cooldown)
         healthy_deployments = self._filter_health_check_unhealthy_deployments(
-            healthy_deployments=list(
-                without_deployments_that_cannot_batch(
-                    cast(Sequence[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are dicts
-                    caller_deployments=lambda: deployments_the_caller_may_use(request_deployments, routing_kwargs),
-                )
-            ),
+            healthy_deployments=healthy_deployments,
             parent_otel_span=parent_otel_span,
         )
 
@@ -15660,8 +15654,17 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
+        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
+            list[dict[str, object]], healthy_deployments
+        )
         healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            healthy_deployments, target_order=_target_order
+            list(
+                without_deployments_that_cannot_batch(
+                    batch_candidates,
+                    caller_deployments=lambda: deployments_the_caller_may_use(batch_candidates, routing_kwargs),
+                )
+            ),
+            target_order=_target_order,
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
