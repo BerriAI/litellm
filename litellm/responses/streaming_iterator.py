@@ -965,7 +965,11 @@ class BaseResponsesAPIStreamingIterator:
 
     def _record_partial_usage_for_failure(self) -> None:
         generated_text: Final = self._generated_content + self._generated_tool_arguments
-        if not generated_text or self.logging_obj.model_call_details.get("combined_usage_object") is not None:
+        if (
+            not generated_text
+            or self.request_data.get("background") is True
+            or self.logging_obj.model_call_details.get("combined_usage_object") is not None
+        ):
             return
         estimate: Final = _estimate_usage_safely(
             self.model or "",

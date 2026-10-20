@@ -10669,6 +10669,81 @@ class TestDetachedStreamFailureHook:
 
         assert [call["original_exception"] for call in recorder.calls] == [failure]
 
+    @staticmethod
+    def _armed_stream(recorder: _FailureHookRecorder, iterator_hook_for):
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-6.1-sol",
+            messages=[{"role": "user", "content": "Write a story."}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=None,
+            litellm_call_id="call-lit6871",
+            function_id="function-lit6871",
+        )
+        user_api_key_dict = RealUserAPIKeyAuth(api_key="sk-test")
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        proxy_logging_obj.post_call_failure_hook = recorder.post_call_failure_hook
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook_for(logging_obj)
+        processing_obj._arm_detached_stream_failure_hook(
+            logging_obj=logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        stream = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+            request_data=processing_obj.data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=lambda chunk: "data: chunk\n\n",
+            serialize_error=lambda error: "data: error\n\n",
+        )
+        return logging_obj, stream
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_by_the_stream_reaches_the_failure_hook_once_when_an_iterator_hook_raises_after_it(
+        self,
+    ):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        hook_failure = RuntimeError("iterator hook rejected the stream")
+
+        def iterator_hook_for(logging_obj):
+            async def iterator_hook(**_kwargs):
+                yield b"event: error\n\n"
+                await logging_obj.on_detached_stream_failure(upstream_failure)
+                raise hook_failure
+
+            return iterator_hook
+
+        _, stream = self._armed_stream(recorder, iterator_hook_for)
+
+        frames = [frame async for frame in stream]
+
+        assert frames == ["data: chunk\n\n", "data: error\n\n"]
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_by_an_iterator_hook_is_not_reported_again_when_the_stream_closes(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        hook_failure = RuntimeError("iterator hook rejected the error frame")
+
+        async def iterator_hook(**_kwargs):
+            yield b"event: message_start\n\n"
+            raise hook_failure
+
+        logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+
+        frames = [frame async for frame in stream]
+        await logging_obj.on_detached_stream_failure(upstream_failure)
+
+        assert frames == ["data: chunk\n\n", "data: error\n\n"]
+        assert [call["original_exception"] for call in recorder.calls] == [hook_failure]
+
 
 class TestPostCallMaskedOutputReachesDeferredLogging:
     @pytest.mark.asyncio

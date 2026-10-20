@@ -3437,6 +3437,8 @@ class ProxyBaseLLMRequestProcessing:
         request_data: Final = self.data
 
         async def _on_detached_stream_failure(exc: Exception) -> None:
+            if not logging_obj.claim_stream_failure_report():
+                return
             try:
                 await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -4384,6 +4386,7 @@ class ProxyBaseLLMRequestProcessing:
         client_disconnected = False
         delivered_chunk = False
         recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: rolling window over the yielded bytes
+        stream_logging_obj: Final[object] = request_data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # legacy request data is narrowed to Logging below
         guarded_stream: Final[AsyncGenerator[object, None]] = proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -4459,10 +4462,18 @@ class ProxyBaseLLMRequestProcessing:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
             )
-            transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=e,
-                request_data=request_data,
+            already_reported: Final = (
+                isinstance(stream_logging_obj, LiteLLMLoggingObj)
+                and not stream_logging_obj.claim_stream_failure_report()
+            )
+            transformed_exception: Final = (
+                None
+                if already_reported
+                else await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=e,
+                    request_data=request_data,
+                )
             )
             if transformed_exception is not None:
                 e = transformed_exception

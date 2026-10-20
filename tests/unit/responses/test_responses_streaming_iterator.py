@@ -270,6 +270,7 @@ async def _failure_payload_after_mid_stream_timeout(
     monkeypatch: pytest.MonkeyPatch,
     request_input: str | list[dict[str, object]],
     upstream: _UpstreamThatTimesOutAfterThreeDeltas | None = None,
+    background: bool = False,
 ) -> tuple[FailureRecorder, StandardLoggingPayload]:
     upstream_response: Final = upstream or _UpstreamThatTimesOutAfterThreeDeltas()
     recorder = FailureRecorder()
@@ -289,7 +290,7 @@ async def _failure_payload_after_mid_stream_timeout(
         responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=logging_obj,
         custom_llm_provider="openai",
-        request_data={"model": "gpt-5.4-nano", "input": request_input, "stream": True},
+        request_data={"model": "gpt-5.4-nano", "input": request_input, "stream": True, "background": background},
     )
     received = _ChunkRecorder()
 
@@ -333,6 +334,17 @@ async def test_mid_stream_read_timeout_bills_the_tool_call_arguments_already_str
         model="gpt-5.4-nano", text="".join(_TOOL_ARGUMENT_DELTAS), count_response_tokens=True
     )
     assert payload["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_of_a_background_response_bills_nothing_since_retrieving_it_bills_the_whole_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT, background=True)
+
+    assert payload["status"] == "failure"
+    assert payload["completion_tokens"] == 0
+    assert payload["response_cost"] == 0
 
 
 @pytest.mark.asyncio

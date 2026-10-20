@@ -796,6 +796,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled: bool = False
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
+        self._stream_failure_claimed: bool = False
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
     def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
@@ -2408,6 +2409,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     "mid_stream_partial_cost": partial_cost,
                 },
             )
+
+    def claim_stream_failure_report(self) -> bool:
+        if self._stream_failure_claimed:
+            return False
+        self._stream_failure_claimed = True
+        return True
 
     def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
         """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
