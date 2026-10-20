@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -6,7 +7,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountTokensConfig
+from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, AnthropicCountTokensConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
@@ -23,6 +24,7 @@ class MantleCountTokensRequest(TypedDict):
 
 _COUNT_REQUEST: Final = TypeAdapter(MantleCountTokensRequest)
 _COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
+_COUNT_OPTIONS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
 
 
 class BedrockMantleCountTokensHandler(BaseAWSLLM):
@@ -61,6 +63,9 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                 messages=request["messages"],
                 tools=request.get("tools"),
                 system=request.get("system"),
+                optional_params=_COUNT_OPTIONS.validate_python(
+                    {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}
+                ),
             )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
             api_key: Final = litellm_params.get("api_key")

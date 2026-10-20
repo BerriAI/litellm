@@ -45,7 +45,7 @@ class FileSearchToolCallArgs(TypedDict):
 
 
 def should_use_emulated_file_search(
-    tools: Iterable[ToolParam] | None,
+    tools: Iterable[object] | None,
     provider_config: "BaseResponsesAPIConfig | None",
 ) -> bool:
     """Return True when there is a file_search tool and the provider can't handle it natively."""
@@ -105,7 +105,7 @@ def _build_function_tool(vector_store_ids: list[str]) -> dict[str, object]:
     }
 
 
-def _replace_file_search_tools(
+def replace_file_search_tools(
     tools: Iterable[ToolParam] | None,
 ) -> tuple[list[object], list[str]]:
     """
@@ -529,7 +529,7 @@ async def aresponses_with_emulated_file_search(
     _include_search_results, call_kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
 
     # 1. Replace file_search tools with function tool
-    transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
+    transformed_tools, all_vs_ids = replace_file_search_tools(tools)
 
     # 2. First provider call — provider will call the file_search function.
     # Mark as an internal sub-call so wrapper_async skips billing callbacks;

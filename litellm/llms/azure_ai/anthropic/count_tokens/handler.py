@@ -4,6 +4,7 @@ Azure AI Anthropic CountTokens API handler.
 Uses httpx for HTTP requests with Azure authentication.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -36,6 +37,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         timeout: float | httpx.Timeout | None = None,
         tools: list[dict[str, JsonValue]] | None = None,
         system: object = None,
+        optional_params: Mapping[str, JsonValue] | None = None,
     ) -> dict[str, object]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
@@ -66,6 +68,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 messages=messages,
                 tools=tools,
                 system=system,
+                optional_params=optional_params,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)

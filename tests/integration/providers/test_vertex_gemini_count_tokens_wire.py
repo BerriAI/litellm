@@ -1096,3 +1096,57 @@ def test_utils_token_counter_counts_a_local_prompt_with_system_or_tools_like_its
     assert as_message.status_code == 200, as_message.text
     assert _total_tokens(prompted) == _total_tokens(as_message)
     assert requests == ()
+
+
+_RESPONSES_TOOL_ROUND_TRIP: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "instructions": "Follow the system instruction.",
+        "input": [
+            {"role": "user", "content": "Look up the value."},
+            {"type": "function_call", "call_id": "call_lookup", "name": "lookup", "arguments": '{"query":"value"}'},
+            {"type": "function_call_output", "call_id": "call_lookup", "output": "result"},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "description": "Look up a value",
+                "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+            }
+        ],
+    }
+)
+
+
+@pytest.mark.parametrize("provider", ("vertex_ai", "gemini"))
+def test_responses_input_tokens_counts_the_tool_round_trip_contents_responses_inference_sends(
+    gateway: Gateway, provider: str
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = (
+            _deployment(gateway, scenario, wire.url)
+            if provider == "vertex_ai"
+            else _ai_studio_deployment(scenario, wire.url)
+        )
+        body: Final = {"model": model, **_RESPONSES_TOOL_ROUND_TRIP}
+        generated: Final = gateway.request("POST", "/v1/responses", {**body, "max_output_tokens": 16})
+        counted: Final = gateway.request("POST", "/v1/responses/input_tokens", body)
+        assert generated.status_code == 200, generated.text
+        assert counted.status_code == 200, counted.text
+        assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _COUNT, counted.text
+        requests: Final = peer.drain()
+        (generated_request,) = (request for request in requests if request.target.endswith(":generateContent"))
+        (count_request,) = (request for request in requests if request.target.endswith(":countTokens"))
+        instruction: Final[JsonValue] = {"text": _RESPONSES_TOOL_ROUND_TRIP["instructions"]}
+        first_turn, *later_turns = _JSON_LIST.validate_python(_counted_contents(_json_body(count_request)))
+        first_parts: Final = _JSON_LIST.validate_python(_JSON_OBJECT.validate_python(first_turn)["parts"])
+        assert instruction in first_parts, count_request.body
+        counted_turns: Final = [
+            {
+                **_JSON_OBJECT.validate_python(first_turn),
+                "parts": [part for part in first_parts if part != instruction],
+            },
+            *later_turns,
+        ]
+        assert counted_turns == _json_body(generated_request)["contents"], count_request.body

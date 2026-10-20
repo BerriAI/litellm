@@ -18,6 +18,7 @@ def _responses_request_keys() -> frozenset[str]:
 def responses_batch_body_to_chat_body(
     openai_request_body: Mapping[str, object],
     custom_llm_provider: str | None = None,
+    drop_params: bool | None = None,
 ) -> dict[str, object]:  # mutable-ok: provider transforms take the bridged chat body as a plain dict
     """
     Rewrite the body of an OpenAI `/v1/responses` batch record as a Chat Completions body.
@@ -50,5 +51,6 @@ def responses_batch_body_to_chat_body(
         input=chat_input,
         responses_api_request=responses_request,
         custom_llm_provider=custom_llm_provider,
+        drop_params=drop_params,
         metadata=openai_request_body.get("metadata"),
     )
