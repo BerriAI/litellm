@@ -5,6 +5,7 @@ from typing import Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
 from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage
@@ -83,6 +84,7 @@ def _record_freed_cost(
     return reduced_cost
 
 
+@with_service_target("search_free_tier")
 async def apply_search_free_tier(
     kwargs: MutableMapping[str, object],  # mutable-ok: writes the reduced cost where the spend row reads it
     sl_object: StandardLoggingPayload,
