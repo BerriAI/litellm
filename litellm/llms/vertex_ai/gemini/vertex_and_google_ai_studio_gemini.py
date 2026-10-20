@@ -2806,6 +2806,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return default_headers
 
 
+def _log_generate_request(
+    logging_obj: LoggingClass,
+    messages: Sequence[AllMessageValues],
+    api_base: str,
+    headers: Mapping[str, str],
+    body: RequestBody,
+) -> None:
+    logging_obj.pre_call(
+        input=messages,
+        api_key="",
+        additional_args={"complete_input_dict": body, "api_base": api_base, "headers": headers},
+    )
+
+
 async def make_call(
     client: AsyncHTTPHandler | None,  # module-level client
     gemini_client: AsyncHTTPHandler | None,  # if passed by user
@@ -2837,8 +2851,10 @@ async def make_call(
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
-        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
         exception_string: Final = str(await e.response.aread())
+        known_cached_contents.forget_rejected(
+            request_body.get("cachedContent"), e.response.status_code, exception_string
+        )
         raise VertexAIError(
             status_code=e.response.status_code,
             message=VertexGeminiConfig().translate_exception_str(exception_string),
@@ -2908,7 +2924,9 @@ def make_sync_call(
             timeout=timeout,
         )
     except httpx.HTTPStatusError as e:
-        known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
+        known_cached_contents.forget_rejected(
+            request_body.get("cachedContent"), e.response.status_code, e.response.text
+        )
         raise
 
     if response.status_code != 200 and response.status_code != 201:
@@ -3063,15 +3081,8 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
 
         open_stream: Final = partial(
             make_call,
@@ -3096,7 +3107,7 @@ class VertexLLM(VertexBase):
             async def post(body: RequestBody) -> ModelResponseIterator:
                 return await open_stream(client=client, data=json.dumps(body), request_body=body)
 
-            return (await post_with_fresh_cache_async(request_body, rebuild, post))[1]
+            return (await post_with_fresh_cache_async(request_body, rebuild, post, log_request))[1]
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=None,
@@ -3189,15 +3200,8 @@ class VertexLLM(VertexBase):
         else:
             client = client
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
 
         fresh_headers: Final = partial(
             self._fresh_headers_async, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3213,7 +3217,9 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
-                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
+                known_cached_contents.forget_rejected(
+                    body.get("cachedContent"), err.response.status_code, err.response.text
+                )
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
@@ -3227,7 +3233,7 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        sent_body, first_response = await post_with_fresh_cache_async(request_body, rebuild, post)
+        sent_body, first_response = await post_with_fresh_cache_async(request_body, rebuild, post, log_request)
         return _transform_long_decode_hops(
             model=model,
             hops=await collect_hops_async(parse_body(first_response), sent_body, post),
@@ -3378,15 +3384,8 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, url, headers)
+        log_request(data)
 
         fresh_headers: Final = partial(
             self._fresh_headers, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3410,7 +3409,7 @@ class VertexLLM(VertexBase):
                 def post(body: RequestBody) -> ModelResponseIterator:
                     return open_stream(client=client, data=json.dumps(body), request_body=body)
 
-                return post_with_fresh_cache_sync(data, rebuild, post)[1]
+                return post_with_fresh_cache_sync(data, rebuild, post, log_request)[1]
 
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=None,
@@ -3440,7 +3439,9 @@ class VertexLLM(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
-                known_cached_contents.forget_rejected(body.get("cachedContent"), err.response.status_code)
+                known_cached_contents.forget_rejected(
+                    body.get("cachedContent"), err.response.status_code, err.response.text
+                )
                 raise VertexAIError(
                     status_code=err.response.status_code,
                     message=err.response.text,
@@ -3454,7 +3455,7 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        sent_body, first_response = post_with_fresh_cache_sync(data, rebuild, post)
+        sent_body, first_response = post_with_fresh_cache_sync(data, rebuild, post, log_request)
         return _transform_long_decode_hops(
             model=model,
             hops=collect_hops_sync(parse_body(first_response), sent_body, post),

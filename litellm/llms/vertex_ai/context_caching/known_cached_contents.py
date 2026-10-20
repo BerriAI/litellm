@@ -9,9 +9,14 @@ from typing import Final, Literal
 
 KNOWN_CACHE_EXPIRY_MARGIN_SECONDS: Final = 10.0
 MAX_KNOWN_CACHED_CONTENTS: Final = 10_000
-CACHE_REJECTED_STATUS_CODES: Final = frozenset({400, 403, 404})
+_CACHE_REJECTED_STATUS_CODES: Final = frozenset({400, 403, 404})
+_NAMES_CACHED_CONTENT: Final = re.compile(r"cached?\s*content", re.IGNORECASE)
 
 _RFC3339_FRACTION: Final = re.compile(r"\.(\d{1,6})\d*")
+
+
+def names_rejected_cache(status_code: int, message: str) -> bool:
+    return status_code in _CACHE_REJECTED_STATUS_CODES and _NAMES_CACHED_CONTENT.search(message) is not None
 
 
 def parse_expire_time(expire_time: object) -> float | None:
@@ -91,8 +96,8 @@ class KnownCachedContents:
                     del self._entries[next(iter(self._entries))]
             self._entries[(scope, cache_key)] = (name, reuse_until)
 
-    def forget_rejected(self, cached_content: str | None, status_code: int) -> None:
-        if cached_content is None or status_code not in CACHE_REJECTED_STATUS_CODES:
+    def forget_rejected(self, cached_content: str | None, status_code: int, message: str) -> None:
+        if cached_content is None or not names_rejected_cache(status_code, message):
             return
         with self._lock:
             self._entries = {key: entry for key, entry in self._entries.items() if entry[0] != cached_content}

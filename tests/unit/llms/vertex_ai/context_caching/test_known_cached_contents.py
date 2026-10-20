@@ -347,8 +347,8 @@ def _generated(stream: bool) -> httpx.Response:
     return httpx.Response(200, json=body)
 
 
-def _rejected(status_code: int) -> httpx.Response:
-    return httpx.Response(status_code, json={"error": {"code": status_code, "message": "rejected"}})
+def _rejected(status_code: int, message: str) -> httpx.Response:
+    return httpx.Response(status_code, json={"error": {"code": status_code, "message": message}})
 
 
 async def _complete(sync_mode: bool, stream: bool, **kwargs) -> str:
@@ -367,8 +367,14 @@ async def _complete(sync_mode: bool, stream: bool, **kwargs) -> str:
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.parametrize(
-    ("status_code", "replaced"),
-    [(400, True), (403, True), (404, True), (429, False), (500, False)],
+    ("status_code", "message", "replaced"),
+    [
+        (400, "Invalid resource state for cache content 4484391867902853120.", True),
+        (403, "CachedContent not found (or permission denied)", True),
+        (404, "CachedContent not found", True),
+        (400, "Invalid value at 'generation_config.temperature'", False),
+        (500, "CachedContent not found", False),
+    ],
 )
 @pytest.mark.asyncio
 async def test_remembered_cache_rejected_by_generate_content_is_replaced_within_the_same_call(
@@ -378,6 +384,7 @@ async def test_remembered_cache_rejected_by_generate_content_is_replaced_within_
     sync_mode: bool,
     stream: bool,
     status_code: int,
+    message: str,
     replaced: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -391,19 +398,57 @@ async def test_remembered_cache_rejected_by_generate_content_is_replaced_within_
         ]
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
-        side_effect=[_generated(stream), _rejected(status_code), _generated(stream)]
+        side_effect=[_generated(stream), _rejected(status_code, message), _generated(stream)]
     )
+    logged: Final[list[dict]] = []
 
     assert await _complete(sync_mode, stream) == "ok"
     if replaced:
-        assert await _complete(sync_mode, stream) == "ok"
+        assert await _complete(sync_mode, stream, logger_fn=logged.append) == "ok"
     else:
         with pytest.raises(openai.APIStatusError):
-            await _complete(sync_mode, stream)
+            await _complete(sync_mode, stream, logger_fn=logged.append)
 
     sent: Final = [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls]
     assert sent == ["cachedContents/deleted", "cachedContents/deleted"] + (["cachedContents/fresh"] if replaced else [])
     assert list_route.call_count == (2 if replaced else 1)
+    assert "enerateContent" in logged[-1]["litellm_params"]["api_base"]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_error_that_does_not_name_the_cache_keeps_the_remembered_cache(
+    respx_mock: respx.MockRouter,
+    fake_provider_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    stream: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    respx_mock.post(url__regex=r".*/cachedContents$").mock(
+        return_value=httpx.Response(200, json=_created("cachedContents/kept", _FAR_FUTURE))
+    )
+    generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
+        side_effect=[
+            _generated(stream),
+            _rejected(400, "Invalid value at 'generation_config.temperature'"),
+            _generated(stream),
+        ]
+    )
+
+    assert await _complete(sync_mode, stream) == "ok"
+    with pytest.raises(openai.BadRequestError):
+        await _complete(sync_mode, stream)
+    assert await _complete(sync_mode, stream) == "ok"
+
+    assert [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls] == [
+        "cachedContents/kept"
+    ] * 3
+    assert list_route.call_count == 1
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -421,7 +466,7 @@ async def test_rejected_caller_supplied_cached_content_is_not_sent_again(
         return_value=httpx.Response(200, json={})
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
-        side_effect=[_rejected(404), _generated(stream)]
+        side_effect=[_rejected(404, "CachedContent not found"), _generated(stream)]
     )
 
     with pytest.raises(openai.APIStatusError):
