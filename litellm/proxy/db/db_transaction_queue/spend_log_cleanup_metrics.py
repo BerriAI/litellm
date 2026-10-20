@@ -32,6 +32,9 @@ RunOutcome: TypeAlias = Literal[
 _BATCH_DURATION_BUCKETS: Final = (0.005, 0.025, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
 _TABLE_LABEL: Final = ("table",)
 _OUTCOME_LABEL: Final = ("outcome",)
+_MEASURE_LABEL: Final = ("measure",)
+
+StorageMeasure: TypeAlias = Literal["allocated", "estimated_live", "above_target"]
 
 
 class SpendLogCleanupMetrics:
@@ -49,6 +52,7 @@ class SpendLogCleanupMetrics:
     rows_remaining: "PrometheusGauge | None" = None
     batch_failures: "PrometheusCounter | None" = None
     runs: "PrometheusCounter | None" = None
+    storage_bytes: "PrometheusGauge | None" = None
 
     @classmethod
     def _ensure_initialized(cls) -> None:
@@ -90,6 +94,15 @@ class SpendLogCleanupMetrics:
                 "Retention cleanup runs, labelled by why the run ended",
                 labelnames=_OUTCOME_LABEL,
             )
+            cls.storage_bytes = Gauge(
+                "litellm_spend_log_storage_bytes",
+                "Disk held by LiteLLM_SpendLogs plus LiteLLM_SpendLogToolIndex as last measured by the cleanup "
+                "job: allocated is pg_total_relation_size (heap, indexes, TOAST), estimated_live scales it by the "
+                "live share of rows from pg_stat_user_tables, above_target is estimated_live minus the size "
+                "cleanup target (0 once the target is reached)",
+                labelnames=_MEASURE_LABEL,
+                multiprocess_mode="livemax",
+            )
         except Exception as e:  # noqa: BLE001 - a metrics problem must never fail the cleanup run
             # Covers the extra being absent, a duplicate registration (repeated
             # imports under a test runner), and registry misconfiguration alike.
@@ -120,3 +133,9 @@ class SpendLogCleanupMetrics:
         cls._ensure_initialized()
         if cls.runs is not None:
             cls.runs.labels(outcome=outcome).inc()
+
+    @classmethod
+    def set_storage_bytes(cls, measure: StorageMeasure, value: int) -> None:
+        cls._ensure_initialized()
+        if cls.storage_bytes is not None:
+            cls.storage_bytes.labels(measure=measure).set(value)
