@@ -1,7 +1,10 @@
 import asyncio
 from base64 import b64encode
+from collections.abc import Mapping
 from copy import deepcopy
+from queue import SimpleQueue
 from threading import get_ident
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -10,16 +13,20 @@ import respx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
+from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
+from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
+from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 
 @pytest.mark.parametrize(
@@ -441,3 +448,302 @@ async def test_handler_sends_the_leading_system_run_as_system_not_as_a_message(h
         "system": [{"type": "text", "text": "Be terse"}],
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
+
+
+_WEATHER_SCHEMA: Final[dict[str, JsonValue]] = {"type": "object", "properties": {"city": {"type": "string"}}}
+
+_CHAT_TOOL_TURNS: Final[list[dict[str, JsonValue]]] = [
+    {"role": "system", "content": "Be terse."},
+    {"role": "user", "content": "Weather in SF?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "SF"}'}}
+        ],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+]
+
+
+_COUNTERS: Final = pytest.mark.parametrize(
+    ("counter_type", "count_endpoint"),
+    (
+        (AnthropicTokenCounter, "https://gateway.example/v1/messages/count_tokens"),
+        (AzureAIAnthropicTokenCounter, "https://gateway.example/anthropic/v1/messages/count_tokens"),
+    ),
+)
+
+
+async def _counted_body(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages: list[dict[str, JsonValue]],
+    tools: list[dict[str, JsonValue]] | None,
+    messages_format: TokenCountMessagesFormat,
+    chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+) -> tuple[TokenCountResponse | None, tuple[dict[str, JsonValue], ...]]:
+    sent: Final[SimpleQueue[bytes]] = SimpleQueue()
+
+    def count(request: httpx.Request) -> httpx.Response:
+        sent.put(request.content)
+        return httpx.Response(200, json={"input_tokens": 31})
+
+    with respx.mock:
+        respx.post(count_endpoint).mock(side_effect=count)
+        result: Final = await counter_type().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=messages,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": "https://gateway.example"}},
+            request_model="claude-opus-5-5",
+            tools=tools,
+            messages_format=messages_format,
+            chat_params=chat_params,
+        )
+    return result, tuple(TypeAdapter(dict[str, JsonValue]).validate_json(sent.get()) for _ in range(sent.qsize()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    "tool",
+    (
+        {"type": "function", "name": "get_weather", "description": "Look up the weather", "parameters": _WEATHER_SCHEMA},
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "description": "Look up the weather", "parameters": _WEATHER_SCHEMA},
+        },
+    ),
+)
+async def test_counter_sends_chat_tool_use_in_the_shape_chat_inference_sends(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    tool: dict[str, JsonValue],
+) -> None:
+    """Responses and chat bodies reach the counter as chat messages and tools, which Anthropic rejects
+    with a 400 unless they are translated the way the chat inference request translates them."""
+    original: Final = deepcopy(_CHAT_TOOL_TURNS)
+    result, bodies = await _counted_body(counter_type, count_endpoint, _CHAT_TOOL_TURNS, [tool], "openai")
+
+    assert result is not None
+    assert result.error is not True
+    assert result.total_tokens == 31
+    assert bodies == (
+        {
+            "model": "claude-opus-5-5",
+            "system": [{"type": "text", "text": "Be terse."}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Weather in SF?"}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "SF"}}],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]},
+            ],
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "input_schema": _WEATHER_SCHEMA,
+                    "type": "custom",
+                    "description": "Look up the weather",
+                }
+            ],
+        },
+    )
+    assert _CHAT_TOOL_TURNS == original
+
+
+_ANTHROPIC_TOOL_USE: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "Weather in SF?"},
+    {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}}]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "sunny"}]},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    ("messages", "tool", "messages_format"),
+    (
+        (_ANTHROPIC_TOOL_USE, {"name": "get_weather", "input_schema": _WEATHER_SCHEMA}, "openai"),
+        (
+            [{"role": "user", "content": "Weather in SF?"}],
+            {"type": "function", "name": "get_weather", "parameters": _WEATHER_SCHEMA},
+            "anthropic",
+        ),
+    ),
+)
+async def test_counter_sends_anthropic_shaped_and_messages_api_requests_as_sent(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages: list[dict[str, JsonValue]],
+    tool: dict[str, JsonValue],
+    messages_format: TokenCountMessagesFormat,
+) -> None:
+    _, bodies = await _counted_body(counter_type, count_endpoint, messages, [tool], messages_format)
+
+    assert bodies == ({"model": "claude-opus-5-5", "messages": messages, "tools": [tool]},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_rejects_a_tool_call_chat_inference_rejects_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": "Weather in SF?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "sunny?"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.rejected_before_provider_call is True
+    assert "Failed to parse tool call arguments for tool 'get_weather'" in (result.error_message or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_rejects_a_chat_tool_without_a_name_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    result, bodies = await _counted_body(
+        counter_type,
+        count_endpoint,
+        [{"role": "user", "content": "Weather in SF?"}],
+        [{"type": "function", "function": {"parameters": _WEATHER_SCHEMA}}],
+        "openai",
+    )
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+
+
+_CHAT_WEATHER_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": _WEATHER_SCHEMA},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    ("messages", "tools"),
+    (
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "name": "ana",
+                    "content": [
+                        {"type": "text", "text": "Describe this"},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0K"}},
+                    ],
+                }
+            ],
+            None,
+            id="native-image-block",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Weather in SF?"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "SF"}}],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "sunny"}]},
+            ],
+            [_CHAT_WEATHER_TOOL],
+            id="native-tool-result-block",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Open the docs"}],
+            [
+                {"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"},
+                _CHAT_WEATHER_TOOL,
+            ],
+            id="computer-use-preview-tool",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Ask the wiki"}],
+            [{"type": "mcp", "server_label": "wiki", "server_url": "https://mcp.example/mcp"}, _CHAT_WEATHER_TOOL],
+            id="mcp-tool",
+        ),
+    ),
+)
+async def test_counter_rejects_input_chat_translation_would_leave_out_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages: list[dict[str, JsonValue]],
+    tools: list[dict[str, JsonValue]] | None,
+) -> None:
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, tools, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+
+
+_ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_sends_the_structured_output_tool_choice_and_thinking_chat_inference_sends(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    """count_tokens refuses the beta output_format that chat inference sends, so the count carries the same
+    schema as output_config.format, next to the inference request's thinking and tool_choice."""
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": "Weather in SF?"}]
+    tool: Final[dict[str, JsonValue]] = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": _WEATHER_SCHEMA},
+    }
+    chat_params: Final[dict[str, JsonValue]] = {
+        "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": _ANSWER_SCHEMA}},
+        "reasoning_effort": "low",
+        "tool_choice": "auto",
+    }
+    config: Final = AnthropicConfig()
+    inference: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=deepcopy(messages),
+        optional_params=config.map_openai_params(
+            {**chat_params, "tools": [tool]}, {}, "claude-opus-5-5", drop_params=False
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    _, bodies = await _counted_body(counter_type, count_endpoint, messages, [tool], "openai", chat_params)
+
+    (body,) = bodies
+    assert "output_format" not in body
+    assert body["output_config"] == {**inference.get("output_config", {}), "format": inference["output_format"]}
+    assert (body["thinking"], body["tool_choice"], body["tools"]) == (
+        inference["thinking"],
+        inference["tool_choice"],
+        inference["tools"],
+    )

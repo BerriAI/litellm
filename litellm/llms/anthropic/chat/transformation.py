@@ -2267,6 +2267,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages_pt,
         )
 
+        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
+
         if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
@@ -2293,7 +2295,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
             optional_params=optional_params,
-            drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
+            drop_params=drop_params,
             custom_llm_provider=self.custom_llm_provider,
         )
 
@@ -2351,6 +2353,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model,
                 messages=list(conversation),
                 llm_provider=self._resolved_provider,
+                drop_params=drop_params,
             )
         except Exception as e:
             raise AnthropicError(

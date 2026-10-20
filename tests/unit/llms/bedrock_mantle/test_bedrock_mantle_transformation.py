@@ -20,7 +20,7 @@ from botocore.awsrequest import AWSRequest
 import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
-from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
+from litellm.llms.bedrock.base_aws_llm import run_off_loop_if_aws
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import LlmProviders
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
@@ -1234,9 +1234,7 @@ async def test_mantle_signing_runs_off_the_event_loop():
         return dict(request.headers)
 
     release = asyncio.create_task(probe.release_refresh_from_the_loop())
-    signed = await sign_request_off_loop_if_aws(
-        BedrockMantleChatConfig(), sign, headers={"Content-Type": "application/json"}
-    )
+    signed = await run_off_loop_if_aws(BedrockMantleChatConfig(), sign, headers={"Content-Type": "application/json"})
     await release
 
     assert "Authorization" in signed

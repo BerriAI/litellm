@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, TypeGuard, cast
 
 from pydantic import TypeAdapter
@@ -31,6 +32,12 @@ if TYPE_CHECKING:
 
 
 class ManagedObjectRow(Protocol):
+    @property
+    def created_at(self) -> datetime: ...
+
+    @property
+    def updated_at(self) -> datetime: ...
+
     @property
     def id(self) -> str: ...
 
