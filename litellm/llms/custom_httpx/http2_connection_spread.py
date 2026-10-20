@@ -23,13 +23,13 @@ class _Lane:
 class _Lanes:
     def __init__(
         self,
-        new_transport: Callable[[], httpx.AsyncBaseTransport],
+        new_transport: Callable[[httpx.Limits], httpx.AsyncBaseTransport],
+        limits: httpx.Limits,
         streams_per_connection: int,
-        max_connections: int | None,
     ) -> None:
         self._new_transport: Final = new_transport
+        self._limits: Final = limits
         self._streams_per_connection: Final = streams_per_connection
-        self._max_connections: Final = max_connections
         self.lanes: tuple[_Lane, ...] = ()
 
     def acquire(self) -> _Lane:
@@ -39,14 +39,25 @@ class _Lanes:
         return lane
 
     def _open_or_share(self) -> _Lane:
-        if self._max_connections is not None and len(self.lanes) >= self._max_connections:
+        cap: Final = self._limits.max_connections
+        if cap is not None and len(self.lanes) * self._streams_per_connection >= cap:
             return min(self.lanes, key=lambda lane: lane.in_flight)
         return self._open()
 
     def _open(self) -> _Lane:
-        lane: Final = _Lane(self._new_transport())
+        lane: Final = _Lane(self._new_transport(self._next_lane_limits()))
         self.lanes = (*self.lanes, lane)
         return lane
+
+    def _next_lane_limits(self) -> httpx.Limits:
+        cap: Final = self._limits.max_connections
+        if cap is None:
+            return self._limits
+        return httpx.Limits(
+            max_connections=min(self._streams_per_connection, cap - len(self.lanes) * self._streams_per_connection),
+            max_keepalive_connections=self._limits.max_keepalive_connections,
+            keepalive_expiry=self._limits.keepalive_expiry,
+        )
 
 
 class _AsyncReleasingStream(httpx.AsyncByteStream):
@@ -70,11 +81,11 @@ def _with_stream(response: httpx.Response, stream: httpx.AsyncByteStream) -> htt
 class AsyncHTTP2ConnectionSpread(httpx.AsyncBaseTransport):
     def __init__(
         self,
-        new_transport: Callable[[], httpx.AsyncBaseTransport],
+        new_transport: Callable[[httpx.Limits], httpx.AsyncBaseTransport],
+        limits: httpx.Limits,
         streams_per_connection: int = HTTP2_STREAMS_PER_CONNECTION,
-        max_connections: int | None = None,
     ) -> None:
-        self._lanes: Final = _Lanes(new_transport, streams_per_connection, max_connections)
+        self._lanes: Final = _Lanes(new_transport, limits, streams_per_connection)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         lane: Final = self._lanes.acquire()

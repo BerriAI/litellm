@@ -1442,10 +1442,10 @@ class AsyncHTTPHandler:
         local_address: Final = _IPV4_LOCAL_ADDRESS if litellm.force_ipv4 else None
         if http2 or http2_enabled():
             return AsyncHTTP2ConnectionSpread(
-                lambda: AsyncHTTPTransport(
-                    local_address=local_address, verify=verify, cert=cert, http2=True, limits=limits
+                lambda lane_limits: AsyncHTTPTransport(
+                    local_address=local_address, verify=verify, cert=cert, http2=True, limits=lane_limits
                 ),
-                max_connections=limits.max_connections,
+                limits,
             )
         if litellm.force_ipv4:
             return AsyncHTTPTransport(local_address=local_address, verify=verify, cert=cert, limits=limits)
@@ -1464,8 +1464,10 @@ class AsyncHTTPHandler:
         if http2 or http2_enabled():
             return _environment_proxy_mounts(
                 lambda proxy_url: AsyncHTTP2ConnectionSpread(
-                    lambda: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=True, limits=limits),
-                    max_connections=limits.max_connections,
+                    lambda lane_limits: AsyncHTTPTransport(
+                        proxy=proxy_url, verify=verify, cert=cert, http2=True, limits=lane_limits
+                    ),
+                    limits,
                 )
             )
         return _environment_proxy_mounts(
