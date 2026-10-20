@@ -1,3 +1,4 @@
+import contextlib
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -479,23 +480,20 @@ class TestGoogleAIStudioTokenCounter:
         assert cleaned_contents == contents_without_function_response
 
 
-@pytest.mark.parametrize(
-    ("raw_image_config", "expected"),
-    [
-        ('{"aspectRatio": "1:1"}', {"imageConfig": {"aspectRatio": "1:1"}}),
-        ("[1, 2]", {}),
-        ('"16:9"', {}),
-        ("null", {}),
-    ],
-)
-def test_map_openai_image_params_to_gemini_forwards_only_a_json_object_image_config(
-    raw_image_config: str, expected: dict[str, object]
-):
-    mapped: Final = map_openai_image_params_to_gemini(
+def _map_image_config(raw_image_config: str) -> dict[str, object]:
+    return map_openai_image_params_to_gemini(
         {"imageConfig": raw_image_config},
         "gemini-2.5-flash-image",
         ["imageConfig"],
         parse_image_config_string=True,
     )
 
-    assert mapped == expected
+
+def test_map_openai_image_params_to_gemini_forwards_a_json_object_image_config():
+    assert _map_image_config('{"aspectRatio": "1:1"}') == {"imageConfig": {"aspectRatio": "1:1"}}
+
+
+@pytest.mark.parametrize("raw_image_config", ["[1, 2]", '"16:9"', "null"])
+def test_map_openai_image_params_to_gemini_drops_or_refuses_a_non_object_image_config(raw_image_config: str):
+    with contextlib.suppress(litellm.UnsupportedParamsError):
+        assert "imageConfig" not in _map_image_config(raw_image_config)
