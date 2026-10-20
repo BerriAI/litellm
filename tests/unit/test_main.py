@@ -9975,8 +9975,13 @@ async def test_completion_num_retries_waits_for_provider_retry_after(
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
     "retry_kwargs",
-    [{"num_retries": 2}, {"num_retries": 2, "retry_policy": RetryPolicy()}],
-    ids=["num-retries", "unconfigured-retry-policy"],
+    [
+        {"num_retries": 2},
+        {"num_retries": 2, "retry_policy": RetryPolicy()},
+        {"num_retries": 2, "retry_policy": None},
+        {"num_retries": 2, "retry_policy": {}},
+    ],
+    ids=["num-retries", "unconfigured-retry-policy", "none-retry-policy", "empty-retry-policy"],
 )
 async def test_completion_num_retries_does_not_retry_auth_error(
     retry_upstream: respx.MockRouter, sync_mode: bool, retry_kwargs: Mapping[str, object]
@@ -9996,8 +10001,9 @@ async def test_completion_num_retries_does_not_retry_auth_error(
     [
         (500, {"num_retries": 3}, litellm.InternalServerError),
         (400, {"retry_policy": RetryPolicy(BadRequestErrorRetries=3)}, litellm.BadRequestError),
+        (429, {"num_retries": 3, "retry_policy": RetryPolicy(BadRequestErrorRetries=1)}, litellm.RateLimitError),
     ],
-    ids=["transient-500", "retry-policy-400"],
+    ids=["transient-500", "retry-policy-400", "retry-policy-for-another-error-keeps-num-retries"],
 )
 async def test_completion_num_retries_exhausts_configured_attempts(
     retry_upstream: respx.MockRouter,
@@ -10013,6 +10019,36 @@ async def test_completion_num_retries_exhausts_configured_attempts(
             await _completion_with_retries_kwargs(sync_mode, _RESPONSES_BRIDGE, **retry_kwargs)
 
     assert route.call_count == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_whole_float_num_retries_retries_that_many_times(retry_upstream: respx.MockRouter, sync_mode: bool):
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(return_value=_provider_error(500))
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(litellm.InternalServerError):
+            await _completion_with_retries_kwargs(sync_mode, _RESPONSES_BRIDGE, num_retries=2.0)
+
+    assert route.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_retry_policy_count_only_retries_its_own_error_class(
+    retry_upstream: respx.MockRouter, sync_mode: bool
+):
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(
+        side_effect=[_provider_error(429), _provider_error(401), httpx.Response(200, json=_RETRY_RESPONSES_OK)]
+    )
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(litellm.AuthenticationError):
+            await _completion_with_retries_kwargs(
+                sync_mode, _RESPONSES_BRIDGE, retry_policy=RetryPolicy(RateLimitErrorRetries=2)
+            )
+
+    assert route.call_count == 2
 
 
 @pytest.mark.asyncio

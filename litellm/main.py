@@ -6403,11 +6403,16 @@ def _compute_retry_wait(
     return float(retry_after) if retry_after is not None and 0 < retry_after <= 60 else 0.0
 
 
-def _build_retry_predicate(retry_policy_override: bool) -> Callable[[BaseException], bool]:
+_NUM_RETRIES_ADAPTER: Final = TypeAdapter(int)
+
+
+def _build_retry_predicate(
+    retry_policy_exception_type: type[BaseException] | None,
+) -> Callable[[BaseException], bool]:
     """Check if an exception is transient or explicitly enabled via RetryPolicy."""
 
     def _predicate(e: BaseException) -> bool:
-        if retry_policy_override and isinstance(e, openai.APIError):
+        if retry_policy_exception_type is not None and isinstance(e, retry_policy_exception_type):
             return True
         status_code: Final[object] = getattr(e, "status_code", None)
         if isinstance(status_code, int):
@@ -6442,8 +6447,7 @@ def completion_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    raw_retries: Final[object] = kwargs.pop("num_retries", 3)
-    num_retries: Final[int] = raw_retries if isinstance(raw_retries, int) else 3
+    num_retries: Final[int] = _NUM_RETRIES_ADAPTER.validate_python(kwargs.pop("num_retries", 3))
     # reset retries in .completion()
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
@@ -6452,7 +6456,10 @@ def completion_with_retries(*args, **kwargs):
     )
     original_function: Final = kwargs.pop("original_function", completion)
     initial_exc: Final[object] = kwargs.pop("_initial_exception", None)
-    retry_policy_override: Final[bool] = kwargs.pop("retry_policy", None) is not None
+    retry_policy: Final[object] = kwargs.pop("retry_policy", None)
+    retry_policy_exception_type: Final[type[BaseException] | None] = (
+        type(initial_exc) if retry_policy is not None and isinstance(initial_exc, BaseException) else None
+    )
     if isinstance(initial_exc, BaseException):
         wait_seconds: Final[float] = _compute_retry_wait(
             exc=initial_exc,
@@ -6464,7 +6471,7 @@ def completion_with_retries(*args, **kwargs):
     retryer: Final = tenacity.Retrying(
         wait=_build_retry_wait_fn(num_retries, retry_strategy),
         stop=tenacity.stop_after_attempt(num_retries),
-        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_override)),
+        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_exception_type)),
         reraise=True,
     )
     return retryer(original_function, *args, **kwargs)
@@ -6480,8 +6487,7 @@ async def acompletion_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    raw_retries: Final[object] = kwargs.pop("num_retries", 3)
-    num_retries: Final[int] = raw_retries if isinstance(raw_retries, int) else 3
+    num_retries: Final[int] = _NUM_RETRIES_ADAPTER.validate_python(kwargs.pop("num_retries", 3))
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
     retry_strategy: Final[str] = (
@@ -6489,7 +6495,10 @@ async def acompletion_with_retries(*args, **kwargs):
     )
     original_function: Final = kwargs.pop("original_function", acompletion)
     initial_exc: Final[object] = kwargs.pop("_initial_exception", None)
-    retry_policy_override: Final[bool] = kwargs.pop("retry_policy", None) is not None
+    retry_policy: Final[object] = kwargs.pop("retry_policy", None)
+    retry_policy_exception_type: Final[type[BaseException] | None] = (
+        type(initial_exc) if retry_policy is not None and isinstance(initial_exc, BaseException) else None
+    )
     if isinstance(initial_exc, BaseException):
         wait_seconds: Final[float] = _compute_retry_wait(
             exc=initial_exc,
@@ -6501,7 +6510,7 @@ async def acompletion_with_retries(*args, **kwargs):
     retryer: Final = tenacity.AsyncRetrying(
         wait=_build_retry_wait_fn(num_retries, retry_strategy),
         stop=tenacity.stop_after_attempt(num_retries),
-        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_override)),
+        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_exception_type)),
         reraise=True,
     )
     return await retryer(original_function, *args, **kwargs)

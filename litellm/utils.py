@@ -1550,22 +1550,21 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
     num_retries = kwargs.get("num_retries", None)
     if num_retries is None:
         num_retries = litellm.num_retries
-    if kwargs.get("retry_policy", None):
-        get_num_retries_from_retry_policy: Final[Callable[..., int | None]] = (
-            litellm_utils.get_num_retries_from_retry_policy
-        )
-        reset_retry_policy: Final = litellm_utils.reset_retry_policy
-        retry_policy_num_retries: Final[int | None] = get_num_retries_from_retry_policy(
-            exception=exception,
-            retry_policy=kwargs.get("retry_policy"),
-        )
-        if retry_policy_num_retries is not None:
-            num_retries = retry_policy_num_retries
-            kwargs["retry_policy"] = reset_retry_policy()
-        else:
-            kwargs.pop("retry_policy", None)
-
-    return num_retries, kwargs
+    retry_policy: Final[object] = kwargs.pop("retry_policy", None)
+    if not retry_policy:
+        return num_retries, kwargs
+    get_num_retries_from_retry_policy: Final[Callable[..., int | None]] = (
+        litellm_utils.get_num_retries_from_retry_policy
+    )
+    retry_policy_num_retries: Final[int | None] = get_num_retries_from_retry_policy(
+        exception=exception,
+        retry_policy=retry_policy,
+    )
+    if retry_policy_num_retries is None:
+        return num_retries, kwargs
+    reset_retry_policy: Final = litellm_utils.reset_retry_policy
+    kwargs["retry_policy"] = reset_retry_policy()
+    return retry_policy_num_retries, kwargs
 
 
 def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
@@ -2058,17 +2057,7 @@ def client(original_function):
             return result
         except Exception as e:
             if call_type == CallTypes.completion.value:
-                num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
-                if kwargs.get("retry_policy", None):
-                    get_num_retries_from_retry_policy: Callable[..., int | None] = (
-                        litellm_utils.get_num_retries_from_retry_policy
-                    )
-                    reset_retry_policy = litellm_utils.reset_retry_policy
-                    num_retries = get_num_retries_from_retry_policy(
-                        exception=e,
-                        retry_policy=kwargs.get("retry_policy"),
-                    )
-                    kwargs["retry_policy"] = reset_retry_policy()  # prevent infinite loops
+                num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
                 litellm.num_retries = None  # set retries to None to prevent infinite loops
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
@@ -2096,9 +2085,11 @@ def client(original_function):
             elif call_type == CallTypes.responses.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
                 if kwargs.get("retry_policy", None):
-                    get_num_retries_from_retry_policy = litellm_utils.get_num_retries_from_retry_policy
+                    get_responses_num_retries: Final[Callable[..., int | None]] = (
+                        litellm_utils.get_num_retries_from_retry_policy
+                    )
                     reset_retry_policy = litellm_utils.reset_retry_policy
-                    num_retries = get_num_retries_from_retry_policy(
+                    num_retries = get_responses_num_retries(
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
