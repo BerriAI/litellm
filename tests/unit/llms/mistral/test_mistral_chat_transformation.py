@@ -1355,6 +1355,36 @@ async def test_prompt_cache_key_rejection_for_an_async_codestral_call_names_code
     assert not azure_route.called
 
 
+@pytest.mark.asyncio
+async def test_async_codestral_call_sends_an_uploaded_file_by_its_id(respx_mock: respx.MockRouter) -> None:
+    import litellm
+
+    codestral_api_base: Final = "https://codestral.mistral.ai/v1"
+    codestral_route: Final = respx_mock.post(f"{codestral_api_base}/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    await litellm.acompletion(
+        model="codestral/codestral-latest",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Review this file"},
+                    {"type": "file", "file": {"file_id": "file-12345"}},
+                ],
+            }
+        ],
+        api_base=codestral_api_base,
+        api_key="codestral-key",
+        max_retries=0,
+        client=AsyncOpenAI(api_key="codestral-key", base_url=codestral_api_base, http_client=httpx.AsyncClient()),
+    )
+
+    sent_content: Final = json.loads(codestral_route.calls.last.request.content)["messages"][0]["content"]
+    assert sent_content[1] == {"type": "file", "file_id": "file-12345"}
+
+
 def test_prompt_cache_key_rejection_for_a_sync_codestral_call_is_an_unsupported_params_error(
     respx_mock: respx.MockRouter,
 ) -> None:

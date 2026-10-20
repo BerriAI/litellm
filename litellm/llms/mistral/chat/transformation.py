@@ -35,6 +35,7 @@ from litellm.router_utils.reasoning_effort_capability import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import (
     MistralCacheKeyParams,
+    MistralFilePart,
     MistralReasoningEffortParams,
     MistralRequestRouting,
     MistralThinkingBlock,
@@ -69,6 +70,7 @@ _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
 _MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
 _MISTRAL_CACHE_KEY_PARAMS: Final = TypeAdapter(MistralCacheKeyParams)
 _MISTRAL_REASONING_EFFORT_PARAMS: Final = TypeAdapter(MistralReasoningEffortParams)
+_MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
 
 
 def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, object]:
@@ -438,24 +440,31 @@ class MistralConfig(OpenAIGPTConfig):
         messages = self._handle_message_with_file(messages)
         return messages
 
+    @staticmethod
+    def _with_mistral_file_id(block: Mapping[str, object]) -> Mapping[str, object]:
+        file_part: Final = block.get("file") if block.get("type") == "file" else None
+        file_id: Final = (
+            _MISTRAL_FILE_PART.validate_python(file_part).get("file_id") if isinstance(file_part, Mapping) else None
+        )
+        if not file_id:
+            return block
+        return {**{key: value for key, value in block.items() if key != "file"}, "file_id": file_id}
+
+    @classmethod
+    def _with_mistral_file_ids(cls, message: AllMessageValues) -> AllMessageValues:
+        content: Final = message.get("content")
+        if not isinstance(content, list):
+            return message
+        blocks: Final[tuple[Mapping[str, object], ...]] = tuple(content)
+        return cast(  # cast-ok: only file blocks change, to the file_id shape the Mistral API takes
+            AllMessageValues, {**message, "content": [cls._with_mistral_file_id(block) for block in blocks]}
+        )
+
     def _handle_message_with_file(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
         Mistral API supports only 'file_id' in message content with type 'file'.
         """
-        for m in messages:
-            _content_block = m.get("content")
-            if _content_block and isinstance(_content_block, list):
-                if any(c.get("type") == "file" for c in _content_block):
-                    # If file content is present, we get file_id from 'file' attribute of content block
-                    # then replace 'file' with 'file_id' and assign the value of 'file_id' attribute to it.
-                    file_contents = [c for c in _content_block if c.get("type") == "file"]
-                    for file_content in file_contents:
-                        file_id = file_content.get("file", {}).get("file_id")
-                        if file_id:
-                            # Replace 'file' with 'file_id'
-                            file_content["file_id"] = file_id  # pyright: ignore[reportGeneralTypeIssues]  # legacy in-place rewrite of the block shape
-                            file_content.pop("file", None)
-        return messages
+        return [self._with_mistral_file_ids(m) for m in messages]
 
     def _add_reasoning_system_prompt_if_needed(
         self, messages: list[AllMessageValues], optional_params: dict

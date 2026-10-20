@@ -37,3 +37,7 @@ class MistralCacheKeyParams(TypedDict, total=False):
 
 class MistralReasoningEffortParams(TypedDict, total=False):
     reasoning_effort: ReadOnly[object]
+
+
+class MistralFilePart(TypedDict, total=False):
+    file_id: ReadOnly[object]
