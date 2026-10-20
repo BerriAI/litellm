@@ -145,7 +145,7 @@ class RouterBudgetLimiting(CustomLogger):
     def _schedule_flush_after_retire(self) -> None:
         if self._flush_after_retire is not None and not self._flush_after_retire.done():
             return
-        if not self.redis_increment_operation_queue:
+        if not self._has_unwritten_increments():
             return
         try:
             loop: Final = asyncio.get_running_loop()
@@ -153,8 +153,11 @@ class RouterBudgetLimiting(CustomLogger):
             return
         self._flush_after_retire = loop.create_task(self._drain_increments_after_retire())
 
+    def _has_unwritten_increments(self) -> bool:
+        return bool(self.redis_increment_operation_queue) or self._detached_increment_operations is not None
+
     async def _drain_increments_after_retire(self) -> None:
-        while self.redis_increment_operation_queue:
+        while self._has_unwritten_increments():
             if not await self._push_in_memory_increments_to_redis():
                 await asyncio.sleep(DEFAULT_REDIS_SYNC_INTERVAL)
 

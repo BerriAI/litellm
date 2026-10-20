@@ -3880,6 +3880,61 @@ class TestCallbackAsyncSyncSeparation:
         assert my_sync_cb not in litellm._async_input_callback
 
 
+class _DropsACallbackFromAnotherThreadWhenComparedToDynamodb:
+    def __init__(self, dropped: Callable[..., object]) -> None:
+        self.dropped = dropped
+        self.drop_thread: threading.Thread | None = None
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str) and other == "dynamodb" and self.drop_thread is None:
+            self.drop_thread = threading.Thread(
+                target=litellm.logging_callback_manager.drop_callbacks, args=((self.dropped,),)
+            )
+            self.drop_thread.start()
+            self.drop_thread.join(timeout=0.2)
+        return self is other
+
+    __hash__ = object.__hash__
+
+
+def test_function_setup_moves_async_callbacks_while_another_thread_drops_a_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def dropped_callback(*args: object, **kwargs: object) -> None:
+        return None
+
+    async def async_callback(*args: object, **kwargs: object) -> None:
+        return None
+
+    drops_on_compare: Final = _DropsACallbackFromAnotherThreadWhenComparedToDynamodb(dropped_callback)
+    monkeypatch.setattr(litellm.utils, "callback_list", ["initialized"])
+    for list_name in (
+        "callbacks",
+        "input_callback",
+        "failure_callback",
+        "service_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "success_callback", [dropped_callback, drops_on_compare, async_callback])
+
+    litellm.utils.function_setup(
+        "completion",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="callback-drop-race",
+    )
+    assert drops_on_compare.drop_thread is not None
+    drops_on_compare.drop_thread.join()
+
+    assert litellm.success_callback == [drops_on_compare]
+    assert litellm._async_success_callback == [async_callback]
+
+
 class TestMetadataNoneHandling:
     """
     Test that metadata=None in kwargs doesn't cause TypeError.

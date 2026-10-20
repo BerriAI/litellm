@@ -349,6 +349,7 @@ class LoggingCallbackManager:
         return "-".join(key_parts)
 
     get_custom_logger_key = _get_custom_logger_key
+    callback_lists_lock: Final = _callback_lists_lock
 
     def drop_callbacks(self, callbacks: Iterable[object], method_owners: Iterable[object] = ()) -> frozenset[str]:
         dropped_ids: Final = frozenset(map(id, callbacks))
