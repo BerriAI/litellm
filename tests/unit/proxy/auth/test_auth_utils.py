@@ -5078,6 +5078,29 @@ def test_bucket_off_the_proxy_allowlist_is_rejected_and_names_the_setting(field:
     assert "general_settings.allowed_client_side_s3_buckets" in str(error.value)
 
 
+@pytest.mark.parametrize(
+    "general_settings,accepted_body,rejected_field",
+    [
+        (
+            {**_BUCKET_ALLOWLIST, "allowed_client_side_s3_endpoint_urls": None},
+            {"s3_bucket_name": "team-batch-bucket"},
+            "s3_endpoint_url",
+        ),
+        (
+            {**_ENDPOINT_ALLOWLIST, "allowed_client_side_s3_buckets": None},
+            {"s3_endpoint_url": "https://s3.us-west-2.amazonaws.com"},
+            "s3_bucket_name",
+        ),
+    ],
+)
+def test_allowlist_left_null_in_config_is_treated_as_empty(
+    general_settings: dict[str, object], accepted_body: dict[str, object], rejected_field: str
+) -> None:
+    assert _batches_body_is_safe(accepted_body, general_settings) is True
+    with pytest.raises(ValueError, match=f"{rejected_field} is not allowed"):
+        _batches_body_is_safe({rejected_field: "team-batch-bucket"}, general_settings)
+
+
 def test_endpoint_on_the_proxy_allowlist_is_accepted() -> None:
     assert _batches_body_is_safe({"s3_endpoint_url": "https://s3.us-west-2.amazonaws.com"}, _ENDPOINT_ALLOWLIST) is True
 

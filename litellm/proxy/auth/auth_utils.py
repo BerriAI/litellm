@@ -489,15 +489,15 @@ _PROXY_ALLOWLIST_SETTING_BY_PARAM: Final[Mapping[str, _ClientSideAllowlistSettin
 class _ClientSideStorageAllowlist(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    allowed_client_side_s3_buckets: tuple[str, ...] = ()
-    allowed_client_side_s3_endpoint_urls: tuple[str, ...] = ()
+    allowed_client_side_s3_buckets: tuple[str, ...] | None = None
+    allowed_client_side_s3_endpoint_urls: tuple[str, ...] | None = None
 
     def admits(self, setting: _ClientSideAllowlistSetting, value: object) -> bool:
         match setting:
             case "allowed_client_side_s3_buckets":
-                return value in self.allowed_client_side_s3_buckets
+                return value in (self.allowed_client_side_s3_buckets or ())
             case "allowed_client_side_s3_endpoint_urls":
-                return value in self.allowed_client_side_s3_endpoint_urls
+                return value in (self.allowed_client_side_s3_endpoint_urls or ())
 
 
 def _banned_param_error(param: str) -> ValueError:
