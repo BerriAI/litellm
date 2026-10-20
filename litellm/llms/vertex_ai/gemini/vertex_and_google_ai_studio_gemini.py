@@ -873,8 +873,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        send_integer_enums: bool = False,
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return self._map_function(value, optional_params)
+        return self._map_function(value, optional_params, send_integer_enums)
 
     def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
         old_schema = deepcopy(value)

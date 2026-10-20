@@ -668,17 +668,18 @@ def _fix_enum_empty_strings(schema, depth=0):
 
 
 GEMINI_MAX_ENUM_CHARACTERS: Final = 2000
-_INT64_MIN: Final = -(2**63)
-_INT64_MAX: Final = 2**63 - 1
+_GEMINI_EXACT_INT_MAX: Final = 2**53 - 1
 
 
 def _gemini_integer_enum_value(value: object) -> str | None:
     match value:
         case bool():
             return None
-        case int() if _INT64_MIN <= value <= _INT64_MAX:
+        case int() if -_GEMINI_EXACT_INT_MAX <= value <= _GEMINI_EXACT_INT_MAX:
             return str(int(value))
-        case str() if re.fullmatch(r"-?[0-9]{1,19}", value) and _INT64_MIN <= int(value) <= _INT64_MAX:
+        case str() if (
+            re.fullmatch(r"-?[0-9]{1,16}", value) and -_GEMINI_EXACT_INT_MAX <= int(value) <= _GEMINI_EXACT_INT_MAX
+        ):
             return str(int(value))
         case _:
             return None
@@ -736,6 +737,9 @@ def with_integer_enums_that_fit(
         cast(JsonValue, with_integer_enums)  # cast-ok: built tools and schemas are JSON request data
     ):
         return with_integer_enums
+    verbose_logger.debug(
+        "Gemini integer enums dropped: the request's enum values exceed %s characters", GEMINI_MAX_ENUM_CHARACTERS
+    )
     return build(False)
 
 
@@ -1489,7 +1493,9 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
             if isinstance(request_view, VertexGeminiCountContextError):
                 return count_context_error_response(request_view, request_model, model_to_use)
-            count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
+            count_context: Final = vertex_gemini_count_context(
+                system=request_view.system, tools=tools, model=model_to_use
+            )
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)
             blocks_error: Final = unconvertible_messages_error(
