@@ -2552,7 +2552,7 @@ def _replayable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
     return [
-        _without_stream_index(_with_native_redacted_data(block))
+        _without_replay_rejected_keys(_with_native_redacted_data(block))
         for block in thinking_blocks
         if not is_unsignable_thinking_block(block)
     ]
@@ -2566,18 +2566,43 @@ def _is_thinking_item(item: object) -> bool:
             return False
 
 
-def _content_has_thinking(content: str | Iterable[object] | None) -> bool:
-    return isinstance(content, list) and any(_is_thinking_item(item) for item in content)
+def _thinking_identity(block: Mapping[str, object]) -> tuple[object, ...]:
+    match block:
+        case {"type": "redacted_thinking", "data": str() as data}:
+            return ("redacted_thinking", native_redacted_thinking_data(data))
+        case _:
+            return (block.get("type"), block.get("thinking"), block.get("signature"))
 
 
-def _without_stream_index(
+def _inline_thinking_identities(content: str | Iterable[object] | None) -> frozenset[tuple[object, ...]]:
+    if not isinstance(content, list):
+        return frozenset()
+    return frozenset(
+        _thinking_identity(cast(Mapping[str, object], item))  # cast-ok: _is_thinking_item matched a mapping
+        for item in content
+        if _is_thinking_item(item)
+    )
+
+
+def _thinking_blocks_not_in_content(
+    thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    content: str | Iterable[object] | None,
+) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...]:
+    inline: Final = _inline_thinking_identities(content)
+    return tuple(block for block in thinking_blocks if _thinking_identity(block) not in inline)
+
+
+_REPLAY_REJECTED_KEYS: Final = frozenset({"index", "cache_control"})
+
+
+def _without_replay_rejected_keys(
     block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
 ) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
-    if "index" not in block:
+    if _REPLAY_REJECTED_KEYS.isdisjoint(block):
         return block
-    return cast(  # cast-ok: dropping one key keeps the block's TypedDict shape
+    return cast(  # cast-ok: dropping keys keeps the block's TypedDict shape
         ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
-        {key: value for key, value in block.items() if key != "index"},
+        {key: value for key, value in block.items() if key not in _REPLAY_REJECTED_KEYS},
     )
 
 
@@ -2963,20 +2988,13 @@ def anthropic_messages_pt(
                 # SEQUENTIAL MODE: No server tool calls, or no thinking blocks,
                 # or content is a list. Use the original sequential approach.
 
-                # When content is a list, check if it already contains thinking
-                # blocks inline. If so, skip prepending thinking_blocks to avoid
-                # duplication and preserve the original interleaved order.
-                # Fixes the gap where list-content messages bypass INTERLEAVED
-                # MODE and still get thinking blocks prepended out of order.
                 _content_is_list = "content" in assistant_content_block and isinstance(
                     assistant_content_block["content"], list
                 )
                 _content_list = assistant_content_block.get("content") if _content_is_list else None
 
-                if thinking_blocks is not None and not _content_has_thinking(
-                    _content_list
-                ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
-                    assistant_content.extend(thinking_blocks)
+                if thinking_blocks is not None:  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
+                    assistant_content.extend(_thinking_blocks_not_in_content(thinking_blocks, _content_list))
                 if _content_is_list and _content_list is not None:
                     for m in _content_list:
                         if not isinstance(m, dict):
@@ -4831,10 +4849,10 @@ class BedrockConverseMessagesProcessor:
                 _assistant_content = assistant_message_block.get("content", None)
                 thinking_blocks = assistant_message_block.get("thinking_blocks")
 
-                if thinking_blocks is not None and not _content_has_thinking(_assistant_content):
+                if thinking_blocks is not None:
                     converted_thinking_blocks = (
                         BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                            thinking_blocks, to_claude=to_claude
+                            _thinking_blocks_not_in_content(thinking_blocks, _assistant_content), to_claude=to_claude
                         )
                     )
                     assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -5249,10 +5267,10 @@ def _bedrock_converse_messages_pt(
             _assistant_content = assistant_message_block.get("content", None)
             thinking_blocks = assistant_message_block.get("thinking_blocks")
 
-            if thinking_blocks is not None and not _content_has_thinking(_assistant_content):
+            if thinking_blocks is not None:
                 converted_thinking_blocks = (
                     BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                        thinking_blocks, to_claude=to_claude
+                        _thinking_blocks_not_in_content(thinking_blocks, _assistant_content), to_claude=to_claude
                     )
                 )
                 assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(

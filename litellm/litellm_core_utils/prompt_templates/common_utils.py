@@ -2312,17 +2312,22 @@ def is_unsignable_thinking_block(block: object) -> bool:
     rejected with a 400, and so is a block whose signature or data carries
     another provider's encrypted reasoning. A signed block is kept whatever its
     text, since ``display: omitted`` returns signed blocks with empty ``thinking``.
-    `redacted_thinking` blocks carry no signature and are always kept.
+    `redacted_thinking` blocks carry no signature and are kept unless their ``data`` is blank.
     """
     if is_encrypted_reasoning_block(block):
         return True
     if not isinstance(block, Mapping):
         return False
     mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
-    if mapping.get("type") != "thinking":
-        return False
-    signature: Final = mapping.get("signature")
-    return not (isinstance(signature, str) and len(signature) > 0)
+    match mapping.get("type"):
+        case "thinking":
+            signature: Final = mapping.get("signature")
+            return not (isinstance(signature, str) and len(signature) > 0)
+        case "redacted_thinking":
+            data: Final = mapping.get("data")
+            return not (isinstance(data, str) and len(data.strip()) > 0)
+        case _:
+            return False
 
 
 def native_redacted_thinking_data(data: str) -> str:
