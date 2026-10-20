@@ -3187,15 +3187,8 @@ class Router:
                 )
             controls: Final = per_request_fallback_controls(kwargs)
             kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
-            if isinstance(request_priority, int):
-                request_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: kwargs keys are param names
-                response = await self._schedule_factory(
-                    model=model,
-                    priority=request_priority,
-                    original_function=self.async_function_with_fallbacks,
-                    args=(),
-                    kwargs={key: value for key, value in request_kwargs.items() if key != "priority"},
-                )
+            if request_priority is not None and isinstance(request_priority, int):
+                response = await self.schedule_acompletion(**kwargs)
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
             end_time: Final = time.time()
@@ -5084,7 +5077,7 @@ class Router:
         self,
         model: str,
         priority: int,
-        original_function: Callable[..., Awaitable[object]],
+        original_function: Callable,
         args: tuple[object, ...],
         kwargs: dict[str, object],
     ):
