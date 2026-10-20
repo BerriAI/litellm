@@ -148,25 +148,25 @@ class BedrockTokenCounter(BaseTokenCounter):
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        request_data: Final[Mapping[str, object]] = (
+        runtime_request: Final = (
             _request_data(model_to_use, messages, tools, system)
             if translated is None
-            else {
-                **_request_data(model_to_use, translated.messages, translated.tools, translated.system),
-                **translated.options,
-            }
+            else _request_data(model_to_use, translated.messages, translated.tools, translated.system)
         )
+        mantle_request: Final = runtime_request if translated is None else {**runtime_request, **translated.options}
 
-        primary: Final = await self._count_with(
-            self._mantle_handler if use_mantle else self._runtime_handler,
-            primary_tokenizer,
-            request_data,
-            litellm_params,
-            resolved_model,
+        primary: Final = (
+            await self._count_with(
+                self._mantle_handler, primary_tokenizer, mantle_request, litellm_params, resolved_model
+            )
+            if use_mantle
+            else await self._count_with(
+                self._runtime_handler, primary_tokenizer, runtime_request, litellm_params, resolved_model
+            )
         )
         outcome: Final = (
             await self._count_with(
-                self._mantle_handler, MANTLE_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
+                self._mantle_handler, MANTLE_TOKENIZER_TYPE, mantle_request, litellm_params, resolved_model
             )
             if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
             else primary

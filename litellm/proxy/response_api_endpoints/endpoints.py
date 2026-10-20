@@ -32,6 +32,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
+from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
@@ -79,6 +80,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -1421,6 +1423,43 @@ def _proxy_response_id_security() -> ResponsesIDSecurity | None:
 _response_id_security_dep: Final = Depends(_proxy_response_id_security)
 
 
+class _ManagedFileAccess(Protocol):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: Literal["aresponses"],
+    ) -> object: ...
+
+
+def _proxy_managed_files_hook() -> _ManagedFileAccess | None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    return proxy_logging_obj.get_proxy_hook("managed_files")
+
+
+_managed_files_hook_dep: Final = Depends(_proxy_managed_files_hook)
+
+
+async def _with_managed_file_id_mapping(
+    data: Mapping[str, object], managed_files: _ManagedFileAccess | None, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    if managed_files is None:
+        return data
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    hooked: Final = dict(data)
+    try:
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=user_api_key_cache, data=hooked, call_type="aresponses"
+        )
+    except HTTPException as e:
+        raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
+    mapping: Final = hooked.get(MODEL_FILE_ID_MAPPING_FIELD)
+    return data if mapping is None else {**data, MODEL_FILE_ID_MAPPING_FIELD: mapping}
+
+
 def _with_authorized_previous_response(
     data: Mapping[str, object], security: ResponsesIDSecurity | None, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, object]:
@@ -1572,6 +1611,7 @@ async def responses_input_tokens(
     llm_router: Router | None = _llm_router_dep,
     user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
     response_id_security: ResponsesIDSecurity | None = _response_id_security_dep,
+    managed_files: _ManagedFileAccess | None = _managed_files_hook_dep,
 ):
     """
     Count the input tokens of a Responses API request without calling the model.
@@ -1631,9 +1671,13 @@ async def responses_input_tokens(
         )
 
     request_fields: Final = _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data)
-    responses_request: Final = _with_authorized_previous_response(
-        {**{name: value for name, value in request_fields.items() if name not in counted_fields}, **token_fields},
-        response_id_security,
+    responses_request: Final = await _with_managed_file_id_mapping(
+        _with_authorized_previous_response(
+            {**{name: value for name, value in request_fields.items() if name not in counted_fields}, **token_fields},
+            response_id_security,
+            user_api_key_dict,
+        ),
+        managed_files,
         user_api_key_dict,
     )
     try:

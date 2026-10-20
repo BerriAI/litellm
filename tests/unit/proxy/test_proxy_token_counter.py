@@ -85,6 +85,7 @@ from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagem
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
     SelectTokenizerResponse,
+    SpecialEnums,
     TokenCountMessagesFormat,
     TokenCountResponse,
 )
@@ -3605,6 +3606,56 @@ async def test_responses_count_goes_to_the_deployment_that_served_the_previous_r
         ]
 
     assert counts == [_PINNED_COUNTS[f"{pinned}.test"]] * 8
+
+
+def _managed_file_id(provider_file_id: str, model_id: str) -> str:
+    unified: Final = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/pdf", "3f0c9a", "gpt-files", provider_file_id, model_id
+    )
+    return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("with_mapping", "expected_file_id"), [(False, "file-uploaded"), (True, "file-on-a")])
+async def test_responses_count_sends_openai_the_provider_file_id_inference_sends(
+    monkeypatch: pytest.MonkeyPatch, with_mapping: bool, expected_file_id: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-files",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key", "api_base": "https://count.test/v1"},
+                "model_info": {"id": "deployment-a"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    managed_id: Final = _managed_file_id("file-uploaded", "deployment-a")
+    bodies: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 49}, request=request)
+
+    with patch.object(
+        openai_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+    ):
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="gpt-files", messages=[{"role": "user", "content": "Summarize"}]),
+            call_endpoint=True,
+            responses_request={
+                "model": "gpt-files",
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": managed_id}]}],
+                **({"model_file_id_mapping": {managed_id: {"deployment-a": "file-on-a"}}} if with_mapping else {}),
+            },
+        )
+
+    assert (result.error, result.total_tokens) == (False, 49)
+    (body,) = bodies
+    assert body["input"] == [{"role": "user", "content": [{"type": "input_file", "file_id": expected_file_id}]}]
+    assert "model_file_id_mapping" not in body
 
 
 _ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {

@@ -14688,6 +14688,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.responses.litellm_completion_transformation.count_request import (
     ChatCountBridgeError,
     chat_count_request,
+    with_provider_file_ids,
 )
 
 
@@ -15382,15 +15383,18 @@ async def count_request_tokens(
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
+    routed_request: Final = (
+        None if responses_request is None else with_provider_file_ids(responses_request, routed_deployment)
+    )
     chat_count: Final = (
         None
-        if responses_request is None or provider_counter is None or isinstance(provider_counter, OpenAITokenCounter)
+        if routed_request is None or provider_counter is None or isinstance(provider_counter, OpenAITokenCounter)
         else await chat_count_request(
             model_to_use,
             custom_llm_provider,
             _deployment_api_base(deployment_view),
-            responses_request,
-            _count_drop_policy(routed_deployment, responses_request),
+            routed_request,
+            _count_drop_policy(routed_deployment, routed_request),
         )
     )
     if isinstance(chat_count, ChatCountBridgeError):
@@ -15402,7 +15406,7 @@ async def count_request_tokens(
             count_with=_native_responses_count(
                 provider_counter,
                 custom_llm_provider,
-                responses_request,
+                routed_request,
                 routed_deployment,
                 request.model,
             )

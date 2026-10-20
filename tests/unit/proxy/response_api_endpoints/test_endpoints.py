@@ -4172,11 +4172,13 @@ class TestResponsesInputTokens:
         counter: AsyncMock | None = None,
         llm_router: litellm.Router | None = None,
         response_id_security: object | None = None,
+        managed_files: object | None = None,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.response_api_endpoints.endpoints import (
             _proxy_llm_router,
+            _proxy_managed_files_hook,
             _proxy_response_id_security,
             _proxy_token_counter,
         )
@@ -4199,6 +4201,8 @@ class TestResponsesInputTokens:
         app.dependency_overrides[_proxy_llm_router] = lambda: llm_router
         if response_id_security is not None:
             app.dependency_overrides[_proxy_response_id_security] = lambda: response_id_security
+        if managed_files is not None:
+            app.dependency_overrides[_proxy_managed_files_hook] = lambda: managed_files
         try:
             client = TestClient(app)
             response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
@@ -4208,6 +4212,7 @@ class TestResponsesInputTokens:
             app.dependency_overrides.pop(_proxy_token_counter, None)
             app.dependency_overrides.pop(_proxy_llm_router, None)
             app.dependency_overrides.pop(_proxy_response_id_security, None)
+            app.dependency_overrides.pop(_proxy_managed_files_hook, None)
 
     def test_string_input_returns_openai_input_tokens_shape(self):
         response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "Hello, how are you?"})
@@ -4380,6 +4385,49 @@ class TestResponsesInputTokens:
             "resp_raw",
             "resp_client_form",
         )
+
+    def test_managed_file_ids_reach_the_counter_with_the_mapping_inference_uses(self) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        mapping: Final = {"litellm-managed-file": {"deployment-a": "file-on-a"}}
+
+        class ManagedFiles(CustomLogger):
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                if call_type == "aresponses":
+                    data["model_file_id_mapping"] = mapping
+                return None
+
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+            },
+            managed_files=ManagedFiles(),
+        )
+
+        assert response.status_code == 200, response.text
+        assert counter.await_args.kwargs["responses_request"]["model_file_id_mapping"] == mapping
+
+    def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        denied: Final = "User u1 does not have access to the file litellm-managed-file"
+
+        class ManagedFiles(CustomLogger):
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                raise HTTPException(status_code=403, detail=denied)
+
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+            },
+            managed_files=ManagedFiles(),
+        )
+
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["message"] == denied
+        counter.assert_not_awaited()
 
     def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self) -> None:
         router: Final = litellm.Router(

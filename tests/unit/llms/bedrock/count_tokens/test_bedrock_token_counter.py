@@ -196,9 +196,10 @@ def _invoke_body(request: httpx.Request) -> dict[str, JsonValue]:
                 "json_schema": {"name": "city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
             }
         },
+        {"reasoning_effort": "low"},
     ],
 )
-async def test_mantle_fallback_counts_the_options_bedrock_runtime_counts(chat_params: dict[str, JsonValue]) -> None:
+async def test_runtime_count_leaves_out_the_options_only_mantle_counts(chat_params: dict[str, JsonValue]) -> None:
     runtime_counts: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
     mantle_counts: Final = _Bedrock(runtime=(404, UNSUPPORTED), mantle=(200, {"input_tokens": 2177}))
     request: Final = {
@@ -215,12 +216,16 @@ async def test_mantle_fallback_counts_the_options_bedrock_runtime_counts(chat_pa
     await _counter(runtime_counts).count_tokens(**request)
     await _counter(mantle_counts).count_tokens(**request)
 
+    assert runtime_counts.posted_hosts() == (RUNTIME_HOST,)
     assert mantle_counts.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+    options: Final = ("thinking", "tool_choice", "output_config")
     invoke_body: Final = _invoke_body(runtime_counts.requests[0])
     mantle_body: Final = _JSON_BODY.validate_json(mantle_counts.requests[1].content)
-    counted: Final = {name: invoke_body[name] for name in ("thinking", "tool_choice", "output_config") if name in invoke_body}
-    assert counted
-    assert {name: mantle_body.get(name) for name in counted} == counted
+    assert [name for name in options if name in invoke_body] == []
+    assert [name for name in options if name in mantle_body] != []
+    assert {name: mantle_body[name] for name in ("messages", "tools")} == {
+        name: invoke_body[name] for name in ("messages", "tools")
+    }
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import re
 import threading
@@ -1590,14 +1589,6 @@ def _tool_use_fields(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {field: body[field] for field in _TOOL_USE_FIELDS if field in body}
 
 
-def _invoke_count_body(request: Request) -> dict[str, JsonValue]:
-    count_input: Final = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_json(request.body)["input"])
-    invoke_model: Final = _JSON_OBJECT.validate_python(count_input["invokeModel"])
-    encoded: Final = invoke_model["body"]
-    assert isinstance(encoded, str), invoke_model
-    return _JSON_OBJECT.validate_json(base64.b64decode(encoded))
-
-
 def _converse_count_tools(request: Request) -> JsonValue:
     count_input: Final = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_json(request.body)["input"])
     converse: Final = _JSON_OBJECT.validate_python(count_input["converse"])
@@ -1608,7 +1599,7 @@ def _requests_to(requests: Sequence[Request], pattern: re.Pattern[str]) -> tuple
     return tuple(request for request in requests if pattern.match(target_of(request)))
 
 
-def test_responses_input_tokens_sends_both_bedrock_counters_the_tool_use_invoke_inference_sends(
+def test_responses_input_tokens_sends_mantle_the_tool_use_invoke_inference_sends(
     counting_proxy: OwnedProxy, mantle_port: int
 ) -> None:
     gateway: Final = counting_proxy.gateway
@@ -1629,11 +1620,10 @@ def test_responses_input_tokens_sends_both_bedrock_counters_the_tool_use_invoke_
         assert _payload(response)["input_tokens"] == _MANTLE_COUNT, response.text
         requests: Final = runtime.drain()
         (invoked,) = _requests_to(requests, _INVOKE_TARGET)
-        (runtime_count,) = _requests_to(requests, _COUNT_TARGET)
         (mantle_count,) = _mantle_bodies(mantle)
         expected: Final = _tool_use_fields(_JSON_OBJECT.validate_json(invoked.body))
         assert set(expected) == set(_TOOL_USE_FIELDS), expected
-        assert _tool_use_fields(_invoke_count_body(runtime_count)) == expected
+        assert _requests_to(requests, _COUNT_TARGET) == ()
         assert _tool_use_fields(mantle_count) == expected, mantle_count
 
 

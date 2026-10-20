@@ -5,6 +5,11 @@ from typing import Final, cast  # noqa: TID251  # input items are forwarded as s
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    update_responses_input_with_model_file_ids,
+    update_responses_tools_with_model_file_ids,
+)
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
 from litellm.responses.additional_tools import hoist_additional_tools
@@ -26,6 +31,10 @@ _MAPPINGS: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(tu
 _JSON_PARAMS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
 _ENTRY: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _MARKED_ENTRY_LISTS: Final = frozenset({"content", "tool_calls"})
+_FILE_ID_MAPPING: Final[TypeAdapter[Mapping[str, Mapping[str, str]] | None]] = TypeAdapter(
+    Mapping[str, Mapping[str, str]] | None
+)
+MODEL_FILE_ID_MAPPING_FIELD: Final = "model_file_id_mapping"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +74,40 @@ def _unmarked_entries(value: object) -> object:
         if isinstance(value, list)
         else value
     )
+
+
+def _routed_model_id(deployment: Mapping[str, object] | None) -> str | None:
+    model_info: Final = as_str_mapping(None if deployment is None else deployment.get("model_info")) or {}
+    model_id: Final = model_info.get("id")
+    return model_id if isinstance(model_id, str) else None
+
+
+def with_provider_file_ids(
+    responses_request: Mapping[str, object], deployment: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    mapping: Final = _FILE_ID_MAPPING.validate_python(responses_request.get(MODEL_FILE_ID_MAPPING_FIELD))
+    model_id: Final = _routed_model_id(deployment)
+    fields: Final = {name: value for name, value in responses_request.items() if name != MODEL_FILE_ID_MAPPING_FIELD}
+    tools: Final = fields.get("tools")
+    return {
+        **fields,
+        **(
+            {"input": update_responses_input_with_model_file_ids(fields["input"], model_id, mapping)}
+            if "input" in fields
+            else {}
+        ),
+        **(
+            {
+                "tools": update_responses_tools_with_model_file_ids(
+                    cast(list[dict[str, object]], tools),  # cast-ok: entries that are not tools pass through as sent
+                    model_id,
+                    mapping,
+                )
+            }
+            if isinstance(tools, list)
+            else {}
+        ),
+    }
 
 
 def _with_hoisted_additional_tools(responses_request: Mapping[str, object]) -> Mapping[str, object]:
