@@ -81,6 +81,8 @@ beforeEach(() => {
           };
           return Response.json(usage);
         }
+        case "/management/v1/users/me":
+          return Response.json({ user_id: "layout-admin", user_role: "proxy_admin", user_email: null });
         case "/sso/get/ui_settings":
           return Response.json({});
         case "/get/user_banner":

@@ -17,7 +17,7 @@ import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -42,6 +42,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.redis_batch import active_request_redis_batches
+from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -159,6 +160,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
+from litellm.proxy.management_endpoints.ptu_consumption import single_team_id, with_ptu_consumption
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -177,6 +179,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
+    USER_ROWS_LOCK_SQL,
     AccessGroupSyncTx,
     invalidate_access_group_caches,
     reconcile_team_access_group_membership,
@@ -189,6 +192,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     invalidate_cached_object_permissions,
     set_object_permission,
 )
+from litellm.proxy.management_helpers.ptu_share_guard import raise_if_teams_hold_ptu_shares
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
@@ -203,6 +207,7 @@ from litellm.proxy.management_helpers.utils import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -413,8 +418,16 @@ class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
     def litellm_teammembership(self) -> "TableActions[prisma_models.LiteLLM_TeamMembership]": ...
 
 
-_STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
-UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
+_STRIP_DELETED_TEAMS_FROM_USERS_SQL: Final = """
+UPDATE "LiteLLM_UserTable"
+SET teams = ARRAY(
+    SELECT kept.team_id FROM unnest(teams) WITH ORDINALITY AS kept(team_id, position)
+    WHERE kept.team_id <> ALL($1::text[])
+    ORDER BY kept.position
+)
+WHERE user_id IN (
+    SELECT user_id FROM "LiteLLM_UserTable" WHERE teams && $1::text[] ORDER BY user_id COLLATE "C" FOR UPDATE
+)
 """
 
 _INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
@@ -3131,6 +3144,17 @@ async def _update_team_members_list(
     )
 
 
+def _user_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_UserTable]":
+    return tx.litellm_usertable  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
+async def _lock_requested_member_rows(tx: "Prisma", members: Sequence[Member]) -> None:
+    emails_only: Final = tuple(m.user_email for m in members if m.user_id is None and m.user_email is not None)
+    matched: Final = await find_many_in(_user_tx_db(tx), "user_email", emails_only)
+    named: Final = (m.user_id for m in members if m.user_id is not None)
+    await tx.query_raw(USER_ROWS_LOCK_SQL, sorted({*named, *(row.user_id for row in matched)}))
+
+
 async def _add_team_members_to_team(
     data: TeamMemberAddRequest,
     complete_team_data: LiteLLM_TeamTable,
@@ -3147,6 +3171,9 @@ async def _add_team_members_to_team(
     lock around its own sweep-and-delete, so the two can never interleave; whichever
     acquires the lock first runs to completion before the other's re-read can proceed.
 
+    Every existing user row the request names is locked through ``USER_ROWS_LOCK_SQL`` before
+    the first member write, so a list of members never waits on a SCIM group push in a cycle.
+
     The user and membership writes run on this transaction too, not on a second
     connection from the pool: a lock waiter that needs a connection it hasn't got yet is
     a waiter that can deadlock the pool, since enough concurrent adds for one team would
@@ -3160,6 +3187,7 @@ async def _add_team_members_to_team(
         if locked_members is None:
             raise HTTPException(status_code=404, detail=gone_detail)
         complete_team_data.members_with_roles = locked_members
+        await _lock_requested_member_rows(tx, (data.member,) if isinstance(data.member, Member) else data.member)
 
         updated_users, updated_team_memberships = await _process_team_members(
             data=data,
@@ -4505,6 +4533,7 @@ async def delete_team(
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
         litellm_proxy_admin_name,
+        llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -4535,6 +4564,8 @@ async def delete_team(
             team_access_denied()
 
         team_rows.append(team_row_pydantic)
+
+    raise_if_teams_hold_ptu_shares(data.team_ids, llm_router)
 
     await _persist_deleted_team_records(
         teams=team_rows,
@@ -4644,7 +4675,7 @@ async def delete_team(
     # or is still waiting on the lock, in which case its own re-read happens after this commits
     # and sees the row gone before it writes anything.
     delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": data.team_ids}}
-    async with prisma_client.tx() as tx:
+    async with prisma_client.tx(timeout=timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)) as tx:
         for team_id in sorted(data.team_ids):
             await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
         await tx.litellm_teamtable.delete_many(where=delete_filter)
@@ -4687,11 +4718,12 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
     rows that already drifted, which is the state this was reported against, so the sweep still has
     to run on delete.
 
-    `array_remove` rather than read-filter-write: rewriting the whole array from a snapshot read
-    outside a transaction drops any team a concurrent `/team/member_add` appended in between.
+    One statement filters the array in place rather than read-filter-write: rewriting the whole
+    array from a snapshot read outside a transaction drops any team a concurrent `/team/member_add`
+    appended in between. It locks the user rows in the order `USER_ROWS_LOCK_SQL` takes them, so it
+    never waits on a SCIM group push in a cycle.
     """
-    for team_id in team_ids:
-        _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+    _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, list(team_ids))
 
     _ = await _team_membership_db(prisma_client).delete_many(where=_TeamIdInFilter(team_id={"in": tuple(team_ids)}))
 
@@ -4699,8 +4731,7 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
 async def _sweep_deleted_team_references_tx(team_ids: Sequence[str], tx: _TeamDeleteTx) -> None:
     """Same sweep as `_sweep_deleted_team_references`, run on the transaction that holds
     every id's advisory lock and deletes the team rows, so it commits or rolls back with them."""
-    for team_id in team_ids:
-        _ = await tx.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+    _ = await tx.execute_raw(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, list(team_ids))
 
     membership_filter: Final[_TeamIdInFilter] = {"team_id": {"in": tuple(team_ids)}}
     _ = await tx.litellm_teammembership.delete_many(where=membership_filter)
@@ -5312,6 +5343,52 @@ async def team_member_me(
     )
 
 
+async def _set_team_blocked(
+    team_id: str,
+    blocked: bool,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> "prisma_models.LiteLLM_TeamTable":
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise Exception("No DB Connected.")
+
+    existing_team: Final = await _team_db(prisma_client).find_unique(where={"team_id": team_id})
+    if existing_team is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={team_id}"},
+        )
+
+    if not await get_team_access().allows(
+        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+    ):
+        team_access_denied()
+
+    record: Final = await _team_db(prisma_client).update(
+        where={"team_id": team_id},
+        data={"blocked": blocked},
+        include=_TEAM_UPDATE_INCLUDE,
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={team_id}"},
+        )
+
+    await refresh_cached_team(
+        team_row=record,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    return record.model_copy(update=dict.fromkeys(_TEAM_UPDATE_INCLUDE))
+
+
 @router.post("/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def block_team(
@@ -5341,30 +5418,7 @@ async def block_team(
 
 
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise Exception("No DB Connected.")
-
-    existing_team: Final = await _team_db(prisma_client).find_unique(where={"team_id": data.team_id})
-    if existing_team is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found, passed team_id={data.team_id}"},
-        )
-
-    # Verify caller has access to manage this team
-    if not await get_team_access().allows(
-        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
-    ):
-        team_access_denied()
-
-    record: Final = await _team_db(prisma_client).update(
-        where={"team_id": data.team_id},
-        data={"blocked": True},
-    )
-
-    return record
+    return await _set_team_blocked(team_id=data.team_id, blocked=True, user_api_key_dict=user_api_key_dict)
 
 
 @router.post("/team/unblock", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
@@ -5390,30 +5444,7 @@ async def unblock_team(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise Exception("No DB Connected.")
-
-    existing_team: Final = await _team_db(prisma_client).find_unique(where={"team_id": data.team_id})
-    if existing_team is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found, passed team_id={data.team_id}"},
-        )
-
-    # Verify caller has access to manage this team
-    if not await get_team_access().allows(
-        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
-    ):
-        team_access_denied()
-
-    record: Final = await _team_db(prisma_client).update(
-        where={"team_id": data.team_id},
-        data={"blocked": False},
-    )
-
-    return record
+    return await _set_team_blocked(team_id=data.team_id, blocked=False, user_api_key_dict=user_api_key_dict)
 
 
 @router.get(
@@ -6848,6 +6879,7 @@ async def get_team_daily_activity(
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
     from litellm.proxy.proxy_server import (
+        llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -6866,7 +6898,7 @@ async def get_team_daily_activity(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    return await get_daily_activity(
+    activity: Final = await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
@@ -6880,6 +6912,7 @@ async def get_team_daily_activity(
         page=page,
         page_size=page_size,
     )
+    return with_ptu_consumption(activity, llm_router, single_team_id(scope.team_ids))
 
 
 _MAX_AGGREGATED_RANGE_DAYS: Final = 400

@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from enum import Enum
 from types import MappingProxyType
@@ -17,7 +18,10 @@ OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
 # Replies depend on the caller's delegated identity, which response-cache keys do not include.
-RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot"})
+RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})
+CLAUDE_CODE_PICKER_PATTERN: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
+GATEWAY_CLIENT_HEADER: Final = "x-gateway-client"
+CLAUDE_CODE_CLIENT: Final = "claude-code"
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
 GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
@@ -36,6 +40,14 @@ class ServerStreamingClassification(str, Enum):
 SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
+KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS", 5.0
+)
+KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS: Final = get_env_float(
+    "KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS", 300.0
+)
+KUBERNETES_POD_DISCOVERY_DNS_TIMEOUT_SECONDS: Final = 2.0
+KUBERNETES_POD_ROUTING_KEY: Final = "kubernetes_pod_routing"
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = get_env_int("ROUTER_MAX_FALLBACKS", 5)
@@ -57,6 +69,7 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "model_group_retry_policy",
         "model_group_alias",
         "enable_weighted_failover",
+        "enable_mid_stream_fallback_continuation",
         "enable_tag_filtering",
         "tag_routing_prefix",
         "optional_pre_call_checks",
@@ -106,6 +119,7 @@ DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY: Final = get_env_int("DEFAULT_S3_MAX_ADAPTIV
 S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS: Final = get_env_int_in_range("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 30, 1, 3600)
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+MAX_S3_OBJECT_KEY_FILENAME_BYTES: Final = 255
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
 S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
@@ -145,6 +159,7 @@ HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
 # Streams exceeding this duration are terminated with a Timeout error.
 # None (default) = no limit.  Set env var to a number of seconds to enable globally.
 LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = get_env_float_or_none("LITELLM_MAX_STREAMING_DURATION_SECONDS")
+MID_STREAM_FAILURE_LOG_WAIT_SECONDS: Final = 1.0
 
 # Maximum number of base64 characters to keep in logging payloads.
 # Data URIs exceeding this are replaced with a size placeholder.
@@ -237,6 +252,13 @@ MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS: Final = get_env_int("MCP_PER_USER_TOKE
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT: Final = get_env_float("LITELLM_MCP_CLIENT_TIMEOUT", 60.0)
 MCP_TOOL_LISTING_TIMEOUT: Final = get_env_float("LITELLM_MCP_TOOL_LISTING_TIMEOUT", 30.0)
+MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES: Final = get_env_int("LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES", 3)
+MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS: Final = get_env_float(
+    "LITELLM_MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS", 0.5
+)
+MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS: Final = get_env_float(
+    "LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS", 5.0
+)
 MCP_METADATA_TIMEOUT: Final = get_env_float("LITELLM_MCP_METADATA_TIMEOUT", 10.0)
 MCP_HEALTH_CHECK_TIMEOUT: Final = get_env_float("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", 10.0)
 AGENT_HEALTH_CHECK_TIMEOUT_SECONDS: Final = get_env_float("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", 5.0)
@@ -379,6 +401,7 @@ REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES: Final = get_env_int_or_none("REALTIME
 REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
     "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 20.0
 )
+BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS: Final = get_env_float("BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS", 5.0)
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
@@ -387,7 +410,7 @@ DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
 NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
 
-BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
+BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_opening_message"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
 BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY: Final = "litellm.bedrock_realtime.committed_failure"
 BEDROCK_REALTIME_SDK_DISTRIBUTION: Final = "aws-sdk-bedrock-runtime"
@@ -845,6 +868,8 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
     }
 )
 
+A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
+
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
     "azure",
@@ -965,7 +990,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES: Final = {
     "context_management": None,
 }
 
-openai_compatible_endpoints: Final[list] = [
+openai_compatible_endpoints: Final[list[str]] = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
@@ -1021,6 +1046,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
+    "https://api.openinfer.ai/v1",
 ]
 
 
@@ -1089,6 +1115,7 @@ openai_compatible_providers: Final[list] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "openinfer",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
@@ -1133,6 +1160,7 @@ _openai_like_providers: Final[list[str]] = [
     "databricks",
     "lemonade",
     "watsonx",
+    "inferenceapis",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
 replicate_models: Final[set] = set(
@@ -1244,14 +1272,6 @@ together_ai_models: Final[set] = set(
 )
 # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-
-baseten_models: Final[set] = set(
-    [
-        "qvv0xeq",
-        "q841o8w",
-        "31dxrj3",
-    ]
-)  # FALCON 7B  # WizardLM  # Mosaic ML
 
 featherless_ai_models: Final[set] = set(
     [
@@ -1610,6 +1630,7 @@ CLOUDZERO_EXPORT_INTERVAL_MINUTES: Final = get_env_int("CLOUDZERO_EXPORT_INTERVA
 MCP_TOOL_NAME_PREFIX: Final = "mcp_tool"
 MAXIMUM_TRACEBACK_LINES_TO_LOG: Final = get_env_int("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100)
 PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS: Final = 4096
+INTERNAL_CALLBACK_NAMES: Final = frozenset({"cache", "vector_store_pre_call_hook"})
 
 # Headers to control callbacks
 X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"
@@ -1621,10 +1642,13 @@ OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_to
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
+VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
+CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
     "Truncation is a DB storage safeguard. "
@@ -1656,6 +1680,7 @@ DEFAULT_SOFT_BUDGET: Final = get_env_float(
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY: Final = "LiteLLM Virtual Key user_api_key_hash"
 # Prefix of the 401 raised when a submitted virtual key is not shaped like one.
 INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
+INVALID_API_KEY_ERROR_MESSAGE: Final = "Authentication Error, Invalid API key provided."
 # Attribute stamped on that 401 at its raise site so log routing recognises it by
 # provenance. Message text is caller-influenceable on other 401s, so it must not
 # be used to classify.
@@ -1700,6 +1725,7 @@ AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:tran
 AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
 AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
 AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
+AWS_ERROR_TYPE_HEADER: Final = "x-amzn-errortype"
 AZURE_SPEECH_SHORT_AUDIO_MODEL: Final = "short-audio"
 AZURE_SPEECH_BATCH_MODEL: Final = "batch-transcription"
 AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL: Final = "fast-transcription"
@@ -1850,6 +1876,7 @@ SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = get_env_int("SPEND_COUNTER_RESEED_L
 PROXY_DB_LOOKUP_MAX_CONCURRENCY: Final = max(1, get_env_int("PROXY_DB_LOOKUP_MAX_CONCURRENCY", 25))
 PROXY_DB_LOOKUP_DEADLINE_SECONDS: Final = max(0.1, get_env_float("PROXY_DB_LOOKUP_DEADLINE_SECONDS", 10.0))
 PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS: Final = max(0.0, get_env_float("PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS", 30.0))
+TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS: Final = 30
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = get_env_int("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)  # 1 minute
 PROXY_BUDGET_RESCHEDULER_MIN_TIME: Final = get_env_int("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
 RESET_BUDGET_JOB_BATCH_SIZE: Final = max(1, get_env_int("RESET_BUDGET_JOB_BATCH_SIZE", 500))
@@ -1861,7 +1888,13 @@ RESET_BUDGET_JOB_NAME: Final = "reset_budget_job"
 RESET_BUDGET_JOB_LOCK_TTL_SECONDS: Final[int] = 900
 PROXY_BATCH_POLLING_INTERVAL: Final = get_env_int("PROXY_BATCH_POLLING_INTERVAL", 3600)
 MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, get_env_int("MAX_OBJECTS_PER_POLL_CYCLE", 50))
+# raw request and result bytes per batch line-item object, so a large batch is built and stored one part at a time
+BATCH_LINE_ITEMS_MAX_PART_BYTES: Final = get_env_int_in_range(
+    "BATCH_LINE_ITEMS_MAX_PART_BYTES", 16 * 1024 * 1024, 1, 1024 * 1024 * 1024
+)
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, get_env_int("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
+PENDING_RESPONSE_STATUSES: Final = ("queued", "in_progress")
+TERMINAL_RESPONSE_STATUSES: Final = frozenset({"completed", "failed", "cancelled", "incomplete"})
 BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS: Final = 10.0
 BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS: Final = 60
 STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, get_env_int("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
@@ -1883,6 +1916,7 @@ _background_interaction_cost_polling_env: Final = os.getenv(
     "BACKGROUND_INTERACTION_COST_POLLING_ENABLED", "true"
 ).lower()
 BACKGROUND_INTERACTION_COST_POLLING_ENABLED: Final = _background_interaction_cost_polling_env == "true"
+BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS: Final = 300.0
 PROXY_BUDGET_RESCHEDULER_MAX_TIME: Final = get_env_int("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 PROXY_BATCH_WRITE_AT: Final = get_env_int("PROXY_BATCH_WRITE_AT", 10)  # in seconds, increased from 10
 PROXY_CONFIG_RELOAD_INTERVAL_SECONDS: Final = get_env_int("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS", 30)

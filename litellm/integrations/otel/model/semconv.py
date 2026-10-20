@@ -340,6 +340,8 @@ class LiteLLM:
     # semconv key for an MCP server's *name* (the convention uses ``server.address``
     # for its network location), so it lives under the vendor namespace.
     MCP_SERVER_NAME: Final = "litellm.mcp.server.name"
+    CACHE_HIT: Final = "litellm.cache_hit"
+    SAVED_CACHE_COST: Final = "litellm.saved_cache_cost"
 
 
 class Metric:

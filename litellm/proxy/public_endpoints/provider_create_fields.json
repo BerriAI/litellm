@@ -2446,6 +2446,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Nace",
+    "provider_display_name": "Nace",
+    "litellm_provider": "nace",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://console.nace.ai",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "nace/drex-latest"
+  },
+  {
     "provider": "NEBIUS",
     "provider_display_name": "Nebius",
     "litellm_provider": "nebius",
@@ -2734,6 +2762,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "OPENINFER",
+    "provider_display_name": "OpenInfer",
+    "litellm_provider": "openinfer",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.openinfer.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "openinfer/@oi/Qwen3.5-27B"
   },
   {
     "provider": "OPENAI_LIKE",
@@ -3350,6 +3406,34 @@
       }
     ],
     "default_model_placeholder": "scx-ai/GLM-5.2"
+  },
+  {
+    "provider": "INFERENCEAPIS",
+    "provider_display_name": "Inference APIs",
+    "litellm_provider": "inferenceapis",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.inferenceapis.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "inferenceapis/deepseek-ai/DeepSeek-V4-Flash"
   },
   {
     "provider": "Snowflake",

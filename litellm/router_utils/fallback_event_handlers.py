@@ -7,10 +7,13 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx
+
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
+from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -24,6 +27,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_stream_stall,
     set_cooldown_deployments,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -68,6 +72,13 @@ def _trigger_cooldown_for_failed_deployment(
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: failure originated "
                 "from advisor orchestration, not the selected deployment."
+            )
+            return
+
+        if is_stream_stall(exception):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: its stream stalled on a read timeout, "
+                "which stays out of cooldown as it does for the primary deployment."
             )
             return
 
@@ -132,8 +143,8 @@ def _trigger_cooldown_for_failed_deployment(
             if deployment_dict is not None
             else None
         )
-        exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
-            original_exception=exception
+        exception_headers: Final[httpx.Headers | None] = (
+            litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(original_exception=exception)
         )
         _get_retry_after: Final = (
             litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py
@@ -613,6 +624,32 @@ def get_fallback_model_group(
     return fallback_model_group, generic_fallback_idx
 
 
+def _resolved_fallback_chain(entries: Sequence[object], lookup_groups: tuple[str, ...]) -> Sequence[object]:
+    group_entries: Final[Sequence[Mapping[str, list[str]]]] = tuple(  # mutable-ok: mirrors the fallbacks config shape
+        entry for entry in entries if isinstance(entry, Mapping) and entry
+    )
+    chain, _ = get_fallback_model_group_for_lookup_groups(fallbacks=group_entries, lookup_groups=lookup_groups)
+    return chain if isinstance(chain, list) else ()
+
+
+def continuation_fallback_targets(fallbacks: object, lookup_groups: tuple[str, ...]) -> Sequence[object]:
+    entries: Final[Sequence[object]] = fallbacks if isinstance(fallbacks, list) else ()
+    return (
+        entries
+        if check_non_standard_fallback_format(fallbacks=entries)
+        else _resolved_fallback_chain(entries, lookup_groups)
+    )
+
+
+def fallback_target_overrides_request_params(target: object) -> bool:
+    return isinstance(target, Mapping) and "model" in target and len(target) > 1
+
+
+def fallback_target_name(target: object) -> str | None:
+    name: Final = target.get("model") if isinstance(target, Mapping) else target
+    return name if isinstance(name, str) else None
+
+
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
 PROVIDER_SCOPED_RESOURCE_FUNCTION_NAMES: Final = frozenset(
     {
@@ -780,6 +817,7 @@ async def run_async_fallback(
     for target in fallback_model_group:
         if isinstance(target, dict):
             reject_server_owned_wif_params(target)
+            reject_api_key_secret_reference(target)
 
     for mg in fallback_model_group:
         if mg == failed_model_group:
