@@ -41,7 +41,7 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
-from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
+from litellm.litellm_core_utils.internal_call_metadata import requests_background, without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -974,7 +974,7 @@ class BaseResponsesAPIStreamingIterator:
         generated_text: Final = self._generated_content + self._generated_tool_arguments
         if (
             not generated_text
-            or self.request_data.get("background") is True
+            or requests_background(self.request_data)
             or self.logging_obj.model_call_details.get("combined_usage_object") is not None
         ):
             return
@@ -990,7 +990,12 @@ class BaseResponsesAPIStreamingIterator:
         usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the success path above uses
             estimate
         )
-        self.logging_obj.record_assembled_response_for_failure(ModelResponse(model=self.model, usage=usage))
+        served_tier: Final[object] = getattr(self._created_response, "service_tier", None)
+        self.logging_obj.record_assembled_response_for_failure(
+            ModelResponse(
+                model=self.model, usage=usage, service_tier=served_tier if isinstance(served_tier, str) else None
+            )
+        )
 
     def _handle_failure(self, exception: Exception):
         """
@@ -1068,9 +1073,8 @@ class BaseResponsesAPIStreamingIterator:
         Its response is the response.created payload (it carries the served
         service_tier) plus the text and tool arguments relayed so far, with counted
         usage since the provider never sent any. None when nothing was relayed yet,
-        the stream already reached its terminal event and billed itself, its failure
-        log already billed the relayed output, or it runs in the background, where
-        retrieving it bills the whole run.
+        the stream already reached its terminal event and billed itself, or its failure
+        log already billed the relayed output.
         """
         created: Final = self._created_response
         generated: Final = self._generated_content + self._generated_tool_arguments
@@ -1096,9 +1100,7 @@ class BaseResponsesAPIStreamingIterator:
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _billed_without_disconnect(self) -> bool:
-        return (
-            self.completed_response is not None or self._failure_handled or self.request_data.get("background") is True
-        )
+        return self.completed_response is not None or self._failure_handled
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True

@@ -129,7 +129,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
 )
-from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
@@ -1991,9 +1991,15 @@ class _ClientStreamFailureReport:
         self.logging_obj.on_detached_stream_failure = self.report
         if self.held is None:
             return
+        await asyncio.shield(
+            spawn_logging_task(
+                asyncio.get_running_loop(), self._report_held(self.held), task_name="stream failure report"
+            )
+        )
+
+    async def _report_held(self, failure: Exception) -> None:
         try:
-            with anyio.CancelScope(shield=True):
-                await self.report(self.held)
+            await self.report(failure)
         except Exception as hook_failure:  # noqa: BLE001  # a failing failure hook must not skip the stream cleanup
             verbose_proxy_logger.warning(
                 "Stream failure hook raised: %s(%s)", type(hook_failure).__name__, sanitize_for_log(hook_failure)
@@ -4549,16 +4555,18 @@ class ProxyBaseLLMRequestProcessing:
             seal: Final = "" if seal_open_frame is None else seal_open_frame(recent_tail)
             yield seal + error_frame if seal else error_frame
         finally:
-            await release_stream_failure()
-            await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
-                request=request,
-                request_data=request_data,
-                response=response,
-                stream_completed=stream_completed,
-                client_disconnected=client_disconnected,
-                user_api_key_dict=user_api_key_dict,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            try:
+                await release_stream_failure()
+            finally:
+                await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+                    request=request,
+                    request_data=request_data,
+                    response=response,
+                    stream_completed=stream_completed,
+                    client_disconnected=client_disconnected,
+                    user_api_key_dict=user_api_key_dict,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
 
     @staticmethod
     def async_sse_data_generator(

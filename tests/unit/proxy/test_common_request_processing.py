@@ -10676,12 +10676,19 @@ class TestResolveLitellmCallId:
 class _FailureHookRecorder:
     """Stands in for ProxyLogging.post_call_failure_hook, recording what the detached-failure closure hands it."""
 
-    def __init__(self, raises: Optional[Exception] = None):
+    def __init__(self, raises: Optional[Exception] = None, gate: Optional[asyncio.Event] = None):
         self.calls = []
+        self.entered = asyncio.Event()
+        self.reported = asyncio.Event()
         self._raises = raises
+        self._gate = gate
 
     async def post_call_failure_hook(self, **kwargs):
+        self.entered.set()
+        if self._gate is not None:
+            await self._gate.wait()
         self.calls.append(kwargs)
+        self.reported.set()
         if self._raises is not None:
             raise self._raises
 
@@ -10782,7 +10789,7 @@ class TestDetachedStreamFailureHook:
         assert [call["original_exception"] for call in recorder.calls] == [failure]
 
     @staticmethod
-    def _armed_stream(recorder: _FailureHookRecorder, iterator_hook_for):
+    def _armed_stream(recorder: _FailureHookRecorder, iterator_hook_for, response: Optional[MagicMock] = None):
         from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
 
         logging_obj = LiteLLMLoggingObj(
@@ -10806,7 +10813,7 @@ class TestDetachedStreamFailureHook:
             proxy_logging_obj=proxy_logging_obj,
         )
         stream = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
-            response=MagicMock(),
+            response=MagicMock() if response is None else response,
             user_api_key_dict=user_api_key_dict,
             request_data=processing_obj.data,
             proxy_logging_obj=proxy_logging_obj,
@@ -10873,6 +10880,30 @@ class TestDetachedStreamFailureHook:
             assert recorder.calls == []
 
         assert frames == ["data: chunk\n\n"] * 3
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_report_and_stream_cleanup_survive_the_client_task_being_cancelled_mid_report(self):
+        gate = asyncio.Event()
+        recorder = _FailureHookRecorder(gate=gate)
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        response = MagicMock()
+        response.aclose = AsyncMock()
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure), response=response)
+
+        async def client_reads_the_whole_stream():
+            return [frame async for frame in stream]
+
+        client = asyncio.create_task(client_reads_the_whole_stream())
+        await asyncio.wait_for(recorder.entered.wait(), timeout=5)
+        client.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await client
+
+        response.aclose.assert_awaited_once()
+        gate.set()
+        await asyncio.wait_for(recorder.reported.wait(), timeout=5)
         assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
 
     @pytest.mark.asyncio

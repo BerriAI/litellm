@@ -270,7 +270,7 @@ async def _failure_payload_after_mid_stream_timeout(
     monkeypatch: pytest.MonkeyPatch,
     request_input: str | list[dict[str, object]],
     upstream: _UpstreamThatTimesOutAfterThreeDeltas | None = None,
-    background: bool = False,
+    background_fields: Mapping[str, object] | None = None,
 ) -> tuple[FailureRecorder, StandardLoggingPayload]:
     upstream_response: Final = upstream or _UpstreamThatTimesOutAfterThreeDeltas()
     recorder = FailureRecorder()
@@ -290,7 +290,7 @@ async def _failure_payload_after_mid_stream_timeout(
         responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=logging_obj,
         custom_llm_provider="openai",
-        request_data={"model": "gpt-5.4-nano", "input": request_input, "stream": True, "background": background},
+        request_data={"model": "gpt-5.4-nano", "input": request_input, "stream": True, **(background_fields or {})},
     )
     received = _ChunkRecorder()
 
@@ -336,11 +336,18 @@ async def test_mid_stream_read_timeout_bills_the_tool_call_arguments_already_str
     assert payload["response_cost"] > 0
 
 
+@pytest.mark.parametrize(
+    "background_fields",
+    [{"background": True}, {"extra_body": {"background": True}}],
+    ids=["top_level", "extra_body"],
+)
 @pytest.mark.asyncio
 async def test_mid_stream_failure_of_a_background_response_bills_nothing_since_retrieving_it_bills_the_whole_run(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, background_fields: Mapping[str, object]
 ) -> None:
-    _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT, background=True)
+    _, payload = await _failure_payload_after_mid_stream_timeout(
+        monkeypatch, _SEA_PROMPT, background_fields=background_fields
+    )
 
     assert payload["status"] == "failure"
     assert payload["completion_tokens"] == 0
@@ -462,6 +469,55 @@ class _UpstreamThatTimesOutAfterRelayingText:
         raise httpx.ReadTimeout("Timeout on reading data from socket")
 
 
+class _UpstreamServedAtTierThatTimesOut:
+    headers: dict[str, str] = {}
+
+    def __init__(self, served_tier: str) -> None:
+        self.served_tier = served_tier
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        created: Final = {
+            **_CREATED_WITH_PRIORITY_TIER,
+            "response": {**_CREATED_RESPONSE_WITH_PRIORITY_TIER, "service_tier": self.served_tier},
+        }
+        for event in (created, _text_delta("Once upon a time", 1)):
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+
+async def _mid_stream_failure_cost(
+    monkeypatch: pytest.MonkeyPatch, requested_tier: str | None, served_tier: str
+) -> float:
+    recorder: Final = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    logging_obj: Final = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True} if requested_tier is None else {"stream": True, "service_tier": requested_tier},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    iterator: Final = _live_iterator(logging_obj, upstream=_UpstreamServedAtTierThatTimesOut(served_tier))
+
+    with pytest.raises(litellm.Timeout):
+        await _ChunkRecorder().drain(iterator)
+    await iterator._await_pending_logging()
+
+    (payload,) = recorder.failure_payloads
+    return payload["response_cost"]
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_bills_the_relayed_text_at_the_tier_the_provider_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flex_requested_default_served: Final = await _mid_stream_failure_cost(monkeypatch, "flex", "default")
+    nothing_requested_default_served: Final = await _mid_stream_failure_cost(monkeypatch, None, "default")
+
+    assert nothing_requested_default_served > 0
+    assert flex_requested_default_served == nothing_requested_default_served
+
+
 def test_partial_response_on_disconnect_bills_the_relayed_text_at_the_served_service_tier():
     iterator: Final = _live_iterator(_make_logging_obj())
     for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time ", 1), _text_delta("a fox slept.", 2)):
@@ -516,9 +572,12 @@ async def test_partial_response_on_disconnect_is_none_once_the_failure_log_bille
     await iterator._await_pending_logging()
 
 
-def test_partial_response_on_disconnect_is_none_for_a_background_response():
+def test_partial_response_on_disconnect_reports_the_relayed_text_of_a_background_response():
     iterator: Final = _live_iterator(_make_logging_obj(), background=True)
     for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time", 1)):
         iterator._process_chunk(json.dumps(event))
 
-    assert iterator.partial_response_on_disconnect() is None
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete_event is not None
+    assert incomplete_event.response.output[0].content[0].text == "Once upon a time"
