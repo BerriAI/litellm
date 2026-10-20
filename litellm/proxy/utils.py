@@ -1407,7 +1407,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
     _base_model: Final = get_base_model_from_metadata(model_call_details=_model_call_details)
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
-    _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_claimed
+    _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
     _billed: Final = provider_billed and not _success_already_logged
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,

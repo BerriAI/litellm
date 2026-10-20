@@ -894,6 +894,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
             }
         )
         assert logging_obj.claim_async_success_log()
+        logging_obj.mark_async_success_log_enqueued()
         request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
         await self._run(
             request_data,
@@ -903,6 +904,48 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         )
 
         assert request_data.get("response_cost", 0.0) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_with_a_claimed_but_deferred_success_log_is_still_priced(self):
+        """With a post_call guardrail registered the success log is claimed but parked in the deferred slot,
+        and a 499 raised before the flush means it never runs. Nothing else bills that request, so the
+        failure row keeps the estimated input cost."""
+        from datetime import datetime
+
+        from fastapi import HTTPException
+
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "count these input tokens please"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime(2026, 1, 1, 12, 0, 0),
+            litellm_call_id="deferred-success-never-flushed",
+            function_id="fn",
+        )
+        logging_obj.model_call_details.update(
+            {
+                "first_api_call_start_time": datetime(2026, 1, 1, 12, 0, 1),
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "count these input tokens please"}],
+                "call_type": "acompletion",
+            }
+        )
+        logging_obj.defer_async_logging = True
+        assert logging_obj.claim_async_success_log()
+        logging_obj.enqueue_deferred_logging = lambda: None
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(
+            request_data,
+            original_exception=HTTPException(
+                status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail="Client disconnected the request"
+            ),
+        )
+
+        assert request_data["response_cost"] > 0.0
 
     @pytest.mark.asyncio
     async def test_client_disconnect_before_provider_handoff_is_not_priced(self):
