@@ -34,6 +34,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
@@ -585,14 +586,11 @@ class TestProxyBaseLLMRequestProcessing:
                 **({"priority": body_priority} if body_priority is not None else {}),
             }
         )
-        proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
-        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
-
         returned_data, _ = await processing_obj.common_processing_pre_call_logic(
             request=request,
             general_settings={},
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
-            proxy_logging_obj=proxy_logging_obj,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
             proxy_config=RealProxyConfig(),
             route_type=route_type,
             llm_router=router,
