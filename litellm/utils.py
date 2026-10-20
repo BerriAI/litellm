@@ -1540,10 +1540,12 @@ async def _client_async_logging_helper(
         )
 
 
-def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tuple[int | None, dict[str, Any]]:
+def _get_wrapper_num_retries(
+    kwargs: dict[str, Any], exception: Exception
+) -> tuple[int | None | Exception, dict[str, Any]]:
     """
     Get the number of retries from the kwargs and the retry policy.
-    Used for the wrapper functions.
+    Used for the wrapper functions. A malformed retry policy comes back as its parse error in place of the count.
     """
 
     num_retries = kwargs.get("num_retries", None)
@@ -1553,7 +1555,10 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
     if not retry_policy:
         return num_retries, kwargs
     kwargs["retry_policy"] = retry_policy
-    retry_policy_num_retries: Final[int | None] = _get_retry_policy_num_retries(kwargs, exception)
+    try:
+        retry_policy_num_retries: Final[int | None] = _get_retry_policy_num_retries(kwargs, exception)
+    except (AttributeError, TypeError, ValueError) as retry_policy_error:
+        return retry_policy_error, kwargs
     if retry_policy_num_retries is None:
         return num_retries, kwargs
     return retry_policy_num_retries, kwargs
@@ -1584,6 +1589,32 @@ def _add_retry_context(error: Exception, kwargs: Mapping[str, object]) -> None:
     if deployment_num_retries is not None:
         setattr(error, "num_retries", deployment_num_retries)
     setattr(error, "timeout", _get_wrapper_timeout(kwargs=kwargs))
+
+
+_RETRY_ATTEMPT_KWARG: Final = "_litellm_wrapper_retry_attempt"
+
+
+def _with_retry_policy_spent(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    if not kwargs.get("retry_policy"):
+        return {**kwargs}
+    return {**kwargs, "retry_policy": litellm_utils.reset_retry_policy()}
+
+
+async def _end_async_wrapper_failure(
+    logging_obj: LiteLLMLoggingObject,
+    error: Exception,
+    traceback_exception: str,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    log_failure: bool,
+) -> None:
+    unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
+    if not log_failure:
+        return
+    logging_obj.failure_handler(
+        error, traceback_exception, start_time, end_time
+    )  # DO NOT MAKE THREADED - router retry fallback relies on this!
+    await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
 
 
 def check_coroutine(value) -> bool:
@@ -2065,6 +2096,8 @@ def client(original_function):
         except Exception as e:
             if call_type == CallTypes.completion.value:
                 num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
+                if isinstance(num_retries, Exception):
+                    raise num_retries
                 litellm.num_retries = None  # set retries to None to prevent infinite loops
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
@@ -2087,9 +2120,10 @@ def client(original_function):
                     and not is_completion_litellm_router_call
                 ):
                     fallback_model: Final = context_window_fallback_dict[model]
-                    if len(args) > 0:
-                        return original_function(fallback_model, *args[1:], **kwargs)
-                    return original_function(*args, **{**kwargs, "model": fallback_model})
+                    fallback_kwargs: Final = _with_retry_policy_spent(kwargs)
+                    if args:
+                        return original_function(fallback_model, *args[1:], **fallback_kwargs)
+                    return original_function(*args, **{**fallback_kwargs, "model": fallback_model})
             elif call_type == CallTypes.responses.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
                 if kwargs.get("retry_policy", None):
@@ -2146,6 +2180,7 @@ def client(original_function):
         model: Final[str | None] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks: Final = kwargs.get("fallbacks") is not None
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
+        is_wrapper_retry_attempt: Final = kwargs.pop(_RETRY_ATTEMPT_KWARG, None) is True
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
         request_kwargs: Final = {**kwargs}
@@ -2363,7 +2398,8 @@ def client(original_function):
 
             return result
         except Exception as e:
-            num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
+            wrapper_num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
+            num_retries: Final = None if isinstance(wrapper_num_retries, Exception) else wrapper_num_retries
             is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
             retries_apply: Final = (
                 call_type == CallTypes.acompletion.value
@@ -2390,10 +2426,19 @@ def client(original_function):
                         *args,
                         original_function=litellm.acompletion,
                         _initial_exception=e,
-                        **{**request_kwargs, "num_retries": num_retries},
+                        **{**request_kwargs, "num_retries": num_retries, _RETRY_ATTEMPT_KWARG: True},
                     )
                 except openai.APIError as retry_err:
                     _add_retry_context(retry_err, kwargs)
+                    if logging_obj and not _is_litellm_internal_call:
+                        await _end_async_wrapper_failure(
+                            logging_obj,
+                            retry_err,
+                            traceback.format_exc(),
+                            start_time,
+                            datetime.datetime.now(),  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
+                            log_failure=True,
+                        )
                     raise
                 except Exception as retry_unavailable:
                     verbose_logger.debug("acompletion retries did not run: %s", retry_unavailable)
@@ -2403,17 +2448,16 @@ def client(original_function):
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
             if logging_obj and not _is_litellm_internal_call:
-                unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
-                try:
-                    logging_obj.failure_handler(
-                        e, traceback_exception, start_time, end_time
-                    )  # DO NOT MAKE THREADED - router retry fallback relies on this!
-                except Exception as e:
-                    raise e
-                try:
-                    await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)
-                except Exception as e:
-                    raise e
+                await _end_async_wrapper_failure(
+                    logging_obj,
+                    e,
+                    traceback_exception,
+                    start_time,
+                    end_time,
+                    log_failure=not is_wrapper_retry_attempt,
+                )
+            if isinstance(wrapper_num_retries, Exception):
+                raise wrapper_num_retries
 
             if call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
@@ -2425,9 +2469,10 @@ def client(original_function):
                     and not is_acompletion_litellm_router_call
                 ):
                     fallback_model: Final = context_window_fallback_dict[model]
-                    if len(args) > 0:
-                        return await original_function(fallback_model, *args[1:], **kwargs)
-                    return await original_function(*args, **{**kwargs, "model": fallback_model})
+                    fallback_kwargs: Final = _with_retry_policy_spent(kwargs)
+                    if args:
+                        return await original_function(fallback_model, *args[1:], **fallback_kwargs)
+                    return await original_function(*args, **{**fallback_kwargs, "model": fallback_model})
             elif call_type == CallTypes.aresponses.value:
                 is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
@@ -2442,7 +2487,7 @@ def client(original_function):
                             kwargs["retry_strategy"] = "exponential_backoff_retry"
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
-                        result = await litellm.aresponses_with_retries(*args, **kwargs)
+                        result = await litellm.aresponses_with_retries(*args, **_with_retry_policy_spent(kwargs))
                     except Exception:
                         pass
                     else:

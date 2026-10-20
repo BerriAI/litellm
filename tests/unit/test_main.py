@@ -24,6 +24,7 @@ import respx
 from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
+from pydantic import ValidationError
 
 import litellm
 from litellm import (
@@ -10385,6 +10386,95 @@ async def test_retried_completion_logs_only_the_outcome_the_caller_gets(
     await _finish_logging(logging_futures)
 
     assert tuple(recorder.outcomes) == expected_outcomes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "later_responses, expected_outcomes",
+    [
+        pytest.param(
+            lambda: [_provider_error(429), httpx.Response(200, json=_ANTHROPIC.ok_body)],
+            ("success",),
+            id="429-429-200",
+        ),
+        pytest.param(
+            lambda: [_provider_error(429), _provider_error(401)],
+            ("failure:AuthenticationError",),
+            id="429-429-401",
+        ),
+        pytest.param(
+            lambda: [_provider_error(429), _provider_error(429)],
+            ("failure:RateLimitError",),
+            id="429-429-429",
+        ),
+    ],
+)
+async def test_async_completion_retried_twice_logs_only_the_outcome_the_caller_gets(
+    retry_upstream: respx.MockRouter,
+    logging_futures: queue.SimpleQueue[Future[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    later_responses: Callable[[], list[httpx.Response]],
+    expected_outcomes: tuple[str, ...],
+):
+    recorder: Final = _OutcomeRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(side_effect=[_provider_error(429), *later_responses()])
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        try:
+            await _completion_with_retries_kwargs(False, _ANTHROPIC, num_retries=2)
+        except (litellm.AuthenticationError, litellm.RateLimitError):
+            pass
+    await _finish_logging(logging_futures)
+
+    assert route.call_count == 3
+    assert tuple(recorder.outcomes) == expected_outcomes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retry_policy", "policy_error"),
+    [("not-a-policy", AttributeError), ({"AuthenticationErrorRetries": "bad"}, ValidationError)],
+    ids=["str", "bad-count"],
+)
+async def test_async_completion_with_a_malformed_retry_policy_still_logs_the_failure(
+    retry_upstream: respx.MockRouter,
+    logging_futures: queue.SimpleQueue[Future[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    retry_policy: object,
+    policy_error: type[Exception],
+):
+    recorder: Final = _OutcomeRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(401))
+
+    with pytest.raises(policy_error):
+        await _completion_with_retries_kwargs(False, _ANTHROPIC, num_retries=1, retry_policy=retry_policy)
+    await _finish_logging(logging_futures)
+
+    assert route.call_count == 1
+    assert tuple(recorder.outcomes) == ("failure:AuthenticationError",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("num_retries", [None, 2], ids=["policy-only", "policy-and-num-retries"])
+async def test_aresponses_bridged_to_chat_applies_its_retry_policy_only_on_the_first_attempt(
+    retry_upstream: respx.MockRouter, num_retries: int | None
+):
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(401))
+    retry_kwargs: Final = {} if num_retries is None else {"num_retries": num_retries}
+
+    with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(litellm.AuthenticationError):
+        await litellm.aresponses(
+            model=_ANTHROPIC.model,
+            input="hi",
+            api_base=_ANTHROPIC.api_base,
+            api_key="test-key",
+            retry_policy=RetryPolicy(AuthenticationErrorRetries=2),
+            **retry_kwargs,
+        )
+
+    assert route.call_count == 5
 
 
 @pytest.mark.asyncio
