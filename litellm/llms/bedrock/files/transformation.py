@@ -375,11 +375,15 @@ def _json_object(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
 
 
-def _batch_record_shape_problem(record: object) -> str | None:
-    record_object: Final = _json_object(record)
-    if record_object is None:
-        return "is not a JSON object"
-    body: Final = _json_object(record_object.get("body"))
+def _batch_json_object(line_number: int, line: str) -> _OpenAIBatchRecord:
+    record: Final = _load_batch_line(line_number, line)
+    if _json_object(record) is None:
+        raise _batch_line_error(line_number, "is not a JSON object")
+    return record
+
+
+def _batch_body_problem(record: Mapping[str, object]) -> str | None:
+    body: Final = _json_object(record.get("body"))
     if body is None:
         return "has a body that is missing or not a JSON object"
     if "model" in body and not isinstance(body["model"], str):
@@ -388,8 +392,8 @@ def _batch_record_shape_problem(record: object) -> str | None:
 
 
 def _batch_input_line(line_number: int, line: str) -> _BatchInputLine:
-    record: Final = _load_batch_line(line_number, line)
-    problem: Final = _batch_record_shape_problem(record)
+    record: Final = _batch_json_object(line_number, line)
+    problem: Final = _batch_body_problem(record)
     if problem is not None:
         raise _batch_line_error(line_number, problem)
     return _BatchInputLine(line_number=line_number, record=record)
@@ -404,14 +408,15 @@ def _parse_batch_jsonl(file_content: str) -> tuple[_BatchInputLine, ...]:
     return tuple(_batch_input_line(line_number, line) for line_number, line in _non_blank_lines(file_content))
 
 
-def _first_batch_record_model(file_content: str) -> str | None:
-    first_line: Final = next(_non_blank_lines(file_content), None)
-    if first_line is None:
+def _batch_file_model(file_content: str) -> str | None:
+    records: Final = tuple(
+        _batch_json_object(line_number, line) for line_number, line in _non_blank_lines(file_content)
+    )
+    if not records:
         return None
-    try:
-        return _batch_input_line(*first_line).record.get("body", {}).get("model", "")
-    except BedrockError:
-        return None
+    body: Final = _json_object(records[0].get("body"))
+    model: Final = body.get("model") if body is not None else None
+    return model if isinstance(model, str) else ""
 
 
 def _batch_s3_object_name(model: str) -> str:
@@ -644,7 +649,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if purpose == "batch":
             ## 1. If jsonl, check if there's a model name
             file_content: Final = self._get_content_from_openai_file(extracted_file_data_content)
-            batch_model: Final = _first_batch_record_model(file_content)
+            batch_model: Final = _batch_file_model(file_content)
             if batch_model is not None:
                 return _batch_s3_object_name(batch_model)
 
