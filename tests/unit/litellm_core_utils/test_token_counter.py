@@ -2173,8 +2173,11 @@ def test_prefixed_openai_model_names_count_text_like_the_model_they_name(deploym
 
 
 @pytest.mark.parametrize("model", ["azure/gpt-chat-latest", "azure/codex-mini"])
-def test_azure_openai_models_only_azure_lists_get_openai_pdf_pricing(model: str):
+def test_azure_openai_models_only_azure_lists_get_openai_pricing_and_o200k(model: str):
     assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,))) == _text_cost(model, _REVENUE_LINE) + 13
+    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
+        tiktoken.get_encoding("o200k_base").encode(_NON_LATIN_SAMPLE)
+    )
 
 
 @pytest.mark.parametrize(

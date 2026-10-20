@@ -833,7 +833,10 @@ def _tiktoken_model_name(model: str) -> str:
     listed_name: Final = _fix_model_name(model)
     if listed_name != "gpt-3.5-turbo":
         return listed_name
-    return _fix_model_name(_openai_model_family(model) or model)
+    family: Final = _openai_model_family(model)
+    if family is not None:
+        return _fix_model_name(family)
+    return _openai_deployment_name(model) if _is_azure_openai_chat_model(model) else listed_name
 
 
 def _is_listed_non_chat_model(model: str) -> bool:
