@@ -2428,6 +2428,20 @@ def _assert_breakdown_agrees_with_the_billed_cost(row: StandardLoggingPayload) -
     assert breakdown is None or breakdown["total_cost"] == pytest.approx(row["response_cost"])
 
 
+def _request_failure_row(logging_obj: Logging, success_row: StandardLoggingPayload) -> Mapping[str, object]:
+    failure_row: Final = _failure_fields_to_lift(MappingProxyType({"litellm_logging_obj": logging_obj}))
+    failure_payload: Final = cast(StandardLoggingPayload, failure_row["standard_logging_object"])
+    assert failure_payload["status"] == "failure"
+    assert failure_payload["id"] != success_row["id"]
+    return failure_row
+
+
+def _assert_billed_tokens(row: Mapping[str, object], tokens: tuple[int, int]) -> None:
+    usage: Final = row["combined_usage_object"]
+    assert isinstance(usage, Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens) == tokens
+
+
 def _assert_one_row_bills(logged: tuple[StandardLoggingPayload, ...], body: Mapping[str, object]) -> None:
     usage: Final = cast(Mapping[str, int], body["usage"])
     assert len(logged) == 1
@@ -2509,6 +2523,7 @@ async def test_stream_auto_execute_bills_the_paid_first_round_on_its_success_row
 
     _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)
     assert [row["response_cost"] for row in recorder.failed] == [0.0]
+    assert _request_failure_row(logging_obj, recorder.logged[0]).get("response_cost", 0.0) == 0.0
 
 
 @pytest.mark.asyncio
@@ -2655,9 +2670,10 @@ async def test_stream_auto_execute_bills_a_failed_follow_up_on_its_own_failure_r
         (_streamed(_ROUND_ONE_BODY), _streamed(_ROUND_TWO_BODY, status="failed", error=server_error)),
     )
     recorder: Final = _RoundRecorder()
+    logging_obj: Final = _rounds_logging_obj(recorder, "mcp-stream-follow-up-failed")
 
     with pytest.raises(litellm.ServiceUnavailableError):
-        await _stream_auto_execute(_rounds_logging_obj(recorder, "mcp-stream-follow-up-failed"))
+        await _stream_auto_execute(logging_obj)
     await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
 
     _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)
@@ -2665,6 +2681,9 @@ async def test_stream_auto_execute_bills_a_failed_follow_up_on_its_own_failure_r
     assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (149, 5)
     assert recorder.failed[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY) - _FIXED_MARGIN)
     _assert_breakdown_agrees_with_the_billed_cost(recorder.failed[0])
+    failure_row: Final = _request_failure_row(logging_obj, recorder.logged[0])
+    _assert_billed_tokens(failure_row, (149, 5))
+    assert failure_row["response_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY) - _FIXED_MARGIN)
 
 
 _XAI_MODEL: Final = "xai/grok-4.7"
@@ -3065,11 +3084,10 @@ async def test_bridged_stream_auto_execute_bills_a_broken_follow_up_on_its_own_f
         _ANTHROPIC_MESSAGES_URL,
     )
     recorder: Final = _RoundRecorder()
+    logging_obj: Final = _rounds_logging_obj(recorder, "mcp-bridged-stream-breaks")
 
     with _echo_tool_served("PING"), pytest.raises(MidStreamFallbackError):
-        await _drain(
-            await _open_bridged_stream_auto_execute(_rounds_logging_obj(recorder, "mcp-bridged-stream-breaks"))
-        )
+        await _drain(await _open_bridged_stream_auto_execute(logging_obj))
     await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
 
     assert len(recorder.logged) == 1
@@ -3079,6 +3097,9 @@ async def test_bridged_stream_auto_execute_bills_a_broken_follow_up_on_its_own_f
     assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (470, 0)
     assert recorder.failed[0]["response_cost"] == pytest.approx(_bridged_round_cost(470, 0) - _FIXED_MARGIN)
     _assert_breakdown_agrees_with_the_billed_cost(recorder.failed[0])
+    failure_row: Final = _request_failure_row(logging_obj, recorder.logged[0])
+    _assert_billed_tokens(failure_row, (470, 0))
+    assert failure_row["response_cost"] == pytest.approx(_bridged_round_cost(470, 0) - _FIXED_MARGIN)
 
 
 @pytest.mark.asyncio

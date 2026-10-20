@@ -363,7 +363,6 @@ class BaseResponsesAPIStreamingIterator:
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
     _earlier_rounds_spend: BilledRoundsSpend | None = None
-    _logs_failure_apart_from_earlier_rounds: bool = False
 
     def __init__(
         self,
@@ -689,7 +688,6 @@ class BaseResponsesAPIStreamingIterator:
             getattr(self.completed_response, "response", None) if self.completed_response else None
         )
         error_info: Final = getattr(response_obj, "error", None) if response_obj else None
-        self._log_failure_apart_from_earlier_rounds()
         self._record_failed_response_usage(response_obj)
         self._handle_failure(self._map_error_event_exception(error_info))
 
@@ -716,12 +714,6 @@ class BaseResponsesAPIStreamingIterator:
 
     def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
         self._earlier_rounds_spend = earlier
-
-    def _log_failure_apart_from_earlier_rounds(self) -> None:
-        if self._earlier_rounds_spend is None or self._logs_failure_apart_from_earlier_rounds:
-            return
-        self._logs_failure_apart_from_earlier_rounds = True
-        self.logging_obj = self.logging_obj.attempt_scoped_copy()
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
         return _map_stream_error_to_exception(
@@ -983,7 +975,6 @@ class BaseResponsesAPIStreamingIterator:
         if self._failure_handled:
             return
         self._failure_handled = True
-        self._log_failure_apart_from_earlier_rounds()
 
         traceback_exception: Final = traceback.format_exc()
         end_time: Final = datetime.now()
