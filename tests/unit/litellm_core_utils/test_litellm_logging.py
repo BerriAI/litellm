@@ -10095,6 +10095,40 @@ class TestAzurePTUSpilloverCost:
         finally:
             self._unregister_models()
 
+    def test_spillover_payload_reports_the_pay_as_you_go_entry_billing_used(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="True", litellm_rate=0.0, monkeypatch=monkeypatch)
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+            response_cost: Final = obj.response_cost_calculator(result=response)
+
+            payload: Final = get_standard_logging_object_payload(
+                kwargs={
+                    "model": self.SERVED_MODEL,
+                    "custom_llm_provider": "azure",
+                    "litellm_params": obj.litellm_params,
+                    "response_cost": response_cost,
+                },
+                init_response_obj=response,
+                start_time=datetime.datetime.now(),
+                end_time=datetime.datetime.now(),
+                logging_obj=obj,
+                status="success",
+            )
+
+            assert response_cost == pytest.approx(self.EXPECTED_SPILL_COST)
+            assert payload is not None
+            model_map_value: Final = payload["model_map_information"]["model_map_value"]
+            assert model_map_value is not None
+            assert model_map_value["input_cost_per_token"] == litellm.model_cost[self.SERVED_MODEL]["input_cost_per_token"]
+            assert model_map_value["output_cost_per_token"] == litellm.model_cost[self.SERVED_MODEL]["output_cost_per_token"]
+            assert response_cost == pytest.approx(
+                100 * model_map_value["input_cost_per_token"] + 50 * model_map_value["output_cost_per_token"]
+            )
+        finally:
+            self._unregister_models()
+
     def test_spillover_header_does_not_touch_non_ptu_custom_pricing(self, monkeypatch) -> None:
         self._register_models()
         custom_model_id: Final = "non-ptu-custom-router-model-id"
