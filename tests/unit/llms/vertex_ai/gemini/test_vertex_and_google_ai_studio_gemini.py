@@ -27,7 +27,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
     _log_gemini_sampling_params_deprecated,
 )
-from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
+from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -3737,6 +3737,169 @@ def test_get_optional_params_gemini_3_has_no_default_temperature(
 
     assert "temperature" not in optional_params
     assert optional_params["thinkingConfig"]["thinkingLevel"] == "medium"
+
+
+_SAMPLING_PARAMS: Final = {"temperature": 0.3, "top_p": 0.9, "top_k": 20}
+
+
+def _gemini_config(config_cls: Literal["vertex", "studio"]) -> VertexGeminiConfig:
+    return VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+
+
+def _gemini_request_body(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
+) -> RequestBody:
+    from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
+
+    return transform_request_body(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini-zeta-9",
+        optional_params=optional_params,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        cached_content=None,
+    )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("param", ["temperature", "top_p"])
+def test_get_optional_params_raises_a_400_naming_drop_params_for_a_flagged_gemini_model(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], param: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Google ignores sampling params on models flagged ``supports_sampling_params: false``, so without
+    drop_params the caller gets the 400 that names the escape hatch instead of a 200 that lied (#47015)"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as excinfo:
+        get_optional_params(
+            model="gemini-zeta-9", custom_llm_provider=custom_llm_provider, **{param: _SAMPLING_PARAMS[param]}
+        )
+
+    assert excinfo.value.status_code == 400
+    assert param in str(excinfo.value)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_allowed_openai_params_still_forwards_a_sampling_param_the_map_flags_off(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 400 tells the caller to send allowed_openai_params, so that escape hatch has to work"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    optional_params: Final = get_optional_params(
+        model="gemini-zeta-9",
+        custom_llm_provider=custom_llm_provider,
+        temperature=0.3,
+        allowed_openai_params=["temperature"],
+    )
+
+    assert optional_params["temperature"] == 0.3
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_top_k_is_stripped_from_the_request_body_of_a_flagged_gemini_model_under_drop_params(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """top_k is a provider-specific kwarg that skips the shared unsupported-param check, so it is gated
+    where the request body is built"""
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    body: Final = _gemini_request_body(
+        custom_llm_provider, {"top_k": 20, "max_output_tokens": 10}, {"drop_params": True}
+    )
+
+    assert body["generationConfig"] == {"max_output_tokens": 10}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_top_k_raises_a_400_naming_drop_params_for_a_flagged_gemini_model(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as excinfo:
+        _gemini_request_body(custom_llm_provider, {"top_k": 20}, {})
+
+    assert excinfo.value.status_code == 400
+    assert "top_k" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("row", [{"supports_sampling_params": True}, {}], ids=["flag_true", "flag_absent"])
+def test_gemini_keeps_forwarding_sampling_params_unless_the_model_map_flags_them_off(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], row: dict[str, bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit true and a model the map says nothing about both keep today's pass-through, top_k included"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", row)
+
+    optional_params: Final = get_optional_params(
+        model="gemini-zeta-9", custom_llm_provider=custom_llm_provider, drop_params=True, **_SAMPLING_PARAMS
+    )
+    body: Final = _gemini_request_body(custom_llm_provider, dict(optional_params), {"drop_params": True})
+
+    assert body["generationConfig"] == _SAMPLING_PARAMS
+
+
+@pytest.mark.parametrize("model_key", ["gemini-zeta-9", "vertex_ai/gemini-zeta-9", "gemini/gemini-zeta-9"])
+def test_gemini_sampling_flag_is_read_from_whichever_provider_row_carries_it(
+    model_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, model_key, {"supports_sampling_params": False})
+
+    result: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"temperature": 0.3},
+        optional_params={},
+        model="gemini-zeta-9",
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+
+
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_gemini_supported_openai_params_omit_sampling_params_when_flagged_off(
+    config_cls: Literal["vertex", "studio"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    supported: Final = set(_gemini_config(config_cls).get_supported_openai_params("gemini-zeta-9"))
+
+    assert not supported & set(_SAMPLING_PARAMS)
+    assert "max_tokens" in supported
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_get_optional_params_drops_sampling_params_for_a_flagged_gemini_model_under_drop_params(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The path every SDK and proxy call takes, on both the Vertex and the AI Studio route"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    optional_params: Final = get_optional_params(
+        model="gemini-zeta-9",
+        custom_llm_provider=custom_llm_provider,
+        temperature=0.3,
+        top_p=0.9,
+        max_tokens=10,
+        drop_params=True,
+    )
+
+    assert "temperature" not in optional_params
+    assert "top_p" not in optional_params
+    assert optional_params["max_output_tokens"] == 10
 
 
 def test_media_resolution_from_detail_parameter():

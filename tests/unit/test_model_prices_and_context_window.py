@@ -272,6 +272,27 @@ def test_vertex_gemini_flash_rows_carry_the_documented_retirement_date(prices: d
     assert prices[f"{prefix}{model}"]["deprecation_date"] == VERTEX_GEMINI_FLASH_RETIREMENT_DATES[model]
 
 
+def _sampling_flags_across_provider_twins(prices: Mapping[str, Mapping[str, object]], key: str) -> frozenset[object]:
+    bare: Final = key.split("/")[-1]
+    twins: Final = tuple(twin for twin in (bare, f"vertex_ai/{bare}", f"gemini/{bare}") if twin in prices)
+    return frozenset(prices[twin].get("supports_sampling_params") for twin in (key, *twins))
+
+
+def test_gemini_rows_agree_on_supports_sampling_params_across_their_provider_twins(
+    prices: Mapping[str, Mapping[str, object]],
+) -> None:
+    """The bare, vertex_ai/ and gemini/ rows of one Gemini model gate sampling params identically, so a request
+    takes the same drop-or-400 path on the Vertex route and the AI Studio route"""
+    flagged: Final = tuple(
+        key
+        for key, row in prices.items()
+        if "supports_sampling_params" in row and key.split("/")[-1].startswith("gemini-")
+    )
+    assert flagged
+    for key in flagged:
+        assert len(_sampling_flags_across_provider_twins(prices, key)) == 1, key
+
+
 OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")
 
 
