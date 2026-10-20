@@ -11,7 +11,7 @@ import anyio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final, Literal, Optional, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -315,6 +315,29 @@ def test_validated_admission_jwt_is_not_forwarded_as_an_extra_header(auth_type: 
     )
     assert upstream_headers == expected
     assert _openapi_forwarded_extra_headers(server, raw, user) == expected
+
+
+
+def _handler_answering(respond: Callable[[httpx.Request], httpx.Response]) -> AsyncHTTPHandler:
+    return AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+
+
+def _bearer_scope_read_challenge(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(401, headers={"WWW-Authenticate": 'Bearer scope="read"'})
+
+
+class _OpenEventStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.read_started: Final = asyncio.Event()
+        self.closed: Final = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        self.read_started.set()
+        await asyncio.Event().wait()
+        yield b": ping\n\n"
+
+    async def aclose(self) -> None:
+        self.closed.set()
 
 
 class TestMCPServerManager:
@@ -4510,12 +4533,6 @@ class TestMCPServerManager:
     ):
         manager = MCPServerManager()
 
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = MagicMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-
         mock_metadata = MCPOAuthMetadata(
             scopes=None,
             authorization_url="https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize",
@@ -4526,7 +4543,7 @@ class TestMCPServerManager:
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
-                return_value=mock_client,
+                return_value=_handler_answering(lambda request: httpx.Response(200)),
             ) as get_client,
             patch.object(
                 manager,
@@ -4567,11 +4584,6 @@ class TestMCPServerManager:
         full capability list."""
         manager = MCPServerManager()
 
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_client = MagicMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-
         authorization_server_metadata = MCPOAuthMetadata(
             scopes=["as.read", "as.write"],
             authorization_url="https://idp.example.com/authorize",
@@ -4581,7 +4593,7 @@ class TestMCPServerManager:
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
-                return_value=mock_client,
+                return_value=_handler_answering(lambda request: httpx.Response(200)),
             ),
             patch.object(
                 manager,
@@ -4598,6 +4610,107 @@ class TestMCPServerManager:
 
         assert result is not None
         assert result.scopes == ["resource.only"]
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_closes_an_open_event_stream_unread(self):
+        body = _OpenEventStream()
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/mcp":
+                return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=body)
+            return httpx.Response(404)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=_handler_answering(respond),
+        ):
+            discovery = asyncio.create_task(
+                MCPServerManager()._discover_metadata_recording_attempts(
+                    "https://stream.example.com/mcp", allow_origin_fallback=False
+                )
+            )
+            body_read = asyncio.create_task(body.read_started.wait())
+            await asyncio.wait((discovery, body_read), return_when=asyncio.FIRST_COMPLETED)
+            body_read.cancel()
+            discovery.cancel()
+
+        assert not body.read_started.is_set()
+        assert body.closed.is_set()
+        metadata, attempts = await discovery
+        assert metadata is None
+        assert "HTTP 200 (no RFC 9728 challenge)" in attempts[0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["config", "database"])
+    async def test_startup_discovery_moves_past_metadata_that_never_finishes(
+        self, source: str, monkeypatch: pytest.MonkeyPatch
+    ):
+        body: Final = _OpenEventStream()
+        documents: Final = MappingProxyType(
+            {
+                "/.well-known/oauth-protected-resource": {"authorization_servers": ["https://stuck.example.com"]},
+                "/.well-known/oauth-authorization-server": {
+                    "issuer": "https://stuck.example.com",
+                    "authorization_endpoint": "https://stuck.example.com/authorize",
+                    "token_endpoint": "https://stuck.example.com/token",
+                },
+            }
+        )
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/mcp":
+                return httpx.Response(200)
+            if request.url.path == "/.well-known/oauth-protected-resource/mcp":
+                return httpx.Response(200, headers={"Content-Type": "application/json"}, stream=body)
+            document: Final = documents.get(request.url.path)
+            return httpx.Response(404) if document is None else httpx.Response(200, json=document)
+
+        monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "1")
+        manager: Final = MCPServerManager()
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=_handler_answering(respond),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_METADATA_TIMEOUT", 0.05),
+        ):
+            if source == "config":
+                await asyncio.wait_for(
+                    manager.load_servers_from_config(
+                        {
+                            "stuck": {
+                                "url": "https://stuck.example.com/mcp",
+                                "transport": "http",
+                                "auth_type": "oauth2",
+                                "oauth2_flow": "authorization_code",
+                                "client_id": "qa-client",
+                            }
+                        }
+                    ),
+                    timeout=5,
+                )
+                server = next(iter(manager.config_mcp_servers.values()))
+            else:
+                server = await asyncio.wait_for(
+                    manager.build_mcp_server_from_table(
+                        LiteLLM_MCPServerTable(
+                            server_id="stuck",
+                            alias="stuck",
+                            url="https://stuck.example.com/mcp",
+                            transport=MCPTransport.http,
+                            auth_type=MCPAuth.oauth2,
+                            oauth2_flow="authorization_code",
+                            created_at=datetime.now(),
+                            updated_at=datetime.now(),
+                        ),
+                        credentials_are_encrypted=False,
+                    ),
+                    timeout=5,
+                )
+
+        assert body.read_started.is_set()
+        assert server.authorization_url == "https://stuck.example.com/authorize"
+        assert server.token_url == "https://stuck.example.com/token"
 
     @pytest.mark.asyncio
     async def test_fetch_single_authorization_server_metadata_supports_azure_issuer_path(
@@ -4784,21 +4897,6 @@ class TestMCPServerManager:
         manager = MCPServerManager()
         server_url = "https://example.com/public/mcp"
 
-        request = httpx.Request("GET", server_url)
-        response_obj = httpx.Response(
-            status_code=401,
-            request=request,
-            headers={"WWW-Authenticate": 'Bearer scope="read"'},
-        )
-
-        def raise_http_error():
-            raise httpx.HTTPStatusError("unauthorized", request=request, response=response_obj)
-
-        response_obj.raise_for_status = MagicMock(side_effect=raise_http_error)
-
-        mock_client = MagicMock()
-        mock_client.get = AsyncMock(return_value=response_obj)
-
         mock_metadata = MCPOAuthMetadata(
             scopes=None,
             authorization_url="https://example.com/auth",
@@ -4809,7 +4907,7 @@ class TestMCPServerManager:
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
-                return_value=mock_client,
+                return_value=_handler_answering(_bearer_scope_read_challenge),
             ),
             patch.object(
                 manager,
@@ -12341,22 +12439,11 @@ class TestOBOEndpointDiscovery:
         # resource origin is never assumed to be the IdP, so no token endpoint is invented.
         manager = MCPServerManager()
         server_url = "https://example.com/public/mcp"
-        request = httpx.Request("GET", server_url)
-        response_obj = httpx.Response(
-            status_code=401, request=request, headers={"WWW-Authenticate": 'Bearer scope="read"'}
-        )
-        response_obj.raise_for_status = MagicMock(
-            side_effect=lambda: (_ for _ in ()).throw(
-                httpx.HTTPStatusError("unauthorized", request=request, response=response_obj)
-            )
-        )
-        mock_client = MagicMock()
-        mock_client.get = AsyncMock(return_value=response_obj)
 
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
-                return_value=mock_client,
+                return_value=_handler_answering(_bearer_scope_read_challenge),
             ),
             patch.object(manager, "_fetch_oauth_metadata_from_resource", AsyncMock(return_value=([], None))),
             patch.object(manager, "_attempt_well_known_discovery", AsyncMock(return_value=([], None))),
@@ -13103,10 +13190,11 @@ class TestDiscoveryFailureLogging:
     Discovery failures used to die at debug level and the config-load path emitted no warning at
     all, so the only operator-facing signal was the bare 400 at /authorize."""
 
-    def _connect_error_client(self, url: str) -> MagicMock:
-        client = MagicMock()
-        client.get = AsyncMock(side_effect=httpx.ConnectError(f"[Errno 8] nodename nor servname provided for {url}"))
-        return client
+    def _connect_error_client(self, url: str) -> AsyncHTTPHandler:
+        def refuse(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError(f"[Errno 8] nodename nor servname provided for {url}", request=request)
+
+        return _handler_answering(refuse)
 
     @pytest.mark.asyncio
     async def test_descovery_metadata_warns_with_redacted_attempts_on_connect_error(self, caplog):
@@ -13147,12 +13235,10 @@ class TestDiscoveryFailureLogging:
     async def test_descovery_metadata_attempt_trail_names_each_failed_step(self, caplog):
         manager = MCPServerManager()
         url = "https://real-host.example.com/mcp-typo"
-        client = MagicMock()
-        client.get = AsyncMock(return_value=httpx.Response(404, request=httpx.Request("GET", url)))
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
-                return_value=client,
+                return_value=_handler_answering(lambda request: httpx.Response(404)),
             ),
             caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
