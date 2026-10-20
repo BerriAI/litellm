@@ -1330,6 +1330,67 @@ class TestUsageAiChatTeamModelRouting:
         assert router.acompletion.await_args.kwargs["metadata"]["user_api_key_team_id"] is None
         mock_litellm_acompletion.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_team_alias_routes_default_model_to_the_aliased_team_deployment(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            DEFAULT_COMPETITOR_DISCOVERY_MODEL,
+            check_usage_ai_chat_model_access,
+        )
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": DEFAULT_COMPETITOR_DISCOVERY_MODEL,
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-admin",
+                        "mock_response": "from the admin deployment",
+                    },
+                },
+                {
+                    "model_name": "team-gpt",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-team",
+                        "mock_response": "from the team deployment",
+                    },
+                },
+            ]
+        )
+        team_key: Final = UserAPIKeyAuth(
+            api_key="sk-test",
+            team_id="t1",
+            team_models=["team-gpt"],
+            team_model_aliases={DEFAULT_COMPETITOR_DISCOVERY_MODEL: "team-gpt"},
+        )
+
+        with (
+            patch(  # test-quality-ok: Ask AI reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the check reads the proxy_server.llm_model_list module global; no injection seam
+                "litellm.proxy.proxy_server.llm_model_list", router.model_list
+            ),
+            patch(  # test-quality-ok: the check reads the proxy_server.prisma_client module global; no injection seam
+                "litellm.proxy.proxy_server.prisma_client", None
+            ),
+        ):
+            await check_usage_ai_chat_model_access(user_api_key_dict=team_key, model=None)
+            events: Final = [
+                json.loads(raw.removeprefix("data: "))
+                async for raw in stream_usage_ai_chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model=None,
+                    is_admin=True,
+                    user_api_key_dict=team_key,
+                )
+            ]
+
+        assert {"type": "chunk", "content": "from the team deployment"} in events
+        assert {"type": "chunk", "content": "from the admin deployment"} not in events
+
 
 class TestUsageAiChatEndpointAccessCheck:
     @pytest.mark.asyncio

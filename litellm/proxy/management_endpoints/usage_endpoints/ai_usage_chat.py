@@ -482,7 +482,10 @@ async def _acompletion(
     user_api_key_dict: "UserAPIKeyAuth | None" = None,
 ) -> ModelResponse | CustomStreamWrapper:
     from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
-    from litellm.proxy.litellm_pre_call_utils import sanitized_user_api_key_auth
+    from litellm.proxy.litellm_pre_call_utils import (
+        resolve_team_model_alias,
+        sanitized_user_api_key_auth,
+    )
     from litellm.proxy.proxy_server import llm_router
     from litellm.types.llms.openai import AllMessageValues
 
@@ -490,10 +493,15 @@ async def _acompletion(
         list[AllMessageValues], messages
     )
     team_id: Final = user_api_key_dict.team_id if user_api_key_dict is not None else None
+    team_aliased_model: Final = (
+        resolve_team_model_alias(model, user_api_key_dict) if user_api_key_dict is not None else model
+    )
     model_aliases: Final = (
         key_model_aliases_for_auth_check(user_api_key_dict) if user_api_key_dict is not None else None
     )
-    resolved_model: Final = model_aliases.get(model, model) if model_aliases is not None else model
+    resolved_model: Final = (
+        model_aliases.get(team_aliased_model, team_aliased_model) if model_aliases is not None else team_aliased_model
+    )
     router_metadata: Final = (
         {
             "user_api_key_team_id": team_id,
