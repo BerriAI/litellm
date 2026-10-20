@@ -6331,7 +6331,7 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
 
     admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
     global_key = "{}:spend".format(admin_name)
-    user_seed = {"user_id": "user-lit", "spend": 1.0}
+    user_seed: Final = {"user_id": "user-lit", "spend": 1.0}
 
     def fake_get(key):
         if key == "user-lit":

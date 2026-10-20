@@ -10,6 +10,7 @@ import datetime
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -559,7 +560,7 @@ async def test_the_armed_update_cache_read_is_declared_under_the_spend_counters_
 
     redis_cache.service_logger_obj.async_service_success_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
 
-    keys = update_cache_read_keys(user_id="user-1", response_cost=1.0)
+    keys: Final = update_cache_read_keys(user_id="user-1", response_cost=1.0)
     with request_redis_batch_scope():
         await arm_update_cache_read(keys, cache=cache)
         await _read_update_cache_values(keys, None, cache=cache)

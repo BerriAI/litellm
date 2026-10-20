@@ -32,11 +32,13 @@ from opentelemetry.trace import Span
 
 import litellm.proxy.proxy_server as ps
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_local
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key, tag_cache_key
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
 
@@ -1754,3 +1756,66 @@ async def test_update_cache_adds_spend_to_the_entry_a_management_write_left_mid_
 
     stored: Final = cache.get_cache(key=key, local_only=True, model_type=type(seeded))
     assert ((stored.models, stored.spend) if stored is not None else None) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_cached_on_this_worker", [True, False])
+async def test_update_cache_adds_spend_to_the_global_proxy_counter_whether_or_not_the_user_is_cached(
+    user_cached_on_this_worker: bool,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0)
+    if user_cached_on_this_worker:
+        cache.set_cache(key="spender", value=LiteLLM_UserTable(user_id="spender", spend=1.0))
+
+    await ps.update_cache(
+        token=None,
+        user_id="spender",
+        end_user_id=None,
+        team_id=None,
+        response_cost=0.25,
+        parent_otel_span=None,
+        cache=cache,
+    )
+    await _drain_spend_cache_writes()
+
+    assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY) == 10.25
+
+
+class _UnwritableKeyUserApiKeyCache(UserApiKeyCache):
+    def __init__(self, unwritable_key: str) -> None:
+        super().__init__(in_memory_cache=InMemoryCache())
+        self._unwritable_key: Final = unwritable_key
+
+    def set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
+        if key == self._unwritable_key:
+            raise RuntimeError("cache write failed")
+        return super().set_cache(key, value, local_only=local_only, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_update_cache_still_adds_spend_to_the_others_when_one_cached_object_fails() -> None:
+    cache: Final = _UnwritableKeyUserApiKeyCache(unwritable_key="broken-user")
+    cache.in_memory_cache.set_cache(
+        key="broken-user",
+        value=CacheCodec.serialize(LiteLLM_UserTable(user_id="broken-user", spend=1.0), model_type=LiteLLM_UserTable),
+    )
+    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0)
+    cache.set_cache(key="team_id:still-billed", value=LiteLLM_TeamTableCachedObj(team_id="still-billed", spend=1.0))
+
+    await ps.update_cache(
+        token=None,
+        user_id="broken-user",
+        end_user_id=None,
+        team_id="still-billed",
+        response_cost=0.25,
+        parent_otel_span=None,
+        cache=cache,
+    )
+    await _drain_spend_cache_writes()
+
+    team: Final = cache.get_cache(key="team_id:still-billed", model_type=LiteLLM_TeamTableCachedObj)
+    assert (team.spend if team is not None else None, cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)) == (
+        1.25,
+        10.25,
+    )

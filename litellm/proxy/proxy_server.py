@@ -4296,10 +4296,10 @@ _CachedSpendObjectT = TypeVar(
 
 def _add_spend_to_locally_cached_object(
     cache: UserApiKeyCache, key: str, model_type: type[_CachedSpendObjectT], response_cost: float
-) -> bool:
+) -> None:
     current: Final = cache.get_cache(key=key, local_only=True, model_type=model_type)
     if current is None:
-        return False
+        return
     cache.set_cache(
         key=key,
         value=current.model_copy(update={"spend": (current.spend or 0.0) + response_cost}),
@@ -4307,7 +4307,6 @@ def _add_spend_to_locally_cached_object(
         model_type=model_type,
         ttl=get_management_object_ttl(cache),
     )
-    return True
 
 
 async def update_cache(
@@ -4384,9 +4383,9 @@ async def update_cache(
             )
             # set cooldown on alert
 
-    def _add_spend(key: str, model_type: type[_CachedSpendObjectT], cost: float) -> bool:
+    def _add_spend(key: str, model_type: type[_CachedSpendObjectT], cost: float) -> None:
         try:
-            return _add_spend_to_locally_cached_object(target, key, model_type, cost)
+            _add_spend_to_locally_cached_object(target, key, model_type, cost)
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update %s spend in cache. "
@@ -4398,7 +4397,6 @@ async def update_cache(
                 str(e),
                 traceback.format_exc(),
             )
-            return False
 
     with service_target(AUTH_OBJECTS_TARGET):
         if token is not None and response_cost is not None:
@@ -4406,7 +4404,8 @@ async def update_cache(
     if response_cost is None:
         return
 
-    user_cached: Final = user_id is not None and _add_spend(user_id, LiteLLM_UserTable, response_cost)
+    if user_id is not None:
+        _add_spend(user_id, LiteLLM_UserTable, response_cost)
     if end_user_id is not None:
         _add_spend(end_user_cache_key(end_user_id), LiteLLM_EndUserTable, response_cost)
     if team_id is not None:
@@ -4416,7 +4415,7 @@ async def update_cache(
             _add_spend(tag_cache_key(tag_name), LiteLLM_TagTable, response_cost)
 
     global_proxy_spend: Final = cached_values.get(GLOBAL_PROXY_SPEND_CACHE_KEY)
-    if not user_cached or not isinstance(global_proxy_spend, (int, float)):
+    if not isinstance(global_proxy_spend, (int, float)):
         return
     with service_target(SPEND_COUNTERS_TARGET):
         asyncio.create_task(
