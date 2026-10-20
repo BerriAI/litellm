@@ -139,6 +139,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
+from litellm.router_utils.get_retry_from_policy import get_num_retries_from_retry_policy
 from litellm.router_utils.reasoning_effort_capability import (
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
@@ -151,7 +152,7 @@ from litellm.types.completion import (
 )
 from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import GenericLiteLLMParams, RetryPolicy
 from litellm.types.utils import (
     BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
@@ -6405,15 +6406,25 @@ def _compute_retry_wait(
 
 
 _NUM_RETRIES_ADAPTER: Final = TypeAdapter(int)
+_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy)
+
+
+def _policy_retries_for(exc: BaseException | None, retry_policy: RetryPolicy | None) -> int | None:
+    if retry_policy is None or not isinstance(exc, Exception):
+        return None
+    return get_num_retries_from_retry_policy(exception=exc, retry_policy=retry_policy)
 
 
 def _build_retry_predicate(
     retry_policy_exception_type: type[BaseException] | None,
+    direct_retry_policy: RetryPolicy | None,
 ) -> Callable[[BaseException], bool]:
     """Check if an exception is transient or explicitly enabled via RetryPolicy."""
 
     def _predicate(e: BaseException) -> bool:
         if retry_policy_exception_type is not None and isinstance(e, retry_policy_exception_type):
+            return True
+        if (_policy_retries_for(e, direct_retry_policy) or 0) > 0:
             return True
         status_code: Final[object] = getattr(e, "status_code", None)
         if isinstance(status_code, int):
@@ -6421,6 +6432,18 @@ def _build_retry_predicate(
         return isinstance(e, (openai.APITimeoutError, openai.APIConnectionError))
 
     return _predicate
+
+
+def _build_retry_stop(num_retries: int, direct_retry_policy: RetryPolicy | None) -> Callable[[_RetryState], bool]:
+    def _stop(retry_state: _RetryState) -> bool:
+        outcome: Final[_RetryOutcome | None] = retry_state.outcome
+        policy_retries: Final[int | None] = _policy_retries_for(
+            outcome.exception() if outcome is not None else None, direct_retry_policy
+        )
+        max_attempts: Final[int] = num_retries if policy_retries is None else policy_retries + 1
+        return retry_state.attempt_number >= max_attempts
+
+    return _stop
 
 
 def _build_retry_wait_fn(num_retries: int, retry_strategy: str) -> Callable[[_RetryState], float]:
@@ -6461,6 +6484,11 @@ def completion_with_retries(*args, **kwargs):
     retry_policy_exception_type: Final[type[BaseException] | None] = (
         type(initial_exc) if retry_policy is not None and isinstance(initial_exc, BaseException) else None
     )
+    direct_retry_policy: Final[RetryPolicy | None] = (
+        None
+        if isinstance(initial_exc, BaseException) or not retry_policy
+        else _RETRY_POLICY_ADAPTER.validate_python(retry_policy)
+    )
     if isinstance(initial_exc, BaseException):
         wait_seconds: Final[float] = _compute_retry_wait(
             exc=initial_exc,
@@ -6471,8 +6499,8 @@ def completion_with_retries(*args, **kwargs):
         time.sleep(wait_seconds)
     retryer: Final = tenacity.Retrying(
         wait=_build_retry_wait_fn(num_retries, retry_strategy),
-        stop=tenacity.stop_after_attempt(num_retries),
-        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_exception_type)),
+        stop=_build_retry_stop(num_retries, direct_retry_policy),
+        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_exception_type, direct_retry_policy)),
         reraise=True,
     )
     return retryer(original_function, *args, **kwargs)
@@ -6500,6 +6528,11 @@ async def acompletion_with_retries(*args, **kwargs):
     retry_policy_exception_type: Final[type[BaseException] | None] = (
         type(initial_exc) if retry_policy is not None and isinstance(initial_exc, BaseException) else None
     )
+    direct_retry_policy: Final[RetryPolicy | None] = (
+        None
+        if isinstance(initial_exc, BaseException) or not retry_policy
+        else _RETRY_POLICY_ADAPTER.validate_python(retry_policy)
+    )
     if isinstance(initial_exc, BaseException):
         wait_seconds: Final[float] = _compute_retry_wait(
             exc=initial_exc,
@@ -6510,8 +6543,8 @@ async def acompletion_with_retries(*args, **kwargs):
         await asyncio.sleep(wait_seconds)
     retryer: Final = tenacity.AsyncRetrying(
         wait=_build_retry_wait_fn(num_retries, retry_strategy),
-        stop=tenacity.stop_after_attempt(num_retries),
-        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_exception_type)),
+        stop=_build_retry_stop(num_retries, direct_retry_policy),
+        retry=tenacity.retry_if_exception(_build_retry_predicate(retry_policy_exception_type, direct_retry_policy)),
         reraise=True,
     )
     return await retryer(original_function, *args, **kwargs)

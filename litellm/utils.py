@@ -2381,11 +2381,11 @@ def client(original_function):
                 if (
                     num_retries and not is_acompletion_litellm_router_call and not isinstance(e, ImportError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
+                    litellm.num_retries = None  # set retries to None to prevent infinite loops
                     status_code: Final[object] = getattr(e, "status_code", None)
                     if (
                         "retry_policy" in kwargs or not isinstance(status_code, int) or should_retry(status_code)
                     ) and isinstance(e, (openai.APIError, openai.APITimeoutError, openai.APIConnectionError)):
-                        litellm.num_retries = None  # set retries to None to prevent infinite loops
                         kwargs["num_retries"] = num_retries
                         kwargs["original_function"] = original_function
                         try:
