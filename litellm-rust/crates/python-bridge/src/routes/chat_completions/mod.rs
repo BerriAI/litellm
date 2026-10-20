@@ -4,10 +4,15 @@ use std::sync::Arc;
 
 use host::ChatCompletionsPythonHost;
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, ScopedCache};
 use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_inference_chat::{ChatCompletionsRoute, route::ChatCompletions};
+use litellm_host::{
+    call::{CallOutput, OutputOf},
+    machine::ChannelInterceptors,
+};
+use litellm_inference::{CallOptions, RouteError};
+use litellm_inference_chat::{
+    ChatCompletionsRoute, route::ChatCompletions, types::ChatCompletionsCall,
+};
 use litellm_secrets::source::SecretSource;
 use pyo3::prelude::*;
 
@@ -57,15 +62,26 @@ impl InferenceRoute for ChatCompletionsRoute {
         Self::new(http, auth, secrets)
     }
 
-    fn with_cache(self, cache: ScopedCache) -> Self {
-        self.with_cache(cache)
+    async fn call(
+        self,
+        request: ChatCompletionsCall,
+        interceptors: ChannelInterceptors<ChatCompletions>,
+        options: CallOptions,
+    ) -> Result<OutputOf<ChatCompletions>, RouteError> {
+        self.execute_call(request, &interceptors, options)
+            .await
+            .map(CallOutput::Complete)
+    }
+}
+
+impl crate::cache::CachedStream for ChatCompletions {
+    const TERMINAL_EVENT: Option<&'static str> = None;
+
+    fn replay(_: String) -> Option<(Self::StreamHead, Vec<Self::Chunk>)> {
+        None
     }
 
-    fn machine(
-        self,
-        call: <ChatCompletions as Protocol>::Request,
-        policy: CachePolicy,
-    ) -> HostedMachine<ChatCompletions> {
-        self.machine(call, policy)
+    fn bytes(chunk: &Self::Chunk) -> &[u8] {
+        match *chunk {}
     }
 }

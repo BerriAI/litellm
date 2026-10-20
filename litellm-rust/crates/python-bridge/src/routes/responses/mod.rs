@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use host::ResponsesPythonHost;
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, ScopedCache};
 use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_inference_responses::{ResponsesRoute, route::Responses};
+use litellm_host::{call::OutputOf, machine::ChannelInterceptors};
+use litellm_inference::{CallOptions, RouteError, caching::StreamCachable};
+use litellm_inference_responses::{ResponsesRoute, route::Responses, types::ResponsesCall};
 use litellm_secrets::source::SecretSource;
 use pyo3::prelude::*;
 pub(crate) use websocket::ResponsesWebSocketConnection;
@@ -49,15 +49,29 @@ impl InferenceRoute for ResponsesRoute {
         Self::new(http, auth, secrets)
     }
 
-    fn with_cache(self, cache: ScopedCache) -> Self {
-        self.with_cache(cache)
+    async fn call(
+        self,
+        request: ResponsesCall,
+        interceptors: ChannelInterceptors<Responses>,
+        options: CallOptions,
+    ) -> Result<OutputOf<Responses>, RouteError> {
+        self.execute(request, &interceptors, options).await
+    }
+}
+
+impl crate::cache::CachedStream for Responses {
+    const TERMINAL_EVENT: Option<&'static str> = Some(<Self as StreamCachable>::TERMINAL_EVENT);
+
+    fn replay(text: String) -> Option<(Self::StreamHead, Vec<Self::Chunk>)> {
+        Some((
+            litellm_inference_responses::types::ResponsesStreamHead {
+                headers: Vec::new(),
+            },
+            vec![text.into()],
+        ))
     }
 
-    fn machine(
-        self,
-        call: <Responses as Protocol>::Request,
-        policy: CachePolicy,
-    ) -> HostedMachine<Responses> {
-        self.machine(call, policy)
+    fn bytes(chunk: &Self::Chunk) -> &[u8] {
+        <Self as StreamCachable>::bytes(chunk)
     }
 }

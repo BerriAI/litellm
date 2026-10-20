@@ -1,7 +1,7 @@
 # Cache boundary
 
-This folder owns how Rust inference reaches the selected cache: global cache selection, route admission, delegation to a Python cache and the experimental V2 native handles. Cache algorithms, storage protocols and response-cache semantics belong to their cache crates
+This folder owns how a Python-hosted native call reaches the configured cache. Rust holds no cache rules: `litellm.rust_bridge.host.cache` decides whether a call may read or write, builds the key, picks the entry format and stores the entry, using the same Python handler functions the Python route runs. Cache algorithms, storage protocols and response-cache semantics belong to their cache crates
 
-`mod.rs` exposes the cache boundary to routes and module registration. Adapter directories remain private. `selection.rs` asks `litellm.rust_bridge.host.cache` for the live configured cache, and owns route admission and inference protocol composition for both adapters
+`mod.rs` exposes the cache boundary to routes and module registration. Adapter directories remain private. `python/binding.rs` owns `CachedBinding<H>`, which wraps a route's Python binding and answers the driver's lookup and store seams. Route bindings never hold cache state
 
-`python/` delegates operations to the selected Python cache without discovering configuration. `native/` owns the experimental V2 native cache handles. Neither adapter depends on shared selection or the other adapter. Shared composition depends on the adapters, and routes use only the parent module's exports
+`python/` serves the Python cache around the native machine, never from inside it. `native/` owns the experimental V2 native cache handles exposed to Python. Python-hosted inference does not attach them until the Rust cache is ready

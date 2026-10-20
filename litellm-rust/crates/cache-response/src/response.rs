@@ -125,14 +125,20 @@ where
         request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
+        self.async_lookup_with_key(request, || cache_key(&request.key), now)
+            .await
+    }
+
+    pub(crate) async fn async_lookup_with_key(
+        &self,
+        request: &ResponseCacheRequest<B::Context>,
+        key: impl FnOnce() -> String + Send,
+        now: Duration,
+    ) -> Result<Option<Value>, Error> {
         if !request.controls.reads() {
             return Ok(None);
         }
-        let entry = match self
-            .backend
-            .async_get_cache(&cache_key(&request.key), &request.context)
-            .await
-        {
+        let entry = match self.backend.async_get_cache(&key(), &request.context).await {
             Ok(entry) => entry,
             Err(Error::InvalidEntry) => None,
             Err(error) => return Err(error),
@@ -254,12 +260,23 @@ where
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
+        self.async_store_with_key(request, || cache_key(&request.key), response, now)
+            .await
+    }
+
+    pub(crate) async fn async_store_with_key(
+        &self,
+        request: &ResponseCacheRequest<B::Context>,
+        key: impl FnOnce() -> String + Send,
+        response: Value,
+        now: Duration,
+    ) -> Result<(), Error> {
         if !request.controls.writes() || !self.fits(&response) {
             return Ok(());
         }
         self.backend
             .async_set_cache(
-                &cache_key(&request.key),
+                &key(),
                 CacheEntry {
                     timestamp: Some(now.as_secs_f64()),
                     response,
