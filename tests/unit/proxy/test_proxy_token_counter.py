@@ -69,6 +69,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     TokenCountModel,
     TokenCountSettings,
     cost_map_entry,
+    resolve_token_count_settings,
 )
 from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request
 from litellm.proxy.proxy_server import (
@@ -1689,6 +1690,65 @@ async def test_model_without_token_count_model_counts_itself_in_the_deployment_r
     assert ([call[0] for call in counter.calls], counter.regions) == (["us.anthropic.claude-sonnet-5-5"], ["us-west-2"])
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "expected_host", "expected_tokens"),
+    (
+        ("bedrock", "bedrock-runtime.us-east-1.amazonaws.com", 193),
+        ("bedrock_mantle", "bedrock-mantle.us-east-1.api.aws", 271),
+    ),
+)
+async def test_token_count_model_provider_selects_the_endpoint_and_preserves_the_public_model(
+    provider: str, expected_host: str, expected_tokens: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    model: Final = "anthropic.claude-opus-5-5"
+
+    def peer(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == expected_host
+        if provider == "bedrock_mantle":
+            assert json.loads(request.content)["model"] == model
+            return httpx.Response(200, json={"input_tokens": expected_tokens})
+        assert request.url.path == f"/model/{model}/count-tokens"
+        return httpx.Response(200, json={"inputTokens": expected_tokens})
+
+    settings: Final = resolve_token_count_settings(
+        configured={},
+        default={"token_count_model": {"model": model, "litellm_provider": provider, "region": "us-east-1"}},
+        deployment_region=lambda: "us-west-2",
+    )
+    counter: Final = BedrockTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(peer)))
+    result: Final = await _provider_token_count(
+        count_with=partial(
+            _try_provider_token_count,
+            counter,
+            "bedrock",
+            messages=_COUNT_REQUEST.messages,
+            contents=_COUNT_REQUEST.contents,
+            request_model=_COUNT_REQUEST.model,
+            deployment={
+                "litellm_params": {
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                }
+            },
+            tools=_COUNT_REQUEST.tools,
+            system=_COUNT_REQUEST.system,
+        ),
+        model_to_use="us.anthropic.claude-sonnet-5-5",
+        settings=settings,
+        local_estimate_allowed=False,
+    )
+
+    assert isinstance(result, TokenCountResponse)
+    assert (result.total_tokens, result.model_used, result.count_source) == (
+        expected_tokens,
+        model,
+        "token_count_model",
+    )
+
+
 @pytest.mark.parametrize(
     ("count_model", "region"),
     [
@@ -2711,7 +2771,7 @@ async def test_uncountable_model_keeps_the_provider_error_when_local_counting_is
 @pytest.mark.parametrize(
     ("model_info", "counted_with"),
     [
-        ({}, ("us.anthropic.claude-opus-5-5", "us-east-1", 447)),
+        ({}, ("bedrock_mantle/us.anthropic.claude-opus-5-5", "us-east-1", 447)),
         (
             {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": "ap-southeast-4"}},
             ("us.anthropic.claude-opus-5-5", "ap-southeast-4", 447),
@@ -2727,6 +2787,7 @@ async def test_configured_token_count_model_overrides_the_shipped_one_and_an_emp
         {
             "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", total_tokens=300),
             "us.anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447),
+            "bedrock_mantle/us.anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447),
         }
     )
     monkeypatch.setattr(
@@ -2765,7 +2826,7 @@ async def test_configured_token_count_model_overrides_the_shipped_one_and_an_emp
 async def test_shipped_token_count_model_keeps_the_prompt_in_the_deployment_geography(
     monkeypatch: pytest.MonkeyPatch, aws_region_name: str, counted_in: str
 ):
-    counter: Final = _ScriptedCounter({"anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    counter: Final = _ScriptedCounter({"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
@@ -2789,7 +2850,7 @@ async def test_shipped_token_count_model_keeps_the_prompt_in_the_deployment_geog
         request=TokenCountRequest(model="sonnet", messages=[{"role": "user", "content": "hi"}]), call_endpoint=True
     )
 
-    assert (counter.calls[0][0], counter.regions[0]) == ("anthropic.claude-opus-5-5", counted_in)
+    assert (counter.calls[0][0], counter.regions[0]) == ("bedrock_mantle/anthropic.claude-opus-5-5", counted_in)
 
 
 class _SlowVault:
@@ -2809,7 +2870,7 @@ async def _longest_stall(done: asyncio.Event) -> float:
 async def test_region_lookup_for_a_shipped_count_model_leaves_the_event_loop_free(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy import proxy_server
 
-    counter: Final = _ScriptedCounter({"anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    counter: Final = _ScriptedCounter({"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
 
     def bedrock_counter(deployment: object, model: str) -> tuple[_ScriptedCounter, str, str]:
         return counter, model, "bedrock"

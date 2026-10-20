@@ -73,8 +73,7 @@ def _request_data(
 
 
 class BedrockTokenCounter(BaseTokenCounter):
-    """Token counter for AWS Bedrock: bedrock-runtime CountTokens first, and Anthropic's count_tokens
-    on bedrock-mantle for Claude models bedrock-runtime answers 400 or 404 for"""
+    """Counts on the configured Bedrock endpoint, with Mantle retry when Runtime rejects a Claude model"""
 
     def __init__(
         self,
@@ -135,16 +134,19 @@ class BedrockTokenCounter(BaseTokenCounter):
         if not messages:
             return None
 
-        resolved_model: Final = get_bedrock_base_model(model_to_use)
+        use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
+        counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
+        resolved_model: Final = get_bedrock_base_model(counted_model)
+        primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         translated: Final = (
             await anthropic_count_fields(
-                model_to_use, messages, system, tools, messages_format, AnthropicConfig(), chat_params
+                counted_model, messages, system, tools, messages_format, AnthropicConfig(), chat_params
             )
             if is_mantle_claude_model(resolved_model)
             else None
         )
         if isinstance(translated, ChatCountTranslationError):
-            return translated.response(request_model, model_to_use, RUNTIME_TOKENIZER_TYPE)
+            return translated.response(request_model, model_to_use, primary_tokenizer)
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
         request_data: Final[Mapping[str, object]] = (
             _request_data(model_to_use, messages, tools, system)
@@ -155,15 +157,19 @@ class BedrockTokenCounter(BaseTokenCounter):
             }
         )
 
-        runtime: Final = await self._count_with(
-            self._runtime_handler, RUNTIME_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
+        primary: Final = await self._count_with(
+            self._mantle_handler if use_mantle else self._runtime_handler,
+            primary_tokenizer,
+            request_data,
+            litellm_params,
+            resolved_model,
         )
         outcome: Final = (
             await self._count_with(
                 self._mantle_handler, MANTLE_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
             )
-            if _runtime_rejected_claude_model(runtime, resolved_model)
-            else runtime
+            if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
+            else primary
         )
         match outcome:
             case CountedTokens():
