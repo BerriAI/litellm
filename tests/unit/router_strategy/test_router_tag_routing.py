@@ -9,6 +9,8 @@ import pytest
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+from litellm.types.router import RouterErrors
 
 
 async def _routed_model_ids(
@@ -3171,3 +3173,96 @@ async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merg
     )
 
     assert deployment["model_info"]["id"] == "team-a-deployment"
+
+
+def _tag_router(model_list: list[dict[str, object]], tag_routing_prefix: str = "route:") -> litellm.Router:
+    return litellm.Router(model_list=model_list, enable_tag_filtering=True, tag_routing_prefix=tag_routing_prefix)
+
+
+def _deployment(model_id: str, tags: list[str]) -> dict[str, object]:
+    return {
+        "model_name": "chat",
+        "litellm_params": {
+            "model": "gpt-4o",
+            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+            **({"tags": tags} if tags else {}),
+        },
+        "model_info": {"id": model_id},
+    }
+
+
+async def _routed_to(router: litellm.Router, metadata: dict[str, object]) -> str:
+    response: Final = await router.acompletion(
+        model="chat", messages=[{"role": "user", "content": "hi"}], metadata=metadata, mock_response="hi"
+    )
+    return response._hidden_params["model_id"]
+
+
+async def _pool(router: litellm.Router, metadata: dict[str, object]) -> frozenset[str]:
+    deployments: Final = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="chat",
+        healthy_deployments=router.get_model_list(model_name="chat"),
+        request_kwargs={"metadata": metadata},
+    )
+    return frozenset(deployment["model_info"]["id"] for deployment in deployments)
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("tags", [["user_id:234"], ["&region:nowhere"]])
+async def test_tag_routing_prefix_ignores_unprefixed_caller_tags_on_an_untagged_group(tags):
+    router = _tag_router([_deployment("untagged", [])])
+
+    assert await _routed_to(router, {"tags": tags}) == "untagged"
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("tags", [["region:eu"], ["!region:eu"], ["&region:eu"], ["user_id:234"]])
+async def test_tag_routing_prefix_ignores_unprefixed_caller_tags_on_a_tagged_group(tags):
+    router = _tag_router([_deployment("eu-1", ["region:eu"]), _deployment("us-1", ["region:us"])])
+
+    assert await _pool(router, {"tags": tags}) == {"eu-1", "us-1"}
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"tags": ["user_id:234", "route:region:us"]}, "us-1"),
+        ({"tags": ["route:region:eu", "!region:eu"]}, "eu-1"),
+        ({"tags": ["&region:eu", "user_id:234"], "inherited_tags": ["&region:eu"]}, "eu-1"),
+        ({"tags": ["!region:eu", "user_id:234"], "inherited_tags": ["!region:eu"]}, "us-1"),
+        ({"tags": ["user_id:234", "region:us"], "inherited_tags": ["region:us"]}, "us-1"),
+    ],
+    ids=["prefixed-caller-tag", "unprefixed-twin-ignored", "policy-require", "policy-exclude", "policy-positive"],
+)
+async def test_tag_routing_prefix_routes_on_prefixed_and_policy_tags(metadata, expected):
+    router = _tag_router([_deployment("eu-1", ["region:eu"]), _deployment("us-1", ["region:us"])])
+
+    assert await _pool(router, metadata) == {expected}
+
+
+@pytest.mark.asyncio()
+async def test_tag_routing_prefix_caller_cannot_route_around_a_policy_requirement():
+    router = _tag_router([_deployment("eu-1", ["region:eu"]), _deployment("us-1", ["region:us"])])
+
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await _routed_to(router, {"tags": ["&region:eu", "route:region:us"], "inherited_tags": ["&region:eu"]})
+
+
+@pytest.mark.asyncio()
+async def test_without_tag_routing_prefix_an_unknown_caller_tag_still_refuses_an_untagged_group():
+    router = _tag_router([_deployment("untagged", [])], tag_routing_prefix="")
+
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await _routed_to(router, {"tags": ["user_id:234"]})
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(("tags", "expected"), [(["region:eu"], {"eu-1"}), (["!region:eu"], {"us-1"})])
+async def test_without_tag_routing_prefix_unprefixed_caller_tags_still_route(tags, expected):
+    router = _tag_router(
+        [_deployment("eu-1", ["region:eu"]), _deployment("us-1", ["region:us"])], tag_routing_prefix=""
+    )
+
+    assert await _pool(router, {"tags": tags}) == expected
