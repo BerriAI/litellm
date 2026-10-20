@@ -140,6 +140,10 @@ PI_PROVIDER_COMPAT: Final[Mapping[str, object]] = MappingProxyType({"supportsSto
 
 PI_CACHE_CONTROL_COMPAT: Final[Mapping[str, str]] = MappingProxyType({"cacheControlFormat": "anthropic"})
 
+PI_DEFAULT_MAX_TOKENS: Final = 16384
+
+SESSION_CWD_SEPARATOR: Final = "@"
+
 PI_BUILTIN_TOOLS: Final = frozenset({*NATIVE_TO_NORMALIZED, "codemode", "tool_search"})
 FAILED_STOP_REASONS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -206,13 +210,15 @@ class PiStreamState:
     """What the parser has learned from one `pi --mode json` run."""
 
     session_id: str | None = None
+    session_cwd: str | None = None
     final_text: str = ""
     stop_reason: str | None = None
     error: str | None = None
 
-    def record_session(self, session_id: object) -> None:
+    def record_session(self, session_id: object, cwd: object) -> None:
         if isinstance(session_id, str) and self.session_id is None:
             self.session_id = session_id
+            self.session_cwd = cwd if isinstance(cwd, str) else None
 
     def record_message_end(self, message: object) -> None:
         if _Role.model_validate(message).role != "assistant":
@@ -283,6 +289,15 @@ def tool_args(
     return ("--tools", ",".join((*PERMISSION_TOOLS[permissions], *mcp_tools)), *exclude)
 
 
+def session_args(native_session_id: str | None, workdir: str) -> tuple[str, ...]:
+    """`--session` for a session pi saved in this workdir, `--fork` for one saved in another, since pi otherwise
+    stops at an interactive "Fork this session into current directory?" prompt the harness cannot answer."""
+    if native_session_id is None:
+        return ()
+    session_id, _, saved_cwd = native_session_id.partition(SESSION_CWD_SEPARATOR)
+    return ("--fork" if saved_cwd and saved_cwd != workdir else "--session", session_id)
+
+
 def mcp_tool_entries(config: Mapping[str, object]) -> tuple[str, ...]:
     """`--tools` entries that keep configured MCP servers reachable.
 
@@ -316,10 +331,16 @@ def mapped_model_info(model: str, through_gateway: bool) -> ModelInfo | None:
 
 
 def model_limits(info: ModelInfo | None) -> Mapping[str, int]:
-    """contextWindow and maxTokens from LiteLLM's model map, since pi assumes 128000 and 16384 otherwise."""
+    """contextWindow from LiteLLM's model map, since pi assumes 128000 otherwise, and maxTokens capped at pi's own
+    16384 default. pi sends maxTokens as max_completion_tokens on every call, and the gateway reserves that many
+    tokens against the key's TPM limit, so the model's full output cap would starve keys with lower limits."""
     if info is None:
         return MappingProxyType({})
-    limits: Final = (("contextWindow", info.get("max_input_tokens")), ("maxTokens", info.get("max_output_tokens")))
+    max_output: Final = info.get("max_output_tokens")
+    limits: Final = (
+        ("contextWindow", info.get("max_input_tokens")),
+        ("maxTokens", min(max_output, PI_DEFAULT_MAX_TOKENS) if isinstance(max_output, int) else None),
+    )
     return MappingProxyType({key: value for key, value in limits if isinstance(value, int)})
 
 
@@ -461,7 +482,7 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
             session_model(ctx),
             "--session-dir",
             f"{private_dir}/{SESSIONS_DIRNAME}",
-            *(("--session", native_session_id) if native_session_id else ()),
+            *session_args(native_session_id, ctx.sandbox.workdir),
             *tool_args(ctx.permissions, ctx.disable_tools, mcp_tool_entries(options.config)),
             *(("--thinking", options.thinking) if options.thinking else ()),
             *(("--skill", f"{private_dir}/{SKILLS_DIRNAME}") if ctx.skills else ()),
@@ -481,7 +502,7 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
         """Usage on message_update is ignored on purpose: the session endpoint accounts it."""
         event_type: Final = line.get("type")
         if event_type == "session":
-            state.record_session(line.get("id"))
+            state.record_session(line.get("id"), line.get("cwd"))
             return event_list()
         if event_type == "message_update":
             return _message_update_events(line.get("assistantMessageEvent"))
@@ -497,7 +518,9 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
         return event_list()
 
     def get_native_session_id(self, state: PiStreamState) -> str | None:
-        return state.session_id
+        if state.session_id is None or state.session_cwd is None:
+            return state.session_id
+        return f"{state.session_id}{SESSION_CWD_SEPARATOR}{state.session_cwd}"
 
     def transform_turn_response(
         self,

@@ -38,6 +38,7 @@ from litellm.llms.pi.harness.transformation import (
     MCP_FILENAME,
     MODELS_FILENAME,
     PI_CONFIG_DIR_ENV,
+    PI_DEFAULT_MAX_TOKENS,
     PI_ISOLATION_ENV,
     PI_TOKEN_ENV,
     SETTINGS_FILENAME,
@@ -49,6 +50,7 @@ from litellm.llms.pi.harness.transformation import (
     tool_args,
     validate_user_config,
 )
+from litellm.types.utils import ModelInfo
 from litellm.utils import ProviderConfigManager, get_model_info
 
 FIXTURES: Final = Path(__file__).parent / "fixtures"
@@ -261,7 +263,7 @@ def written_models(sandbox: FakeSandbox, private: str = PRIVATE) -> Mapping[str,
 
 def test_parse_write_read_turn():
     events, state = parse_all("turn1_write_read.jsonl")
-    assert CONFIG.get_native_session_id(state) == SESSION
+    assert state.session_id == SESSION
     assert [type(e) for e in events] == [
         Reasoning,
         ToolCall,
@@ -516,7 +518,20 @@ def test_mapped_model_declares_litellm_context_and_output_limits() -> None:
     info: Final = get_model_info(MODEL)
     models: Final = setup_models(setup_for(make_ctx()))
     declared: Final = models["providers"]["litellm"]["models"][0]
-    assert (declared["contextWindow"], declared["maxTokens"]) == (info["max_input_tokens"], info["max_output_tokens"])
+    assert (declared["contextWindow"], declared["maxTokens"]) == (
+        info["max_input_tokens"],
+        min(info["max_output_tokens"], PI_DEFAULT_MAX_TOKENS),
+    )
+
+
+@pytest.mark.parametrize("max_output_tokens", [PI_DEFAULT_MAX_TOKENS // 4, PI_DEFAULT_MAX_TOKENS * 8])
+def test_pi_asks_for_no_more_output_tokens_than_the_model_or_its_own_default(max_output_tokens: int) -> None:
+    info: Final = ModelInfo(**{**get_model_info(MODEL), "max_output_tokens": max_output_tokens})
+    declared: Final = json.loads(build_models_json(MODEL, "http://h:1/v1", None, info))["providers"]["litellm"]
+    assert declared["models"][0]["maxTokens"] == min(max_output_tokens, PI_DEFAULT_MAX_TOKENS), (
+        "pi sends maxTokens as max_completion_tokens on every call, and the gateway reserves it against the key's "
+        "TPM limit, so a model's full output cap made keys under that limit answer 429"
+    )
 
 
 def test_model_that_supports_prompt_caching_asks_pi_for_cache_control_marks() -> None:
@@ -551,7 +566,7 @@ def test_gateway_group_is_looked_up_without_printing_to_stdout(
 MAPPED_MODEL: Final = {
     "id": MODEL,
     "contextWindow": get_model_info(MODEL)["max_input_tokens"],
-    "maxTokens": get_model_info(MODEL)["max_output_tokens"],
+    "maxTokens": min(get_model_info(MODEL)["max_output_tokens"], PI_DEFAULT_MAX_TOKENS),
     "compat": {"cacheControlFormat": "anthropic"},
 }
 REASONING_MODEL: Final = {**MAPPED_MODEL, "reasoning": True, "thinkingLevelMap": {"xhigh": "xhigh", "max": "max"}}
@@ -779,7 +794,6 @@ async def test_turn_argv_env_and_session_continuation():
     assert first.env["FOO"] == "1"
     assert any(isinstance(e, ToolCall) for e in events)
     assert ctx.final_text == "Done! hello.txt contains: hi"
-    assert handler.native_session_id() == SESSION
 
     await collect(handler, ctx, "what file did you create?")
     second: Final = sandbox.execs[1].cmd
@@ -795,6 +809,19 @@ async def test_prompt_is_sent_on_stdin_not_argv():
     await collect(await started(ctx), ctx, "secret prompt text")
     assert proc.stdin.data == b"secret prompt text" and proc.stdin.closed
     assert "secret prompt text" not in sandbox.execs[0].cmd
+
+
+@pytest.mark.parametrize(("workdir", "resume_flag"), [("/work", "--session"), ("/elsewhere", "--fork")])
+def test_session_saved_in_another_workdir_is_forked_into_this_one(workdir: str, resume_flag: str) -> None:
+    _, state = parse_all("turn1_write_read.jsonl")
+    ctx: Final = make_ctx(FakeSandbox(workdir=workdir))
+    argv: Final = CONFIG.transform_turn_request(
+        ctx, setup_for(ctx), PRIVATE, "again", CONFIG.get_native_session_id(state)
+    ).argv
+    assert flag(argv, resume_flag) == SESSION
+    assert ({"--session", "--fork"} - {resume_flag}).isdisjoint(argv), (
+        "pi answers --session for a session saved in another directory with a fork prompt the harness never answers"
+    )
 
 
 async def test_resume_sets_session():
