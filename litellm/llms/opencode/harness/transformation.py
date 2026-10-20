@@ -12,7 +12,8 @@ DB outlives a session for resume. Verified against opencode 1.14.41.
 opencode files each session under the folder it ran in and only streams a resumed session's
 events from that folder, so resuming one filed elsewhere (by an older LiteLLM that left PWD
 unset, or from another sandbox) hangs. Resume first runs `opencode export` and `opencode import`
-in the sandbox, which files the session under the sandbox folder. Verified against opencode 1.19.3.
+in the sandbox, which files the session under the sandbox folder, and raises HarnessError if that
+fails or times out instead of hanging. Verified against opencode 1.19.3.
 """
 
 from __future__ import annotations

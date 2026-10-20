@@ -1,7 +1,9 @@
 import asyncio
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final
 
 import pytest
 from pydantic import BaseModel
@@ -12,6 +14,7 @@ from litellm.harness.errors import (
     HarnessError,
     HarnessInstallFailed,
     OptionsMismatch,
+    SandboxError,
 )
 from litellm.harness.handlers.cli_handler import PERSIST_DIR_SCRIPT, CLIHarnessHandler
 from litellm.harness.options import CodexOptions, OpenCodeOptions
@@ -99,6 +102,12 @@ class FakeProcess:
         self.killed = True
 
 
+async def stall_until_timeout(cmd: Sequence[str], timeout: float | None) -> CompletedRun:
+    if timeout is None:
+        await asyncio.Event().wait()
+    raise SandboxError(f"command timed out after {timeout}s: {cmd[0]}")
+
+
 @dataclass
 class FakeSandbox:
     workdir: str = "/work"
@@ -107,8 +116,9 @@ class FakeSandbox:
     outputs: list = field(default_factory=list)
     files: dict = field(default_factory=dict)
     execs: list = field(default_factory=list)
-    runs: list = field(default_factory=list)
-    run_envs: list = field(default_factory=list)
+    stall_runs: bool = False
+    runs: list[Sequence[str]] = field(default_factory=list)
+    run_envs: list[dict[str, str]] = field(default_factory=list)
     tempdirs: int = 0
 
     async def exec(self, cmd, *, env=None, cwd=None):
@@ -118,6 +128,8 @@ class FakeSandbox:
     async def run(self, cmd, *, env=None, cwd=None, timeout=None):
         self.runs.append(cmd)
         self.run_envs.append(dict(env or {}))
+        if self.stall_runs:
+            return await stall_until_timeout(cmd, timeout)
         if self.persist_ok:
             return CompletedRun("", "", 0)
         return CompletedRun("", "read-only fs", 1)
@@ -597,11 +609,8 @@ async def test_prompt_is_sent_on_stdin_not_argv():
     assert "secret prompt text" not in sandbox.execs[0]["cmd"]
 
 
-@pytest.mark.parametrize("rehome_ok", [True, False])
-async def test_resume_files_the_session_under_the_sandbox_then_continues_it(
-    rehome_ok,
-):
-    handler, ctx, sandbox = await started(FakeSandbox(persist_ok=rehome_ok))
+async def test_resume_files_the_session_under_the_sandbox_then_continues_it() -> None:
+    handler, ctx, sandbox = await started()
     await handler.resume(ctx, "ses_prev")
     sandbox.outputs.append(fixture_proc("turn2_session_skill.jsonl"))
     await collect(handler, ctx, "hi")
@@ -616,8 +625,39 @@ async def test_resume_files_the_session_under_the_sandbox_then_continues_it(
         "ses_prev",
     )
     assert sandbox.run_envs[-1]["XDG_DATA_HOME"] == "/tmp/oc-1/xdg/data"
-    cmd = sandbox.execs[0]["cmd"]
+    cmd: Final = sandbox.execs[0]["cmd"]
     assert cmd[cmd.index("--session") + 1] == "ses_prev"
+
+
+@pytest.mark.parametrize("rehome", ["exits_1", "stalls"])
+async def test_resume_fails_when_the_session_cannot_be_filed_under_the_sandbox(
+    rehome: str,
+) -> None:
+    handler, ctx, sandbox = await started()
+    sandbox.persist_ok = rehome != "exits_1"
+    sandbox.stall_runs = rehome == "stalls"
+
+    with pytest.raises(HarnessError, match="ses_prev"):
+        await asyncio.wait_for(handler.resume(ctx, "ses_prev"), 5)
+    assert handler.native_session_id() is None
+
+
+async def test_restart_resumes_its_own_session_without_filing_it_again() -> None:
+    handler, ctx, sandbox = await started()
+    sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
+    await collect(handler, ctx, "first")
+    native_id: Final = handler.native_session_id()
+    assert native_id is not None
+    runs_before_restart: Final = len(sandbox.runs)
+
+    await handler.start(ctx)
+    await handler.resume(ctx, native_id)
+    sandbox.outputs.append(fixture_proc("turn2_session_skill.jsonl"))
+    await collect(handler, ctx, "again")
+
+    assert all(REHOME_SESSION_SCRIPT not in run for run in sandbox.runs[runs_before_restart:])
+    cmd: Final = sandbox.execs[1]["cmd"]
+    assert cmd[cmd.index("--session") + 1] == native_id
 
 
 async def test_read_only_and_disable_tools_config():

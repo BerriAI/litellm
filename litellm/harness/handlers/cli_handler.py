@@ -12,13 +12,17 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import deque
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 
 from litellm._logging import verbose_logger
-from litellm.constants import HARNESS_STDERR_TAIL_LINES, HARNESS_STREAM_READ_CHUNK_BYTES
+from litellm.constants import (
+    HARNESS_RESUME_COMMAND_TIMEOUT_SECONDS,
+    HARNESS_STDERR_TAIL_LINES,
+    HARNESS_STREAM_READ_CHUNK_BYTES,
+)
 from litellm.harness.context import SessionContext
-from litellm.harness.errors import HarnessInstallFailed, SandboxError
+from litellm.harness.errors import HarnessError, HarnessInstallFailed, SandboxError
 from litellm.harness.handlers.base import BaseHarnessHandler
 from litellm.harness.sandbox.base import Process, Sandbox
 from litellm.harness.types import Event
@@ -79,6 +83,14 @@ async def persist_dir(sandbox: Sandbox, link_path: str, cache_subpath: str) -> N
         verbose_logger.debug(
             "harness: could not persist %s, resume across sessions disabled: %s", cache_subpath, run.stderr.strip()
         )
+
+
+async def resume_command_failure(sandbox: Sandbox, cmd: Sequence[str], env: Mapping[str, str]) -> str | None:
+    try:
+        run: Final = await sandbox.run(cmd, env=env, timeout=HARNESS_RESUME_COMMAND_TIMEOUT_SECONDS)
+    except SandboxError as exc:
+        return str(exc)
+    return None if run.exit_code == 0 else run.stderr.strip()
 
 
 async def copy_skills(sandbox: Sandbox, skills: Sequence[str], skills_root: str) -> None:
@@ -160,12 +172,10 @@ class CLIHarnessHandler(BaseHarnessHandler):
     async def resume(self, ctx: SessionContext, native_session_id: str) -> None:
         if self._setup is None or self._private_dir is None:
             raise RuntimeError("CLIHarnessHandler.resume() called before start()")
-        self._native_id = native_session_id
-        cmd: Final = self.config.transform_resume_command(self._private_dir, native_session_id)
-        if cmd is None:
+        if native_session_id == self._native_id:
             return
-        run: Final = await ctx.sandbox.run(cmd, env=self._setup.env)
-        if run.exit_code != 0:
-            verbose_logger.warning(
-                "harness: could not prepare session %s for resume: %s", native_session_id, run.stderr.strip()
-            )
+        cmd: Final = self.config.transform_resume_command(self._private_dir, native_session_id)
+        failure: Final = None if cmd is None else await resume_command_failure(ctx.sandbox, cmd, self._setup.env)
+        if failure is not None:
+            raise HarnessError(f"could not prepare session {native_session_id} for resume: {failure}")
+        self._native_id = native_session_id

@@ -129,7 +129,10 @@ class BaseCLIHarnessConfig(BaseHarnessConfig[OptionsT], Generic[OptionsT, Stream
         """argv / env / stdin for one turn. native_session_id is set after the first turn."""
 
     def transform_resume_command(self, private_dir: str, native_session_id: str) -> Sequence[str] | None:
-        """Command run once in the sandbox, with the session env, before resuming native_session_id."""
+        """Command run in the sandbox, with the session env, before resuming a session this handler did not run.
+
+        A non-zero exit or a timeout fails the resume.
+        """
         return None
 
     @abstractmethod
