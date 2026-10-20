@@ -117,7 +117,8 @@ from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
-    redact_streaming_responses_for_custom_logger,
+    redacted_model_call_details_for_custom_logger,
+    redacted_response_obj_for_custom_logger,
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.served_output_texts import (
@@ -3489,8 +3490,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
-                                kwargs=call_details,
-                                response_obj=result,
+                                kwargs=redacted_model_call_details_for_custom_logger(
+                                    model_call_details=call_details, custom_logger=callback
+                                ),
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -3500,8 +3503,13 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = call_details_view["complete_response"]
 
                             callback.log_success_event(
-                                kwargs=callback.redact_standard_logging_payload_from_model_call_details(call_details),
-                                response_obj=result,
+                                kwargs=redacted_model_call_details_for_custom_logger(
+                                    model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                        call_details
+                                    ),
+                                    custom_logger=callback,
+                                ),
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -3844,7 +3852,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
                         model_call_details=model_call_details
                     )
-                    model_call_details = redact_streaming_responses_for_custom_logger(
+                    model_call_details = redacted_model_call_details_for_custom_logger(
                         model_call_details=model_call_details, custom_logger=callback
                     )
                     ##################################
@@ -3855,7 +3863,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             kwargs=model_call_details,
                             response_obj=model_call_details["async_complete_streaming_response"]
                             if self.stream
-                            else result,
+                            else redacted_response_obj_for_custom_logger(result, callback),
                             start_time=start_time,
                             end_time=end_time,
                             guardrail_snapshot=self.shadow_eval_request_snapshot,
@@ -3871,14 +3879,14 @@ class Logging(LiteLLMLoggingBaseClass):
                         else:
                             await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
                                 kwargs=model_call_details,
-                                response_obj=result,
+                                response_obj=redacted_response_obj_for_custom_logger(result, callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                     else:
                         await callback.async_log_success_event(
                             kwargs=model_call_details,
-                            response_obj=result,
+                            response_obj=redacted_response_obj_for_custom_logger(result, callback),
                             start_time=start_time,
                             end_time=end_time,
                         )
