@@ -1692,19 +1692,19 @@ async def test_calculate_batch_cost_and_usage_anthropic_end_to_end():
     assert result.models == ["claude-sonnet-4-5"]
 
 
-def test_extract_credentials_forwards_the_deployment_bucket_settings():
+def test_extract_credentials_forwards_the_deployment_bucket_settings() -> None:
     """Cost accounting on the retrieve path reads the batch's output file from the
     deployment's Bedrock buckets. Without these keys the read raises "S3 bucket_name is
     required" for a bucket the deployment has configured, and the batch's cost is never
     recorded."""
-    params = {
+    params: Final = {
         "s3_bucket_name": "configured-bucket",
         "s3_output_bucket_name": "output-bucket",
         "allow_legacy_cloud_file_ids": True,
         "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     }
 
-    credentials = bu._extract_file_access_credentials(params)
+    credentials: Final = bu._extract_file_access_credentials(params)
 
     assert credentials == {key: value for key, value in params.items() if key != "model"}
 

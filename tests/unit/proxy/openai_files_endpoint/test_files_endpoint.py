@@ -3993,7 +3993,9 @@ def test_require_managed_files_rejects_raw_provider_file_id(
     mock_call.assert_not_called()
 
 
-def test_get_file_content_model_routed_passes_the_deployment_bucket_to_the_sdk(monkeypatch):
+def test_get_file_content_model_routed_passes_the_deployment_bucket_to_the_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A managed batch output id routes by model, so Bedrock batch output retrieval only
     works when the deployment's s3_bucket_name reaches litellm.afile_content. Without it
     every retrieval fails with "S3 bucket_name is required"."""
@@ -5285,7 +5287,9 @@ def test_create_file_path_traversal_filename_rejected_before_forwarding(monkeypa
     assert forwarded_calls == []
 
 
-def test_list_files_target_model_names_passes_the_deployment_bucket(mocker: MockerFixture, monkeypatch):
+def test_list_files_target_model_names_passes_the_deployment_bucket(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """GET /v1/files?target_model_names=<bedrock model> lists the deployment's bucket,
     so its s3_bucket_name must reach litellm.afile_list."""
     import litellm.proxy.proxy_server as ps

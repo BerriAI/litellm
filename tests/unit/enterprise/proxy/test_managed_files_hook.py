@@ -1142,7 +1142,7 @@ async def test_should_skip_non_file_unified_id_on_output_file_id():
 
 
 @pytest.mark.asyncio
-async def test_afile_content_reads_from_the_deployment_bucket(monkeypatch):
+async def test_afile_content_reads_from_the_deployment_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unified-id content retrieval must validate and fetch the s3:// file against the
     deployment's s3_bucket_name, with no AWS_S3_BUCKET_NAME env set."""
     import httpx

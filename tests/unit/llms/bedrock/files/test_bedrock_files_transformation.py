@@ -3215,10 +3215,12 @@ def _bedrock_s3_params() -> dict:
     }
 
 
-def _deployment_bucket_params(**deployment_litellm_params) -> dict:
+def _deployment_bucket_params(**deployment_litellm_params: object) -> dict[str, object]:
     from litellm.types.router import CredentialLiteLLMParams
 
-    credentials = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(exclude_none=True)
+    credentials: Final = CredentialLiteLLMParams.model_validate(deployment_litellm_params).model_dump(
+        exclude_none=True
+    )
     return {**_bedrock_s3_params(), **credentials}
 
 

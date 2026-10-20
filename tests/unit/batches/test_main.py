@@ -730,7 +730,7 @@ def test_resolve_timeout__httpx_timeout_returns_float_read():
     assert resolved == 99.0
 
 
-def test_retrieve__keeps_the_deployment_bucket_settings_in_litellm_params(seams):
+def test_retrieve__keeps_the_deployment_bucket_settings_in_litellm_params(seams: Seams) -> None:
     """The batch's cost is computed by reading its output file after the retrieve, and
     that read finds the Bedrock bucket in these litellm_params. Dropping them fails cost
     accounting on a bucket the deployment has configured."""

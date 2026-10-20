@@ -1,6 +1,7 @@
 import base64
 import os
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -147,7 +148,7 @@ def _echo_request_url_client() -> HTTPHandler:
     )
 
 
-_SDK_AWS_CREDENTIALS = MappingProxyType(
+_SDK_AWS_CREDENTIALS: Final = MappingProxyType(
     {
         "aws_access_key_id": "AKIASDKCALLER",
         "aws_secret_access_key": "sdk-caller-secret",
@@ -156,11 +157,11 @@ _SDK_AWS_CREDENTIALS = MappingProxyType(
 )
 
 
-def test_sdk_file_content_reads_from_the_bucket_passed_to_the_call(monkeypatch):
+def test_sdk_file_content_reads_from_the_bucket_passed_to_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
     monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
 
-    response = files_main.file_content(
+    response: Final = files_main.file_content(
         file_id="s3://sdk-bucket/litellm-bedrock-files/batch.jsonl",
         custom_llm_provider="bedrock",
         s3_bucket_name="sdk-bucket",
@@ -171,7 +172,9 @@ def test_sdk_file_content_reads_from_the_bucket_passed_to_the_call(monkeypatch):
     assert httpx.URL(response.content.decode()).path == "/sdk-bucket/litellm-bedrock-files/batch.jsonl"
 
 
-def test_sdk_file_content_rejects_a_file_outside_the_bucket_passed_to_the_call(monkeypatch):
+def test_sdk_file_content_rejects_a_file_outside_the_bucket_passed_to_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
     monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
 
