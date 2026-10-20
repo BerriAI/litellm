@@ -696,7 +696,7 @@ def _get_token_base_cost(
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: float | None = None
-    for key in sorted(threshold_keys, key=_parse_above_token_threshold, reverse=True):
+    for key in sorted(threshold_keys, key=_parse_above_token_threshold):
         value = model_info.get(key)
         if value is not None:
             try:
@@ -770,8 +770,6 @@ def _get_token_base_cost(
                     )
 
                     cache_read_cost = get_cost_per_unit(model_info, cache_read_tiered_key, cache_read_cost)
-
-                    break
             except (IndexError, ValueError):
                 continue
             except Exception:

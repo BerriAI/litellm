@@ -2550,6 +2550,36 @@ def test_flat_input_price_keeps_other_token_thresholds(field: str) -> None:
     assert rates[4] == (0.005 if field == "cache_read_input_token_cost" else 0.003)
 
 
+@pytest.mark.parametrize("prompt_tokens", (200_000, 200_001, 512_000, 512_001))
+@pytest.mark.parametrize("higher_rate", (0.0, 0.009))
+def test_mixed_token_thresholds_preserve_each_crossed_rate(prompt_tokens: int, higher_rate: float) -> None:
+    from typing import Final, cast
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+
+    info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "cache_read_input_token_cost": 0.003,
+            "cache_creation_input_token_cost": 0.004,
+            "input_cost_per_token_above_200k_tokens": 0.005,
+            "output_cost_per_token_above_200k_tokens": 0.006,
+            "cache_creation_input_token_cost_above_200k_tokens": 0.007,
+            "cache_read_input_token_cost_above_512k_tokens": higher_rate,
+            "output_cost_per_token_above_512k_tokens": higher_rate,
+        },
+    )
+    rates: Final = _get_token_base_cost(
+        model_info=info,
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=3, total_tokens=prompt_tokens + 3),
+    )
+    assert rates[0] == (0.005 if prompt_tokens > 200_000 else 0.001)
+    assert rates[1] == (higher_rate if prompt_tokens > 512_000 else 0.006 if prompt_tokens > 200_000 else 0.002)
+    assert rates[2] == (0.007 if prompt_tokens > 200_000 else 0.004)
+    assert rates[4] == (higher_rate if prompt_tokens > 512_000 else 0.003)
+
+
 def test_threshold_keys_exclude_service_tier_variants():
     from typing import cast
 
