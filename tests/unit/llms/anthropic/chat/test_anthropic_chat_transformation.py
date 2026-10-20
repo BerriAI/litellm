@@ -1375,7 +1375,6 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
     assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
 
 
-
 @pytest.mark.parametrize(
     ("model", "thinking_params"),
     [
@@ -1388,7 +1387,13 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
             {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
         ),
     ],
-    ids=["adaptive-thinking", "reasoning-effort", "reasoning-effort-none", "model-without-forced-tools", "caller-tools"],
+    ids=[
+        "adaptive-thinking",
+        "reasoning-effort",
+        "reasoning-effort-none",
+        "model-without-forced-tools",
+        "caller-tools",
+    ],
 )
 def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
     optional_params: Final = AnthropicConfig().map_openai_params(
@@ -1413,6 +1418,7 @@ def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(m
 
     assert "output_format" in optional_params
     assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
 
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     monkeypatch: pytest.MonkeyPatch,
@@ -3704,7 +3710,9 @@ def _block_ids(message: dict[str, object], block_type: str, id_key: str) -> list
     return sorted(block[id_key] for block in message["content"] if block["type"] == block_type)
 
 
-_SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn([], {"type": "text", "text": "I have no tool that books flights."})
+_SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn(
+    [], {"type": "text", "text": "I have no tool that books flights."}
+)
 
 
 @pytest.mark.parametrize(
@@ -9528,7 +9536,9 @@ def test_map_openai_params_runs_tool_search_on_a_custom_named_deployment_whose_m
         AzureAnthropicConfig().map_openai_params(
             non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
         )
-    litellm.register_model({"azure_ai/my-claude-deployment": {"supports_tool_search": True, "litellm_provider": "azure_ai"}})
+    litellm.register_model(
+        {"azure_ai/my-claude-deployment": {"supports_tool_search": True, "litellm_provider": "azure_ai"}}
+    )
     mapped: Final = AzureAnthropicConfig().map_openai_params(
         non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
     )
@@ -9653,3 +9663,81 @@ def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> Non
     )
     provider_specific_fields = result.choices[0].message.provider_specific_fields or {}
     assert "stop_details" not in provider_specific_fields
+
+
+def _two_function_tools() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": f"tool_{i}", "description": f"Tool {i}", "parameters": {"type": "object"}},
+        }
+        for i in range(2)
+    ]
+
+
+@pytest.mark.parametrize(
+    "control, expected_control",
+    [
+        (None, {"type": "ephemeral"}),
+        ({"type": "ephemeral", "ttl": "1h"}, {"type": "ephemeral", "ttl": "1h"}),
+    ],
+)
+def test_transform_request_tool_config_point_marks_last_tool_and_drops_the_key(control, expected_control):
+    """LIT-9880: a tool_config injection point used to be spread into the Anthropic body, which
+    Anthropic rejected with 400 Extra inputs are not permitted."""
+    tools = _two_function_tools()
+    tools_before = copy.deepcopy(tools)
+    point = {"location": "tool_config", **({"control": control} if control is not None else {})}
+    litellm_params = {"metadata": {}, "model_info": {"id": "deployment-1"}}
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [point]},
+        litellm_params=litellm_params,
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert data["tools"][-1]["cache_control"] == expected_control
+    assert "cache_control" not in data["tools"][0]
+    assert tools == tools_before
+    assert litellm_params["metadata"]["litellm_gateway_injected_cache"] == "deployment-1"
+
+
+def test_transform_request_tool_config_point_keeps_the_clients_tool_marker():
+    tools = _two_function_tools()
+    tools[0]["cache_control"] = {"type": "ephemeral"}
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params={},
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert data["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in data["tools"][1]
+
+
+def test_transform_request_tool_config_point_skips_tool_search_tools():
+    tool_search_type = next(iter(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES))
+    tools = [*_two_function_tools(), {"type": tool_search_type, "name": "tool_search"}]
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params={},
+    )
+
+    assert data["tools"][1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in data["tools"][2]
+    assert "cache_control" not in data["tools"][0]
+
+
+def test_transform_request_tool_config_point_without_tools_drops_the_key():
+    litellm_params = {"metadata": {}}
+
+    data = _make_transform_request(
+        optional_params={"cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params=litellm_params,
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert "tools" not in data
+    assert litellm_params["metadata"] == {}

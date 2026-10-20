@@ -269,9 +269,10 @@ from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
-from litellm.types.router import BaggageMappedTagsStamp
+from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    API_KEY_SECRET_REFERENCE_REJECTION,
     CAPTURE_MESSAGE_CONTENT_VAR,
     EXCLUDED_SERVICES_VAR,
     CustomPricingLiteLLMParams,
@@ -1763,11 +1764,9 @@ class LiteLLMProxyRequestSetup:
             metadata_from_headers["agent_id"] = agent_id_from_header
             verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
-        spend_log_session_id: Final = (
+        caller_session_beside_trace: Final = (
             _caller_session_beside_trace_header(normalized_headers, request_body, _metadata_variable_name)
-            if litellm.request_correlation_in_logs
-            and chain_id is not None
-            and chain_id == normalized_headers.get("x-litellm-trace-id")
+            if chain_id is not None and chain_id == normalized_headers.get("x-litellm-trace-id")
             else None
         )
         if chain_id:
@@ -1829,8 +1828,8 @@ class LiteLLMProxyRequestSetup:
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(
-                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: spend_log_session_id}
-                if spend_log_session_id
+                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: caller_session_beside_trace}
+                if caller_session_beside_trace
                 else metadata_from_headers
             )
         return data
@@ -2912,6 +2911,9 @@ async def add_litellm_data_to_request(
         ),
     )
 
+    if holds_api_key_secret_reference(data):  # pyright: ignore[reportUnknownArgumentType]  # data is an untyped dict
+        raise HTTPException(status_code=400, detail=API_KEY_SECRET_REFERENCE_REJECTION)
+
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param
     # example enforced_params ['user', 'metadata', 'metadata.generation_name']
@@ -3895,7 +3897,7 @@ def _add_guardrails_from_policies_in_metadata(
 
 def add_guardrails_from_auth_metadata(
     user_api_key_dict: UserAPIKeyAuth,
-    data: dict,  # mutable-ok: writes guardrails into the live request dict, same contract as the helpers it wraps
+    data: dict[str, object],  # mutable-ok: writes guardrails into the live request dict, same contract as helpers
     metadata_variable_name: str,
 ) -> None:
     """Resolve key, team, and project guardrails, direct and via policies, onto the request metadata."""
@@ -3953,7 +3955,7 @@ async def move_guardrails_to_metadata(
 
     add_guardrails_from_auth_metadata(
         user_api_key_dict=user_api_key_dict,
-        data=data,
+        data=data,  # pyright: ignore[reportUnknownArgumentType]  # request data retains a legacy dynamic shape
         metadata_variable_name=_metadata_variable_name,
     )
 

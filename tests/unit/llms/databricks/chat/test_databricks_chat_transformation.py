@@ -27,6 +27,7 @@ from litellm.llms.databricks.chat.transformation import (
     _sanitize_empty_content,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponseStream, StreamingChoices
 import asyncio
 from unittest.mock import Mock
 from litellm._version import version
@@ -2462,3 +2463,278 @@ def test_databricks_claude_drops_the_openai_tool_search_tool_under_drop_params(m
     assert mapped["tools"] == [
         {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}}
     ]
+
+
+_JSON_TOOL_ARGUMENT_FRAGMENTS: Final = ("", "", '{"name": ', '"Ada"', ', "met', 'a": ', "{}", ', "tags": []}')
+_RECORD_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "Record",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "meta": {"type": "object"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["name", "meta", "tags"],
+        },
+    },
+}
+
+
+def _json_tool_call_frame(delta: dict[str, object], finish_reason: str | None = None) -> bytes:
+    chunk: Final = {
+        "id": "msg_1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "databricks-claude-haiku-5-5",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(chunk)}\n\n".encode()
+
+
+_GET_WEATHER_ARGUMENTS: Final = '{"city": "Paris"}'
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+}
+
+
+def _tool_call_opening(index: int, name: str, arguments: str) -> dict[str, object]:
+    tool_call: Final = {"index": index, "id": f"toolu_{index}", "type": "function"}
+    return {"tool_calls": [{**tool_call, "function": {"name": name, "arguments": arguments}}]}
+
+
+def _tool_call_fragment(index: int, fragment: str) -> dict[str, object]:
+    return {"tool_calls": [{"index": index, "type": "function", "function": {"arguments": fragment}}]}
+
+
+def _json_tool_call_deltas(index: int) -> tuple[dict[str, object], ...]:
+    fragments: Final = tuple(_tool_call_fragment(index, fragment) for fragment in _JSON_TOOL_ARGUMENT_FRAGMENTS[1:])
+    return (_tool_call_opening(index, "json_tool_call", _JSON_TOOL_ARGUMENT_FRAGMENTS[0]), *fragments)
+
+
+def _sse_stream(deltas: tuple[dict[str, object], ...], finish_reason: str) -> bytes:
+    frames: Final = tuple(_json_tool_call_frame(delta) for delta in deltas)
+    return b"".join((*frames, _json_tool_call_frame({}, finish_reason=finish_reason), b"data: [DONE]\n\n"))
+
+
+def _completion(content: str | None, tool_calls: tuple[tuple[str, str], ...], finish_reason: str) -> dict[str, object]:
+    message_tool_calls: Final = [
+        {"id": f"toolu_{index}", "type": "function", "function": {"name": name, "arguments": arguments}}
+        for index, (name, arguments) in enumerate(tool_calls)
+    ]
+    return {
+        "id": "msg_1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "databricks-claude-haiku-5-5",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content, "tool_calls": message_tool_calls or None},
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+    }
+
+
+_JSON_ANSWER: Final = "".join(_JSON_TOOL_ARGUMENT_FRAGMENTS)
+_PROSE_FRAGMENTS: Final = ("I picked ", "Ada with empty ", "meta and tags.")
+_PROSE_DELTAS: Final = tuple({"content": fragment} for fragment in _PROSE_FRAGMENTS)
+_TEXT_ANSWER_DELTAS: Final = tuple({"content": fragment} for fragment in _JSON_TOOL_ARGUMENT_FRAGMENTS)
+
+
+async def _collect_async_stream(request: dict[str, object]) -> list[ModelResponseStream]:
+    return [chunk async for chunk in await litellm.acompletion(**request, stream=True)]
+
+
+def _stream_chunks(request: dict[str, object], call: str) -> list[ModelResponseStream]:
+    if call == "completion":
+        return list(litellm.completion(**request, stream=True))
+    return asyncio.run(_collect_async_stream(request))
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+@pytest.mark.parametrize(
+    ("completion", "stream"),
+    [
+        pytest.param(
+            _completion(None, (("json_tool_call", _JSON_ANSWER),), "tool_calls"),
+            _sse_stream(_json_tool_call_deltas(0), "tool_calls"),
+            id="json-tool-only",
+        ),
+        pytest.param(
+            _completion("".join(_PROSE_FRAGMENTS), (("json_tool_call", _JSON_ANSWER),), "tool_calls"),
+            _sse_stream((*_PROSE_DELTAS, *_json_tool_call_deltas(0)), "tool_calls"),
+            id="prose-before-json-tool",
+        ),
+        pytest.param(
+            _completion(_JSON_ANSWER, (), "stop"),
+            _sse_stream(_TEXT_ANSWER_DELTAS, "stop"),
+            id="answer-as-text",
+        ),
+        pytest.param(
+            _completion(_JSON_ANSWER, (("json_tool_call", _JSON_ANSWER),), "tool_calls"),
+            _sse_stream((*_TEXT_ANSWER_DELTAS, *_json_tool_call_deltas(0)), "tool_calls"),
+            id="answer-as-text-and-json-tool",
+        ),
+    ],
+)
+def test_claude_json_schema_stream_returns_the_non_stream_answer(
+    respx_mock: respx.MockRouter, call: str, completion: dict[str, object], stream: bytes
+) -> None:
+    respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=completion),
+            httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"}),
+        ]
+    )
+    request: Final[dict[str, object]] = {
+        "model": "databricks/databricks-claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Return name Ada, an empty meta object, and empty tags."}],
+        "response_format": _RECORD_RESPONSE_FORMAT,
+        "api_base": DATABRICKS_API_BASE,
+        "api_key": DATABRICKS_API_KEY,
+    }
+
+    answer: Final = litellm.completion(**request).choices[0]
+    choices: Final = tuple(chunk.choices[0] for chunk in _stream_chunks(request, call) if chunk.choices)
+
+    assert answer.message.content == _JSON_ANSWER
+    assert "".join(choice.delta.content or "" for choice in choices) == answer.message.content
+    assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
+    assert not any(choice.delta.tool_calls for choice in choices)
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+@pytest.mark.parametrize("json_tool_first", [False, True], ids=["user-tool-first", "json-tool-first"])
+@pytest.mark.parametrize("leading_prose", [(), _PROSE_DELTAS], ids=["no-prose", "prose-first"])
+def test_claude_json_schema_stream_keeps_the_user_tool_call_to_run(
+    respx_mock: respx.MockRouter, call: str, json_tool_first: bool, leading_prose: tuple[dict[str, object], ...]
+) -> None:
+    json_index: Final = 0 if json_tool_first else 1
+    user_tool_deltas: Final = (
+        _tool_call_opening(1 - json_index, "get_weather", ""),
+        _tool_call_fragment(1 - json_index, '{"city": '),
+        _tool_call_fragment(1 - json_index, '"Paris"}'),
+    )
+    tool_calls: Final = (("get_weather", _GET_WEATHER_ARGUMENTS), ("json_tool_call", _JSON_ANSWER))
+    respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_completion(
+                    "".join(_PROSE_FRAGMENTS) if leading_prose else None,
+                    tool_calls[::-1] if json_tool_first else tool_calls,
+                    "tool_calls",
+                ),
+            ),
+            httpx.Response(
+                200,
+                content=_sse_stream(
+                    (
+                        (*leading_prose, *_json_tool_call_deltas(json_index), *user_tool_deltas)
+                        if json_tool_first
+                        else (*leading_prose, *user_tool_deltas, *_json_tool_call_deltas(json_index))
+                    ),
+                    "tool_calls",
+                ),
+                headers={"content-type": "text/event-stream"},
+            ),
+        ]
+    )
+    request: Final[dict[str, object]] = {
+        "model": "databricks/databricks-claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Check the weather in Paris, then return the record."}],
+        "tools": [_GET_WEATHER_TOOL],
+        "response_format": _RECORD_RESPONSE_FORMAT,
+        "api_base": DATABRICKS_API_BASE,
+        "api_key": DATABRICKS_API_KEY,
+    }
+
+    answer: Final = litellm.completion(**request).choices[0]
+    state: Final = ChatCompletionStreamState()
+    for chunk in _stream_chunks(request, call):
+        state.handle_chunk(ChatCompletionChunk.model_validate(chunk.model_dump()))
+    streamed: Final = state.get_final_completion().choices[0]
+
+    assert answer.message.content == _JSON_ANSWER
+    assert [tool_call.function.name for tool_call in answer.message.tool_calls or ()] == ["get_weather"]
+    assert answer.finish_reason == "tool_calls"
+    assert streamed.message.content == answer.message.content
+    streamed_tool_calls: Final = tuple(
+        (tool_call.function.name, tool_call.function.arguments) for tool_call in streamed.message.tool_calls or ()
+    )
+    assert streamed_tool_calls == (("get_weather", _GET_WEATHER_ARGUMENTS),)
+    assert streamed.finish_reason == answer.finish_reason
+
+
+def _json_schema_stream_choices(respx_mock: respx.MockRouter, call: str, stream: bytes) -> tuple[StreamingChoices, ...]:
+    respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"})
+    )
+    request: Final[dict[str, object]] = {
+        "model": "databricks/databricks-claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Check the weather in Paris, then return the record."}],
+        "tools": [_GET_WEATHER_TOOL],
+        "response_format": _RECORD_RESPONSE_FORMAT,
+        "api_base": DATABRICKS_API_BASE,
+        "api_key": DATABRICKS_API_KEY,
+    }
+    return tuple(chunk.choices[0] for chunk in _stream_chunks(request, call) if chunk.choices)
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+def test_claude_json_schema_stream_sends_a_text_answer_as_it_arrives(respx_mock: respx.MockRouter, call: str) -> None:
+    choices: Final = _json_schema_stream_choices(respx_mock, call, _sse_stream(_TEXT_ANSWER_DELTAS, "stop"))
+
+    assert [choice.delta.content for choice in choices if choice.delta.content] == [
+        fragment for fragment in _JSON_TOOL_ARGUMENT_FRAGMENTS if fragment
+    ]
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+def test_claude_json_schema_stream_sends_prose_before_the_user_tool_call(respx_mock: respx.MockRouter, call: str) -> None:
+    user_tool_opening: Final = _tool_call_opening(0, "get_weather", _GET_WEATHER_ARGUMENTS)
+    choices: Final = _json_schema_stream_choices(
+        respx_mock, call, _sse_stream((*_PROSE_DELTAS, user_tool_opening), "tool_calls")
+    )
+    first_tool_call_at: Final = next(position for position, choice in enumerate(choices) if choice.delta.tool_calls)
+
+    assert "".join(choice.delta.content or "" for choice in choices[: first_tool_call_at + 1]) == "".join(
+        _PROSE_FRAGMENTS
+    )
+    assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["tool_calls"]
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+def test_claude_json_schema_stream_split_across_json_tools_keeps_the_non_stream_finish_reason(
+    respx_mock: respx.MockRouter, call: str
+) -> None:
+    halves: Final = ('{"name": "Ada"}', '{"meta": {}, "tags": []}')
+    respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200, json=_completion(None, tuple(("json_tool_call", half) for half in halves), "tool_calls")
+        )
+    )
+    answer: Final = litellm.completion(
+        model="databricks/databricks-claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Return name Ada, an empty meta object, and empty tags."}],
+        response_format=_RECORD_RESPONSE_FORMAT,
+        api_base=DATABRICKS_API_BASE,
+        api_key=DATABRICKS_API_KEY,
+    ).choices[0]
+    split_stream: Final = _sse_stream(
+        tuple(_tool_call_opening(index, "json_tool_call", half) for index, half in enumerate(halves)), "tool_calls"
+    )
+    choices: Final = _json_schema_stream_choices(respx_mock, call, split_stream)
+
+    assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
