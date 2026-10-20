@@ -299,6 +299,7 @@ def test_arize_otel_v2_b3_non_openinference_callback_family(callback: str, gatew
         assert _json_object(response.content) == _chat_caller_response(_chat_response(marker), rig.model), response.text
         attributes: Final = _matching_genai_marker_span(rig.destination, marker)
         assert frozenset(attributes) == _B3_ATTRIBUTE_KEYS[callback], attributes
+        assert attributes["litellm.cache_hit"] == "False", attributes
         assert "metadata" not in attributes, attributes
         assert not any(".tool_calls." in key for key in attributes), attributes
         baggage: Final = tuple(
