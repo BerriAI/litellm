@@ -14,7 +14,11 @@ from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.router_strategy.least_busy import IN_FLIGHT_COUNT_TTL_SECONDS, LeastBusyLoggingHandler
+from litellm.router_strategy.least_busy import (
+    IN_FLIGHT_COUNT_TTL_SECONDS,
+    SELECTION_RESERVATION_TTL_SECONDS,
+    LeastBusyLoggingHandler,
+)
 from litellm.types.utils import ModelResponse
 
 GROUP: Final = "least-busy-group"
@@ -391,3 +395,62 @@ async def test_router_picks_least_busy_deployment_and_completion_restores_counts
     assert response._hidden_params["model_id"] == "1"
     assert route.calls.last.request.headers["authorization"] == "Bearer key-1"
     assert _router_counts(router) == seeded
+
+
+@pytest.mark.asyncio
+async def test_router_spreads_requests_that_start_together(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    async def slow_completion(_: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.05)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-least-busy",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=slow_completion)
+    router: Final = _least_busy_router()
+
+    await asyncio.gather(
+        *(
+            router.acompletion(model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}])
+            for _ in range(2 * len(ROUTER_DEPLOYMENT_IDS))
+        )
+    )
+
+    assert sorted(call.request.headers["authorization"] for call in route.calls) == sorted(
+        f"Bearer key-{deployment_id}" for deployment_id in ROUTER_DEPLOYMENT_IDS for _ in range(2)
+    )
+
+
+def test_a_reservation_that_never_reaches_the_api_call_expires() -> None:
+    now: list[float] = [0.0]
+    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), clock=lambda: now[0])
+
+    picks: Final = []
+    for at in (0.0, 1.0, 2.0):
+        now[0] = at
+        picks.append(worker.get_available_deployments(GROUP, HEALTHY, reserve=True))
+    now[0] = SELECTION_RESERVATION_TTL_SECONDS + 0.5
+
+    assert picks == [DEPLOYMENT_A, DEPLOYMENT_B, DEPLOYMENT_A]
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+
+
+def test_a_started_request_moves_its_reservation_into_the_in_flight_count() -> None:
+    worker: Final = _worker(None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A

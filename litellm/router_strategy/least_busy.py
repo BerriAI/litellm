@@ -1,5 +1,7 @@
 import logging
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -13,6 +15,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
+SELECTION_RESERVATION_TTL_SECONDS: Final = 30.0
 
 
 class _ModelInfo(TypedDict, total=False):
@@ -84,12 +87,8 @@ def _local_counts(raw: object, keys: tuple[str, ...]) -> tuple[int, ...]:
     return _as_counts(values)
 
 
-def _least_busy(
-    healthy_deployments: Sequence[Mapping[str, object]], counts: tuple[int, ...]
-) -> Mapping[str, object] | None:
-    if not healthy_deployments:
-        return None
-    return healthy_deployments[min(range(len(healthy_deployments)), key=lambda index: counts[index])]
+def _least_busy_index(counts: tuple[int, ...]) -> int:
+    return min(range(len(counts)), key=lambda index: counts[index])
 
 
 def _warn_unreadable(model_group: str, error: Exception) -> None:
@@ -116,12 +115,42 @@ class LeastBusyLoggingHandler(CustomLogger):
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(self, router_cache: DualCache):
+    def __init__(self, router_cache: DualCache, clock: Callable[[], float] = time.monotonic):
         self.router_cache = router_cache
         self.router_cache_id = str(id(router_cache))
+        self._clock = clock
+        self._reservations: Mapping[str, tuple[float, ...]] = MappingProxyType({})
+
+    def _live_reservations(self, key: str, now: float) -> tuple[float, ...]:
+        return tuple(t for t in self._reservations.get(key, ()) if now - t < SELECTION_RESERVATION_TTL_SECONDS)
+
+    def _select(
+        self,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        keys: tuple[str, ...],
+        counts: tuple[int, ...],
+        reserve: bool,
+    ) -> Mapping[str, object] | None:
+        if not healthy_deployments:
+            return None
+        now: Final = self._clock()
+        live: Final = tuple(self._live_reservations(key, now) for key in keys)
+        index: Final = _least_busy_index(tuple(count + len(r) for count, r in zip(counts, live, strict=True)))
+        if reserve:
+            self._reservations = MappingProxyType({**self._reservations, keys[index]: (*live[index], now)})
+        return healthy_deployments[index]
+
+    def _release_reservation(self, kwargs: Mapping[str, object]) -> None:
+        ref: Final = _deployment_ref(kwargs)
+        if ref is None:
+            return
+        key: Final = _request_count_key(*ref)
+        live: Final = self._live_reservations(key, self._clock())
+        self._reservations = MappingProxyType({**self._reservations, key: live[1:]})
 
     @with_service_target("router_usage")
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+        self._release_reservation(kwargs)
         self._increment(kwargs, 1)
 
     @with_service_target("router_usage")
@@ -158,7 +187,7 @@ class LeastBusyLoggingHandler(CustomLogger):
 
     @with_service_target("router_usage")
     def get_available_deployments(
-        self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]]
+        self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]], reserve: bool = False
     ) -> Mapping[str, object] | None:
         keys: Final = _request_count_keys(model_group, healthy_deployments)
         redis_cache: Final = self.router_cache.redis_cache
@@ -168,13 +197,13 @@ class LeastBusyLoggingHandler(CustomLogger):
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:
-                return _least_busy(healthy_deployments, shared)
+                return self._select(healthy_deployments, keys, shared, reserve)
         local: Final = _local_counts(self.router_cache.batch_get_cache(list(keys), local_only=True), keys)
-        return _least_busy(healthy_deployments, local)
+        return self._select(healthy_deployments, keys, local, reserve)
 
     @with_service_target("router_usage")
     async def async_get_available_deployments(
-        self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]]
+        self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]], reserve: bool = False
     ) -> Mapping[str, object] | None:
         keys: Final = _request_count_keys(model_group, healthy_deployments)
         redis_cache: Final = self.router_cache.redis_cache
@@ -184,9 +213,9 @@ class LeastBusyLoggingHandler(CustomLogger):
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:
-                return _least_busy(healthy_deployments, shared)
+                return self._select(healthy_deployments, keys, shared, reserve)
         local: Final = _local_counts(await self.router_cache.async_batch_get_cache(list(keys), local_only=True), keys)
-        return _least_busy(healthy_deployments, local)
+        return self._select(healthy_deployments, keys, local, reserve)
 
     def _increment(self, kwargs: Mapping[str, object], delta: int) -> None:
         ref: Final = _deployment_ref(kwargs)

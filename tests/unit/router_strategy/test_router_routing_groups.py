@@ -1202,12 +1202,12 @@ async def test_least_busy_override_sees_the_overriding_request_in_flight():
     stream = await router.acompletion(**_proxy_shaped_request(model="grp", routing_strategy="least-busy", stream=True))
     busy = stream._hidden_params["model_id"]
     idle = "d2" if busy == "d1" else "d1"
-    assert [await _async_override_pick(router, "least-busy") for _ in range(3)] == [idle, idle, idle]
+    assert await _async_override_pick(router, "least-busy") == idle
 
     async for _ in stream:
         pass
     await _async_wait_until(lambda: _in_flight(router, busy) == 0)
-    assert await _async_override_pick(router, "least-busy") == "d1"
+    assert await _async_override_pick(router, "least-busy") == busy
     assert _selector_is_not_global(router._override_selectors["least-busy"])
 
 
@@ -1217,12 +1217,12 @@ def test_sync_least_busy_override_sees_the_overriding_request_in_flight():
     stream = router.completion(**_proxy_shaped_request(model="grp", routing_strategy="least-busy", stream=True))
     busy = stream._hidden_params["model_id"]
     idle = "d2" if busy == "d1" else "d1"
-    assert [_sync_override_pick(router, "least-busy") for _ in range(3)] == [idle, idle, idle]
+    assert _sync_override_pick(router, "least-busy") == idle
 
     for _ in stream:
         pass
     _sync_wait_until(lambda: _in_flight(router, busy) == 0)
-    assert _sync_override_pick(router, "least-busy") == "d1"
+    assert _sync_override_pick(router, "least-busy") == busy
     assert _selector_is_not_global(router._override_selectors["least-busy"])
 
 

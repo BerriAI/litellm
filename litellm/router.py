@@ -2199,6 +2199,7 @@ class Router:
                 return await selector.async_get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
+                    reserve=request_kwargs not in (None, {}),
                 )
             case "usage-based-routing":
                 # `LowestTPMLoggingHandler` (v1) only exposes the sync
@@ -2255,6 +2256,7 @@ class Router:
                 return selector.get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
+                    reserve=request_kwargs not in (None, {}),
                 )
             case "usage-based-routing" | "usage-based-routing-v2":
                 return selector.get_available_deployments(
