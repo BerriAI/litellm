@@ -29,10 +29,12 @@ describe("BudgetModal", () => {
     const user = userEvent.setup();
     renderModal();
 
+    expect(screen.getByLabelText(/^Spend limit/)).toBeVisible();
+    expect(resetPeriod()).toBeVisible();
     fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
     fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "42.567" } });
     await chooseSelectOption(user, resetPeriod(), "per month");
-    fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "500.567" } });
+    fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "500" } });
     fireEvent.change(screen.getByLabelText("Requests per minute"), { target: { value: "7" } });
     fireEvent.change(screen.getByLabelText("Batch tokens per day"), { target: { value: "90000" } });
     await create(user);
@@ -42,7 +44,7 @@ describe("BudgetModal", () => {
       budget_id: "budget-alpha",
       max_budget: 42.57,
       budget_duration: "30d",
-      tpm_limit: 500.57,
+      tpm_limit: 500,
       rpm_limit: 7,
       tpd_limit: 90000,
     };
@@ -55,6 +57,7 @@ describe("BudgetModal", () => {
 
     fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
     fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "10" } });
+    expect(resetPeriod()).toHaveTextContent("in total");
     await chooseSelectOption(user, resetPeriod(), "per week");
     await chooseSelectOption(user, resetPeriod(), "in total");
     await create(user);

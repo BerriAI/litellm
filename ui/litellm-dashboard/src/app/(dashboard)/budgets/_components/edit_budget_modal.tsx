@@ -3,6 +3,7 @@ import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { applyBudgetPrecision } from "./budgetPrecision";
 import { BudgetFormFields, type BudgetFormValues, useBudgetForm } from "./BudgetFormFields";
+import { pickDirty } from "@/lib/forms/pickDirty";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -38,7 +39,8 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
   const handleUpdate = async (formValues: BudgetFormValues) => {
     try {
       toast.info("Making API Call");
-      await updateBudget.mutateAsync(applyBudgetPrecision(formValues));
+      const changedValues = pickDirty(formValues, form.formState.dirtyFields);
+      await updateBudget.mutateAsync(applyBudgetPrecision({ budget_id: formValues.budget_id, ...changedValues }));
       toast.success("Budget Updated");
       form.reset();
       setIsModalVisible(false);
