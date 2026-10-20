@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -1305,6 +1305,50 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat
     assert model_info.get("mode") != "responses"
 
 
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, reasoning_effort",
+    [
+        ("gpt-6.1-sol", "openai", "none"),
+        ("gpt-6.1-sol", "openai", {"effort": "none"}),
+        ("gpt-6-astra", "azure", "none"),
+    ],
+)
+def test_responses_api_bridge_check_tools_with_a_none_the_row_refuses_routes_to_responses(
+    local_model_cost_map: None, model: str, custom_llm_provider: str, reasoning_effort: object
+) -> None:
+    """The ``none`` escape hatch only holds when the chat gate forwards it. These rows refuse
+    ``none``, so the gate drops it (or refuses the call) and the provider runs its default effort,
+    under which Chat Completions rejects function tools; the bridge has to fire the way it does
+    for an unset effort. Row-derived: the test follows the flag, never the vendor's answer."""
+    from litellm.main import responses_api_bridge_check
+
+    row_key: Final = model if custom_llm_provider == "openai" else f"{custom_llm_provider}/{model}"
+    assert litellm.model_cost[row_key]["supports_none_reasoning_effort"] is False
+
+    model_info, _ = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=reasoning_effort,
+    )
+
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_a_none_the_row_refuses_stays_chat_without_tools(
+    local_model_cost_map: None,
+) -> None:
+    """Without function tools nothing forces the Responses route: the dropped ``none`` leaves a
+    plain chat call at the default effort, as for any other dropped level."""
+    from litellm.main import responses_api_bridge_check
+
+    model_info, _ = responses_api_bridge_check(
+        model="gpt-6.1-sol", custom_llm_provider="openai", reasoning_effort="none"
+    )
+
+    assert model_info.get("mode") != "responses"
+
+
 def test_responses_api_bridge_check_reasoning_none_with_summary_still_routes_to_responses():
     """A reasoning summary is Responses-only regardless of effort value."""
     from litellm.main import responses_api_bridge_check
@@ -1712,11 +1756,15 @@ _FOUNDRY_FUNCTION_TOOL: Final = ({"type": "function", "function": {"name": "get_
         pytest.param("gpt-6-astra", "https://myresource.openai.azure.com", None, id="gpt-6-azure-openai-host"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "low", id="gpt-5.6-explicit-effort"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, {"effort": "high"}, id="gpt-5.6-explicit-effort-dict"),
+        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "none", id="gpt-6-row-refused-none"),
     ],
 )
 def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_responses(
     model_name, api_base, reasoning_effort
 ):
+    """The explicit ``none`` only keeps a Foundry gpt-6 request on chat while the deployment takes
+    it; the ``azure_ai/gpt-6-astra`` row says it does not, so the gate drops it and the call runs at
+    the default effort, under which Foundry rejects function tools from gpt-6 on."""
     from litellm.main import responses_api_bridge_check
 
     model_info, model = responses_api_bridge_check(
@@ -1734,7 +1782,6 @@ def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_res
 @pytest.mark.parametrize(
     "model_name, api_base, reasoning_effort",
     [
-        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "none", id="explicit-none-stays-chat"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, None, id="gpt-5.6-unset-effort-stays-chat"),
         pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "none", id="gpt-5.6-explicit-none-stays-chat"),
         pytest.param("gpt-5.5", _FOUNDRY_API_BASE, "high", id="gpt-5.5-explicit-effort-stays-chat"),
@@ -4381,18 +4428,27 @@ class _RecordedSpeechSuccess:
     spend_metadata: Mapping[str, object]
     response_cost: float | None
     logged_response_cost: float | None
+    logged_tokens: tuple[object, object]
+    logged_cache_hit: object
+    logged_saved_cache_cost: object
+    logged_cache_key: object
 
 
 def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess:
     call_type: Final = payload.get("call_type")
     response_cost: Final = payload.get("response_cost")
     logging_payload: Final = payload.get("standard_logging_object")
-    logged_cost: Final = logging_payload.get("response_cost") if isinstance(logging_payload, dict) else None
+    logged: Final[Mapping[str, object]] = logging_payload if isinstance(logging_payload, dict) else {}
+    logged_cost: Final = logged.get("response_cost")
     return _RecordedSpeechSuccess(
         call_type=call_type if isinstance(call_type, str) else None,
         spend_metadata=get_litellm_metadata_from_kwargs(payload),
         response_cost=response_cost if isinstance(response_cost, float) else None,
         logged_response_cost=logged_cost if isinstance(logged_cost, float) else None,
+        logged_tokens=(logged.get("prompt_tokens"), logged.get("completion_tokens")),
+        logged_cache_hit=logged.get("cache_hit"),
+        logged_saved_cache_cost=logged.get("saved_cache_cost"),
+        logged_cache_key=logged.get("cache_key"),
     )
 
 
@@ -4400,6 +4456,11 @@ class _SuccessEventRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.events: list[_RecordedSpeechSuccess] = []  # mutable-ok: test recorder of success-callback events
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_speech_success(kwargs))
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
@@ -4413,6 +4474,16 @@ async def _wait_for_success_event(recorder: _SuccessEventRecorder, call_type: st
             return event
         await asyncio.sleep(0.05)
     pytest.fail(f"no {call_type} success event; got {[e.call_type for e in recorder.events]}")
+
+
+async def _wait_for_success_events(
+    recorder: _SuccessEventRecorder, call_type: str, count: int
+) -> tuple[_RecordedSpeechSuccess, ...]:
+    for _ in range(100):
+        if len(events := tuple(e for e in recorder.events if e.call_type == call_type)) >= count:
+            return events
+        await asyncio.sleep(0.05)
+    pytest.fail(f"expected {count} {call_type} success events; got {[e.call_type for e in recorder.events]}")
 
 
 def _gemini_tts_generate_content_response() -> dict[str, object]:
@@ -4446,7 +4517,7 @@ def _gemini_tts_generate_content_response() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
+async def test_aspeech_gemini_bridge_bills_one_call_with_proxy_metadata_and_completion_tokens(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -4466,9 +4537,11 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
         metadata={"user_api_key": "hashed-virtual-key", "user_api_key_user_id": "user-1"},
     )
 
-    assert mock_route.called
+    assert mock_route.call_count == 1
     assert mock_route.calls.last.request.headers["x-goog-api-key"] == "fake-gemini-key"
     speech_event: Final = await _wait_for_success_event(recorder, call_type="aspeech")
+    assert recorder.events == [speech_event]
+    assert speech_event.logged_tokens == (5, 60)
     assert speech_event.spend_metadata["user_api_key"] == "hashed-virtual-key"
     assert speech_event.spend_metadata["user_api_key_user_id"] == "user-1"
     expected_prompt_cost, expected_completion_cost = litellm.cost_per_token(
@@ -4479,6 +4552,39 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
     assert expected_cost > 0
     assert speech_event.response_cost == pytest.approx(expected_cost)
     assert speech_event.logged_response_cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_logs_a_cached_reply_as_a_free_cache_hit(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    recorder: Final = _SuccessEventRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    mock_route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+
+    for _ in range(2):
+        await litellm.aspeech(
+            model="gemini/gemini-2.5-flash-preview-tts",
+            input="cache hit check",
+            voice="Kore",
+            api_key="fake-gemini-key",
+        )
+
+    first, cached = await _wait_for_success_events(recorder, call_type="aspeech", count=2)
+    assert mock_route.call_count == 1
+    assert len(recorder.events) == 2
+    assert first.logged_cache_hit is not True
+    assert first.logged_response_cost is not None and first.logged_response_cost > 0
+    assert cached.logged_cache_hit is True
+    assert cached.logged_response_cost == 0.0
+    assert cached.logged_saved_cache_cost == pytest.approx(first.logged_response_cost)
+    assert isinstance(cached.logged_cache_key, str) and cached.logged_cache_key
 
 
 def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:
@@ -8694,6 +8800,676 @@ def test_model_alias_map_resolves_the_outbound_model(
 
     assert response.model == "resolved-model"
     assert json.loads(route.calls[0].request.content)["model"] == "resolved-model"
+
+
+_KIMI_DEPLOYMENT: Final = {"id": "kimi-vllm-1", "reasoning_effort_levels": ["low", "high", "max", "none"]}
+_VLLM_API_BASE: Final = "https://vllm.example.test/v1"
+_HELLO: Final = [{"role": "user", "content": "hello"}]
+
+
+def _chat_body_sent(
+    respx_mock: respx.MockRouter,
+    model: str,
+    reasoning_effort: str | None,
+    model_info: Mapping[str, object] | None,
+    **params: object,
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
+        return_value=_mocked_openai_chat_response(model)
+    )
+    completion(
+        model=model,
+        api_base=_VLLM_API_BASE,
+        api_key="fake-key",
+        messages=_HELLO,
+        reasoning_effort=reasoning_effort,
+        model_info=model_info,
+        **params,
+    )
+    return json.loads(route.calls.last.request.content)
+
+
+def _reasoning_effort_remaps(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if hasattr(record, "reasoning_effort_sent")]
+
+
+@pytest.fixture
+def remap_log(caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
+    from litellm._logging import verbose_logger
+
+    verbose_logger.addHandler(caplog.handler)
+    verbose_logger.propagate = False
+    verbose_logger.setLevel(logging.INFO)
+    return caplog
+
+
+@pytest.mark.parametrize(
+    "model, requested, expected",
+    [
+        ("hosted_vllm/my-kimi", "minimal", "low"),
+        ("hosted_vllm/my-kimi", "medium", "high"),
+        ("hosted_vllm/my-kimi", "xhigh", "max"),
+        ("hosted_vllm/my-kimi", "none", "none"),
+        ("azure_ai/my-kimi", "medium", "high"),
+    ],
+)
+def test_a_deployment_declaring_its_levels_receives_the_level_rounded_up(
+    respx_mock: respx.MockRouter, model: str, requested: str, expected: str
+) -> None:
+    assert _chat_body_sent(respx_mock, model, requested, _KIMI_DEPLOYMENT)["reasoning_effort"] == expected
+
+
+def test_a_deployment_rounding_down_receives_the_declared_level_below(respx_mock: respx.MockRouter) -> None:
+    rounding_down: Final = {**_KIMI_DEPLOYMENT, "reasoning_effort_rounding": "down"}
+
+    assert _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", "medium", rounding_down)["reasoning_effort"] == "low"
+
+
+def test_default_on_a_declaring_deployment_leaves_the_effort_to_the_provider(respx_mock: respx.MockRouter) -> None:
+    assert "reasoning_effort" not in _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", "default", _KIMI_DEPLOYMENT)
+
+
+def test_azure_ai_forwards_reasoning_effort_once_the_deployment_declares_levels(
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+        _chat_body_sent(respx_mock, "azure_ai/my-kimi", "medium", {"id": "kimi-azure-1"})
+    with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+        _chat_body_sent(respx_mock, "azure_ai/my-kimi", "medium", {"reasoning_effort_levels": []})
+
+    assert _chat_body_sent(respx_mock, "azure_ai/my-kimi", "medium", _KIMI_DEPLOYMENT)["reasoning_effort"] == "high"
+    assert _chat_body_sent(respx_mock, "azure_ai/my-kimi", "adaptive", _KIMI_DEPLOYMENT)["reasoning_effort"] == (
+        "adaptive"
+    )
+    assert _chat_body_sent(respx_mock, "azure_ai/my-kimi", "none", {"reasoning_effort_levels": ["low", "high"]})[
+        "reasoning_effort"
+    ] == "none"
+
+
+def test_a_model_map_declaration_alone_leaves_reasoning_effort_to_drop_params(
+    local_model_cost_map: None, respx_mock: respx.MockRouter
+) -> None:
+    assert "reasoning_effort" not in _chat_body_sent(
+        respx_mock, "azure_ai/FW-Kimi-K3", "medium", {"id": "kimi-azure-1"}, drop_params=True
+    )
+
+
+@pytest.mark.parametrize("model_info, expected", [(_KIMI_DEPLOYMENT, "high"), (None, "medium")])
+def test_a_hosted_vllm_thinking_budget_is_rounded_onto_the_declared_levels(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, expected: str
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock, "hosted_vllm/my-kimi", None, model_info, thinking={"type": "enabled", "budget_tokens": 2048}
+    )
+
+    assert sent["reasoning_effort"] == expected
+
+
+def test_an_undeclared_sibling_of_a_declaring_deployment_gets_the_request_untouched(
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.router import Router
+
+    route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
+        return_value=_mocked_openai_chat_response("my-kimi")
+    )
+    shared_params: Final = {"model": "hosted_vllm/my-kimi", "api_base": _VLLM_API_BASE, "api_key": "fake-key"}
+    router: Final = Router(
+        model_list=[
+            {"model_name": "kimi-declared", "litellm_params": {**shared_params}, "model_info": _KIMI_DEPLOYMENT},
+            {"model_name": "kimi-plain", "litellm_params": {**shared_params}, "model_info": {"id": "kimi-plain-1"}},
+        ]
+    )
+
+    router.completion(model="kimi-plain", messages=_HELLO, reasoning_effort="medium")
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "medium"
+
+
+def _anthropic_chat_body_sent(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    completion(model="anthropic/claude-opus-5-5", messages=_HELLO, model_info=model_info, max_tokens=4096, **params)
+    return json.loads(route.calls.last.request.content)
+
+
+_OPUS_DECLARING_LOW_AND_HIGH: Final = {"id": "opus-1", "reasoning_effort_levels": ["low", "high"]}
+
+
+def test_an_anthropic_deployment_declaring_its_levels_sends_the_rounded_tier_in_its_own_shape(
+    respx_mock: respx.MockRouter,
+) -> None:
+    rounded: Final = _anthropic_chat_body_sent(respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, reasoning_effort="medium")
+    asked_for_high: Final = _anthropic_chat_body_sent(respx_mock, None, reasoning_effort="high")
+
+    assert "reasoning_effort" not in rounded
+    assert rounded == asked_for_high
+
+
+def _bedrock_converse_request_fields_sent(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-opus-5-5/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=_HELLO,
+        model_info=model_info,
+        max_tokens=4096,
+        api_key="test-bedrock-token",
+        aws_region_name="us-west-2",
+        **params,
+    )
+    return json.loads(route.calls.last.request.content)["additionalModelRequestFields"]
+
+
+@pytest.mark.parametrize("display", [{}, {"display": "omitted"}, {"display": "summarized"}])
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_a_thinking_budget_on_a_declaring_adaptive_claude_deployment_sends_the_rounded_tier(
+    respx_mock: respx.MockRouter,
+    body_sent: Callable[..., Mapping[str, object]],
+    display: Mapping[str, str],
+) -> None:
+    budget: Final = {"type": "enabled", "budget_tokens": 2048, **display}
+
+    rounded: Final = body_sent(respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, thinking=budget)
+    undeclared: Final = body_sent(respx_mock, None, thinking=budget)
+
+    assert undeclared["output_config"] == {"effort": "medium"}
+    assert rounded == {**undeclared, "output_config": {"effort": "high"}}
+
+
+@pytest.mark.parametrize("display", [{}, {"display": "omitted"}])
+@pytest.mark.parametrize("default_effort", [{"reasoning_effort": "default"}, {"output_config": {"effort": "default"}}])
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_a_default_effort_beside_a_thinking_budget_sends_no_effort_on_a_declaring_adaptive_claude_deployment(
+    respx_mock: respx.MockRouter,
+    body_sent: Callable[..., Mapping[str, object]],
+    default_effort: Mapping[str, object],
+    display: Mapping[str, str],
+) -> None:
+    defaulted: Final = body_sent(
+        respx_mock,
+        _OPUS_DECLARING_LOW_AND_HIGH,
+        thinking={"type": "enabled", "budget_tokens": 2048, **display},
+        **default_effort,
+    )
+    adaptive_alone: Final = body_sent(respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, thinking={"type": "adaptive", **display})
+
+    assert "output_config" not in defaulted
+    assert defaulted == adaptive_alone
+
+
+def _bedrock_invoke_body_sent(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-opus-5-5/invoke"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    completion(
+        model="bedrock/invoke/us.anthropic.claude-opus-5-5",
+        messages=_HELLO,
+        model_info=model_info,
+        max_tokens=4096,
+        api_key="test-bedrock-token",
+        aws_region_name="us-west-2",
+        **params,
+    )
+    return json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.parametrize("display", ["updates", "summarized"])
+@pytest.mark.parametrize(
+    "body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent, _bedrock_invoke_body_sent]
+)
+def test_an_output_config_effort_beside_a_thinking_budget_reaches_a_declaring_claude_deployment_unchanged(
+    respx_mock: respx.MockRouter, body_sent: Callable[..., Mapping[str, object]], display: str
+) -> None:
+    params: Final = {
+        "thinking": {"type": "enabled", "budget_tokens": 2048, "display": display},
+        "output_config": {"effort": "high"},
+    }
+
+    declared: Final = body_sent(respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, **params)
+    undeclared: Final = body_sent(respx_mock, None, **params)
+
+    assert undeclared["output_config"] == {"effort": "high"}
+    assert declared == undeclared
+
+
+@pytest.mark.parametrize("dropped_effort", ["none", "HIGH"])
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_drop_params_leaves_the_thinking_budget_to_set_the_effort_beside_a_dropped_level(
+    respx_mock: respx.MockRouter, body_sent: Callable[..., Mapping[str, object]], dropped_effort: str
+) -> None:
+    budget: Final = {"type": "enabled", "budget_tokens": 2048}
+
+    dropped: Final = body_sent(
+        respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, thinking=budget, reasoning_effort=dropped_effort, drop_params=True
+    )
+    budget_alone: Final = body_sent(respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, thinking=budget, drop_params=True)
+
+    assert budget_alone["output_config"] == {"effort": "high"}
+    assert dropped == budget_alone
+
+
+@pytest.mark.parametrize(
+    "model_info, effort",
+    [(None, {}), (_OPUS_DECLARING_LOW_AND_HIGH, {}), (_OPUS_DECLARING_LOW_AND_HIGH, {"reasoning_effort": "default"})],
+)
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_a_non_numeric_thinking_budget_on_adaptive_claude_is_rejected_with_a_400(
+    respx_mock: respx.MockRouter,
+    body_sent: Callable[..., Mapping[str, object]],
+    model_info: Mapping[str, object] | None,
+    effort: Mapping[str, str],
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match=r"thinking\.budget_tokens must be a number") as rejected:
+        body_sent(respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **effort)
+
+    assert rejected.value.status_code == 400
+
+
+@pytest.mark.parametrize("drop_globally", [False, True])
+@pytest.mark.parametrize("model_info", [None, _OPUS_DECLARING_LOW_AND_HIGH])
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    body_sent: Callable[..., Mapping[str, object]],
+    model_info: Mapping[str, object] | None,
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    request_drop: Final = {} if drop_globally else {"drop_params": True}
+
+    dropped: Final = body_sent(
+        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+    )
+    adaptive_alone: Final = body_sent(respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop)
+
+    assert "output_config" not in adaptive_alone
+    assert dropped == adaptive_alone
+
+
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_an_output_config_effort_replaces_a_thinking_budget_the_provider_cannot_read(
+    respx_mock: respx.MockRouter, model: str, drop_params: bool
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock,
+        model,
+        None,
+        _KIMI_DEPLOYMENT,
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        output_config={"effort": "minimal"},
+        drop_params=drop_params,
+    )
+
+    assert sent["reasoning_effort"] == "low"
+    assert sent["output_config"] == {"effort": "low"}
+    assert "thinking" not in sent
+
+
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+def test_a_default_output_config_effort_beside_a_thinking_budget_sends_no_effort_where_thinking_is_unread(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock,
+        model,
+        None,
+        _KIMI_DEPLOYMENT,
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        output_config={"effort": "default"},
+    )
+
+    assert "reasoning_effort" not in sent
+    assert "thinking" not in sent
+
+
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+def test_a_thinking_budget_reaches_a_declaring_deployment_as_its_rounded_effort(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock, model, None, _KIMI_DEPLOYMENT, thinking={"type": "enabled", "budget_tokens": 2048}
+    )
+
+    assert sent["reasoning_effort"] == "high"
+    assert "thinking" not in sent
+
+
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+def test_an_explicit_reasoning_effort_replaces_a_thinking_budget_the_provider_cannot_read(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock, model, "medium", _KIMI_DEPLOYMENT, thinking={"type": "enabled", "budget_tokens": 2048}
+    )
+
+    assert sent["reasoning_effort"] == "high"
+    assert "thinking" not in sent
+
+
+def test_an_explicit_reasoning_effort_keeps_the_thinking_a_claude_deployment_reads(
+    respx_mock: respx.MockRouter,
+) -> None:
+    budget: Final = {"type": "enabled", "budget_tokens": 2048}
+
+    declared: Final = _anthropic_chat_body_sent(
+        respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, reasoning_effort="medium", thinking=budget
+    )
+    undeclared: Final = _anthropic_chat_body_sent(respx_mock, None, reasoning_effort="medium", thinking=budget)
+
+    assert "thinking" in undeclared
+    assert declared["thinking"] == undeclared["thinking"]
+
+
+@pytest.mark.parametrize("declared", [["none"], []])
+def test_drop_params_drops_a_thinking_budget_whose_effort_the_deployment_does_not_declare(
+    respx_mock: respx.MockRouter, declared: list[str]
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock,
+        "hosted_vllm/my-kimi",
+        None,
+        {"reasoning_effort_levels": declared},
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        drop_params=True,
+    )
+
+    assert "reasoning_effort" not in sent
+
+
+@pytest.mark.parametrize("declared", [["none"], []])
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_drop_params_keeps_adaptive_thinking_but_drops_a_budget_effort_the_claude_deployment_does_not_declare(
+    respx_mock: respx.MockRouter, body_sent: Callable[..., Mapping[str, object]], declared: list[str]
+) -> None:
+    model_info: Final = {"reasoning_effort_levels": declared}
+
+    dropped: Final = body_sent(
+        respx_mock,
+        model_info,
+        thinking={"type": "enabled", "budget_tokens": 2048, "display": "summarized"},
+        drop_params=True,
+    )
+    adaptive_alone: Final = body_sent(
+        respx_mock, model_info, thinking={"type": "adaptive", "display": "summarized"}, drop_params=True
+    )
+
+    assert "output_config" not in dropped
+    assert dropped == adaptive_alone
+
+
+@pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
+@pytest.mark.parametrize("budget_tokens", [500, 9000])
+def test_a_hosted_vllm_deployment_maps_a_thinking_budget_the_same_for_a_claude_model_name(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: int
+) -> None:
+    thinking: Final = {"type": "enabled", "budget_tokens": budget_tokens}
+
+    claude_named: Final = _chat_body_sent(
+        respx_mock, "hosted_vllm/claude-opus-5-5", None, model_info, thinking=thinking
+    )
+    kimi_named: Final = _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", None, model_info, thinking=thinking)
+
+    assert claude_named["reasoning_effort"] == kimi_named["reasoning_effort"]
+
+
+@pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
+@pytest.mark.parametrize("budget_tokens", ["2048", None, True])
+def test_a_non_numeric_thinking_budget_is_rejected_with_a_400(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: str | bool | None
+) -> None:
+    thinking: Final = {"type": "enabled", "budget_tokens": budget_tokens}
+
+    with pytest.raises(litellm.BadRequestError, match=r"thinking\.budget_tokens must be a number") as rejected:
+        _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", None, model_info, thinking=thinking)
+
+    assert rejected.value.status_code == 400
+
+
+@pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
+@pytest.mark.parametrize("budget_tokens", ["2048", None, True])
+def test_an_explicit_reasoning_effort_wins_over_a_non_numeric_thinking_budget(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: str | bool | None
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock,
+        "hosted_vllm/my-kimi",
+        "low",
+        model_info,
+        thinking={"type": "enabled", "budget_tokens": budget_tokens},
+    )
+
+    assert sent["reasoning_effort"] == "low"
+    assert "thinking" not in sent
+
+
+@pytest.mark.parametrize("drop_globally", [False, True])
+@pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
+def test_drop_params_drops_a_non_numeric_thinking_budget(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model_info: Mapping[str, object] | None,
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    request_drop: Final = {} if drop_globally else {"drop_params": True}
+
+    sent: Final = _chat_body_sent(
+        respx_mock,
+        "hosted_vllm/my-kimi",
+        None,
+        model_info,
+        thinking={"type": "enabled", "budget_tokens": "2048"},
+        **request_drop,
+    )
+
+    assert "reasoning_effort" not in sent
+    assert "thinking" not in sent
+
+
+def test_an_adaptive_effort_on_a_declaring_bedrock_converse_claude_deployment_is_rounded(
+    respx_mock: respx.MockRouter,
+) -> None:
+    adaptive: Final = {"type": "adaptive"}
+
+    rounded: Final = _bedrock_converse_request_fields_sent(
+        respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, thinking=adaptive, output_config={"effort": "medium"}
+    )
+    asked_for_high: Final = _bedrock_converse_request_fields_sent(
+        respx_mock, None, thinking=adaptive, output_config={"effort": "high"}
+    )
+
+    assert rounded == asked_for_high
+
+
+def test_a_routed_remap_is_logged_with_the_deployment_id_and_model_group(
+    respx_mock: respx.MockRouter, remap_log: pytest.LogCaptureFixture
+) -> None:
+    from litellm.router import Router
+
+    route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
+        return_value=_mocked_openai_chat_response("my-kimi")
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "kimi-k3",
+                "litellm_params": {"model": "hosted_vllm/my-kimi", "api_base": _VLLM_API_BASE, "api_key": "fake-key"},
+                "model_info": _KIMI_DEPLOYMENT,
+            }
+        ]
+    )
+
+    router.completion(model="kimi-k3", messages=_HELLO, reasoning_effort="minimal")
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "low"
+    assert [
+        (
+            getattr(record, "reasoning_effort_deployment_id"),
+            getattr(record, "reasoning_effort_model_group"),
+            getattr(record, "reasoning_effort_requested"),
+            getattr(record, "reasoning_effort_sent"),
+        )
+        for record in _reasoning_effort_remaps(remap_log)
+    ] == [("kimi-vllm-1", "kimi-k3", "minimal", "low")]
+
+
+def test_a_chat_request_bridged_to_responses_is_rounded_and_logged_once(
+    respx_mock: respx.MockRouter, remap_log: pytest.LogCaptureFixture
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY)
+    )
+
+    completion(
+        model="openai/gpt-5.5",
+        messages=_HELLO,
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        reasoning_effort="medium",
+        model_info={"id": "gpt-5.5-1", "reasoning_effort_levels": ["low", "high"]},
+    )
+
+    assert json.loads(route.calls.last.request.content)["reasoning"]["effort"] == "high"
+    assert [getattr(record, "reasoning_effort_sent") for record in _reasoning_effort_remaps(remap_log)] == ["high"]
+
+
+def test_default_on_a_declaring_deployment_keeps_a_tool_call_on_chat_completions(respx_mock: respx.MockRouter) -> None:
+    gateway: Final = "https://openai-gateway.example.test/v1"
+    chat: Final = respx_mock.post(f"{gateway}/chat/completions").mock(
+        return_value=_mocked_openai_chat_response("gpt-5.5")
+    )
+    responses: Final = respx_mock.post(f"{gateway}/responses")
+
+    completion(
+        model="openai/gpt-5.5",
+        api_base=gateway,
+        api_key="fake-key",
+        messages=_HELLO,
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        reasoning_effort="default",
+        model_info={"id": "gpt-5.5-1", "reasoning_effort_levels": ["low", "high"]},
+    )
+
+    assert not responses.called
+    assert "reasoning_effort" not in json.loads(chat.calls.last.request.content)
+
+
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+def test_drop_params_drops_a_level_the_deployment_does_not_declare(respx_mock: respx.MockRouter, model: str) -> None:
+    without_none: Final = {"reasoning_effort_levels": ["low", "high", "max"]}
+
+    assert "reasoning_effort" not in _chat_body_sent(respx_mock, model, "turbo", without_none, drop_params=True)
+    assert "reasoning_effort" not in _chat_body_sent(respx_mock, model, "none", without_none, drop_params=True)
+    assert _chat_body_sent(respx_mock, model, "none", _KIMI_DEPLOYMENT, drop_params=True)["reasoning_effort"] == "none"
+    assert _chat_body_sent(respx_mock, model, "turbo", without_none)["reasoning_effort"] == "turbo"
+
+
+_GPT_5_GATEWAY: Final = "https://gpt5-gateway.example.test/v1"
+_AZURE_GPT_5_BASE: Final = "https://gpt5.openai.azure.com"
+
+
+def _gpt_5_chat_body_sent(
+    respx_mock: respx.MockRouter, model: str, reasoning_effort: str, model_info: Mapping[str, object]
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(url__regex=r"https://gpt5[^/]*/.*chat/completions.*").mock(
+        return_value=_mocked_openai_chat_response(model)
+    )
+    completion(
+        model=model,
+        api_base=_AZURE_GPT_5_BASE if model.startswith("azure/") else _GPT_5_GATEWAY,
+        api_version="2025-04-01-preview",
+        api_key="fake-key",
+        messages=_HELLO,
+        reasoning_effort=reasoning_effort,
+        model_info=model_info,
+    )
+    return json.loads(route.calls.last.request.content) if route.called else {}
+
+
+def _openai_gpt_5_entry_disabling(level: str) -> str:
+    return next(
+        model
+        for model, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == "openai" and entry.get(f"supports_{level}_reasoning_effort") is False
+    )
+
+
+@pytest.mark.parametrize(
+    "model, requested, declared, expected",
+    [
+        ("openai/gpt-5-in-house", "high", ["low", "xhigh"], "xhigh"),
+        ("openai/gpt-5-in-house", "xhigh", ["xhigh"], "xhigh"),
+        ("azure/gpt-5-in-house", "none", ["none", "high"], "none"),
+        ("azure_ai/gpt-5-in-house", "xhigh", ["xhigh"], "xhigh"),
+    ],
+)
+def test_a_gpt_5_deployment_receives_a_level_it_declares_that_the_model_map_does_not_list(
+    respx_mock: respx.MockRouter, model: str, requested: str, declared: list[str], expected: str
+) -> None:
+    with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+        _gpt_5_chat_body_sent(respx_mock, model, expected, {"id": "gpt-5-in-house-1"})
+
+    sent: Final = _gpt_5_chat_body_sent(respx_mock, model, requested, {"reasoning_effort_levels": declared})
+
+    assert sent["reasoning_effort"] == expected
+
+
+def test_a_gpt_5_deployment_receives_a_declared_level_the_model_map_disables(
+    local_model_cost_map: None, respx_mock: respx.MockRouter
+) -> None:
+    model: Final = f"openai/{_openai_gpt_5_entry_disabling('low')}"
+    responses: Final = respx_mock.post(f"{_GPT_5_GATEWAY}/responses").mock(
+        return_value=httpx.Response(200, json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY)
+    )
+
+    with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+        _gpt_5_chat_body_sent(respx_mock, model, "low", {"id": "gpt-5-pro-1"})
+    _gpt_5_chat_body_sent(respx_mock, model, "low", {"reasoning_effort_levels": ["low", "high"]})
+
+    assert json.loads(responses.calls.last.request.content)["reasoning"]["effort"] == "low"
 
 
 @pytest.mark.asyncio

@@ -42,9 +42,11 @@ def get_all_functions_called_in_tests(base_dir):
         print("dir_path: ", dir_path)
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith(".py") and ("router" in file.lower() or test_dir == "unit"):
+                file_path = os.path.join(root, file)
+                if file.endswith(".py") and (
+                    "router" in os.path.relpath(file_path, dir_path).lower() or test_dir == "unit"
+                ):
                     print("file: ", file)
-                    file_path = os.path.join(root, file)
                     with open(file_path, "r", encoding="utf-8") as f:
                         try:
                             tree = ast.parse(f.read())
@@ -98,6 +100,8 @@ ignored_function_names = [
     "_embedding",
     "_aembedding",
     "_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
+    "_narrow_to_video_deployment",  # Tested through video_status and avideo_status polls in test_router_provider_endpoints.py
+    "_video_call_pin",  # Tested through the video_status pin tests and the chat video_id test in test_router_provider_endpoints.py
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
