@@ -117,6 +117,14 @@ class _FailureKwargsView(TypedDict, total=False):
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
+
+def _text_as_stored_on_span(span: Span, key: str, text: str) -> str:
+    from opentelemetry.sdk.trace import ReadableSpan
+
+    stored: Final = span.attributes.get(key) if isinstance(span, ReadableSpan) and span.attributes else None
+    return stored if isinstance(stored, str) else text
+
+
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
 
@@ -933,7 +941,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=value,
                     )
 
-            service_logging_span.set_status(Status(StatusCode.ERROR, error or None))
+            service_logging_span.set_status(
+                Status(
+                    StatusCode.ERROR, _text_as_stored_on_span(service_logging_span, "error", error) if error else None
+                )
+            )
             service_logging_span.end(end_time=_end_time_ns)
 
     async def async_post_call_failure_hook(
@@ -2282,7 +2294,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         key=ErrorAttributes.ERROR_MESSAGE,
                         value=error_str,
                     )
-                return error_str or None
+                return _text_as_stored_on_span(span, ErrorAttributes.ERROR_MESSAGE, error_str) if error_str else None
 
             # Set structured error attributes from StandardLoggingPayloadErrorInformation
             error_code: Final = error_information.get("error_code")
@@ -2340,7 +2352,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             verbose_logger.exception("OpenTelemetry: Error recording exception on span: %s", str(e))
             return None
         else:
-            return error_message or None
+            if error_message:
+                return _text_as_stored_on_span(span, ErrorAttributes.ERROR_MESSAGE, error_message)
+            return error_class or None
 
     def set_tools_attributes(self, span: Span, tools):
         import json
@@ -3614,19 +3628,20 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         span: Span | None,
         exception: Exception | None,
         status_code: int,
-    ) -> None:
+    ) -> str | None:
         """Stamp structured ``error.*`` attributes on the SERVER span from the
         exception returned to the client, with ``error.code`` pinned to the real
-        response status. Idempotent (overwrites); emits no exception event."""
+        response status. Idempotent (overwrites); emits no exception event.
+        Returns the error text for the span status description."""
         if span is None or exception is None:
-            return
+            return None
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
         )
 
         error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=exception)
         error_information["error_code"] = str(status_code)
-        self._record_exception_on_span(
+        return self._record_exception_on_span(
             span=span,
             kwargs={"standard_logging_object": {"error_information": error_information}},
         )

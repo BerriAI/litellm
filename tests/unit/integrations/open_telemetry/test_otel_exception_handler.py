@@ -133,10 +133,27 @@ def test_openai_exception_handler_stamps_structured_error_on_span(
         expected_url_path=path,
         where=f"openai_exception_handler ({path})",
     )
-    attrs = get_server_span(wired_otel).attributes
+    server_span = get_server_span(wired_otel)
+    attrs = server_span.attributes
     assert attrs.get(ErrorAttributes.ERROR_MESSAGE) == msg
     assert attrs.get(ErrorAttributes.ERROR_TYPE) == "ProxyException"
     assert attrs.get(ErrorAttributes.ERROR_CODE) == "401"
+    assert server_span.status.description == msg
+
+
+def test_validation_handler_puts_the_error_message_on_the_span_status(wired_otel, server_span_factory):
+    path = "/team/new"
+    request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
+    exc = RequestValidationError(
+        errors=[{"type": "float_parsing", "loc": ("body", "max_budget"), "msg": "Input should be a valid number"}]
+    )
+
+    response = asyncio.run(otel_request_validation_exception_handler(request, exc))
+
+    assert response.status_code == 422
+    server_span = get_server_span(wired_otel)
+    assert "Input should be a valid number" in server_span.status.description
+    assert server_span.status.description == server_span.attributes.get(ErrorAttributes.ERROR_MESSAGE)
 
 
 def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_factory):
