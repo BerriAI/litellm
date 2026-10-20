@@ -14,6 +14,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.router_utils.deployment_pricing import deployment_pricing_models
 
 _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _STR_KEYED: Final = TypeAdapter(dict[str, object])
@@ -31,8 +32,7 @@ def _deployment_pricing_models(deployment: Mapping[str, object]) -> tuple[str, .
     deployment's own model, the same order ``completion_cost`` walks for its spend row."""
     params: Final = _str_keyed(deployment.get("litellm_params"))
     info: Final = _str_keyed(deployment.get("model_info"))
-    candidates: Final = (info.get("base_model") or params.get("base_model"), params.get("model"))
-    return tuple(candidate for candidate in candidates if isinstance(candidate, str) and candidate)
+    return deployment_pricing_models(info.get("base_model") or params.get("base_model"), params.get("model"))
 
 
 def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float | None]:
