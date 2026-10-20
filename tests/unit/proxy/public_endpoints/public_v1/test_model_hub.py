@@ -25,7 +25,7 @@ class _FakeRouter:
 
     infos: Mapping[str, ModelGroupInfo]
 
-    def get_model_group_info(self, model_group: str) -> ModelGroupInfo | None:
+    def get_model_group_info(self, model_group: str, team_id: str | None = None) -> ModelGroupInfo | None:
         return self.infos.get(model_group)
 
 
@@ -325,7 +325,7 @@ def test_no_router_answers_with_a_problem_rather_than_the_openai_error_shape(mon
 
 def test_an_unexpected_router_failure_answers_as_a_problem_not_the_openai_error_shape(monkeypatch):
     class _Exploding:
-        def get_model_group_info(self, model_group: str) -> ModelGroupInfo:
+        def get_model_group_info(self, model_group: str, team_id: str | None = None) -> ModelGroupInfo:
             raise RuntimeError("router blew up")
 
     monkeypatch.setattr(litellm, "public_model_groups", ["boom"])
