@@ -3924,9 +3924,7 @@ class MirroredPricingParams(LiteLLMBaseModel):
     input_cost_per_character: float | None = None
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
-    # Loaded from config dictionaries; keep it in Pydantic/schema without adding a
-    # keyword to every generated subclass constructor's static signature.
-    explicit_cache_read_input_token_cost: float | None = Field(default=None, init=False)
+    explicit_cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
