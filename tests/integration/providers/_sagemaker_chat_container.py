@@ -70,15 +70,28 @@ def _event_header(name: str, value: str) -> bytes:
     return struct.pack("!B", len(name_bytes)) + name_bytes + b"\x07" + struct.pack("!H", len(value_bytes)) + value_bytes
 
 
+def _frame(headers: bytes, body: bytes) -> bytes:
+    prelude: Final = struct.pack("!II", 12 + len(headers) + len(body) + 4, len(headers))
+    message: Final = prelude + struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF) + headers + body
+    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
+
+
 def _payload_part(body: bytes) -> bytes:
     headers: Final = (
         _event_header(":event-type", "PayloadPart")
         + _event_header(":content-type", "application/octet-stream")
         + _event_header(":message-type", "event")
     )
-    prelude: Final = struct.pack("!II", 12 + len(headers) + len(body) + 4, len(headers))
-    message: Final = prelude + struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF) + headers + body
-    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
+    return _frame(headers, body)
+
+
+def model_stream_error(message: str, error_code: str) -> bytes:
+    headers: Final = (
+        _event_header(":exception-type", "ModelStreamError")
+        + _event_header(":content-type", "application/json")
+        + _event_header(":message-type", "exception")
+    )
+    return _frame(headers, json.dumps({"Message": message, "ErrorCode": error_code}).encode())
 
 
 def container_reply(identity: str, stream: bool) -> Reply:
@@ -93,8 +106,8 @@ def container_reply(identity: str, stream: bool) -> Reply:
     )
 
 
-def event_stream_reply(payloads: tuple[bytes, ...]) -> Reply:
-    return Reply(chunks=tuple(map(_payload_part, payloads)), content_type="application/vnd.amazon.eventstream")
+def event_stream_reply(payloads: tuple[bytes, ...], *, then: tuple[bytes, ...] = ()) -> Reply:
+    return Reply(chunks=(*map(_payload_part, payloads), *then), content_type="application/vnd.amazon.eventstream")
 
 
 def vllm_stream_events(identity: str) -> tuple[bytes, ...]:

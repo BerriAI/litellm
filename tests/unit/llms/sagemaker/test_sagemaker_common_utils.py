@@ -388,32 +388,100 @@ async def test_completion_stream_keeps_every_token_however_sagemaker_cuts_the_pa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["sync", "async"])
-async def test_truncated_last_record_is_reported_after_the_complete_ones(mode: str, caplog: pytest.LogCaptureFixture):
+@pytest.mark.parametrize(
+    "last_part",
+    [
+        pytest.param(_VLLM_EVENTS[2][:20], id="cut-between-characters"),
+        pytest.param(
+            _VLLM_EVENTS[2].encode()[: _VLLM_EVENTS[2].encode().index("👋".encode()) + 2], id="cut-inside-a-character"
+        ),
+    ],
+)
+async def test_stream_that_ends_inside_a_record_raises_after_the_complete_ones(mode: str, last_part: str | bytes):
+    stream: Final = _stream_frames(tuple(map(_payload_part, (*_VLLM_EVENTS[:2], last_part))), True, mode)
+
+    assert [_text(await anext(stream), True) for _ in range(2)] == ["", "Hél"]
+    with pytest.raises(SagemakerError, match="ended inside a record") as exc_info:
+        await anext(stream)
+    assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_text_left_over_that_is_not_a_record_is_logged_once(mode: str, caplog: pytest.LogCaptureFixture):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        chunks: Final = await _decode((*_VLLM_EVENTS[:2], _VLLM_EVENTS[2][:20]), is_messages_api=True, mode=mode)
+        chunks: Final = await _decode((*_VLLM_EVENTS[:3], "data: upstream hiccup\n\n"), is_messages_api=True, mode=mode)
 
     assert chunks[-1] is None
-    assert "".join(chunk.choices[0].delta.content for chunk in chunks[:-1]) == "Hél"
+    assert "".join(chunk.choices[0].delta.content for chunk in chunks[:-1]) == "Héllo 👋"
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["sync", "async"])
 @pytest.mark.parametrize(
-    ("parts", "is_messages_api"),
+    ("parts", "is_messages_api", "status_code"),
     [
         pytest.param(
             (
                 _VLLM_EVENTS[1],
-                _sse({"error": {"message": "CUDA out of memory while decoding", "code": 500}}) + "data: [DONE]\n\n",
+                _sse(
+                    {
+                        "error": {
+                            "message": "CUDA out of memory while decoding",
+                            "type": "InternalServerError",
+                            "code": 500,
+                        }
+                    }
+                )
+                + "data: [DONE]\n\n",
             ),
             True,
-            id="vllm-error-event-shares-a-part-with-done",
+            500,
+            id="vllm-500-error-event-shares-a-part-with-done",
         ),
         pytest.param(
-            (_VLLM_EVENTS[1], _sse({"error": {"message": "CUDA out of memory while decoding"}}), "data: [DONE]\n\n"),
+            (
+                _VLLM_EVENTS[1],
+                _sse(
+                    {"error": {"message": "CUDA out of memory while decoding", "type": "BadRequestError", "code": 400}}
+                ),
+                "data: [DONE]\n\n",
+            ),
             True,
-            id="vllm-error-event-in-its-own-part",
+            400,
+            id="vllm-400-error-event-in-its-own-part",
+        ),
+        pytest.param(
+            (
+                _VLLM_EVENTS[1],
+                _sse(
+                    {
+                        "object": "error",
+                        "message": "CUDA out of memory while decoding",
+                        "type": "BadRequestError",
+                        "code": 400,
+                    }
+                ),
+            ),
+            True,
+            400,
+            id="legacy-vllm-flat-error-event",
+        ),
+        pytest.param(
+            (
+                _VLLM_EVENTS[1],
+                _sse({"error": {"message": "CUDA out of memory while decoding", "http_status_code": 422}}),
+            ),
+            True,
+            422,
+            id="tgi-messages-api-error-event",
+        ),
+        pytest.param(
+            (_VLLM_EVENTS[1], _sse({"error": {"message": "CUDA out of memory while decoding", "code": "oom"}})),
+            True,
+            500,
+            id="error-event-without-a-status",
         ),
         pytest.param(
             (
@@ -421,18 +489,38 @@ async def test_truncated_last_record_is_reported_after_the_complete_ones(mode: s
                 + f"data:{json.dumps({'error': 'CUDA out of memory while decoding', 'error_type': 'generation'})}\n\n",
             ),
             False,
-            id="tgi-error-event-shares-a-part-with-a-token",
+            424,
+            id="tgi-generation-error-event-shares-a-part-with-a-token",
+        ),
+        pytest.param(
+            (
+                _TGI_EVENTS[0],
+                f"data:{json.dumps({'error': 'CUDA out of memory while decoding', 'error_type': 'overloaded'})}\n\n",
+            ),
+            False,
+            429,
+            id="tgi-overloaded-error-event",
+        ),
+        pytest.param(
+            (
+                _TGI_EVENTS[0],
+                f"data:{json.dumps({'error': 'CUDA out of memory while decoding', 'error_type': 'incomplete_generation'})}\n\n",
+            ),
+            False,
+            500,
+            id="tgi-incomplete-generation-error-event",
         ),
     ],
 )
-async def test_container_error_event_raises_with_its_message_after_the_chunks_before_it(
-    parts: tuple[str, ...], is_messages_api: bool, mode: str
+async def test_container_error_event_raises_with_its_message_and_status_after_the_chunks_before_it(
+    parts: tuple[str, ...], is_messages_api: bool, status_code: int, mode: str
 ):
     stream: Final = _stream_frames(tuple(map(_payload_part, parts)), is_messages_api, mode)
 
     assert _text(await anext(stream), is_messages_api) == "Hél"
-    with pytest.raises(SagemakerError, match="CUDA out of memory while decoding"):
+    with pytest.raises(SagemakerError, match="CUDA out of memory while decoding") as exc_info:
         await anext(stream)
+    assert exc_info.value.status_code == status_code
 
 
 @pytest.mark.asyncio
@@ -440,14 +528,21 @@ async def test_container_error_event_raises_with_its_message_after_the_chunks_be
 async def test_model_stream_error_raises_after_the_chunks_before_it(mode: str):
     frames: Final = (
         _payload_part(_VLLM_EVENTS[1]),
-        _frame(_MODEL_STREAM_ERROR_HEADERS, json.dumps({"Message": "container exited", "ErrorCode": "ModelError"})),
+        _frame(
+            _MODEL_STREAM_ERROR_HEADERS,
+            json.dumps({"Message": "container exited", "ErrorCode": "ModelInvocationTimeExceeded"}),
+        ),
         _payload_part(_VLLM_EVENTS[2]),
     )
     stream: Final = _stream_frames(frames, True, mode)
 
     assert _text(await anext(stream), True) == "Hél"
-    with pytest.raises(ValueError, match="container exited"):
+    with pytest.raises(SagemakerError) as exc_info:
         await anext(stream)
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.message == (
+        "SageMaker stream failed with ModelStreamError (ModelInvocationTimeExceeded): container exited"
+    )
 
 
 @pytest.mark.asyncio
@@ -495,7 +590,8 @@ async def test_record_that_is_not_a_chunk_is_logged_and_skipped(mode: str, caplo
 
     assert "".join(chunk.choices[0].delta.content for chunk in chunks) == "Héllo 👋"
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
-    assert "still decoding" in caplog.records[0].getMessage()
+    assert "['detail', 'object']" in caplog.records[0].getMessage()
+    assert "still decoding" not in caplog.records[0].getMessage()
 
 
 class TestSagemakerTransform:

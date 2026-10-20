@@ -1,11 +1,14 @@
 import asyncio
+import itertools
+import json
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import httpx
+import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, list_value, object_value, string_value
 from integration._support.database import read_rows
@@ -35,6 +38,7 @@ from integration.providers._sagemaker_chat_container import (
     event_stream_reply,
     marked_prompt,
     marker,
+    model_stream_error,
     only_request,
     vllm_stream_events,
 )
@@ -277,8 +281,15 @@ _PART_CUTTINGS: Final[Mapping[str, Callable[[tuple[bytes, ...]], tuple[bytes, ..
         "usage-and-done-share-a-part": lambda events: (*events[:-2], events[-2] + events[-1]),
         "event-pairs-share-a-part": _event_pairs,
         "seven-byte-parts": lambda events: _seven_byte_parts(b"".join(events)),
+        "keep-alive-comments-between-events": lambda events: tuple(
+            itertools.chain.from_iterable((b":\n\n", event) for event in events)
+        ),
     }
 )
+
+
+def _sse(record: Mapping[str, JsonValue]) -> bytes:
+    return f"data: {json.dumps(record)}\n\n".encode()
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,6 +464,79 @@ def test_sagemaker_chat_container_error_reaches_the_caller_after_one_attempt_wit
     assert "synthetic model error" in response.text, response.text
     assert JSON_OBJECT.validate_json(request.body) == container_body(wire.url, prompt, stream=False), request.body
     assert_signed(request, ACCESS_KEY, REGION, None)
+
+
+def test_sagemaker_chat_container_error_record_answers_its_own_status_after_one_attempt(gateway: Gateway) -> None:
+    failure: Final = _sse({"error": {"message": "synthetic prompt too long", "type": "BadRequestError", "code": 400}})
+
+    with wire_server(lambda _request: event_stream_reply((failure,))) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, {})
+        response: Final = _chat(gateway, model, marked_prompt(), {"stream": True})
+        only_request(wire)
+    assert response.status_code == 400, response.text
+    assert "synthetic prompt too long" in response.text, response.text
+
+
+async def _texts_until_error(
+    stream: openai.AsyncStream[openai.types.chat.ChatCompletionChunk],
+) -> AsyncIterator[str | openai.APIError]:
+    try:
+        async for chunk in stream:
+            yield "".join(choice.delta.content or "" for choice in chunk.choices)
+    except openai.APIError as error:
+        yield error
+
+
+async def _chat_openai_stream_until_error(
+    gateway: Gateway, model: str, prompt: str
+) -> tuple[str | openai.APIError, ...]:
+    async with async_openai_client(gateway) as client:
+        stream: Final = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=16,
+            stream=True,
+            extra_body=dict(NO_CACHE),
+        )
+        return tuple([item async for item in _texts_until_error(stream)])
+
+
+_MID_STREAM_FAILURES: Final[Mapping[str, tuple[Callable[[tuple[bytes, ...]], Reply], str]]] = MappingProxyType(
+    {
+        "error-record": (
+            lambda events: event_stream_reply(
+                (*events[:2], _sse({"error": {"message": "synthetic decode failure", "code": 500}}))
+            ),
+            "synthetic decode failure",
+        ),
+        "model-stream-error": (
+            lambda events: event_stream_reply(
+                events[:2], then=(model_stream_error("synthetic stream timeout", "ModelInvocationTimeExceeded"),)
+            ),
+            "SageMaker stream failed with ModelStreamError (ModelInvocationTimeExceeded): synthetic stream timeout",
+        ),
+        "stream-ends-inside-a-record": (
+            lambda events: event_stream_reply((*events[:2], events[2][:30])),
+            "SageMaker stream ended inside a record",
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("failure", tuple(_MID_STREAM_FAILURES))
+def test_sagemaker_chat_stream_failure_after_the_first_chunks_reaches_the_caller_as_an_error(
+    gateway: Gateway, failure: str
+) -> None:
+    reply, expected = _MID_STREAM_FAILURES[failure]
+    events: Final = vllm_stream_events(f"sagemaker-chat-{uuid.uuid4().hex}")
+
+    with wire_server(lambda _request: reply(events)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, {})
+        outcome: Final = asyncio.run(_chat_openai_stream_until_error(gateway, model, marked_prompt()))
+        only_request(wire)
+    errors: Final = tuple(item for item in outcome if isinstance(item, openai.APIError))
+    assert "".join(item for item in outcome if isinstance(item, str)) == "".join(CONTENT), outcome
+    assert len(errors) == 1 and expected in errors[0].message, outcome
 
 
 @dataclass(frozen=True, slots=True)

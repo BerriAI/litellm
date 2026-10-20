@@ -3,7 +3,8 @@ import functools
 import json
 import re
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import Final
+from types import MappingProxyType
+from typing import Final, Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError, with_config
@@ -45,6 +46,17 @@ _STREAM_FRAMING: Final = re.compile(r"(?:\s|data:|\[DONE\]|(?::|event:|id:|retry
 _JSON_DECODER: Final = json.JSONDecoder()
 _RAW_DECODED: Final = TypeAdapter(tuple[object, int])
 _NO_RECORD: Final = object()
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_TGI_ERROR_TYPE_STATUS: Final = MappingProxyType(
+    {
+        "generation": 424,
+        "overloaded": 429,
+        "validation": 422,
+        "template_error": 422,
+        "missing_template_variable": 422,
+        "tool_error": 422,
+    }
+)
 
 
 def _framing_end(text: str) -> int:
@@ -66,8 +78,15 @@ class _StreamRecordBuffer:
         self._pending += self._decoder.decode(data)
         return tuple(iter(self._pop_record, _NO_RECORD))
 
-    def unparsed(self) -> str:
-        return self._pending + self._decoder.decode(b"", final=True)
+    def close(self) -> "SagemakerError | str":
+        unparsed: Final = self._pending + self._decoder.decode(b"", final=True)
+        record_start: Final = unparsed[_framing_end(unparsed) :]
+        if record_start.startswith(("{", "[")):
+            return SagemakerError(
+                status_code=500,
+                message=f"SageMaker stream ended inside a record, {len(record_start)} characters into it",
+            )
+        return unparsed
 
     def _pop_record(self) -> object:
         start: Final = _framing_end(self._pending)
@@ -78,6 +97,25 @@ class _StreamRecordBuffer:
             return _NO_RECORD
         self._pending = self._pending[end:]
         return record
+
+
+def _fields(value: object) -> Mapping[str, object]:
+    return STR_KEYED_MAPPING.validate_python(value) if isinstance(value, Mapping) else _NO_FIELDS
+
+
+def _http_error_status(value: object) -> int | None:
+    return value if isinstance(value, int) and 400 <= value <= 599 else None
+
+
+def _streamed_error_status(record: Mapping[str, object]) -> int:
+    detail: Final = _fields(record.get("error"))
+    candidates: Final = (
+        detail.get("code"),
+        detail.get("http_status_code"),
+        record.get("code"),
+        _TGI_ERROR_TYPE_STATUS.get(str(record.get("error_type"))),
+    )
+    return next(filter(None, map(_http_error_status, candidates)), 500)
 
 
 def _load_sagemaker_response_stream_shape():
@@ -142,6 +180,10 @@ def client_error_details(error: Exception) -> tuple[int, str]:
     return response.response_metadata.http_status_code, response.error.message or str(error)
 
 
+class _EventStreamMessage(Protocol):
+    def to_response_dict(self) -> Mapping[str, object]: ...
+
+
 class SagemakerError(BaseLLMException):
     def __init__(
         self,
@@ -150,6 +192,24 @@ class SagemakerError(BaseLLMException):
         headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
+
+
+class _StreamExceptionBody(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
+    message: str = Field(default="", alias="Message")
+    error_code: str | None = Field(default=None, alias="ErrorCode")
+
+
+def _stream_exception_error(headers: Mapping[str, object], body: object) -> SagemakerError:
+    name: Final = headers.get(":exception-type") or headers.get(":error-code") or "an error"
+    try:
+        detail: Final = _StreamExceptionBody.model_validate_json(body if isinstance(body, bytes) else b"")
+    except ValidationError:
+        return SagemakerError(
+            status_code=500, message=f"SageMaker stream failed with {name}: {headers.get(':error-message', '')}"
+        )
+    code: Final = f" ({detail.error_code})" if detail.error_code else ""
+    return SagemakerError(status_code=500, message=f"SageMaker stream failed with {name}{code}: {detail.message}")
 
 
 class AWSEventStreamDecoder:
@@ -192,9 +252,11 @@ class AWSEventStreamDecoder:
         )
 
     def _record_to_chunk(self, record: object) -> GChunk | StreamingChatCompletionChunk | SagemakerError | None:
-        if isinstance(record, Mapping) and record.get("error") is not None:
+        fields: Final = _fields(record)
+        if fields.get("error") is not None or fields.get("object") == "error":
             return SagemakerError(
-                status_code=500, message=f"SageMaker endpoint streamed an error: {json.dumps(record)}"
+                status_code=_streamed_error_status(fields),
+                message=f"SageMaker endpoint streamed an error: {json.dumps(record)}",
             )
         try:
             if self.is_messages_api:
@@ -203,7 +265,11 @@ class AWSEventStreamDecoder:
                 )
             return self._chunk_parser(chunk_data=_SageMakerChunkDataRoot.model_validate(record).root)
         except ValidationError:
-            verbose_logger.error("Skipping a SageMaker stream record that is not a chunk: %s", json.dumps(record))
+            verbose_logger.error(
+                "Skipping a SageMaker stream record that is not a chunk: %s with keys %s",
+                type(record).__name__,
+                sorted(fields),
+            )
             return None
 
     def _chunks(self, records: tuple[object, ...]) -> Iterator[GChunk | StreamingChatCompletionChunk]:
@@ -226,7 +292,9 @@ class AWSEventStreamDecoder:
                 if payload := self._parse_message_from_event(event):
                     yield from self._chunks(records.feed(payload))
 
-        unparsed: Final = records.unparsed()
+        unparsed: Final = records.close()
+        if isinstance(unparsed, SagemakerError):
+            raise unparsed
         if unparsed:
             verbose_logger.error("Warning: Unparseable JSON data remained: %s", unparsed)
             yield None
@@ -247,12 +315,14 @@ class AWSEventStreamDecoder:
                     for parsed_chunk in self._chunks(records.feed(payload)):
                         yield parsed_chunk
 
-        unparsed: Final = records.unparsed()
+        unparsed: Final = records.close()
+        if isinstance(unparsed, SagemakerError):
+            raise unparsed
         if unparsed:
             verbose_logger.error("Warning: Unparseable JSON data remained: %s", unparsed)
             yield None
 
-    def _parse_message_from_event(self, event) -> bytes | None:
+    def _parse_message_from_event(self, event: _EventStreamMessage) -> bytes | None:
         response_stream_shape: Final = get_sagemaker_response_stream_shape()
         if response_stream_shape is None:
             raise SagemakerError(
@@ -264,18 +334,14 @@ class AWSEventStreamDecoder:
             )
         response_dict: Final = event.to_response_dict()
         parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
+        body: Final = response_dict.get("body")
 
         if response_dict["status_code"] != 200:
-            raise ValueError(f"Bad response code, expected 200: {response_dict}")
+            raise _stream_exception_error(_fields(response_dict.get("headers")), body)
 
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
             return chunk.get("bytes")
-        else:
-            chunk = response_dict.get("body")
-            if not chunk:
-                return None
-
-            return chunk
+        return body if isinstance(body, bytes) and body else None
