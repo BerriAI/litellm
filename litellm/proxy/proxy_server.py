@@ -360,6 +360,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
+    normalize_drop_params,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -401,6 +402,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
+    MAX_REQUEST_SIZE_MB_SETTING,
     check_response_size_is_safe,
     is_request_body_safe,
     log_model_access_denial,
@@ -840,6 +842,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
@@ -1995,6 +1998,9 @@ vertex_live_passthrough_vertex_base: Final = VertexBase()
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
 from fastapi.routing import APIWebSocketRoute
+from starlette.routing import BaseRoute
+
+from litellm.proxy.common_utils.openapi_route import OpenAPISchema, serve_openapi_off_the_event_loop
 
 
 def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_routes: list) -> dict:
@@ -2041,10 +2047,19 @@ def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_
     return openapi_schema
 
 
-def get_openapi_schema():
-    if app.openapi_schema:
-        return app.openapi_schema
+@dataclass(frozen=True, slots=True)
+class _OpenAPIInputs:
+    routes: tuple[BaseRoute, ...]
+    loaded_lazy_modules: frozenset[str]
 
+
+def _openapi_inputs() -> _OpenAPIInputs:
+    from litellm.proxy._lazy_features import loaded_lazy_modules
+
+    return _OpenAPIInputs(routes=tuple(app.routes), loaded_lazy_modules=loaded_lazy_modules(app))
+
+
+def _build_openapi_schema(inputs: _OpenAPIInputs) -> OpenAPISchema:
     # Use compatibility wrapper for FastAPI 0.120+ schema generation
     from litellm.proxy.common_utils.openapi_schema_compat import (
         get_openapi_schema_with_compat,
@@ -2055,11 +2070,11 @@ def get_openapi_schema():
         title=app.title,
         version=app.version,
         description=app.description,
-        routes=app.routes,
+        routes=list(inputs.routes),
     )
 
     # Find all WebSocket routes
-    websocket_routes: Final = [route for route in app.routes if isinstance(route, APIWebSocketRoute)]
+    websocket_routes: Final = [route for route in inputs.routes if isinstance(route, APIWebSocketRoute)]
 
     # Add a synthetic GET stub for each so they render in Swagger UI,
     # without clobbering existing HTTP operations on the same path.
@@ -2071,31 +2086,34 @@ def get_openapi_schema():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
+    from litellm.proxy._lazy_features import inject_lazy_stubs
 
-    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
+    openapi_schema = inject_lazy_stubs(openapi_schema, inputs.loaded_lazy_modules)
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
-    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+
+def get_openapi_schema():
+    if app.openapi_schema:
+        return app.openapi_schema
+    app.openapi_schema = _build_openapi_schema(_openapi_inputs())
     return app.openapi_schema
 
 
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi_schema()
+def _build_docs_filtered_openapi_schema(inputs: _OpenAPIInputs) -> OpenAPISchema:
+    openapi_schema = _build_openapi_schema(inputs)
 
-    # Filter routes to include only specific ones
-    openai_routes: Final = LiteLLMRoutes.openai_routes.value
-    paths_to_include: Final[dict] = {}
-    for route in openai_routes:
-        if route in openapi_schema["paths"]:
-            paths_to_include[route] = openapi_schema["paths"][route]
-    openapi_schema["paths"] = paths_to_include
+    all_paths: Final = openapi_schema.get("paths")
+    openapi_schema["paths"] = (
+        {route: all_paths[route] for route in LiteLLMRoutes.openai_routes.value if route in all_paths}
+        if isinstance(all_paths, dict)
+        else {}
+    )
 
     # Add LLM API request schema bodies for documentation
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
@@ -2103,24 +2121,32 @@ def custom_openapi():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
+    from litellm.proxy._lazy_features import inject_lazy_stubs
 
-    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
+    openapi_schema = inject_lazy_stubs(openapi_schema, inputs.loaded_lazy_modules)
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
-    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    app.openapi_schema = _build_docs_filtered_openapi_schema(_openapi_inputs())
     return app.openapi_schema
 
 
 if os.getenv("DOCS_FILTERED", "False") == "True" and premium_user:
     app.openapi = custom_openapi
+    serve_openapi_off_the_event_loop(app, _openapi_inputs, _build_docs_filtered_openapi_schema)
 else:
     # For regular users, use get_openapi_schema to include LLM API schemas
     app.openapi = get_openapi_schema
+    serve_openapi_off_the_event_loop(app, _openapi_inputs, _build_openapi_schema)
 
 
 class UserAPIKeyCacheTTLEnum(enum.Enum):
@@ -2215,9 +2241,14 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Ex
                 open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
             return
         open_telemetry_logger.set_response_status_code_attribute(parent_otel_span, status_code)
-        if status_code >= 400:
-            open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
-        parent_otel_span.set_status(Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK))
+        parent_otel_span.set_status(
+            Status(
+                StatusCode.ERROR,
+                open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code),
+            )
+            if status_code >= 400
+            else Status(StatusCode.OK)
+        )
         parent_otel_span.end()
     except Exception as e:
         verbose_proxy_logger.debug("Error closing dangling OTEL SERVER span: %s", str(e))
@@ -2727,6 +2758,14 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
+def configured_max_request_size_mb() -> int | float | None:
+    return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
+
+
+app.add_middleware(
+    RequestBodyDecompressionMiddleware,
+    get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -7065,6 +7104,7 @@ class ProxyConfig:
                         "vector_store_deny_by_default",
                         "search_tool_deny_by_default",
                         "vertex_ai_pass_through_drop_anthropic_betas",
+                        "request_tag_mappings",
                     )
                     if name in typed_general_settings
                 }
@@ -8309,6 +8349,7 @@ class ProxyConfig:
         previous_cleanup_schedule: tuple[object, ...],
     ) -> None:
         effects: Final = (
+            self._apply_request_tag_mappings_setting,
             self._apply_alerting_settings,
             self._apply_pass_through_settings,
             self._apply_boolean_settings,
@@ -8319,6 +8360,19 @@ class ProxyConfig:
         )
         for effect in effects:
             await effect(db_values)
+
+    async def _apply_request_tag_mappings_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        if "request_tag_mappings" not in db_values:
+            return
+        mappings: Final = self.settings.get("request_tag_mappings")
+        try:
+            ConfigGeneralSettings.model_validate(MappingProxyType({"request_tag_mappings": mappings}))
+        except ValidationError as error:
+            self.settings.pop("request_tag_mappings", None)
+            verbose_proxy_logger.error(
+                "Ignoring invalid general_settings.request_tag_mappings from the DB, so no baggage maps to tags: %s",
+                error,
+            )
 
     async def _apply_alerting_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         alerting: Final = self.settings.get("alerting")
@@ -14828,9 +14882,14 @@ async def _provider_token_count(
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
     estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
     count_model: Final = settings.count_model
-    counted: Final = await (
-        count_with(model_to_use, None) if count_model is None else count_with(count_model.model, count_model.region)
+    counting_model: Final = (
+        model_to_use
+        if count_model is None
+        else count_model.model
+        if count_model.litellm_provider is None
+        else f"{count_model.litellm_provider}/{count_model.model.removeprefix('bedrock/').removeprefix('bedrock_mantle/')}"
     )
+    counted: Final = await count_with(counting_model, None if count_model is None else count_model.region)
     if counted is None:
         return None
     if isinstance(counted, TokenCountResponse):
@@ -15165,7 +15224,7 @@ def _count_context_management(
     return CountContextManagement(
         spec=context_management,
         drop_invalid_edits=litellm.drop_params is True
-        or any(params.get("drop_params") is True for params in sent_params),
+        or any(normalize_drop_params(params.get("drop_params")) is True for params in sent_params),
     )
 
 
@@ -17714,7 +17773,7 @@ async def model_deprecations(
 
 
 def get_model_group_info(
-    llm_router: Router, all_models_str: Sequence[str], model_group: str | None
+    llm_router: Router, all_models_str: Sequence[str], model_group: str | None, team_id: str | None = None
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
@@ -17727,7 +17786,7 @@ def get_model_group_info(
         if model_group is not None and model_group != model:
             continue
 
-        _model_group_info = llm_router.get_model_group_info(model_group=model)
+        _model_group_info = llm_router.get_model_group_info(model_group=model, team_id=team_id)
 
         if _model_group_info is not None:
             model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
@@ -17959,7 +18018,10 @@ async def model_group_info(
 
     model_groups: Final = await append_agents_to_model_group(
         model_groups=get_model_group_info(
-            llm_router=llm_router, all_models_str=listed_group_names, model_group=model_group
+            llm_router=llm_router,
+            all_models_str=listed_group_names,
+            model_group=model_group,
+            team_id=user_api_key_dict.team_id,
         ),
         user_api_key_dict=user_api_key_dict,
     )
@@ -18235,6 +18297,7 @@ async def async_queue_request(
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
         router: Final = llm_router
 
+        queued_priority, _ = router.split_request_priority(model=data["model"], kwargs=data)
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_queue_stream() -> StreamingResponse:
@@ -18246,6 +18309,7 @@ async def async_queue_request(
                         request=request,
                     ),
                     media_type="text/event-stream",
+                    headers={"x-litellm-priority": str(queued_priority)},
                 )
 
             async def audit_late_failure(exc: Exception) -> HTTPException | None:
@@ -18260,7 +18324,7 @@ async def async_queue_request(
             )
 
         response: Final = await router.schedule_acompletion(**data)
-        fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
+        fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -18275,6 +18339,10 @@ async def async_queue_request(
             )
         elif isinstance(e, ProxyException):
             raise e
+        elif isinstance(e, litellm.BadRequestError):
+            raise ProxyException(
+                message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
+            )
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,
@@ -19587,6 +19655,7 @@ _PLUGIN_KEY_REDACTED: Final = "***"
 
 _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
+        "request_tag_mappings": "RequestTagMappings",
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
         "max_in_flight_requests_per_worker": "Integer",
@@ -21479,7 +21548,7 @@ attach_lazy_features(app)
 app.router.routes = hot_routes_first(app.router.routes)
 app.add_middleware(
     RequestSizeLimitMiddleware,
-    get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
+    get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
 )
 app.add_middleware(

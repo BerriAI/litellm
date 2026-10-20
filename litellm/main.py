@@ -136,6 +136,11 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
+from litellm.router_utils.reasoning_effort_capability import (
+    model_group_from_metadata,
+    reasoning_effort_needs_allowing,
+    resolve_chat_reasoning,
+)
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
     CompletionDispatchContext,
@@ -198,7 +203,7 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
-from .litellm_core_utils.core_helpers import normalize_drop_params, safe_deep_copy
+from .litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -5667,6 +5672,34 @@ def completion(
                 cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
             ),
         )
+        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        drop_unsupported_reasoning: Final = (
+            litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
+        )
+        reasoning_model_group: Final = model_group_from_metadata(
+            routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
+        )
+        requested_output_config: Final = as_str_mapping(non_default_params.get("output_config"))
+        chat_reasoning: Final = resolve_chat_reasoning(
+            reasoning_effort,
+            thinking,
+            requested_output_config,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            deployment_model_info=routing_kwargs.get("model_info"),
+            model_group=reasoning_model_group,
+            drop_params=drop_unsupported_reasoning,
+        )
+        resolved_reasoning_effort: Final = chat_reasoning.effort.value
+        resolved_output_config: Final = chat_reasoning.output_config
+        provider_params: Final = (
+            non_default_params
+            if resolved_output_config is requested_output_config
+            else {
+                **{key: value for key, value in non_default_params.items() if key != "output_config"},
+                **({"output_config": resolved_output_config} if resolved_output_config is not None else {}),
+            }
+        )
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
@@ -5758,6 +5791,12 @@ def completion(
         allowed_openai_params: Final[list[str] | None] = (
             [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
             if bridges_to_responses_api
+            or reasoning_effort_needs_allowing(
+                chat_reasoning.effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                base_model=base_model if isinstance(base_model, str) else None,
+            )
             else kwargs.get("allowed_openai_params")
         )
         optional_param_args: Final = {
@@ -5791,9 +5830,9 @@ def completion(
             "api_version": api_version,
             "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": resolved_reasoning_effort,
             "verbosity": verbosity,
-            "thinking": thinking,
+            "thinking": chat_reasoning.thinking,
             "web_search_options": web_search_options,
             "include_server_side_tool_invocations": (
                 include_server_side_tool_invocations
@@ -5808,14 +5847,14 @@ def completion(
             "base_model": base_model,
         }
         provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
-            reasoning_effort,
-            non_default_params,
+            resolved_reasoning_effort,
+            provider_params,
             accepts_summary=provider_config is not None
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
 
         mapping_args: Final = MappingProxyType({**optional_param_args, "reasoning_effort": provider_reasoning_effort})
-        mapping_special_params: Final = MappingProxyType(dict(non_default_params))
+        mapping_special_params: Final = MappingProxyType(dict(provider_params))
 
         def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
             return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
@@ -5852,7 +5891,7 @@ def completion(
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
-            special_params=non_default_params,
+            special_params=provider_params,
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=kwargs.get("additional_drop_params"),
             remove_sensitive_keys=True,
@@ -5973,6 +6012,7 @@ def completion(
             optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
+            model_id=optional_params.get("model_id"),
         )
         if mock_response or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
@@ -6007,7 +6047,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=bridge_reasoning_effort(reasoning_effort, optional_params.get("extra_body")),
+                reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
                 deployment_model_info=str_keyed_mapping(
@@ -6024,10 +6064,10 @@ def completion(
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
-            if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
-                optional_params["reasoning_effort"] = reasoning_effort
+            if isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
+                optional_params["reasoning_effort"] = resolved_reasoning_effort
             elif rs_val is not None:
-                eff: Final = optional_params.get("reasoning_effort", reasoning_effort)
+                eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
                 if isinstance(eff, dict):
                     optional_params["reasoning_effort"] = {**eff, "summary": rs_val}
                 elif eff is not None:
@@ -6089,7 +6129,7 @@ def completion(
             organization=organization,
             provider_config=provider_config,
             request_params=MappingProxyType(
-                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **non_default_params})
+                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **provider_params})
             ),
             shared_session=shared_session,
             stream=stream,
@@ -9127,7 +9167,7 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import (  # noqa: 
     stream_chunk_builder as stream_chunk_builder,  # noqa: PLC0414  # pyright: ignore[reportUnknownVariableType]  # chunks is an untyped list
 )
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import (  # noqa: E402  # re-export after the move
-    stream_chunk_builder_text_completion as stream_chunk_builder_text_completion,  # noqa: PLC0414  # pyright: ignore[reportUnknownVariableType]  # chunks is an untyped list
+    stream_chunk_builder_text_completion as stream_chunk_builder_text_completion,  # noqa: PLC0414  # re-export after the move
 )
 
 ########## Token Counting API ##########
