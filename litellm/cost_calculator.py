@@ -362,12 +362,6 @@ def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
     )
 
 
-def _priced_deployment_model_info(deployment_model_info: ModelInfo | None) -> ModelInfo | None:
-    if deployment_model_info is None or not _has_token_or_tiered_pricing(deployment_model_info):
-        return None
-    return deployment_model_info
-
-
 def _bills_wall_clock_seconds(model_info: ModelInfoBase) -> bool:
     mode: Final = model_info.get("mode")
     return mode is None or mode in _WALL_CLOCK_PRICED_MODES
@@ -448,7 +442,6 @@ def cost_per_token(
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
     bedrock_model_info: ModelInfo | None = None,
-    deployment_model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -767,7 +760,6 @@ def cost_per_token(
             usage=usage_block,
             service_tier=service_tier,
             data_residency=data_residency,
-            model_info=_priced_deployment_model_info(deployment_model_info),
         )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
@@ -807,12 +799,7 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        priced_deployment_info: Final = _priced_deployment_model_info(deployment_model_info)
-        model_info: Final = (
-            priced_deployment_info
-            if priced_deployment_info is not None
-            else cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-        )
+        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
@@ -820,7 +807,6 @@ def cost_per_token(
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
-                model_info=priced_deployment_info,
             )
         verbose_logger.debug("No per-token, tiered, or per-second pricing for model=%s; cost is 0", model)
         return 0.0, 0.0
@@ -2040,7 +2026,6 @@ def completion_cost(
                     response=completion_response,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
-                    deployment_model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)

@@ -24,7 +24,6 @@ def cost_per_token(
     usage: Usage,
     service_tier: str | None = None,
     data_residency: str | None = None,
-    model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -45,7 +44,6 @@ def cost_per_token(
         custom_llm_provider="openai",
         service_tier=service_tier,
         data_residency=data_residency,
-        model_info=model_info,
     )
 
 

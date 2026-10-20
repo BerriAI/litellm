@@ -4320,26 +4320,26 @@ def test_router_capacity_reads_a_model_info_base_model_before_a_litellm_params_o
     _invalidate_model_cost_lowercase_map()
 
 
-def test_deployment_id_equal_to_another_providers_catalog_key_bills_its_own_prices() -> None:
-    """The deployment's prices are read straight from its entry, never resolved by name: resolving
-    the id by name lands on the other provider's row and the provider check rejects it, billing $0."""
+def test_deployment_id_equal_to_another_providers_catalog_key_bills_its_own_prices_under_pricing_provider() -> None:
+    """Resolving the id by name under the routing provider lands on the other provider's row and the
+    provider check rejects it, billing $0. ``pricing_provider`` names the row's provider, so the
+    deployment's own prices (merged into that row) bill."""
     model_cost_entries: Final = {
         key: copy.deepcopy(litellm.model_cost.get(key))
         for key in (_COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
     }
     try:
-        router: Final = Router(model_list=[_colliding_id_deployment(_COLLIDING_BUILTIN_KEY, "openai")])
-
-        response: Final = router.completion(
-            model="nvidia/zai-org/glm-5.2",
-            messages=[{"role": "user", "content": "deployment id equal to a catalog key"}],
-            mock_response=litellm.ModelResponse(
-                model="zai-org/GLM-5.2",
-                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
-            ),
+        router: Final = Router(
+            model_list=[
+                _pricing_provider_deployment(
+                    _COLLIDING_BUILTIN_KEY,
+                    {"input_cost_per_token": 0.00000096, "output_cost_per_token": 0.00000302},
+                )
+            ]
         )
 
-        assert isinstance(response, litellm.ModelResponse)
+        response: Final = _glm_completion(router)
+
         assert response._hidden_params["response_cost"] == pytest.approx(1000 * 0.00000096 + 500 * 0.00000302)
     finally:
         _restore_model_cost_entries(model_cost_entries)
