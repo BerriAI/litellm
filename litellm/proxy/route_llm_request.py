@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import is_proxy_admin_request
 
@@ -676,7 +677,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
     data.pop("enable_tag_filtering", None)
-    drop_params: Final = data.get("drop_params", litellm.drop_params) is True  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
+    drop_params: Final = litellm.drop_params is True or normalize_drop_params(data.get("drop_params")) is True  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # route_request takes an untyped dict body
     router_settings_override_adapter: Final = (
         _JSON_OBJECT_OR_DROPPED_ADAPTER if drop_params else _OPTIONAL_JSON_OBJECT_ADAPTER
     )
@@ -691,16 +692,19 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             param="router_settings_override",
             code=status.HTTP_400_BAD_REQUEST,
         ) from None
+    if "user_config" in data and data["user_config"] is None:
+        data.pop("user_config")  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
+    user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
     if router_settings_override is not None:
         data.update(
             {
                 key: router_settings_override[key]
                 for key in _PER_REQUEST_ROUTER_SETTINGS
-                if router_settings_override.get(key) is not None and key not in data
+                if router_settings_override.get(key) is not None
+                and key not in data
+                and (user_config is None or key not in user_config)
             }
         )
-    if "user_config" in data and data["user_config"] is None:
-        data.pop("user_config")  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
@@ -734,12 +738,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     elif "user_config" in data:
         return _route_user_config_request(data, route_type)
 
-    elif router_settings_override is not None:
-        # Use main router with overridden kwargs
-        if llm_router is not None:
-            return getattr(llm_router, f"{route_type}")(**data)
-        else:
-            return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
         _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
         # Evals API: always route to litellm directly (not through router)

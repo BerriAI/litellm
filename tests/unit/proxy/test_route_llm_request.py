@@ -1,3 +1,4 @@
+import contextlib
 import httpx
 import json
 import litellm
@@ -438,7 +439,7 @@ async def test_route_request_with_router_settings_override_no_router():
     litellm.acompletion = mock_completion
 
     try:
-        response = await route_request(data, None, None, "acompletion")
+        response = await route_request(data, None, "gpt-3.5-turbo", "acompletion")
 
         assert response == "success"
         # Verify litellm.acompletion was called with merged settings
@@ -1087,7 +1088,6 @@ def _proxy_router_with_two_model_groups() -> litellm.Router:
         pytest.param(
             {
                 "user_config": {
-                    "num_retries": 0,
                     "model_list": [
                         {
                             "model_name": "gpt-3.5-turbo",
@@ -1164,13 +1164,13 @@ async def test_route_request_treats_null_router_settings_override_as_absent(
     "global_drop_params, extra_body",
     [
         pytest.param(False, {}, id="drop-params-off"),
-        pytest.param(True, {"drop_params": False}, id="request-turns-drop-params-off"),
+        pytest.param(False, {"drop_params": False}, id="request-drop-params-false"),
     ],
 )
 @pytest.mark.parametrize("override", ["fallbacks", ["num_retries"], 3])
 @pytest.mark.asyncio
 async def test_route_request_rejects_non_object_router_settings_override(
-    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool, extra_body: dict[str, bool], override: object
+    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool, extra_body: dict[str, bool | str], override: object
 ) -> None:
     from litellm.proxy._types import ProxyException
 
@@ -1200,12 +1200,14 @@ async def test_route_request_rejects_non_object_router_settings_override(
     [
         pytest.param(False, {"drop_params": True}, id="request-drop-params"),
         pytest.param(True, {}, id="global-drop-params"),
+        pytest.param(True, {"drop_params": False}, id="global-drop-params-with-request-false"),
+        pytest.param(False, {"drop_params": "true"}, id="request-drop-params-string"),
     ],
 )
 @pytest.mark.parametrize("override", ["fallbacks", ["num_retries"], 3])
 @pytest.mark.asyncio
 async def test_route_request_drops_non_object_router_settings_override_under_drop_params(
-    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool, extra_body: dict[str, bool], override: object
+    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool, extra_body: dict[str, bool | str], override: object
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "drop_params", global_drop_params)
@@ -1225,6 +1227,77 @@ async def test_route_request_drops_non_object_router_settings_override_under_dro
     assert response.choices[0].message.content == "hi", response
     assert upstream.call_count == 1
     assert "router_settings_override" not in json.loads(upstream.calls.last.request.content)
+
+
+@pytest.mark.parametrize(
+    "user_config_settings, expected_upstream_calls",
+    [
+        pytest.param({}, 2, id="key-setting-fills-unset-user-config-setting"),
+        pytest.param({"num_retries": 0}, 1, id="user-config-setting-beats-key-setting"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_user_config_router_settings_beat_key_settings(
+    monkeypatch: pytest.MonkeyPatch, user_config_settings: dict[str, int], expected_upstream_calls: int
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    user_config_base: Final = "https://user-config.example/v1"
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": {"num_retries": 1},
+        "user_config": {
+            **user_config_settings,
+            "model_list": [
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {
+                        "model": "openai/gpt-3.5-turbo",
+                        "api_key": "sk-user-config",
+                        "api_base": user_config_base,
+                    },
+                }
+            ],
+        },
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post(f"{user_config_base}/chat/completions").mock(
+            side_effect=[
+                httpx.Response(500, json={"error": {"message": "boom"}}),
+                _chat_completion_response("gpt-3.5-turbo"),
+            ]
+        )
+        with contextlib.suppress(litellm.InternalServerError):
+            await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+
+    assert upstream.call_count == expected_upstream_calls
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        pytest.param({}, id="no-key-settings"),
+        pytest.param({"router_settings_override": {"num_retries": 2}}, id="key-settings"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_refuses_blocked_model_whether_or_not_key_has_router_settings(
+    extra_body: dict[str, dict[str, int]],
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "sk-proxy"},
+                "model_info": {"blocked": True},
+            }
+        ],
+    )
+    data: Final = {"model": "gpt-3.5-turbo", "messages": list(_HELLO_MESSAGES), **extra_body}
+
+    with pytest.raises(litellm.PermissionDeniedError):
+        await route_request(data, router, None, "acompletion")
 
 
 @pytest.mark.parametrize(
