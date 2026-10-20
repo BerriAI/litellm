@@ -1004,8 +1004,14 @@ BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
 @pytest.mark.parametrize(
     "requested_thinking",
     (
-        {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING},
-        {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING},
+        {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1},
+        {
+            "type": "enabled",
+            "budget_tokens": 2048,
+            "display": "updates",
+            "block_binding": BLOCK_BINDING,
+            "future_key": 1,
+        },
     ),
     ids=("adaptive", "legacy"),
 )

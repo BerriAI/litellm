@@ -16,7 +16,7 @@ import sys
 import threading
 from collections.abc import Mapping
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -4172,28 +4172,81 @@ def test_shared_legacy_thinking_translation_preserves_supported_display(
     assert optional_params["thinking"] == expected_thinking
 
 
-@pytest.mark.usefixtures("local_model_cost_map")
-def test_shared_legacy_thinking_translation_carries_block_binding() -> None:
-    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-    optional_params: Final = {
-        "thinking": {
-            "type": "enabled",
-            "budget_tokens": 2048,
-            "block_binding": {"prefix_mismatch_behavior": "error"},
-        },
+LEGACY_THINKING_WITH_BLOCK_BINDING: Final = MappingProxyType(
+    {
+        "type": "enabled",
+        "budget_tokens": 2048,
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "future_key": 1,
     }
+)
+ADAPTIVE_THINKING_WITH_BLOCK_BINDING: Final = MappingProxyType(
+    {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+)
 
-    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-        model="claude-opus-5",
-        optional_params=optional_params,
-        custom_llm_provider="azure_ai",
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_thinking"),
+    (
+        ("claude-opus-4-8", "anthropic", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("claude-opus-4-8", "azure_ai", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("invoke/us.anthropic.claude-opus-4-8", "bedrock", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("converse/us.anthropic.claude-opus-4-8", "bedrock", {"type": "adaptive"}),
+        ("claude-opus-4-8", "vertex_ai", {"type": "adaptive"}),
+        ("databricks-claude-opus-4-8", "databricks", {"type": "adaptive"}),
+    ),
+    ids=("anthropic", "azure_ai", "bedrock_invoke", "bedrock_converse", "vertex_ai", "databricks"),
+)
+def test_chat_legacy_thinking_translation_carries_only_block_binding_where_supported(
+    model: str, custom_llm_provider: str, expected_thinking: Mapping[str, object]
+) -> None:
+    from litellm.utils import get_optional_params
+
+    optional_params: Final = get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        thinking=dict(LEGACY_THINKING_WITH_BLOCK_BINDING),
     )
 
-    assert optional_params["thinking"] == {
-        "type": "adaptive",
-        "block_binding": {"prefix_mismatch_behavior": "error"},
-    }
+    assert optional_params["thinking"] == expected_thinking
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_thinking"),
+    (
+        ("claude-opus-4-8", "anthropic", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("claude-opus-4-8", "azure_ai", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("us.anthropic.claude-opus-4-8", "bedrock", ADAPTIVE_THINKING_WITH_BLOCK_BINDING),
+        ("claude-opus-4-8", "vertex_ai", {"type": "adaptive"}),
+    ),
+    ids=("anthropic", "azure_ai", "bedrock_invoke", "vertex_ai"),
+)
+def test_messages_legacy_thinking_translation_carries_only_block_binding_where_supported(
+    model: str, custom_llm_provider: str, expected_thinking: Mapping[str, object]
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model=model, provider=LlmProviders(custom_llm_provider)
+    )
+    assert config is not None
+
+    result: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 512,
+            "thinking": dict(LEGACY_THINKING_WITH_BLOCK_BINDING),
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("thinking") == expected_thinking
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")

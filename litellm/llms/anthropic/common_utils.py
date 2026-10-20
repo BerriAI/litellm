@@ -108,6 +108,7 @@ _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+THINKING_BLOCK_BINDING_PROVIDERS: Final = frozenset({"anthropic", "azure_ai"})
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -160,6 +161,11 @@ def validated_object_mapping(value: object) -> dict[object, object] | None:
         return _OBJECT_MAPPING_ADAPTER.validate_python(value)
     except ValidationError:
         return None
+
+
+def thinking_block_binding(thinking: Mapping[object, object] | None) -> dict[str, object]:
+    block_binding: Final = thinking.get("block_binding") if thinking is not None else None
+    return {} if block_binding is None else {"block_binding": block_binding}
 
 
 def _validated_claude_code_list(value: object) -> list[object] | None:
@@ -914,6 +920,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         model: str,
         optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
         custom_llm_provider: str,
+        carry_block_binding: bool = False,
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
         adaptive-thinking models that reject it (4.7+ and the 5 families).
@@ -939,10 +946,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         existing_output_config: Final = optional_params.get("output_config")
         display: Final = thinking.get("display")
         supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
-        carried_thinking_keys: Final = {
-            key: value for key, value in thinking.items() if key not in ("type", "budget_tokens", "display")
-        }
-        optional_params["thinking"] = {**carried_thinking_keys, "type": "adaptive", **supported_display}
+        carried_block_binding: Final = thinking_block_binding(thinking) if carry_block_binding else {}
+        optional_params["thinking"] = {**carried_block_binding, "type": "adaptive", **supported_display}
         optional_params["output_config"] = {
             "effort": effort,
             **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),

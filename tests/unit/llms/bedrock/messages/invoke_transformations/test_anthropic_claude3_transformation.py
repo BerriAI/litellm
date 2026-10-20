@@ -3536,15 +3536,15 @@ BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
 @pytest.mark.parametrize(
     ("model", "requested_thinking", "extra_params"),
     (
-        ("eu.anthropic.claude-opus-5", {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}, {}),
+        ("eu.anthropic.claude-opus-5", {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1}, {}),
         (
             "eu.anthropic.claude-opus-5",
-            {"type": "enabled", "budget_tokens": 24000, "display": "updates", "block_binding": BLOCK_BINDING},
+            {"type": "enabled", "budget_tokens": 24000, "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1},
             {},
         ),
         (
             "us.anthropic.claude-opus-4-6",
-            {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING},
+            {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1},
             {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}},
         ),
     ),

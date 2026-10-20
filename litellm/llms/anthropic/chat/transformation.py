@@ -97,6 +97,7 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
+    THINKING_BLOCK_BINDING_PROVIDERS,
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
@@ -328,6 +329,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @property
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
+
+    @property
+    def _carries_thinking_block_binding(self) -> bool:
+        return self._resolved_provider in THINKING_BLOCK_BINDING_PROVIDERS
 
     @classmethod
     def get_config(cls, *, model: str | None = None):
@@ -1656,7 +1661,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 else:
                     optional_params["thinking"] = value
                     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-                        model=model, optional_params=optional_params, custom_llm_provider=self._resolved_provider
+                        model=model,
+                        optional_params=optional_params,
+                        custom_llm_provider=self._resolved_provider,
+                        carry_block_binding=self._carries_thinking_block_binding,
                     )
             elif param == "reasoning_effort":
                 # Accept both string ("low") and dict ({"effort": "low",
