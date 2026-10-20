@@ -1683,8 +1683,8 @@ def test_responses_input_tokens_sends_mantle_the_tool_use_invoke_inference_sends
         wire_server(_mantle(), port=mantle_port) as mantle,
         gateway.scenario() as scenario,
     ):
-        counted_model: Final = _deployment(scenario, runtime.url)
-        invoked_model: Final = _deployment(scenario, runtime.url, f"invoke/{_OPUS}")
+        counted_model: Final = _metadata_deployment(scenario, runtime.url)
+        invoked_model: Final = _metadata_deployment(scenario, runtime.url, f"invoke/{_OPUS}")
         generated: Final = gateway.request(
             "POST", "/v1/responses", {**_FORCED_TOOL_CHOICE, "model": invoked_model, "max_output_tokens": 16}
         )
@@ -1729,7 +1729,7 @@ def test_nova_count_sends_the_tool_specs_converse_inference_sends(counting_proxy
     path, body, count_field = _NOVA_COUNTS[route]
     gateway: Final = counting_proxy.gateway
     with wire_server(_counting_every_model) as runtime, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, runtime.url, _NOVA)
+        model: Final = _metadata_deployment(scenario, runtime.url, _NOVA)
         generated: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
