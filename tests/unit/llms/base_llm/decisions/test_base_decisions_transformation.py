@@ -197,13 +197,26 @@ def test_missing_or_mismatched_systemone_answers_are_refusals_left_out_of_the_re
     assert tuple(ir_to_systemone_response(parsed, ir).answers) == ("damaged",)
 
 
-def test_a_systemone_response_without_answers_names_the_missing_field() -> None:
+@pytest.mark.parametrize(
+    ("payload", "field"),
+    [
+        ({"model": "jev-latest", "usage": {"input_tokens": 10, "output_tokens": 1}}, ("answers",)),
+        (
+            {"model": "jev-latest", "answers": {"damaged": None}, "usage": {"input_tokens": 10, "output_tokens": 1}},
+            ("answers", "damaged"),
+        ),
+    ],
+    ids=["missing_answers", "null_answer"],
+)
+def test_a_malformed_systemone_response_names_the_field_at_fault(
+    payload: Mapping[str, object], field: tuple[str, ...]
+) -> None:
     ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(_SYSTEMONE_REQUEST))
 
     with pytest.raises(ValidationError) as error:
-        parse_systemone_response({"model": "jev-latest", "usage": {"input_tokens": 10, "output_tokens": 1}}, ir)
+        parse_systemone_response(payload, ir)
 
-    assert [(item["loc"], item["type"]) for item in error.value.errors()] == [(("answers",), "missing")]
+    assert [item["loc"] for item in error.value.errors()] == [field]
 
 
 def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:

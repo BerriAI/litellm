@@ -394,7 +394,9 @@ _MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, ob
 _LABELS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 
 
-def _normalize_answer(value: object) -> Mapping[str, object]:
+def _normalize_answer(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
     answer: Final = _MAPPING.validate_python(value)
     legend: Final = answer.get("legend")
     if answer.get("type") != "score" or not isinstance(legend, list):
@@ -403,18 +405,23 @@ def _normalize_answer(value: object) -> Mapping[str, object]:
     return {**answer, "legend": {str(index): label for index, label in enumerate(labels)}}
 
 
-def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
+def _normalize_systemone_response(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
     response: Final = _MAPPING.validate_python(payload)
     answers: Final = response.get("answers")
-    normalized: Final = (
-        {
-            **response,
-            "answers": {name: _normalize_answer(answer) for name, answer in _MAPPING.validate_python(answers).items()},
-        }
-        if isinstance(answers, Mapping)
-        else response
+    if not isinstance(answers, Mapping):
+        return response
+    return {
+        **response,
+        "answers": {name: _normalize_answer(answer) for name, answer in _MAPPING.validate_python(answers).items()},
+    }
+
+
+def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
+    return systemone_response_to_ir(
+        _SYSTEMONE_RESPONSE_ADAPTER.validate_python(_normalize_systemone_response(payload)), request
     )
-    return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(normalized), request)
 
 
 def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:

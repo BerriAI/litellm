@@ -969,6 +969,9 @@ def test_arize_otel_v2_cache_hit_exports_llm_span(gateway: Gateway, tmp_path: Pa
             attributes for attributes in spans if attributes.get("litellm.metadata.trace_marker") == marker
         )
         assert len(marker_spans) == 2, spans
-        _assert_tool_span_for_marker(marker_spans[1], marker)
-        assert marker_spans[1]["litellm.cache_hit"] == "True", marker_spans
-        assert marker_spans[1]["litellm.cost.total"] == "0.0", marker_spans
+        cache_hit_spans: Final = tuple(
+            attributes for attributes in marker_spans if attributes.get("litellm.cache_hit") == "True"
+        )
+        assert len(cache_hit_spans) == 1, marker_spans
+        _assert_tool_span_for_marker(cache_hit_spans[0], marker)
+        assert cache_hit_spans[0]["litellm.cost.total"] == "0.0", marker_spans
