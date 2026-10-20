@@ -1,49 +1,40 @@
-use crate::error::Error;
-use crate::fallback::{FallbackGeneralizations, FallbackRule};
-use crate::model_info::ModelInfo;
 use indexmap::IndexMap;
-use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+use crate::error::{Error, Problem, Rejected};
+use crate::fallback::{FallbackGeneralizations, FallbackRule};
+use crate::model_info::{Fields, Model};
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Provenance {
     pub source: Option<String>,
     pub revision: Option<String>,
     pub etag: Option<String>,
 }
 
+/// How far a fetched registry may shrink against the one it replaces.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IntegrityLimits {
-    pub reference_model_count: usize,
     pub min_model_count: usize,
     pub min_reference_ratio: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AliasIssue {
-    InvalidList { model: String },
-    InvalidName { model: String },
-    CanonicalCollision { model: String, alias: String },
-    AliasCollision { model: String, alias: String },
-}
-
 #[derive(Clone, Debug)]
 pub struct ModelEntry {
-    fields: Map<String, Value>,
-    info: ModelInfo,
+    fields: Fields,
+    model: Model,
 }
 
 impl ModelEntry {
     pub fn field(&self, name: &str) -> Option<&Value> {
         self.fields.get(name)
     }
-    pub fn fields(&self) -> &Map<String, Value> {
+    pub fn fields(&self) -> &Fields {
         &self.fields
     }
-    /// The entry deserialized into the typed mirror of the catalog schema.
-    pub fn info(&self) -> &ModelInfo {
-        &self.info
+    pub fn model(&self) -> &Model {
+        &self.model
     }
 }
 
@@ -54,80 +45,91 @@ pub struct ModelMatch<'a> {
     pub entry: &'a ModelEntry,
 }
 
+/// The registry document: named sections, and every other key a model.
+#[macro_rules_attribute::apply(crate::wire_type)]
+pub(crate) struct Registry {
+    sample_spec: Option<Map<String, Value>>,
+    fallback_generalizations: Option<FallbackGeneralizations>,
+    #[serde(flatten)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "std::collections::BTreeMap<String, Value>")
+    )]
+    models: IndexMap<String, Value>,
+}
+
 #[derive(Debug)]
 pub struct Catalog {
     entries: IndexMap<String, ModelEntry>,
     aliases: IndexMap<String, String>,
     lowercase_keys: HashMap<String, String>,
-    sample_spec: Option<Value>,
+    sample_spec: Option<Map<String, Value>>,
     fallback_generalizations: Option<FallbackGeneralizations>,
     provenance: Provenance,
-    alias_issues: Vec<AliasIssue>,
 }
 
 impl Catalog {
+    /// Reads a registry document, rejecting it with every problem found. Keys no type knows are
+    /// kept and listed by `unrecognized`.
     pub fn parse(body: &[u8], provenance: Provenance) -> Result<Self, Error> {
-        let root: IndexMap<String, Value> = serde_json::from_slice(body)?;
-        if root.is_empty() {
+        let Registry {
+            sample_spec,
+            fallback_generalizations,
+            models,
+        } = serde_json::from_slice(body)?;
+        if models.is_empty() {
             return Err(Error::Empty);
         }
 
-        let mut entries = IndexMap::with_capacity(root.len());
+        let mut problems = Vec::new();
+        let mut entries = IndexMap::with_capacity(models.len());
         let mut alias_lists = Vec::new();
-        let mut alias_issues = Vec::new();
-        let mut sample_spec = None;
-        let mut fallback_generalizations = None;
-        for (name, value) in root {
-            match name.as_str() {
-                "sample_spec" => {
-                    sample_spec = Some(value);
-                    continue;
-                }
-                "fallback_generalizations" => {
-                    fallback_generalizations =
-                        Some(serde_json::from_value::<FallbackGeneralizations>(value)?);
-                    continue;
-                }
-                _ => {}
-            }
+        for (name, value) in models {
             let Value::Object(mut fields) = value else {
-                return Err(Error::EntryNotObject { model: name });
+                problems.push(Problem::NotAnObject { model: name });
+                continue;
             };
-            let info = ModelInfo::deserialize(&fields)?;
-            if let Some(aliases) = fields.remove("aliases") {
-                match aliases {
-                    Value::Array(names) => alias_lists.push((name.clone(), names)),
-                    _ => alias_issues.push(AliasIssue::InvalidList {
-                        model: name.clone(),
-                    }),
-                }
+            match fields.remove("aliases").map(alias_names) {
+                None => {}
+                Some(Some(names)) => alias_lists.push((name.clone(), names)),
+                Some(None) => problems.push(Problem::InvalidAliases {
+                    model: name.clone(),
+                }),
             }
-            entries.insert(name, ModelEntry { fields, info });
+            match Model::from_fields(&name, &fields) {
+                Ok(model) => {
+                    if model.attributes.litellm_provider.is_none() {
+                        problems.push(Problem::MissingProvider {
+                            model: name.clone(),
+                        });
+                    }
+                    entries.insert(name, ModelEntry { fields, model });
+                }
+                Err(found) => problems.extend(found),
+            }
         }
 
-        let mut aliases = IndexMap::new();
+        let mut aliases: IndexMap<String, String> = IndexMap::new();
         for (model, names) in alias_lists {
-            for name in names {
-                let Value::String(alias) = name else {
-                    alias_issues.push(AliasIssue::InvalidName {
-                        model: model.clone(),
-                    });
-                    continue;
-                };
+            for alias in names {
                 if entries.contains_key(&alias) {
-                    alias_issues.push(AliasIssue::CanonicalCollision {
+                    problems.push(Problem::AliasShadowsModel {
                         model: model.clone(),
                         alias,
                     });
-                } else if aliases.contains_key(&alias) {
-                    alias_issues.push(AliasIssue::AliasCollision {
+                } else if let Some(owner) = aliases.get(&alias) {
+                    problems.push(Problem::AliasTaken {
                         model: model.clone(),
+                        owner: owner.clone(),
                         alias,
                     });
                 } else {
                     aliases.insert(alias, model.clone());
                 }
             }
+        }
+        if !problems.is_empty() {
+            return Err(Rejected(problems).into());
         }
 
         let lowercase_keys = entries
@@ -142,33 +144,55 @@ impl Catalog {
             sample_spec,
             fallback_generalizations,
             provenance,
-            alias_issues,
         })
     }
 
-    pub fn validate(&self, limits: IntegrityLimits) -> Result<(), Error> {
+    /// `body` read as the replacement for `current`, rejected when it does not parse or has
+    /// shrunk past `limits`.
+    pub fn fetched(
+        body: &[u8],
+        provenance: Provenance,
+        current: &Catalog,
+        limits: IntegrityLimits,
+    ) -> Result<Self, Error> {
+        let fetched = Self::parse(body, provenance)?;
+        fetched.check_size(current.model_count(), limits)?;
+        Ok(fetched)
+    }
+
+    /// Whether this catalog is big enough to replace one of `reference` models.
+    pub fn check_size(&self, reference: usize, limits: IntegrityLimits) -> Result<(), Error> {
         if !limits.min_reference_ratio.is_finite()
             || !(0.0..=1.0).contains(&limits.min_reference_ratio)
         {
             return Err(Error::InvalidRatio);
         }
-        let actual = self.entries.len();
+        let actual = self.model_count();
         if actual < limits.min_model_count {
             return Err(Error::BelowMinimum {
                 actual,
                 minimum: limits.min_model_count,
             });
         }
-        if limits.reference_model_count > 0
-            && (actual as f64) < (limits.reference_model_count as f64) * limits.min_reference_ratio
-        {
+        if (actual as f64) < (reference as f64) * limits.min_reference_ratio {
             return Err(Error::Shrunk {
                 actual,
-                reference: limits.reference_model_count,
+                reference,
                 ratio: limits.min_reference_ratio,
             });
         }
         Ok(())
+    }
+
+    /// Every `(model, key)` no type of this build reads. Python still serves these keys.
+    pub fn unrecognized(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.entries.iter().flat_map(|(name, entry)| {
+            entry
+                .model
+                .unrecognized
+                .iter()
+                .map(move |key| (name.as_str(), key.as_str()))
+        })
     }
 
     pub fn lookup(&self, key: &str) -> Option<ModelMatch<'_>> {
@@ -211,10 +235,7 @@ impl Catalog {
     pub fn aliases(&self) -> &IndexMap<String, String> {
         &self.aliases
     }
-    pub fn alias_issues(&self) -> &[AliasIssue] {
-        &self.alias_issues
-    }
-    pub fn sample_spec(&self) -> Option<&Value> {
+    pub fn sample_spec(&self) -> Option<&Map<String, Value>> {
         self.sample_spec.as_ref()
     }
     pub fn fallback_generalizations(&self) -> Option<&FallbackGeneralizations> {
@@ -226,4 +247,17 @@ impl Catalog {
     pub fn provenance(&self) -> &Provenance {
         &self.provenance
     }
+}
+
+fn alias_names(aliases: Value) -> Option<Vec<String>> {
+    let Value::Array(names) = aliases else {
+        return None;
+    };
+    names
+        .into_iter()
+        .map(|name| match name {
+            Value::String(name) => Some(name),
+            _ => None,
+        })
+        .collect()
 }

@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use litellm_model_catalog::{
-    Catalog, FallbackGeneralizations, Provenance, validate_model_entry, validate_registry,
-};
+use litellm_model_catalog::{Catalog, FallbackGeneralizations, Provenance};
 use rstest::{fixture, rstest};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 #[fixture]
 fn repo_root() -> PathBuf {
@@ -12,13 +10,15 @@ fn repo_root() -> PathBuf {
 }
 
 #[rstest]
-#[case("model_prices_and_context_window.json")]
-#[case("litellm/model_prices_and_context_window_backup.json")]
 #[ignore]
-fn checked_in_registry_passes_strict_validation(repo_root: PathBuf, #[case] filename: &str) {
-    let body = std::fs::read(repo_root.join(filename)).unwrap();
+fn checked_in_registry_parses_with_every_key_understood(repo_root: PathBuf) {
+    let body = std::fs::read(repo_root.join("model_prices_and_context_window.json")).unwrap();
     let catalog = Catalog::parse(&body, Provenance::default()).unwrap();
-    validate_registry(&catalog).unwrap();
+    let unrecognized: Vec<_> = catalog.unrecognized().collect();
+    assert!(
+        unrecognized.is_empty(),
+        "keys no type reads: {unrecognized:#?}"
+    );
 }
 
 #[rstest]
@@ -39,43 +39,6 @@ fn fallback_generalizations_are_typed(repo_root: PathBuf) {
 }
 
 #[rstest]
-#[case::missing_provider(serde_json::json!({"mode": "chat"}), "litellm_provider")]
-#[case::unknown_field(serde_json::json!({"litellm_provider": "test", "typo": true}), "unknown field")]
-#[case::negative_price(serde_json::json!({"litellm_provider": "test", "input_cost_per_token": -1}), "nonnegative")]
-#[case::negative_nested_price(serde_json::json!({"litellm_provider": "test", "guardrail_cost_per_unit": {"unit": -1}}), "nonnegative")]
-#[case::invalid_mode(serde_json::json!({"litellm_provider": "test", "mode": "invalid"}), "unknown variant")]
-#[case::invalid_date(serde_json::json!({"litellm_provider": "test", "deprecation_date": "2026-02-31"}), "deprecation_date")]
-#[case::invalid_hours(serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"hours_utc": "25:00-01:00"}}), "hours_utc")]
-#[case::empty_windows(serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"windows": []}}), "windows is empty")]
-#[case::invalid_weekday(serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"windows": [{"hours_utc": "00:00-01:00", "weekdays": [0]}]}}), "weekdays is invalid")]
-#[case::invalid_aliases(serde_json::json!({"litellm_provider": "test", "aliases": ["good", 7]}), "aliases must contain strings")]
-#[case::null_aliases(serde_json::json!({"litellm_provider": "test", "aliases": null}), "aliases must be an array")]
-#[ignore]
-fn registry_validation_rejects_malformed_entries(#[case] entry: Value, #[case] expected: &str) {
-    assert!(
-        validate_model_entry("test", &entry)
-            .unwrap_err()
-            .to_string()
-            .contains(expected)
-    );
-}
-
-#[test]
-#[ignore]
-fn checked_in_catalog_and_backup_match() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let current = std::fs::read(root.join("model_prices_and_context_window.json")).unwrap();
-    let backup =
-        std::fs::read(root.join("litellm/model_prices_and_context_window_backup.json")).unwrap();
-    assert_eq!(current, backup);
-    let catalog = Catalog::parse(&current, Provenance::default()).unwrap();
-    assert!(
-        catalog.alias_issues().is_empty(),
-        "invalid registry aliases"
-    );
-}
-
-#[rstest]
 #[case::input("input_cost_per_token_above_100k_tokens")]
 #[case::input_batches("input_cost_per_token_above_100k_tokens_batches")]
 #[case::output("output_cost_per_token_above_100k_tokens")]
@@ -85,9 +48,19 @@ fn checked_in_catalog_and_backup_match() {
 #[case::cache_creation_1hr("cache_creation_input_token_cost_above_1hr_above_100k_tokens")]
 #[case::cache_read("cache_read_input_token_cost_above_100k_tokens")]
 #[case::cache_read_batches("cache_read_input_token_cost_above_100k_tokens_batches")]
-fn registry_validation_keeps_above_100k_tier_rates(#[case] field: &str) {
-    let mut entry = Map::new();
-    entry.insert("litellm_provider".into(), "anthropic".into());
-    entry.insert(field.into(), 5e-7.into());
-    validate_model_entry("test", &Value::Object(entry)).unwrap();
+fn above_100k_tier_rates_are_prices(#[case] field: &str) {
+    let body = json!({"test": {"litellm_provider": "anthropic", field: 5e-7}}).to_string();
+    let catalog = Catalog::parse(body.as_bytes(), Provenance::default()).unwrap();
+    assert_eq!(catalog.unrecognized().count(), 0);
+    assert_eq!(
+        catalog
+            .lookup("test")
+            .unwrap()
+            .entry
+            .model()
+            .prices
+            .iter()
+            .count(),
+        1
+    );
 }

@@ -1,18 +1,122 @@
-use crate::capabilities::{AudioFormat, InputModality, Mode, OutputModality, VertexAiAudioApi};
-use crate::pricing::{OffPeakPricing, SearchContextCostPerQuery, TieredRate, WebSearchBillingUnit};
-use litellm_llms_types::formats::chat_completions::ReasoningEffort;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::BTreeMap;
+use std::fmt;
+use std::str::FromStr;
 
-/// Typed mirror of one catalog model entry.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct ModelInfo {
+use serde::Deserialize;
+use serde::de::{self, Deserializer, Visitor};
+use serde_json::{Map, Value};
+use serde_with::{DeserializeAs, serde_as};
+
+use crate::capabilities::{
+    AudioFormat, Endpoint, InputModality, Mode, OutputModality, VertexAiAudioApi,
+};
+use crate::error::{InvalidDate, Problem};
+use crate::prices::Prices;
+use crate::pricing::{PricingFields, Usd, WebSearchBillingUnit};
+use crate::rate::Rate;
+use litellm_llms_types::formats::chat_completions::ReasoningEffort;
+use litellm_llms_types::serde_compat::LaxI64;
+
+pub type Fields = Map<String, Value>;
+
+/// The model whose provider token counter counts tokens for this entry.
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct TokenCountModel {
+    pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub annotation_cost_per_page: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub annotation_cost_per_page_batches: Option<f64>,
+    pub region: Option<String>,
+}
+
+/// Local tokenizer that counts tokens for this entry.
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenCountTokenizer {
+    KimiK3,
+}
+
+/// A calendar date written YYYY-MM-DD.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
+)]
+pub struct IsoDate(pub time::Date);
+
+impl FromStr for IsoDate {
+    type Err = InvalidDate;
+
+    fn from_str(date: &str) -> Result<Self, Self::Err> {
+        let mut parts = date.split('-');
+        let (Some(year), Some(month), Some(day), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return Err(InvalidDate);
+        };
+        if year.len() != 4 || month.len() != 2 || day.len() != 2 {
+            return Err(InvalidDate);
+        }
+        let number = |part: &str| part.parse::<u8>().map_err(|_| InvalidDate);
+        let month = time::Month::try_from(number(month)?).map_err(|_| InvalidDate)?;
+        time::Date::from_calendar_date(year.parse().map_err(|_| InvalidDate)?, month, number(day)?)
+            .map(Self)
+            .map_err(|_| InvalidDate)
+    }
+}
+
+impl fmt::Display for IsoDate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:04}-{:02}-{:02}",
+            self.0.year(),
+            u8::from(self.0.month()),
+            self.0.day()
+        )
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for IsoDate {
+    fn inline_schema() -> bool {
+        true
+    }
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "IsoDate".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "format": "date",
+            "pattern": r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$"
+        })
+    }
+}
+
+struct Count;
+
+impl<'de> DeserializeAs<'de, u64> for Count {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        let count = LaxI64::deserialize_as(deserializer)?;
+        u64::try_from(count).map_err(|_| {
+            de::Error::invalid_value(de::Unexpected::Signed(count), &"a count of zero or more")
+        })
+    }
+}
+
+/// The named, non-price fields of a catalog entry.
+#[serde_as]
+#[macro_rules_attribute::apply(crate::wire_type)]
+pub struct Attributes {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_transcription_config: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -21,262 +125,20 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bedrock_output_config_effort_ceiling: Option<ReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_audio_token_cost: Option<f64>,
-    /// USD per token written to the provider's prompt cache.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_32k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_100k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_100k_tokens_batches: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_128k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_1hr: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_1hr_above_100k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_1hr_above_200k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_200k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_200k_tokens_batches: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_256k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_272k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_272k_tokens_batches: Option<f64>,
-    /// Flex service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_272k_tokens_flex: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_272k_tokens_priority: Option<f64>,
-    /// Ultrafast service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_above_272k_tokens_ultrafast: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_batches: Option<f64>,
-    /// Flex service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_flex: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_priority: Option<f64>,
-    /// Ultrafast service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_token_cost_ultrafast: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_audio_token_cost: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_image_token_cost: Option<f64>,
-    /// USD per prompt token served from the provider's prompt cache.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_32k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_100k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_100k_tokens_batches: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_128k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_200k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_200k_tokens_batches: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_200k_tokens_priority: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_256k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_272k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_272k_tokens_batches: Option<f64>,
-    /// Flex service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_272k_tokens_flex: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_272k_tokens_priority: Option<f64>,
-    /// Ultrafast service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_272k_tokens_ultrafast: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_above_512k_tokens: Option<f64>,
-    /// Balanced service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_balanced: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_batches: Option<f64>,
-    /// Flex service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_flex: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_priority: Option<f64>,
-    /// Ultrafast service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_token_cost_ultrafast: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub citation_cost_per_token: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub code_interpreter_cost_per_session: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub computer_use_input_cost_per_1k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub computer_use_output_cost_per_1k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost_per_second: Option<f64>,
     /// Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_reasoning_effort: Option<ReasoningEffort>,
     /// Date the provider deprecates the model, YYYY-MM-DD.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub deprecation_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_search_cost_per_1k_calls: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_search_cost_per_gb_per_day: Option<f64>,
+    pub deprecation_date: Option<IsoDate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gemini_audio_only_live: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gemini_native_audio: Option<bool>,
-    /// USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub google_maps_grounding_cost_per_query: Option<f64>,
-    /// USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub guardrail_cost_per_unit: Option<BTreeMap<String, f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_audio_per_second: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_audio_per_second_above_128k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_audio_token: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_audio_token_batches: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_audio_token_priority: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_character: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_character_above_128k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_image: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_image_above_128k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_image_token: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_image_token_batches: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_pixel: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_query: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_request: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_second: Option<f64>,
-    /// USD per prompt token.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_32k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_100k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_100k_tokens_batches: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_128k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_200k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_200k_tokens_batches: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_200k_tokens_priority: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_256k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_272k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_272k_tokens_batches: Option<f64>,
-    /// Flex service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_272k_tokens_flex: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_272k_tokens_priority: Option<f64>,
-    /// Ultrafast service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_272k_tokens_ultrafast: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_above_512k_tokens: Option<f64>,
-    /// Balanced service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_balanced: Option<f64>,
-    /// USD per prompt token via the provider's batch API.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_batches: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_cache_hit: Option<f64>,
-    /// Flex service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_flex: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_priority: Option<f64>,
-    /// Ultrafast service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_token_ultrafast: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_video_per_second: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_video_per_second_above_128k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_video_per_second_above_15s_interval: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_video_per_second_above_8s_interval: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_video_token: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_video_token_batches: Option<f64>,
+    pub input_cost_per_token_cache_hit: Option<Usd>,
+    /// Databricks units, not USD.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_dbu_cost_per_token: Option<f64>,
     /// LiteLLM provider slug; one of https://docs.litellm.ai/docs/providers.
@@ -284,12 +146,15 @@ pub struct ModelInfo {
     pub litellm_provider: Option<String>,
     /// Maximum prompt/context tokens the model accepts.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(deserialize_as = "Option<Count>")]
     pub max_input_tokens: Option<u64>,
     /// Maximum tokens the model can generate in one response.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(deserialize_as = "Option<Count>")]
     pub max_output_tokens: Option<u64>,
     /// Legacy field: max output tokens if the provider specifies it, else max input tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(deserialize_as = "Option<Count>")]
     pub max_tokens: Option<u64>,
     /// Free-form notes about the entry (e.g. pricing derivation).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -297,139 +162,16 @@ pub struct ModelInfo {
     /// Primary API surface / task type of the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<Mode>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ocr_cost_per_credit: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ocr_cost_per_page: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ocr_cost_per_page_batches: Option<f64>,
-    /// Rates that replace the same-named base fields while the request falls inside the stated UTC windows.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub off_peak_pricing: Option<OffPeakPricing>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_audio_token: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_character: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_character_above_128k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_image: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_image_1024: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_image_1536: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_image_512: Option<f64>,
-    #[serde(
-        rename = "output_cost_per_image_0.5K",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub output_cost_per_image_0_5k: Option<f64>,
-    #[serde(
-        rename = "output_cost_per_image_1K",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub output_cost_per_image_1k: Option<f64>,
-    #[serde(
-        rename = "output_cost_per_image_2K",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub output_cost_per_image_2k: Option<f64>,
-    #[serde(
-        rename = "output_cost_per_image_4K",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub output_cost_per_image_4k: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_image_token: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_pixel: Option<f64>,
-    /// USD per reasoning/thinking token, when billed separately.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_reasoning_token: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_second: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_second_1080p: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_second_2k: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_second_480p: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_second_4k: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_second_720p: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_second_768p: Option<f64>,
-    /// USD per generated token.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_32k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_100k_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_100k_tokens_batches: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_128k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_200k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_200k_tokens_batches: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_200k_tokens_priority: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_256k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_272k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_272k_tokens_batches: Option<f64>,
-    /// Flex service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_272k_tokens_flex: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_272k_tokens_priority: Option<f64>,
-    /// Ultrafast service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_272k_tokens_ultrafast: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_above_512k_tokens: Option<f64>,
-    /// Balanced service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_balanced: Option<f64>,
-    /// USD per generated token via the provider's batch API.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_batches: Option<f64>,
-    /// Flex service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_flex: Option<f64>,
-    /// Priority service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_priority: Option<f64>,
-    /// Ultrafast service-tier rate for the same-named base field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_token_ultrafast: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_video_per_second: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_video_token: Option<f64>,
+    /// Databricks units, not USD.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_dbu_cost_per_token: Option<f64>,
     /// Embedding dimension for embedding models.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(deserialize_as = "Option<Count>")]
     pub output_vector_size: Option<u64>,
     /// Smallest prefix the provider will actually cache; absent means the provider default applies.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(deserialize_as = "Option<Count>")]
     pub prompt_cache_min_tokens: Option<u64>,
     /// Provider-internal routing hints (e.g. bedrock_invocation_schema).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -437,23 +179,10 @@ pub struct ModelInfo {
     /// Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort_levels: Option<Vec<ReasoningEffort>>,
-    /// Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub regional_endpoint_uplift_multiplier: Option<f64>,
-    /// Multiplier applied to all token costs for EU data residency (e.g. 1.10 = +10%).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub regional_processing_uplift_multiplier_eu: Option<f64>,
-    /// Multiplier applied to all token costs for US data residency (e.g. 1.10 = +10%).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub regional_processing_uplift_multiplier_us: Option<f64>,
     /// Provider default requests-per-minute limit.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(deserialize_as = "Option<Count>")]
     pub rpm: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rules: Option<Vec<Value>>,
-    /// USD cost per web search query, keyed by search context size.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub search_context_cost_per_query: Option<SearchContextCostPerQuery>,
     /// URL of the provider pricing/model page this entry was taken from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -462,7 +191,7 @@ pub struct ModelInfo {
     pub supported_audio_formats: Option<Vec<AudioFormat>>,
     /// OpenAI-style API routes this model can be called through, e.g. /v1/chat/completions.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub supported_endpoints: Option<Vec<String>>,
+    pub supported_endpoints: Option<Vec<Endpoint>>,
     /// Input modalities the model accepts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supported_modalities: Option<Vec<InputModality>>,
@@ -473,110 +202,260 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supported_regions: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_adaptive_thinking: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_anthropic_compaction: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_anthropic_thinking_payload: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_assistant_prefill: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_audio_input: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_audio_output: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_bedrock_runtime_chat_completions_response_format: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_bedrock_runtime_chat_completions_tools_with_reasoning: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_computer_use: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_embedding_image_input: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_fast_mode: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_forced_tool_use: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_function_calling: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_image_input: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_image_size: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_legacy_thinking: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_low_reasoning_effort: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_max_reasoning_effort: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_mid_conversation_system: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_minimal_reasoning_effort: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_multimodal: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_native_streaming: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_native_structured_output: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_none_reasoning_effort: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_nova_canvas_image_edit: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_output_config: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_parallel_function_calling: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_parallel_tool_use_config: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_pdf_input: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_prompt_cache_breakpoint: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_prompt_caching: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_reasoning: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_response_schema: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_sampling_params: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_speed: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_system_messages: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_thinking_cache_preservation: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_tool_choice: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_tool_search: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_url_context: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_video_input: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_vision: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_web_search: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_xhigh_reasoning_effort: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_always_on: Option<bool>,
-    /// Context-length or result-count tiered rates; each tier's costs apply within its range.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tiered_pricing: Option<Vec<TieredRate>>,
+    #[serde_as(deserialize_as = "Option<Count>")]
+    pub token_count_framing: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_count_model: Option<TokenCountModel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_count_tokenizer: Option<TokenCountTokenizer>,
     /// Provider default tokens-per-minute limit.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(deserialize_as = "Option<Count>")]
     pub tpm: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub use_openai_responses_path: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uses_embed_content: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vector_store_cost_per_gb_per_day: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub vertex_ai_audio_api: Option<VertexAiAudioApi>,
     /// Whether web search is billed per query or per prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_search_billing_unit: Option<WebSearchBillingUnit>,
+}
+
+/// One catalog entry read into types. Every non-null key lands in exactly one of `attributes`,
+/// `prices`, `capabilities` or `unrecognized`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Model {
+    pub attributes: Attributes,
+    pub prices: Prices,
+    pub capabilities: BTreeMap<String, bool>,
+    pub unrecognized: Vec<String>,
+}
+
+impl Model {
+    /// Reads `fields` strictly: a known key with a bad value is a problem, an unknown key is kept
+    /// in `unrecognized`, and a null is treated as absent.
+    pub fn from_fields(model: &str, fields: &Fields) -> Result<Self, Vec<Problem>> {
+        let attribute_keys = field_names::<Attributes>();
+        let pricing_keys = field_names::<PricingFields>();
+        let invalid = |key: &str, error: serde_json::Error| Problem::InvalidField {
+            model: model.to_owned(),
+            key: key.to_owned(),
+            error,
+        };
+
+        let mut problems = Vec::new();
+        let mut named = Fields::new();
+        let mut rates = Vec::new();
+        let mut capabilities = BTreeMap::new();
+        let mut unrecognized = Vec::new();
+        for (key, value) in fields.iter().filter(|(_, value)| !value.is_null()) {
+            if attribute_keys.contains(&key.as_str()) || pricing_keys.contains(&key.as_str()) {
+                named.insert(key.clone(), value.clone());
+            } else if let Ok(rate) = key.parse::<Rate>() {
+                match Usd::deserialize(value) {
+                    Ok(usd) => rates.push((rate, usd)),
+                    Err(error) => problems.push(invalid(key, error)),
+                }
+            } else if key.starts_with("supports_") {
+                match bool::deserialize(value) {
+                    Ok(flag) => {
+                        capabilities.insert(key.clone(), flag);
+                    }
+                    Err(error) => problems.push(invalid(key, error)),
+                }
+            } else {
+                unrecognized.push(key.clone());
+            }
+        }
+
+        let attributes = typed::<Attributes>(&named, attribute_keys, &invalid, &mut problems);
+        let pricing = typed::<PricingFields>(&named, pricing_keys, &invalid, &mut problems);
+        let (Some(attributes), Some(pricing)) = (attributes, pricing) else {
+            return Err(problems);
+        };
+        match Prices::lower(model, rates, &pricing) {
+            Ok(prices) if problems.is_empty() => Ok(Self {
+                attributes,
+                prices,
+                capabilities,
+                unrecognized,
+            }),
+            Ok(_) => Err(problems),
+            Err(lowering) => {
+                problems.extend(lowering);
+                Err(problems)
+            }
+        }
+    }
+}
+
+/// `T` read from the keys of `named` it declares. On failure, each of those keys is read alone
+/// so every bad one is reported by name.
+fn typed<T: for<'de> Deserialize<'de>>(
+    named: &Fields,
+    keys: &[&str],
+    invalid: &impl Fn(&str, serde_json::Error) -> Problem,
+    problems: &mut Vec<Problem>,
+) -> Option<T> {
+    let own: Fields = named
+        .iter()
+        .filter(|(key, _)| keys.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    match serde_json::from_value(Value::Object(own.clone())) {
+        Ok(value) => Some(value),
+        Err(whole) => {
+            let before = problems.len();
+            problems.extend(own.into_iter().filter_map(|(key, value)| {
+                serde_json::from_value::<T>(Value::Object(Fields::from_iter([(
+                    key.clone(),
+                    value,
+                )])))
+                .err()
+                .map(|error| invalid(&key, error))
+            }));
+            if problems.len() == before {
+                problems.push(invalid("", whole));
+            }
+            None
+        }
+    }
+}
+
+/// The field names a derived `Deserialize` struct declares, read from what it hands the
+/// deserializer.
+fn field_names<T: for<'de> Deserialize<'de>>() -> &'static [&'static str] {
+    struct Probe<'a>(&'a mut &'static [&'static str]);
+
+    impl<'de> Deserializer<'de> for Probe<'_> {
+        type Error = de::value::Error;
+
+        fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+            Err(de::Error::custom("only structs declare field names"))
+        }
+
+        fn deserialize_struct<V: Visitor<'de>>(
+            self,
+            _: &'static str,
+            fields: &'static [&'static str],
+            _: V,
+        ) -> Result<V::Value, Self::Error> {
+            *self.0 = fields;
+            Err(de::Error::custom("field names captured"))
+        }
+
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf
+            option unit unit_struct newtype_struct seq tuple tuple_struct map enum identifier
+            ignored_any
+        }
+    }
+
+    let mut fields: &'static [&'static str] = &[];
+    let _ = T::deserialize(Probe(&mut fields));
+    fields
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+    use crate::prices::{Clock, Meter, PriceKey};
+    use crate::rate::{Charge, TokenKind, Unit};
+
+    fn fields(value: Value) -> Fields {
+        let Value::Object(fields) = value else {
+            panic!("entry must be an object")
+        };
+        fields
+    }
+
+    fn problems(entry: Value) -> Vec<String> {
+        Model::from_fields("m", &fields(entry))
+            .unwrap_err()
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[rstest]
+    fn every_key_lands_in_exactly_one_part() {
+        let model = Model::from_fields(
+            "m",
+            &fields(json!({
+                "litellm_provider": "openai",
+                "max_tokens": "8192",
+                "input_cost_per_token": "0.000001",
+                "tiered_pricing": [{"range": [0, 10], "output_cost_per_token": 2e-6}],
+                "supports_vision": true,
+                "id": "deployment-1",
+                "mode": null
+            })),
+        )
+        .unwrap();
+
+        assert_eq!(model.attributes.litellm_provider.as_deref(), Some("openai"));
+        assert_eq!(model.attributes.max_tokens, Some(8192));
+        assert_eq!(model.attributes.mode, None);
+        assert_eq!(
+            model.prices.get(&PriceKey {
+                meter: Meter::Charge(Charge::Input(Unit::Token(TokenKind::Text))),
+                tier: None,
+                band: None,
+                clock: Clock::Peak,
+            }),
+            Usd::new(1e-6)
+        );
+        assert_eq!(model.prices.iter().count(), 2);
+        assert_eq!(
+            model.capabilities,
+            BTreeMap::from([("supports_vision".to_owned(), true)])
+        );
+        assert_eq!(model.unrecognized, vec!["id".to_owned()]);
+    }
+
+    #[rstest]
+    #[case::bad_mode(json!({"mode": "chatt"}), "m.mode: unknown variant `chatt`")]
+    #[case::bad_price(json!({"input_cost_per_token": "abc"}), "m.input_cost_per_token: invalid value: string \"abc\", expected a non-negative USD amount")]
+    #[case::negative_price(json!({"output_cost_per_token": -1}), "m.output_cost_per_token: invalid value")]
+    #[case::bad_capability(json!({"supports_vision": "yes"}), "m.supports_vision: invalid type: string \"yes\", expected a boolean")]
+    #[case::negative_count(json!({"max_tokens": -5}), "m.max_tokens: invalid value: integer `-5`, expected a count of zero or more")]
+    #[case::bad_date(json!({"deprecation_date": "2026-02-31"}), "m.deprecation_date: expected a calendar date YYYY-MM-DD")]
+    #[case::bad_endpoint(json!({"supported_endpoints": ["/v1/telepathy"]}), "m.supported_endpoints: unknown variant `/v1/telepathy`")]
+    #[case::low_uplift(json!({"regional_endpoint_uplift_multiplier": 0.5}), "m.regional_endpoint_uplift_multiplier: invalid value")]
+    #[case::bad_hours(json!({"off_peak_pricing": {"hours_utc": "25:00-01:00"}}), "m.off_peak_pricing")]
+    #[case::bad_weekday(json!({"off_peak_pricing": {"windows": [{"hours_utc": "00:00-01:00", "weekdays": [0]}]}}), "m.off_peak_pricing")]
+    #[case::negative_guardrail(json!({"guardrail_cost_per_unit": {"unit": -1}}), "m.guardrail_cost_per_unit")]
+    #[case::unknown_tier_key(json!({"tiered_pricing": [{"range": [0, 1], "typo_cost": 1}]}), "m.tiered_pricing")]
+    fn a_bad_known_key_names_the_model_key_and_what_was_expected(
+        #[case] entry: Value,
+        #[case] expected: &str,
+    ) {
+        let problems = problems(entry);
+        assert!(
+            problems.iter().any(|problem| problem.starts_with(expected)),
+            "{problems:?}"
+        );
+    }
+
+    #[rstest]
+    fn every_bad_key_is_reported_at_once() {
+        assert_eq!(
+            problems(json!({"mode": "chatt", "max_tokens": -1, "input_cost_per_token": "x"})).len(),
+            3
+        );
+    }
+
+    #[rstest]
+    fn field_names_lists_declared_fields() {
+        assert!(field_names::<Attributes>().contains(&"litellm_provider"));
+        assert!(field_names::<PricingFields>().contains(&"tiered_pricing"));
+        assert!(!field_names::<Attributes>().contains(&"tiered_pricing"));
+    }
 }

@@ -1,8 +1,6 @@
-use serde::{Deserialize, Serialize};
-
 /// Primary API surface / task type of the model.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     AudioSpeech,
@@ -26,8 +24,8 @@ pub enum Mode {
 }
 
 /// Gemini audio generation API the model is served through.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum VertexAiAudioApi {
     LyriaPredict,
@@ -35,8 +33,8 @@ pub enum VertexAiAudioApi {
 }
 
 /// Audio container format the model can return.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioFormat {
     Mp3,
@@ -44,8 +42,8 @@ pub enum AudioFormat {
 }
 
 /// Input modality the model accepts.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum InputModality {
     Text,
@@ -55,8 +53,8 @@ pub enum InputModality {
 }
 
 /// Output modality the model can produce.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputModality {
     Text,
@@ -64,4 +62,48 @@ pub enum OutputModality {
     Audio,
     Video,
     Code,
+}
+
+/// API route a model can be called through.
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Eq, Hash)]
+pub enum Endpoint {
+    #[serde(rename = "/v1/chat/completions")]
+    ChatCompletions,
+    #[serde(rename = "/v1/completions")]
+    Completions,
+    #[serde(rename = "/v1/responses")]
+    Responses,
+    #[serde(rename = "/v1/messages")]
+    Messages,
+    #[serde(rename = "/v1/batch")]
+    Batch,
+    #[serde(rename = "/v1/embeddings")]
+    Embeddings,
+    #[serde(rename = "/v1/images/generations")]
+    ImageGenerations,
+    #[serde(rename = "/v1/images/edits")]
+    ImageEdits,
+    #[serde(rename = "/v1/audio/speech")]
+    AudioSpeech,
+    #[serde(rename = "/v1/audio/transcriptions")]
+    AudioTranscriptions,
+    #[serde(rename = "/v1/realtime")]
+    Realtime,
+    #[serde(rename = "/v1/realtime/transcription_sessions")]
+    RealtimeTranscriptionSessions,
+    #[serde(rename = "/v1/videos")]
+    Videos,
+    #[serde(rename = "/v1/ocr")]
+    Ocr,
+    #[serde(rename = "/v1/listen")]
+    Listen,
+    #[serde(rename = "/v1/systemone")]
+    SystemOne,
+    #[serde(rename = "/v1/decisions")]
+    Decisions,
+    #[serde(rename = "/v1beta/interactions")]
+    Interactions,
+    #[serde(rename = "/vertex_ai/live")]
+    VertexAiLive,
 }

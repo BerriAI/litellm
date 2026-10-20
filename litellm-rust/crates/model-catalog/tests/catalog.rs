@@ -1,6 +1,7 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use litellm_model_catalog::{AliasIssue, Catalog, Error, IntegrityLimits, Mode, Provenance};
+use litellm_model_catalog::{Catalog, Error, IntegrityLimits, Mode, Provenance};
 use rstest::{fixture, rstest};
 use serde_json::json;
 
@@ -23,13 +24,6 @@ fn current_catalog(repo_root: PathBuf) -> Catalog {
 }
 
 #[fixture]
-fn backup_catalog(repo_root: PathBuf) -> Catalog {
-    let body = std::fs::read(repo_root.join("litellm/model_prices_and_context_window_backup.json"))
-        .unwrap();
-    Catalog::parse(&body, Provenance::default()).unwrap()
-}
-
-#[fixture]
 fn fixture_catalog() -> Catalog {
     Catalog::parse(
         ALPHA_FIXTURE,
@@ -42,6 +36,12 @@ fn fixture_catalog() -> Catalog {
     .unwrap()
 }
 
+fn rejection(body: &[u8]) -> String {
+    Catalog::parse(body, Provenance::default())
+        .unwrap_err()
+        .to_string()
+}
+
 #[rstest]
 #[case::decisions("decisions", Mode::Decisions)]
 #[case::legacy_evaluation("evaluation", Mode::Evaluation)]
@@ -50,14 +50,60 @@ fn parses_decision_modes(#[case] mode: &str, #[case] expected: Mode) {
     let catalog = Catalog::parse(source.as_bytes(), Provenance::default()).unwrap();
 
     assert_eq!(
-        catalog.lookup("Test").unwrap().entry.info().mode,
+        catalog
+            .lookup("Test")
+            .unwrap()
+            .entry
+            .model()
+            .attributes
+            .mode,
         Some(expected)
     );
     assert_eq!(serde_json::to_value(expected).unwrap(), json!(mode));
 }
 
 #[rstest]
-#[ignore]
+fn unknown_keys_are_served_raw_and_listed_as_unrecognized(fixture_catalog: Catalog) {
+    let entry = fixture_catalog.lookup("Alpha").unwrap().entry;
+
+    assert_eq!(
+        entry.field("unknown"),
+        Some(&json!({"nested":[1,{"x":true}]}))
+    );
+    assert_eq!(
+        fixture_catalog.unrecognized().collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            ("Alpha", "enabled"),
+            ("Alpha", "price"),
+            ("Alpha", "unknown")
+        ])
+    );
+}
+
+#[rstest]
+fn a_bad_known_value_rejects_the_document_naming_every_problem() {
+    let rejected = rejection(
+        json!({
+            "Good": {"litellm_provider": "test"},
+            "Bad": {"litellm_provider": "test", "mode": "chatt", "input_cost_per_token": "free"},
+            "Worse": {"mode": "chat"}
+        })
+        .to_string()
+        .as_bytes(),
+    );
+
+    assert!(
+        rejected.contains("Bad.mode: unknown variant `chatt`"),
+        "{rejected}"
+    );
+    assert!(rejected.contains("Bad.input_cost_per_token"), "{rejected}");
+    assert!(
+        rejected.contains("Worse.litellm_provider is required"),
+        "{rejected}"
+    );
+}
+
+#[rstest]
 fn preserves_fields_and_metadata(fixture_catalog: Catalog) {
     let catalog = fixture_catalog;
     let entry = catalog.lookup("SHORT").unwrap();
@@ -67,15 +113,14 @@ fn preserves_fields_and_metadata(fixture_catalog: Catalog) {
     assert_eq!(entry.entry.field("enabled"), Some(&json!(false)));
     assert_eq!(entry.entry.field("optional"), Some(&json!(null)));
     assert_eq!(entry.entry.field("missing"), None);
-    assert_eq!(
-        entry.entry.field("unknown"),
-        Some(&json!({"nested":[1,{"x":true}]}))
-    );
     assert_eq!(entry.entry.field("aliases"), None);
-    assert_eq!(entry.entry.info().litellm_provider.as_deref(), Some("test"));
+    assert_eq!(
+        entry.entry.model().attributes.litellm_provider.as_deref(),
+        Some("test")
+    );
     assert_eq!(
         catalog.sample_spec(),
-        Some(&json!({"explanation":"example"}))
+        json!({"explanation":"example"}).as_object()
     );
     assert_eq!(catalog.fallback_rules().unwrap().len(), 1);
     assert_eq!(catalog.provenance().revision.as_deref(), Some("rev"));
@@ -83,7 +128,6 @@ fn preserves_fields_and_metadata(fixture_catalog: Catalog) {
 }
 
 #[rstest]
-#[ignore]
 fn snapshot_does_not_borrow_source() {
     let mut source = ALPHA_FIXTURE.to_vec();
     let catalog = Catalog::parse(&source, Provenance::default()).unwrap();
@@ -95,136 +139,95 @@ fn snapshot_does_not_borrow_source() {
 }
 
 #[rstest]
-#[case("Shared", "First")]
-#[case("Second", "Second")]
-#[case("shared", "Second")]
-#[case("FIRST", "First")]
-#[case("sHaReD", "Second")]
-#[ignore]
-fn alias_collisions_and_case_fallback_follow_entry_order(
-    #[case] lookup: &str,
-    #[case] expected: &str,
-) {
+#[case::alias_names_a_model(
+    br#"{"First":{"litellm_provider":"t","aliases":["Second"]},"Second":{"litellm_provider":"t"}}"#,
+    r#"First: alias "Second" is already a model name"#
+)]
+#[case::alias_claimed_twice(
+    br#"{"First":{"litellm_provider":"t","aliases":["shared"]},"Second":{"litellm_provider":"t","aliases":["shared"]}}"#,
+    r#"Second: alias "shared" already belongs to First"#
+)]
+#[case::aliases_not_a_list(
+    br#"{"a":{"litellm_provider":"t","aliases":"bad"}}"#,
+    "a.aliases must be an array of strings"
+)]
+#[case::alias_not_a_string(
+    br#"{"b":{"litellm_provider":"t","aliases":[9,"ok"]}}"#,
+    "b.aliases must be an array of strings"
+)]
+#[case::aliases_null(
+    br#"{"c":{"litellm_provider":"t","aliases":null}}"#,
+    "c.aliases must be an array of strings"
+)]
+#[case::entry_not_object(br#"{"a":1}"#, "a must be a JSON object")]
+fn alias_and_shape_problems_reject_the_document(#[case] body: &[u8], #[case] expected: &str) {
+    let rejected = rejection(body);
+    assert!(rejected.contains(expected), "{rejected}");
+}
+
+#[rstest]
+#[case("foo", "fOO")]
+#[case("FOO", "fOO")]
+#[case("Foo", "Foo")]
+fn case_insensitive_lookup_prefers_the_later_entry(#[case] lookup: &str, #[case] expected: &str) {
     let catalog = Catalog::parse(
-        br#"{
-            "First":{"aliases":["Shared","Second","first"],"value":1},
-            "Second":{"aliases":["Shared","sHaReD"],"value":2},
-            "SHARED":{"value":3}
-        }"#,
+        br#"{"Foo":{"litellm_provider":"t"},"fOO":{"litellm_provider":"t"}}"#,
         Provenance::default(),
     )
     .unwrap();
     assert_eq!(catalog.lookup(lookup).unwrap().canonical_key, expected);
-    assert_eq!(catalog.alias_count(), 3);
-    assert!(
-        catalog
-            .alias_issues()
-            .contains(&AliasIssue::CanonicalCollision {
-                model: "First".into(),
-                alias: "Second".into(),
-            })
-    );
-    assert!(
-        catalog
-            .alias_issues()
-            .contains(&AliasIssue::AliasCollision {
-                model: "Second".into(),
-                alias: "Shared".into(),
-            })
-    );
-}
-
-#[test]
-#[ignore]
-fn json_entry_order_controls_alias_ownership_and_case_fallback() {
-    let forward = Catalog::parse(
-        br#"{
-            "Alpha":{"aliases":["shared"]},
-            "Beta":{"aliases":["shared"]},
-            "Foo":{},
-            "fOO":{}
-        }"#,
-        Provenance::default(),
-    )
-    .unwrap();
-    let reversed = Catalog::parse(
-        br#"{
-            "fOO":{},
-            "Foo":{},
-            "Beta":{"aliases":["shared"]},
-            "Alpha":{"aliases":["shared"]}
-        }"#,
-        Provenance::default(),
-    )
-    .unwrap();
-
-    assert_eq!(forward.lookup("shared").unwrap().canonical_key, "Alpha");
-    assert_eq!(reversed.lookup("shared").unwrap().canonical_key, "Beta");
-    assert_eq!(forward.lookup("foo").unwrap().canonical_key, "fOO");
-    assert_eq!(reversed.lookup("foo").unwrap().canonical_key, "Foo");
 }
 
 #[derive(Debug)]
-enum ValidationOutcome {
+enum FetchOutcome {
     Ok,
     Shrunk,
     BelowMinimum,
     InvalidRatio,
 }
 
+fn limits(min_model_count: usize, min_reference_ratio: f64) -> IntegrityLimits {
+    IntegrityLimits {
+        min_model_count,
+        min_reference_ratio,
+    }
+}
+
 #[rstest]
-#[case(
-    IntegrityLimits {
-        reference_model_count: 2,
-        min_model_count: 1,
-        min_reference_ratio: 0.5,
-    },
-    ValidationOutcome::Ok
-)]
-#[case(
-    IntegrityLimits {
-        reference_model_count: 3,
-        min_model_count: 1,
-        min_reference_ratio: 0.5,
-    },
-    ValidationOutcome::Shrunk
-)]
-#[case(
-    IntegrityLimits {
-        reference_model_count: 0,
-        min_model_count: 2,
-        min_reference_ratio: 0.5,
-    },
-    ValidationOutcome::BelowMinimum
-)]
-#[case(
-    IntegrityLimits {
-        reference_model_count: 0,
-        min_model_count: 0,
-        min_reference_ratio: f64::NAN,
-    },
-    ValidationOutcome::InvalidRatio
-)]
-#[ignore]
-fn integrity_uses_canonical_count_and_strict_shrink_boundary(
+#[case::half_of_two(2, limits(1, 0.5), FetchOutcome::Ok)]
+#[case::under_half_of_three(3, limits(1, 0.5), FetchOutcome::Shrunk)]
+#[case::below_minimum(1, limits(2, 0.5), FetchOutcome::BelowMinimum)]
+#[case::nan_ratio(1, limits(0, f64::NAN), FetchOutcome::InvalidRatio)]
+fn a_fetched_registry_counts_canonical_models_against_the_current_one(
+    #[case] current_models: usize,
     #[case] limits: IntegrityLimits,
-    #[case] expected: ValidationOutcome,
+    #[case] expected: FetchOutcome,
 ) {
-    let catalog = Catalog::parse(
-        br#"{"sample_spec":{},"fallback_generalizations":{"rules":[]},"a":{"aliases":["b","c"]}}"#,
-        Provenance::default(),
+    let current_body = serde_json::to_vec(
+        &(0..current_models)
+            .map(|index| (format!("m{index}"), json!({"litellm_provider": "t"})))
+            .collect::<serde_json::Map<_, _>>(),
     )
     .unwrap();
-    let actual = catalog.validate(limits);
+    let current = Catalog::parse(&current_body, Provenance::default()).unwrap();
+    let fetched = Catalog::fetched(
+        br#"{"sample_spec":{},"fallback_generalizations":{"rules":[]},"a":{"litellm_provider":"t","aliases":["b","c"]}}"#,
+        Provenance::default(),
+        &current,
+        limits,
+    );
     match expected {
-        ValidationOutcome::Ok => assert!(actual.is_ok()),
-        ValidationOutcome::Shrunk => {
-            assert!(matches!(actual, Err(Error::Shrunk { actual: 1, .. })))
+        FetchOutcome::Ok => assert!(fetched.is_ok()),
+        FetchOutcome::Shrunk => {
+            assert!(matches!(fetched, Err(Error::Shrunk { actual: 1, .. })))
         }
-        ValidationOutcome::BelowMinimum => {
-            assert!(matches!(actual, Err(Error::BelowMinimum { actual: 1, .. })))
+        FetchOutcome::BelowMinimum => {
+            assert!(matches!(
+                fetched,
+                Err(Error::BelowMinimum { actual: 1, .. })
+            ))
         }
-        ValidationOutcome::InvalidRatio => assert!(matches!(actual, Err(Error::InvalidRatio))),
+        FetchOutcome::InvalidRatio => assert!(matches!(fetched, Err(Error::InvalidRatio))),
     }
 }
 
@@ -232,19 +235,16 @@ fn integrity_uses_canonical_count_and_strict_shrink_boundary(
 enum MalformedOutcome {
     Empty,
     Json,
-    EntryNotObject,
 }
 
 #[rstest]
 #[case::empty(b"{}", MalformedOutcome::Empty)]
 #[case::invalid_json(b"{", MalformedOutcome::Json)]
-#[case::entry_not_object(br#"{"a":1}"#, MalformedOutcome::EntryNotObject)]
 #[case::fallback_rules_missing(
-    br#"{"fallback_generalizations":{},"a":{}}"#,
+    br#"{"fallback_generalizations":{},"a":{"litellm_provider":"t"}}"#,
     MalformedOutcome::Json
 )]
-#[ignore]
-fn malformed_input_and_aliases_have_typed_outcomes(
+fn malformed_documents_have_typed_outcomes(
     #[case] body: &[u8],
     #[case] expected: MalformedOutcome,
 ) {
@@ -252,52 +252,14 @@ fn malformed_input_and_aliases_have_typed_outcomes(
     match expected {
         MalformedOutcome::Empty => assert!(matches!(actual, Err(Error::Empty))),
         MalformedOutcome::Json => assert!(matches!(actual, Err(Error::Json(_)))),
-        MalformedOutcome::EntryNotObject => {
-            assert!(matches!(actual, Err(Error::EntryNotObject { .. })))
-        }
     }
 }
 
 #[rstest]
 #[ignore]
-fn invalid_aliases_are_reported_not_fatal() {
-    let catalog = Catalog::parse(
-        br#"{"a":{"aliases":"bad"},"b":{"aliases":[9,"ok"]}}"#,
-        Provenance::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        catalog.alias_issues(),
-        &[
-            AliasIssue::InvalidList { model: "a".into() },
-            AliasIssue::InvalidName { model: "b".into() },
-        ]
-    );
-    assert_eq!(catalog.lookup("ok").unwrap().canonical_key, "b");
-    assert!(catalog.lookup("missing").is_none());
-}
-
-#[rstest]
-#[ignore]
-fn parses_current_and_packaged_catalogs_against_independent_baseline(
-    current_catalog: Catalog,
-    backup_catalog: Catalog,
-) {
-    assert!(current_catalog.model_count() > 0);
-    assert!(backup_catalog.model_count() > 0);
+fn parses_current_catalog(current_catalog: Catalog) {
     assert!(current_catalog.sample_spec().is_some());
-    assert!(backup_catalog.sample_spec().is_some());
-    // Snapshot from 2026-09-23; the backup file mirrors the current file and cannot detect shrinkage.
+    // Snapshot from 2026-09-23, an independent baseline that catches catalog shrinkage.
     const REFERENCE_MODEL_COUNT: usize = 4303;
-    current_catalog
-        .validate(IntegrityLimits {
-            reference_model_count: REFERENCE_MODEL_COUNT,
-            min_model_count: 50,
-            min_reference_ratio: 0.9,
-        })
-        .unwrap();
-    assert!(current_catalog.model_names().all(|name| {
-        let entry = current_catalog.lookup(name).unwrap().entry;
-        entry.info().litellm_provider.is_some() == entry.field("litellm_provider").is_some()
-    }));
+    assert!(current_catalog.model_count() as f64 >= REFERENCE_MODEL_COUNT as f64 * 0.9);
 }
