@@ -14,7 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import map_finish_reason, usage_has_token_counts
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     extract_reasoning_content,
     handle_invalid_parallel_tool_calls,
@@ -958,7 +958,8 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 )
             choices = chunk.get("choices", [])
             choices = self._map_reasoning_to_reasoning_content(choices)
-            fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
+            chunk_fields: Final = _OBJECT_MAPPING.validate_python(chunk)
+            fingerprint: Final = chunk_fields.get("system_fingerprint")
 
             kwargs: Final[dict[str, Any]] = {
                 "id": chunk.get("id"),
@@ -968,8 +969,9 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 "model": chunk.get("model"),
                 "choices": choices,
             }
-            if "usage" in chunk and chunk["usage"] is not None:
-                kwargs["usage"] = chunk["usage"]
+            chunk_usage: Final = chunk_fields.get("usage")
+            if usage_has_token_counts(chunk_usage):
+                kwargs["usage"] = chunk_usage
             service_tier: Final = chunk.get("service_tier")
             if isinstance(service_tier, str) and service_tier:
                 kwargs["service_tier"] = service_tier

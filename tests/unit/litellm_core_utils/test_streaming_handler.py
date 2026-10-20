@@ -2854,7 +2854,12 @@ async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
         stream_options=None,
     )
 
-    collected: Final = [chunk for chunk in wrapper] if sync_mode else [chunk async for chunk in wrapper]
+    yielded: Final = (
+        [(chunk, chunk._hidden_params.get("usage")) for chunk in wrapper]
+        if sync_mode
+        else [(chunk, chunk._hidden_params.get("usage")) async for chunk in wrapper]
+    )
+    collected: Final = [chunk for chunk, _ in yielded]
 
     expected: Final = (
         litellm.token_counter(model=model, messages=messages),
@@ -2863,11 +2868,120 @@ async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
     assembled: Final = litellm.stream_chunk_builder(chunks=collected, messages=messages)
     assert assembled is not None
     assert (assembled.usage.prompt_tokens, assembled.usage.completion_tokens) == expected
-    hidden_usage: Final = collected[-1]._hidden_params["usage"]
-    assert (hidden_usage.prompt_tokens, hidden_usage.completion_tokens) == expected
+    last_chunk, usage_when_yielded = yielded[-1]
+    assert usage_when_yielded is not None
+    assert (usage_when_yielded.prompt_tokens, usage_when_yielded.completion_tokens) == expected
+    usage_after_drain: Final = last_chunk._hidden_params["usage"]
+    assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == expected
 
     rates: Final = litellm.model_cost[model]
     spend: Final = expected[0] * rates["input_cost_per_token"] + expected[1] * rates["output_cost_per_token"]
+    assert litellm.completion_cost(completion_response=assembled) == pytest.approx(spend)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("transport", ["sdk", "parser"])
+@pytest.mark.asyncio
+async def test_stream_with_empty_provider_usage_falls_back_to_the_token_estimate(
+    sync_mode: bool, transport: str
+) -> None:
+    from openai.types.chat import ChatCompletionChunk
+
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    raw_chunks: Final = [
+        {
+            "id": "chatcmpl-empty-usage",
+            "object": "chat.completion.chunk",
+            "created": 1741037890,
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+            "usage": {},
+        }
+        for delta, finish_reason in (({"role": "assistant", "content": text}, None), ({}, "stop"))
+    ]
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                ChatCompletionChunk.model_construct(**raw) if transport == "sdk" else parser.chunk_parser(raw)
+                for raw in raw_chunks
+            ]
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id="empty-usage-call",
+            function_id="empty-usage-fn",
+        ),
+        stream_options=None,
+    )
+
+    yielded: Final = (
+        [(chunk, chunk._hidden_params.get("usage")) for chunk in wrapper]
+        if sync_mode
+        else [(chunk, chunk._hidden_params.get("usage")) async for chunk in wrapper]
+    )
+
+    expected: Final = (
+        litellm.token_counter(model=model, messages=messages),
+        litellm.token_counter(model=model, text=text, count_response_tokens=True),
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=[chunk for chunk, _ in yielded], messages=messages)
+    assert assembled is not None
+    assert (assembled.usage.prompt_tokens, assembled.usage.completion_tokens) == expected
+    usage_when_yielded: Final = yielded[-1][1]
+    assert usage_when_yielded is not None
+    assert (usage_when_yielded.prompt_tokens, usage_when_yielded.completion_tokens) == expected
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_with_usage_after_the_finish_chunk_bills_only_the_reported_usage(sync_mode: bool) -> None:
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    reported: Final = (6, 20)
+    chunks: Final = [
+        ModelResponseStream(id="cmpl-late-usage", created=1741037890, model=model, choices=choices, usage=usage)
+        for choices, usage in (
+            ([StreamingChoices(index=0, delta=Delta(role="assistant", content=text))], None),
+            ([StreamingChoices(index=0, delta=Delta(content=""), finish_reason="length")], None),
+            ([], Usage(prompt_tokens=reported[0], completion_tokens=reported[1], total_tokens=sum(reported))),
+        )
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id="late-usage-call",
+            function_id="late-usage-fn",
+        ),
+        stream_options=None,
+    )
+
+    collected: Final = [chunk for chunk in wrapper] if sync_mode else [chunk async for chunk in wrapper]
+
+    usage_after_drain: Final = collected[-1]._hidden_params["usage"]
+    assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == reported
+    assembled: Final = litellm.stream_chunk_builder(chunks=collected, messages=messages)
+    assert assembled is not None
+    rates: Final = litellm.model_cost[model]
+    spend: Final = reported[0] * rates["input_cost_per_token"] + reported[1] * rates["output_cost_per_token"]
     assert litellm.completion_cost(completion_response=assembled) == pytest.approx(spend)
 
 

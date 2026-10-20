@@ -57,6 +57,14 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
 
 
+_USAGE_TOKEN_COUNT_KEYS: Final = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+
+def usage_has_token_counts(usage: object) -> bool:
+    usage_mapping: Final = as_str_mapping(usage)
+    return usage_mapping is not None and any(usage_mapping.get(key) is not None for key in _USAGE_TOKEN_COUNT_KEYS)
+
+
 @runtime_checkable
 class _SupportsIter(Protocol):
     def __iter__(self) -> Iterator[object]: ...
