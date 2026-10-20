@@ -91,7 +91,7 @@ class AnthropicCountFields:
     messages: tuple[Mapping[str, JsonValue], ...]
     system: JsonValue
     tools: tuple[Mapping[str, JsonValue], ...] | None
-    options: Mapping[str, JsonValue] = MappingProxyType({})
+    options: Mapping[str, JsonValue]
 
 
 @dataclass(frozen=True, slots=True)

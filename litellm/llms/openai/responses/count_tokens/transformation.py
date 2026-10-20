@@ -347,7 +347,10 @@ class OpenAICountTokensConfig:
         return _RESPONSES_COUNT_REQUEST_PARTS.validate_python((input_items, instructions, tools, text))
 
 
-_COUNT_REQUEST_FIELDS: Final = InputTokenCountParams.__required_keys__ | InputTokenCountParams.__optional_keys__
+_COUNT_FIELDS_THE_SDK_TYPE_OMITS: Final = frozenset({"prompt"})
+_COUNT_REQUEST_FIELDS: Final = (
+    InputTokenCountParams.__required_keys__ | InputTokenCountParams.__optional_keys__ | _COUNT_FIELDS_THE_SDK_TYPE_OMITS
+)
 _INFERENCE_REQUEST_FIELDS: Final = (
     ResponsesAPIRequestParams.__required_keys__ | ResponsesAPIRequestParams.__optional_keys__
 )

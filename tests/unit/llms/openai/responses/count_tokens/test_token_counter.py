@@ -529,10 +529,12 @@ _KEEP_ALL: Final = DropPolicy(drop_params=False, additional_drop_params=frozense
 _ANSWER_FORMAT: Final[dict[str, object]] = {
     "format": {"type": "json_schema", "name": "answer", "schema": {"type": "object", "properties": {}}}
 }
+_STORED_PROMPT: Final[dict[str, object]] = {"id": "pmpt_abc", "variables": {"city": "Paris"}}
 _CALLER_BODY: Final[dict[str, object]] = {
     "model": "my-gpt",
     "input": "hi",
     "text": _ANSWER_FORMAT,
+    "prompt": _STORED_PROMPT,
     "max_output_tokens": "lots",
     "metadata": {"run": "nightly"},
     "drop_params": False,
@@ -567,17 +569,23 @@ async def _native_count(
     [
         pytest.param(
             _KEEP_ALL,
-            {"model": "gpt-4o", "input": "hi", "text": _ANSWER_FORMAT, "max_output_tokens": "lots"},
+            {
+                "model": "gpt-4o",
+                "input": "hi",
+                "text": _ANSWER_FORMAT,
+                "prompt": _STORED_PROMPT,
+                "max_output_tokens": "lots",
+            },
             id="keeps-responses-fields",
         ),
         pytest.param(
             DropPolicy(drop_params=True, additional_drop_params=frozenset()),
-            {"model": "gpt-4o", "input": "hi", "text": _ANSWER_FORMAT},
+            {"model": "gpt-4o", "input": "hi", "text": _ANSWER_FORMAT, "prompt": _STORED_PROMPT},
             id="drop-params-keeps-count-fields",
         ),
         pytest.param(
             DropPolicy(drop_params=False, additional_drop_params=frozenset({"text"})),
-            {"model": "gpt-4o", "input": "hi", "max_output_tokens": "lots"},
+            {"model": "gpt-4o", "input": "hi", "prompt": _STORED_PROMPT, "max_output_tokens": "lots"},
             id="additional-drop-params",
         ),
     ],
