@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from os import PathLike
 from typing import Final, TypeVar
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
@@ -14,6 +14,7 @@ from litellm.types.utils import CallTypes, LlmProviders
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
 _DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
+_ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
 
 BATCH_ENDPOINT: Final = "/v1/batch"
 _AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
@@ -120,10 +121,17 @@ def without_deployments_that_cannot_batch(
     ]
 
 
+def _endpoint_paths(configured: object) -> tuple[str, ...]:
+    try:
+        return _ENDPOINT_PATHS.validate_python(configured)
+    except ValidationError:
+        return ()
+
+
 def deployment_supported_endpoints(
-    resolved_endpoints: Sequence[str] | None, deployment: Mapping[str, object], provider: str | None
+    resolved_endpoints: object, deployment: Mapping[str, object], provider: str | None
 ) -> tuple[str, ...]:
-    endpoints: Final = tuple(resolved_endpoints or ())
+    endpoints: Final = _endpoint_paths(resolved_endpoints)
     if is_batch_capable(deployment) and provider in _AZURE_PROVIDERS:
         return (BATCH_ENDPOINT,)
     if is_batch_capable(deployment):

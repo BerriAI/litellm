@@ -2437,6 +2437,23 @@ def test_model_group_info_lists_cost_map_batch_only_for_providers_that_batch_on_
     )
 
 
+@pytest.mark.parametrize(
+    "malformed_endpoints",
+    ["/v1/chat/completions", [{"path": "/v1/chat/completions"}], [1], {"/v1/batch": True}],
+)
+def test_model_group_info_skips_a_malformed_endpoint_list_instead_of_failing(malformed_endpoints: object):
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]),
+            _azure_sku_deployment("gpt-mixed", "odd-sku", "chat", supported_endpoints=malformed_endpoints),
+        ]
+    )
+
+    info: Final = router.get_model_group_info("gpt-mixed")
+
+    assert info is not None and info.supported_endpoints == ("/v1/chat/completions",)
+
+
 def test_model_group_info_ignores_a_stored_batch_endpoint_on_an_azure_chat_deployment():
     """Admin UI saves before v1.104.0 stored the cost map's endpoint list, /v1/batch included, on Azure chat rows,
     so a stored list cannot mark a deployment as one that runs batches."""
