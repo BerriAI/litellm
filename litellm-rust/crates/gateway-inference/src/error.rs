@@ -20,6 +20,9 @@ pub enum Error {
         "/v1/messages: Invalid model name passed in model={0}. Call `/v1/models` to view available models for your key."
     )]
     UnknownModel(String),
+    /// `/v1/models/{model_id}` for a model that does not exist or that the caller may not use.
+    #[error("The model `{0}` does not exist or is not accessible")]
+    ModelNotFound(String),
     #[error(transparent)]
     Route(#[from] RouteError),
     #[error(transparent)]
@@ -78,6 +81,7 @@ impl Error {
                 .and_then(|status| StatusCode::from_u16(status).ok())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
+            Self::ModelNotFound(_) => StatusCode::NOT_FOUND,
             Self::Route(RouteError::Transport(TransportError::Http { status, .. })) => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
             }
@@ -93,6 +97,10 @@ impl Error {
         match self {
             Self::Auth(error) => error.into_response(),
             Self::Refused(refusal) => refused(refusal),
+            // The proxy raises a bare `HTTPException`, which FastAPI answers as `{"detail"}`.
+            Self::ModelNotFound(_) => {
+                (self.status(), Json(json!({ "detail": self.to_string() }))).into_response()
+            }
             other => (other.status(), Json(other.openai_body())).into_response(),
         }
     }

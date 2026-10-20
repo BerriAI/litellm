@@ -118,6 +118,7 @@ fn programmatic_deployments_preserve_overrides_and_share_their_group() {
         team_id: None,
         id: None,
         base_model: None,
+        undiscoverable: false,
     };
     let router = Router::from_iter([
         ("public-model".into(), Deployment::default()),
@@ -161,6 +162,31 @@ fn configuration_keeps_every_deployment_of_a_model_name_in_order() {
             .collect::<Vec<_>>(),
         ["provider/a", "provider/b", "provider/c"]
     );
+    assert_eq!(
+        router
+            .groups()
+            .map(|group| group.name())
+            .collect::<Vec<_>>(),
+        ["shared", "other"]
+    );
+}
+
+#[rstest]
+#[case::unset("{}", false)]
+#[case::discoverable("{discoverable: true}", false)]
+#[case::undiscoverable("{discoverable: false}", true)]
+#[case::not_a_bool("{discoverable: \"false\"}", false)]
+fn configuration_reads_discoverable(#[case] model_info: &str, #[case] undiscoverable: bool) {
+    let config = Config::from_yaml(&format!(
+        "model_list:
+  - model_name: m
+    litellm_params: {{model: provider/a}}
+    model_info: {model_info}"
+    ))
+    .unwrap();
+    let router = Router::from_config(&config).unwrap();
+
+    assert_eq!(only(&router, "m").undiscoverable, undiscoverable);
 }
 
 #[rstest]
