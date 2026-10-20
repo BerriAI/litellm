@@ -1,11 +1,14 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+import litellm
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
@@ -2618,3 +2621,75 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
         assert "headers" in failure_debug_lines[0]
     else:
         assert failure_debug_lines == []
+
+
+_CALL_START: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_batch_accounting_failures_stay_with_their_originating_call() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+    logger: Final = _ProxyDBLogger()
+    dependency: Final = SimpleNamespace(failed_tracking_alert=AsyncMock())
+
+    async def fail_before_accounting(call_id: str) -> None:
+        await logger.async_log_success_event(
+            kwargs={
+                "litellm_call_id": call_id,
+                "call_type": "aretrieve_batch",
+                "model": "batch-model",
+                "stream": False,
+                "response_cost": None,
+            },
+            response_obj=None,
+            start_time=_CALL_START,
+            end_time=_CALL_START,
+        )
+
+    async def independent_batch() -> bool:
+        with track_batch_accounting("independent") as outcome:
+            await fail_before_accounting("independent")
+        return outcome.retryable_failure
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency):
+        with track_batch_accounting("outer") as outer:
+            await fail_before_accounting("unrelated")
+            assert outer.retryable_failure is False
+            with track_batch_accounting("inner") as inner:
+                await fail_before_accounting("inner")
+            assert inner.retryable_failure is True
+            assert outer.retryable_failure is False
+            independent, _ = await asyncio.gather(independent_batch(), fail_before_accounting("outer"))
+            assert independent is True
+            assert outer.retryable_failure is True
+            with pytest.raises(asyncio.CancelledError):
+                with track_batch_accounting("cancelled") as cancelled:
+                    raise asyncio.CancelledError
+            await fail_before_accounting("cancelled")
+            assert cancelled.retryable_failure is False
+
+
+@pytest.mark.asyncio
+async def test_batch_accounting_does_not_retry_after_settling_a_budget_reservation() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": ()}
+    dependency: Final = SimpleNamespace(failed_tracking_alert=AsyncMock())
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency):
+        with track_batch_accounting("reserved") as outcome:
+            await _ProxyDBLogger().async_log_success_event(
+                kwargs={
+                    "litellm_call_id": "reserved",
+                    "call_type": "aretrieve_batch",
+                    "model": "batch-model",
+                    "stream": False,
+                    "response_cost": None,
+                    "litellm_params": {"metadata": {"user_api_key_budget_reservation": reservation}},
+                },
+                response_obj=None,
+                start_time=_CALL_START,
+                end_time=_CALL_START,
+            )
+    assert reservation["finalized"] is True
+    assert outcome.retryable_failure is False
