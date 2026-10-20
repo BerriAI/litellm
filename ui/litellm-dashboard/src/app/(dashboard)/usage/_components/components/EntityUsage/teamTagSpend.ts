@@ -18,11 +18,7 @@ const emptyRow = (tag: string): TeamTagSpendRow => ({
   total_tokens: 0,
 });
 
-/**
- * The Team view's per-tag breakdown, from a group_by=tag report whose
- * breakdown.entities are keyed by tag: one row per tag summed across days,
- * zero-spend tags dropped, highest spend first (ties by tag name).
- */
+/** One row per tag summed across days, zero-spend tags dropped, highest spend first (ties by tag name). */
 export const teamTagSpendRows = (days: readonly DailyData[]): TeamTagSpendRow[] => {
   const byTag = new Map<string, TeamTagSpendRow>();
   for (const day of days) {
@@ -44,6 +40,5 @@ export const teamTagSpendRows = (days: readonly DailyData[]): TeamTagSpendRow[] 
     .sort((a, b) => b.spend - a.spend || a.tag.localeCompare(b.tag));
 };
 
-/** The card answers "what did this team spend per tag", so it needs exactly one team. */
 export const singleTeamId = (selectedTeamIds: readonly string[]): string | null =>
   selectedTeamIds.length === 1 ? selectedTeamIds[0] : null;

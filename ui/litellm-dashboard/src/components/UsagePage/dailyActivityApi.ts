@@ -26,7 +26,6 @@ export interface DailyActivityRequest {
   model?: string | null;
   includeCurrentUtcDay?: boolean;
   apiKeyLimit?: number;
-  /** Team reports only: "tag" buckets one team's spend by tag (needs exactly one id in entityIds). */
   groupBy?: TeamGroupBy;
 }
 
