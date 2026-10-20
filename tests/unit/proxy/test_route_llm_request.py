@@ -2118,6 +2118,64 @@ async def test_route_request_routing_group_name_passes_model_gate():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("agent_registered", [True, False])
+async def test_route_request_a2a_agent_precedes_pattern_route(
+    agent_registered: bool, fresh_agent_read_through: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    import uuid
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.types.agents import AgentResponse
+
+    agent_name: Final = "pattern-route-agent-" + uuid.uuid4().hex
+    model_name: Final = f"a2a/{agent_name}"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+            }
+        ]
+    )
+    pattern_route: Final = AsyncMock(return_value="pattern response")
+    monkeypatch.setattr(router, "acompletion", pattern_route)
+    agent: Final = AgentResponse(
+        agent_id=f"{agent_name}-id",
+        agent_name=agent_name,
+        agent_card_params={"name": agent_name, "url": "http://agent.example"},
+    )
+    agents_find_unique: Final = AsyncMock(side_effect=[None, agent] if agent_registered else [None, None])
+    fake_prisma, _ = _fake_prisma_client_with_models([])
+    fake_prisma.db.litellm_agentstable = SimpleNamespace(find_unique=agents_find_unique)
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    data: Final = {"model": model_name, "messages": [{"role": "user", "content": "hi"}]}
+    admin_auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    if agent_registered:
+        agent_route: Final = AsyncMock(return_value="agent response")
+        monkeypatch.setattr(litellm, "acompletion", agent_route)
+        agent_response: Final[object] = await (await route_request(data, router, None, "acompletion", admin_auth))
+        assert agent_response == "agent response"
+        agent_route.assert_awaited_once()
+        agent_call: Final = agent_route.await_args
+        assert agent_call is not None
+        assert agent_call.kwargs["api_base"] == "http://agent.example"
+        pattern_route.assert_not_awaited()
+        return
+
+    pattern_response: Final[object] = await (await route_request(data, router, None, "acompletion"))
+    assert pattern_response == "pattern response"
+    pattern_route.assert_awaited_once_with(**data)
+    assert agents_find_unique.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(fresh_agent_read_through, monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock

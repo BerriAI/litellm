@@ -888,6 +888,22 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:
+            a2a_model_name: Final[object] = JSON_OBJECT_ADAPTER.validate_python(data).get("model", "")
+            if isinstance(a2a_model_name, str) and _is_a2a_agent_model(a2a_model_name):
+                from litellm.proxy.common_utils.registry_read_through import (
+                    get_agent_with_read_through,
+                )
+
+                agent_name: Final = a2a_model_name[4:]
+                if await get_agent_with_read_through(agent_name) is not None:
+                    from litellm.proxy.agent_endpoints.a2a_routing import (
+                        route_a2a_agent_request,
+                    )
+
+                    result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
+                    if result is not None:
+                        return result
+
             # Check wildcards before checking deployment_names
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.router_general_settings.pass_through_all_models:
@@ -944,16 +960,12 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
                     return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
-            elif _is_a2a_agent_model(data.get("model", "")):
-                from litellm.proxy.agent_endpoints.a2a_routing import (
-                    route_a2a_agent_request,
+            elif isinstance(a2a_model_name, str) and _is_a2a_agent_model(a2a_model_name):
+                raise ProxyModelNotFoundError(
+                    route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
+                    model_name=a2a_model_name,
+                    retryable_with_model_read_through=False,
                 )
-
-                result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
-                if result is not None:
-                    return result
-                # Fall through to raise exception below if result is None
-
     elif user_model is not None or route_type == "allm_passthrough_route":
         return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
 
