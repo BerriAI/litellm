@@ -30,7 +30,7 @@ from integration._support.client import (
     until_asserted,
 )
 from integration._support.database import scratch_database
-from integration._support.otlp_sink import Span, SpanSinks, recorded_requests, recorded_spans
+from integration._support.otlp_sink import Span, SpanSinks, configure_sink, recorded_requests, recorded_spans
 from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -477,6 +477,47 @@ def test_a_failed_call_answers_to_the_error_rate_on_a_pod_that_dropped_its_trace
     assert any(not kept[0] for kept in verdicts.values()), "no successful call was dropped before its trace failed"
 
 
+def test_a_successful_call_answers_to_the_success_rate_on_a_pod_that_kept_its_failed_call(pods: Pods) -> None:
+    """A pod that already kept a failed call of the trace drops a later successful call of it at a zero
+    success rate, as the pod that only served the successful call does."""
+    sampled: Final = pods.team_key({**CREDENTIALS, "arize_success_sampling_rate": "0.0"})
+    cursors: Final = _cursors(pods)
+    traces: Final = _trace_ids("succeeded-after-kept")
+    failed: Final = {
+        trace_id: pods.send(pods.first, _call(sampled, trace_id, content="sampling-fail")) for trace_id in traces
+    }
+    _await_logged(pods, cursors.operator, tuple(failed.values()))
+    by_trace: Final = {
+        trace_id: (
+            failed[trace_id],
+            pods.send(pods.first, _call(sampled, trace_id)),
+            pods.send(pods.second, _call(sampled, trace_id)),
+        )
+        for trace_id in traces
+    }
+
+    _settled(pods, cursors, by_trace, pods.team_key(CREDENTIALS), holds=lambda kept: kept == (True, False, False))
+
+
+def test_concurrent_calls_of_one_trace_on_one_worker_each_answer_to_their_own_outcome(pods: Pods) -> None:
+    """A failed and a successful call of the trace in flight at once on the single worker of the first pod
+    are decided apart: the failed one is kept at an unset error rate, the successful one dropped at a zero
+    success rate."""
+    sampled: Final = pods.team_key({**CREDENTIALS, "arize_success_sampling_rate": "0.0"})
+    cursors: Final = _cursors(pods)
+    traces: Final = _trace_ids("concurrent-mixed")
+    plan: Final = tuple(product(traces, ("sampling-fail", "hello")))
+
+    def send(job: tuple[str, str]) -> Sent:
+        return pods.send(pods.first, _call(sampled, job[0], content=job[1]))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        sent: Final = tuple(pool.map(send, plan))
+    by_trace: Final = {trace_id: tuple(call for call in sent if call.trace_id == trace_id) for trace_id in traces}
+
+    _settled(pods, cursors, by_trace, pods.team_key(CREDENTIALS), holds=lambda kept: kept == (True, False))
+
+
 @pytest.mark.parametrize(
     ("variables", "expected"),
     [({"arize_success_sampling_rate": "1.0"}, TRACES), ({"arize_success_sampling_rate": "0.0"}, 0), ({}, TRACES)],
@@ -570,6 +611,30 @@ def test_a_concurrent_burst_keeps_every_trace_whole(pods: Pods) -> None:
 
     with ThreadPoolExecutor(max_workers=16) as pool:
         sent: Final = list(pool.map(send, plan))
+    by_trace: Final = {trace_id: tuple(call for call in sent if call.trace_id == trace_id) for trace_id in traces}
+
+    verdicts: Final = _settled(pods, cursors, by_trace, pods.team_key(CREDENTIALS))
+
+    assert 0 < _kept(verdicts) < len(traces)
+
+
+def test_a_stalled_team_space_during_a_burst_keeps_serving_and_each_trace_whole(pods: Pods) -> None:
+    """The team's Arize endpoint stops answering while a burst of calls runs over both pods: every call is
+    still served, and once the endpoint answers again each trace arrives whole or not at all."""
+    sampled: Final = pods.team_key({**CREDENTIALS, "arize_success_sampling_rate": "0.5"})
+    cursors: Final = _cursors(pods)
+    traces: Final = _trace_ids("stalled")
+    plan: Final = tuple(product(traces, (pods.first, pods.second)))
+
+    def send(job: tuple[str, OwnedProxy]) -> Sent:
+        return pods.send(job[1], _call(sampled, job[0]))
+
+    configure_sink(pods.sinks.arize, paused=True)
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            sent: Final = tuple(pool.map(send, plan))
+    finally:
+        configure_sink(pods.sinks.arize, paused=False)
     by_trace: Final = {trace_id: tuple(call for call in sent if call.trace_id == trace_id) for trace_id in traces}
 
     verdicts: Final = _settled(pods, cursors, by_trace, pods.team_key(CREDENTIALS))
