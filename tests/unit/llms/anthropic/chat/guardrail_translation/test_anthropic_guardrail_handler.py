@@ -6,7 +6,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,7 +18,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import Streami
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 
 class MockPassThroughGuardrail(CustomGuardrail):
@@ -155,6 +155,17 @@ class MockStructuredMaskingGuardrail(CustomGuardrail):
         return masked
 
 
+class MockNumberMaskingGuardrail(MockStructuredMaskingGuardrail):
+    @staticmethod
+    def _mask(text: str) -> str:
+        return (
+            text.replace("bob@example.com", "<EMAIL>")
+            .replace("5", "<NUMBER>")
+            .replace("null", "<NULL>")
+            .replace("山田太郎", "<NAME>")
+        )
+
+
 class TestAnthropicMessagesHandlerStreamingRequestData:
     """Post-call guardrails on streaming /v1/messages receive the response and identity metadata"""
 
@@ -182,7 +193,7 @@ class TestAnthropicMessagesHandlerStreamingRequestData:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.build_complete_streaming_response",
                 return_value=mock_response,
             ),
         ):
@@ -241,7 +252,7 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.build_complete_streaming_response",
                 return_value=None,
             ),
         ):
@@ -382,6 +393,97 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert '"name": "lookup_fruit_reviewed"' in raw and '"id": "toolu_1"' in raw
         assert '"name": "lookup_fruit"' not in raw
         assert json.loads("".join(self._partial_jsons(chunks))) == {"fruit": "persimmon"}
+
+    @staticmethod
+    def _message_delta(chunks: list[bytes]) -> dict[str, object]:
+        lines: Final = b"".join(chunks).decode().split("\n")
+        events: Final = (json.loads(line[len("data:") :]) for line in lines if line.startswith("data:"))
+        return next(event["delta"] for event in events if event.get("type") == "message_delta")
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_text_rewrite_drops_the_upstream_explanations(self):
+        delta_fields: Final = {
+            "stop_details": {"type": "refusal", "category": "cyber", "explanation": "the reply says world"},
+            "safeguard_results": [
+                {"type": "prompt_injection", "status": {"type": "available", "explanation": "quotes world"}}
+            ],
+        }
+        source: Final[list[bytes]] = self._ended_sse_chunks()
+        chunks: Final = [
+            chunk.replace(
+                b'"stop_sequence": null}', b'"stop_sequence": null, ' + json.dumps(delta_fields)[1:-1].encode() + b"}"
+            )
+            for chunk in source
+        ]
+
+        await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert self._delta_texts(chunks) == ["hello [MASKED]", ""]
+        assert self._message_delta(chunks) == {
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": {"type": "refusal", "category": "cyber", "explanation": None},
+            "safeguard_results": [{"type": "prompt_injection", "status": {"type": "available"}}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_use_rewrite_drops_the_verdict_of_the_rewritten_call_only(self):
+        class MaskPersimmon(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[LiteLLMLoggingObj] = None,
+            ) -> GenericGuardrailAPIInputs:
+                for tool_call in inputs.get("tool_calls", []):
+                    if isinstance(tool_call, ChatCompletionMessageToolCall) and "persimmon" in tool_call.function.arguments:
+                        tool_call.function.arguments = '{"fruit": "[MASKED]"}'
+                return inputs
+
+        first_call: Final[list[bytes]] = self._ended_tool_use_sse_chunks()
+        second_call: Final = [
+            chunk.replace(b'"index": 0', b'"index": 1')
+            .replace(b"toolu_1", b"toolu_2")
+            .replace(b"persim", b"pear")
+            .replace(b'mon\\"}', b'\\"}')
+            for chunk in first_call[1:6]
+        ]
+        verdicts: Final = {
+            "toolu_1": {"type": "evaluated", "outcome": "flagged", "explanation": "looks up persimmon"},
+            "toolu_2": {"type": "evaluated", "outcome": "not_flagged", "explanation": "looks up pear"},
+        }
+        safeguard_results: Final = [
+            {"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": verdicts}}
+        ]
+        message_delta: Final = first_call[6].replace(
+            b'"stop_sequence": null}',
+            b'"stop_sequence": null, "safeguard_results": ' + json.dumps(safeguard_results).encode() + b"}",
+        )
+        chunks: Final = [*first_call[:6], *second_call, message_delta, first_call[7]]
+
+        await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MaskPersimmon(guardrail_name="test"),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert self._partial_jsons(chunks)[:3] == ['{"fruit": "[MASKED]"}', "", ""]
+        assert self._message_delta(chunks)["safeguard_results"] == [
+            {
+                "type": "dangerous_tool_use",
+                "status": {
+                    "type": "available",
+                    "tool_uses": {"toolu_2": {"type": "evaluated", "outcome": "not_flagged"}},
+                },
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_ended_stream_tool_use_rewrite_leaves_chunks_untouched_by_default(self):
@@ -1353,7 +1455,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.build_complete_streaming_response",
                 return_value=mock_response,
             ),
         ):
@@ -1400,7 +1502,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.build_complete_streaming_response",
                 return_value=mock_response,
             ),
         ):
@@ -2075,6 +2177,45 @@ class TestAnthropicMessagesScanOnlyToolResults:
         )
         assert data["messages"][2]["content"][0]["text"] == "sibling POISON text"
 
+    @staticmethod
+    def _strict_weather_tool() -> dict[str, Any]:
+        return {
+            "name": "get_weather",
+            "strict": True,
+            "input_schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+            "input_examples": [{"city": "Paris"}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_strict_tool_with_input_examples_is_forwarded_as_sent(self):
+        handler = AnthropicMessagesHandler()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "tools": [self._strict_weather_tool()],
+            "messages": [
+                {"role": "user", "content": "weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tu1", "name": "get_weather", "input": {"city": "Paris"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "sunny"}],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=self._guardrail())
+
+        assert data["tools"] == [self._strict_weather_tool()]
+
     @pytest.mark.asyncio
     async def test_guardrail_synthesized_tools_are_appended_without_replacing_request_tools(self):
         handler = AnthropicMessagesHandler()
@@ -2369,7 +2510,7 @@ class TestStructuredWriteBackKeepsToolResults:
     """A guardrail rewrite must never leave a tool_use without its tool_result (Claude Code ToolSearch, LIT-6103)."""
 
     @staticmethod
-    def _claude_code_tool_search_turns(tool_result_content):
+    def _claude_code_tool_search_turns(tool_result_content, tool_use_id="toolu_01"):
         return [
             {"role": "user", "content": "load WebFetch for bob@example.com"},
             {
@@ -2377,7 +2518,7 @@ class TestStructuredWriteBackKeepsToolResults:
                 "content": [
                     {
                         "type": "tool_use",
-                        "id": "toolu_01",
+                        "id": tool_use_id,
                         "name": "ToolSearch",
                         "input": {"query": "select:WebFetch"},
                     }
@@ -2386,7 +2527,7 @@ class TestStructuredWriteBackKeepsToolResults:
             {
                 "role": "user",
                 "content": [
-                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content},
+                    {"type": "tool_result", "tool_use_id": tool_use_id, "content": tool_result_content},
                     {"type": "text", "text": "Now fetch the page."},
                 ],
             },
@@ -2432,6 +2573,124 @@ class TestStructuredWriteBackKeepsToolResults:
         }
         later_blocks = [b for m in messages[tool_use_index + 1 :] for b in self._blocks(m)]
         assert {"type": "text", "text": "Now fetch the page."} in later_blocks
+
+    @pytest.mark.parametrize(
+        ("tool_result_content", "expected_written_back_content"),
+        [
+            (
+                [{"type": "text", "text": None}, {"type": "text", "text": "log for bob@example.com"}],
+                [{"type": "text", "text": None}, {"type": "text", "text": "log for <EMAIL>"}],
+            ),
+            (
+                [{"type": "text", "text": "log for bob@example.com"}, {"type": "text", "text": 73}],
+                [{"type": "text", "text": "log for <EMAIL>"}, {"type": "text", "text": 73}],
+            ),
+            ([{"type": "text", "text": None}], [{"type": "text", "text": None}]),
+            (
+                [
+                    {"type": "text", "text": None},
+                    {"type": "text", "text": "log for bob@example.com"},
+                    {"type": "text", "text": 5},
+                    {"type": "text", "text": "bob@example.com again"},
+                ],
+                [
+                    {"type": "text", "text": None},
+                    {"type": "text", "text": "log for <EMAIL>"},
+                    {"type": "text", "text": 5},
+                    {"type": "text", "text": "<EMAIL> again"},
+                ],
+            ),
+        ],
+        ids=["null-first", "number-last", "null-only", "interleaved"],
+    )
+    async def test_rewrite_keeps_a_non_string_tool_result_text_in_place(
+        self, tool_result_content, expected_written_back_content
+    ):
+        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert "bob@example.com" not in json.dumps(data["messages"])
+        assert data["messages"][2]["content"][0] == {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": expected_written_back_content,
+        }
+
+    async def test_rewrite_keeps_a_non_string_tool_result_text_whose_tool_use_id_gets_sanitized(self):
+        tool_result_content = [{"type": "text", "text": None}, {"type": "text", "text": "log for bob@example.com"}]
+        data = {
+            "model": "claude-fable-5",
+            "messages": self._claude_code_tool_search_turns(tool_result_content, tool_use_id="functions.get_weather:0"),
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"][2]["content"][0]["content"] == [
+            {"type": "text", "text": None},
+            {"type": "text", "text": "log for <EMAIL>"},
+        ]
+
+    async def test_rewrite_keeps_each_non_string_text_when_two_tool_use_ids_sanitize_alike(self):
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": "check both logs for bob@example.com"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "read:log", "name": "Read", "input": {"path": "a.log"}},
+                        {"type": "tool_use", "id": "read_log", "name": "Read", "input": {"path": "b.log"}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "read:log",
+                            "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": None}],
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "read_log",
+                            "content": [{"type": "text", "text": 5}, {"type": "text", "text": "bob@example.com"}],
+                        },
+                    ],
+                },
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert [block["content"] for block in data["messages"][2]["content"]] == [
+            [{"type": "text", "text": "ok"}, {"type": "text", "text": None}],
+            [{"type": "text", "text": 5}, {"type": "text", "text": "<EMAIL>"}],
+        ]
+
+    @pytest.mark.parametrize(
+        ("text", "masked"),
+        [(5, "<NUMBER>"), (None, "<NULL>"), ({"owner": "山田太郎"}, '{"owner": "<NAME>"}')],
+        ids=["number", "null", "non-ascii-object"],
+    )
+    async def test_guardrail_scans_and_masks_a_non_string_tool_result_text(self, text, masked):
+        tool_result_content = [{"type": "text", "text": text}, {"type": "text", "text": "log for bob@example.com"}]
+        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockNumberMaskingGuardrail()
+        )
+
+        assert data["messages"][2]["content"][0]["content"] == [
+            {"type": "text", "text": masked},
+            {"type": "text", "text": "log for <EMAIL>"},
+        ]
 
 
 class TestAnthropicMessagesHandlerStreamingScanKey:

@@ -3,10 +3,11 @@ import datetime
 import json
 import math
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -14,7 +15,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
     "1:1": 1 / 1,
@@ -495,21 +496,67 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "openai",
+        output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        from litellm.llms.vertex_ai.count_tokens.context import (
+            VertexGeminiCountContextError,
+            count_context_edits,
+            count_context_error_response,
+            gemini_count_contents,
+            inference_request_view,
+            malformed_tool_result_text_count_error,
+            provider_error_response,
+            unconvertible_messages_error,
+            vertex_gemini_count_context,
+        )
+
+        request_view: Final = await inference_request_view(
+            messages or [],
+            system,
+            messages_format,
+            count_context_edits(context_management, tools, (deployment or {}).get("litellm_params", {}), model_to_use),
+        )
+        if isinstance(request_view, VertexGeminiCountContextError):
+            return count_context_error_response(request_view, request_model, model_to_use)
+        count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools, model=model_to_use)
+        if isinstance(count_context, VertexGeminiCountContextError):
+            return count_context_error_response(count_context, request_model, model_to_use)
+        blocks_error: Final = unconvertible_messages_error(
+            request_view.messages, messages_format
+        ) or malformed_tool_result_text_count_error(messages, messages_format, deployment)
+        if blocks_error is not None:
+            return count_context_error_response(blocks_error, request_model, model_to_use)
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
+        resolved_contents: Final = (
+            contents
+            if contents is not None
+            else await gemini_count_contents(
+                request_view.messages, messages_format, model_to_use, "gemini", count_tokens_params_request
+            )
+        )
+        if isinstance(resolved_contents, VertexGeminiCountContextError):
+            return count_context_error_response(resolved_contents, request_model, model_to_use)
         count_tokens_params: Final = {
             "model": model_to_use,
-            "contents": contents,
+            "contents": resolved_contents,
+            "system_instruction": count_context.system_instruction,
+            "tools": count_context.tools,
         }
         count_tokens_params_request.update(count_tokens_params)
-        result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-            **count_tokens_params_request,
-        )
+        try:
+            result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
+                **count_tokens_params_request,
+            )
+        except litellm.APIError as error:
+            return provider_error_response(error, request_model, model_to_use)
 
         if result is not None:
             return TokenCountResponse(

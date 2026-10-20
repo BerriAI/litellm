@@ -639,7 +639,7 @@ class TestEncodeUiSessionJwt:
         from unittest.mock import MagicMock
 
         from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
-            _user_id_from_session_cookie,
+            user_id_from_session_cookie,
         )
         from litellm.proxy.auth.login_utils import encode_ui_session_jwt
 
@@ -649,7 +649,7 @@ class TestEncodeUiSessionJwt:
         request = MagicMock()
         request.cookies = {"token": token}
         with patch("litellm.proxy.proxy_server.master_key", "sk-master-for-tests"):
-            assert _user_id_from_session_cookie(request) == "cornell-user"
+            assert user_id_from_session_cookie(request) == "cornell-user"
 
 
 def _throttle(
@@ -2144,7 +2144,7 @@ class TestPasswordResetRequiredSessionMinting:
         row = _db_user_row(password="Str0ng!Passw0rd", password_reset_required=True)
         result, key_kwargs = await self._login(_prisma_with_user(row))
 
-        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout"]
+        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout", "/management/v1/users/me"]
         assert key_kwargs["metadata"] == {"login_method": "username_password", "password_reset_required": True}
         assert result.password_reset_required is True
 
@@ -2205,7 +2205,7 @@ class TestPasswordResetRequiredSessionMinting:
 
         result, key_kwargs, _ = await self._login_with_screen_result(mock_prisma_client, breached=True)
 
-        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout"]
+        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout", "/management/v1/users/me"]
         assert key_kwargs["metadata"] == {"login_method": "username_password", "password_reset_required": True}
         assert result.password_reset_required is True
 

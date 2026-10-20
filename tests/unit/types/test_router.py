@@ -1,6 +1,9 @@
 import logging
+from typing import Final
 
+import httpx
 import pytest
+from openai import Timeout as SDKTimeout
 from pydantic import ValidationError
 
 from litellm.types.router import (
@@ -13,15 +16,25 @@ from litellm.types.router import (
     holds_secret_pointer,
     reject_server_owned_wif_params,
     server_owned_wif_fields_named,
+    server_owned_wif_fields_written,
     server_owned_wif_fields_present,
 )
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     anthropic_wif_litellm_params,
+    github_copilot_oauth_litellm_params,
+    oauth_token_exchange_litellm_params,
     openai_wif_litellm_params,
     server_owned_wif_litellm_params,
 )
+
+
+def test_sdk_timeout_is_normalized_for_provider_clients() -> None:
+    timeout: Final = SDKTimeout(connect=2.0, read=None, write=5.0, pool=7.0)
+    params: Final = GenericLiteLLMParams(timeout=timeout)
+    assert isinstance(params.timeout, httpx.Timeout)
+    assert params.timeout.as_dict() == timeout.as_dict()
 
 
 def test_model_info_declares_mirrored_pricing_fields():
@@ -51,6 +64,7 @@ def test_custom_pricing_params_keeps_every_field_it_had():
         "output_cost_per_character",
         "cache_read_input_token_cost",
         "cache_creation_input_token_cost",
+        "cache_creation_input_token_cost_above_1hr",
         "cost_per_second",
         "input_cost_per_second",
         "cache_read_input_token_cost_flex",
@@ -241,9 +255,7 @@ def test_model_info_rejects_offset_aware_access_window_times():
     with pytest.raises(ValidationError):
         ModelInfo(
             id="x",
-            access_windows=[
-                {"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}
-            ],
+            access_windows=[{"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}],
         )
 
 
@@ -301,6 +313,23 @@ def test_server_owned_wif_fields_named_is_derived_from_the_shared_list():
     )
 
 
+@pytest.mark.parametrize(
+    "api_key", ["oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token", "oidc/env/SA_TOKEN", "oidc/google/aud"]
+)
+def test_an_oidc_reference_api_key_is_server_owned(api_key: str):
+    assert server_owned_wif_fields_present({"api_key": api_key}) == ("api_key",)
+    assert server_owned_wif_fields_written({"api_key": api_key}) == ("api_key",)
+    with pytest.raises(ValueError, match="api_key holds an oidc/ secret reference"):
+        reject_server_owned_wif_params({"api_key": api_key})
+
+
+@pytest.mark.parametrize("api_key", ["sk-static", "os.environ/MISTRAL_API_KEY", None])
+def test_a_plain_api_key_stays_client_settable(api_key: str | None):
+    assert server_owned_wif_fields_present({"api_key": api_key}) == ()
+    assert server_owned_wif_fields_written({"api_key": api_key}) == ()
+    reject_server_owned_wif_params({"api_key": api_key})
+
+
 @pytest.mark.parametrize("param_name", ["anthropic_issuer_signing_key_ref", "anthropic_keycloak_client_secret_ref"])
 def test_wif_ref_fields_hold_secret_pointers(param_name: str):
     assert holds_secret_pointer(param_name)
@@ -325,13 +354,30 @@ def test_openai_wif_fields_round_trip_through_model_dump():
         assert dumped[field] == value, field
 
 
-def test_server_owned_registry_is_anthropic_plus_openai():
-    assert server_owned_wif_litellm_params == anthropic_wif_litellm_params + openai_wif_litellm_params
+def test_server_owned_registry_includes_anthropic_openai_and_oauth_token_exchange():
+    assert oauth_token_exchange_litellm_params == (
+        "token_exchange_audience",
+        "token_exchange_endpoint",
+        "token_exchange_profile",
+        "token_exchange_scope",
+    )
+    assert github_copilot_oauth_litellm_params == ("github_copilot_auth_type",)
+    assert server_owned_wif_litellm_params == (
+        anthropic_wif_litellm_params
+        + openai_wif_litellm_params
+        + oauth_token_exchange_litellm_params
+        + github_copilot_oauth_litellm_params
+    )
     assert set(openai_wif_litellm_params) == {
         "openai_identity_provider_id",
         "openai_service_account_id",
         "openai_identity_token_file",
     }
+
+
+def test_credential_litellm_params_declares_each_oauth_token_exchange_field():
+    for field in oauth_token_exchange_litellm_params:
+        assert field in CredentialLiteLLMParams.model_fields, field
 
 
 def test_server_owned_wif_fields_present_reports_openai_fields():
@@ -345,3 +391,9 @@ def test_server_owned_wif_fields_present_reports_openai_fields():
 def test_reject_server_owned_wif_params_names_each_openai_field(param_name: str):
     with pytest.raises(ValueError, match=param_name):
         reject_server_owned_wif_params({param_name: "client-supplied"})
+
+
+@pytest.mark.parametrize("param_name", openai_wif_litellm_params)
+def test_reject_server_owned_wif_params_catches_the_array_form_key(param_name: str):
+    with pytest.raises(ValueError, match=param_name):
+        reject_server_owned_wif_params({f"{param_name}[]": "client-supplied"})

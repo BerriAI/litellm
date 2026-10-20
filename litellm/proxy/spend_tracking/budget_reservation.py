@@ -228,29 +228,6 @@ def _raise_counter_budget_exceeded(
     )
 
 
-_UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
-    {
-        "/models",
-        "/v1/models",
-        "/utils/token_counter",
-        "/responses/input_tokens",
-        "/v1/responses/input_tokens",
-        "/openai/v1/responses/input_tokens",
-    }
-)
-_TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
-_TOKEN_COUNTING_ACTION: Final = "countTokens"
-
-
-def _is_token_counting_route(route: str) -> bool:
-    resource, _, action = route.rsplit("/", 1)[-1].partition(":")
-    return resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
-
-
-def _is_unbilled_route(route: str) -> bool:
-    return route in _UNBILLED_ROUTES or _is_token_counting_route(route)
-
-
 async def reserve_budget_for_request(
     request_body: dict,
     route: str,
@@ -269,7 +246,7 @@ async def reserve_budget_for_request(
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
-    if _is_unbilled_route(route):
+    if RouteChecks.is_unbilled_route(route):
         return None
     if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
@@ -438,10 +415,10 @@ async def invalidate_budget_reservation_counters(
     if budget_reservation is None:
         return
 
-    from litellm.proxy.proxy_server import _invalidate_spend_counter
+    from litellm.proxy.proxy_server import invalidate_spend_counter
 
     for counter_key in get_reserved_counter_keys(budget_reservation=budget_reservation):
-        await _invalidate_spend_counter(counter_key=counter_key)
+        await invalidate_spend_counter(counter_key=counter_key)
 
 
 async def release_or_invalidate_budget_reservation(
@@ -946,19 +923,19 @@ async def _reservation_counter_loaded(counter: _BudgetCounter, fail_closed_budge
 
 async def _initialize_reservation_counter(counter: _BudgetCounter) -> None:
     from litellm.proxy.proxy_server import (
-        _ensure_spend_counter_initialized,
-        _ensure_window_spend_counter_initialized,
-        _invalidate_spend_counter,
+        ensure_spend_counter_initialized,
+        ensure_window_spend_counter_initialized,
+        invalidate_spend_counter,
     )
 
     try:
         if counter.source_cache_key is not None:
-            await _ensure_spend_counter_initialized(
+            await ensure_spend_counter_initialized(
                 counter_key=counter.counter_key,
                 source_cache_key=counter.source_cache_key,
             )
         elif counter.spend_log_entity_id is not None and counter.window_start is not None:
-            initialized: Final = await _ensure_window_spend_counter_initialized(
+            initialized: Final = await ensure_window_spend_counter_initialized(
                 counter_key=counter.counter_key,
                 entity_type=counter.entity_type,
                 entity_id=counter.spend_log_entity_id,
@@ -980,7 +957,7 @@ async def _initialize_reservation_counter(counter: _BudgetCounter) -> None:
             exc_info=True,
         )
         try:
-            await _invalidate_spend_counter(counter_key=counter.counter_key)
+            await invalidate_spend_counter(counter_key=counter.counter_key)
         except Exception:
             verbose_proxy_logger.warning(
                 "Failed to invalidate spend counter after budget reservation failure for %s",
@@ -1062,7 +1039,7 @@ async def _reserve_counters(
 ) -> tuple[float | None, ...] | None:
     """One INCRBYFLOAT pipeline reserves every counter. When it fails each counter is dropped, and one that cannot
     be dropped is released instead in case its increment landed, so nothing is left to release by the caller."""
-    from litellm.proxy.proxy_server import _invalidate_spend_counter, run_spend_counter_pipeline
+    from litellm.proxy.proxy_server import invalidate_spend_counter, run_spend_counter_pipeline
 
     if not counters:
         return ()
@@ -1081,7 +1058,7 @@ async def _reserve_counters(
         )
         for counter, entry in zip(counters, entries):
             try:
-                await _invalidate_spend_counter(counter_key=counter.counter_key)
+                await invalidate_spend_counter(counter_key=counter.counter_key)
             except Exception:
                 verbose_proxy_logger.warning(
                     "Failed to invalidate spend counter after budget reservation failure for %s",
@@ -1190,11 +1167,11 @@ async def _reseed_reserved_entry(item: _EntryAdjustment, actual_cost: float) -> 
     reconcile: the optimistic delta no longer applies, so reseed from the DB floor and add the settled cost, since
     increment_spend_counters skips reserved keys. The reconcile runs before this request's spend is enqueued to the
     DB, so the reseeded floor excludes it."""
-    from litellm.proxy.proxy_server import _increment_spend_counter_cache, reseed_spend_counter_from_db
+    from litellm.proxy.proxy_server import increment_spend_counter_cache, reseed_spend_counter_from_db
 
     reseeded: Final = await reseed_spend_counter_from_db(counter_key=item.counter_key)
     if reseeded and actual_cost > 0:
-        await _increment_spend_counter_cache(counter_key=item.counter_key, increment=actual_cost)
+        await increment_spend_counter_cache(counter_key=item.counter_key, increment=actual_cost)
 
 
 async def _counter_can_apply_adjustment(
@@ -1230,9 +1207,9 @@ async def _release_applied_entries_best_effort(
             if counter_key is None:
                 continue
             try:
-                from litellm.proxy.proxy_server import _invalidate_spend_counter
+                from litellm.proxy.proxy_server import invalidate_spend_counter
 
-                await _invalidate_spend_counter(counter_key=counter_key)
+                await invalidate_spend_counter(counter_key=counter_key)
             except Exception:
                 verbose_proxy_logger.exception(
                     "Failed to invalidate partial budget reservation counter during exception cleanup"

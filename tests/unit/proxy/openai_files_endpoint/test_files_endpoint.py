@@ -1,5 +1,6 @@
 import json
 from typing import Final, List, Optional
+from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
@@ -12,7 +13,7 @@ from pytest_mock import MockerFixture
 import litellm
 from litellm import Router
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
@@ -235,23 +236,112 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     assert error["param"] == "purpose"
 
 
-def test_get_file_content_rejects_raw_cloud_storage_uri(llm_router: Router):
-    """A raw s3:// file id must be rejected on the proxy content endpoint.
+RAW_GCS_OUTPUT_FILE_ID: Final = (
+    "gs://my-gcs-bucket/litellm-vertex-files/publishers/google/models/gemini-3.8-flash/"
+    "prediction-model-2026-09-10T20:27:18.178864Z/predictions.jsonl"
+)
+RAW_S3_OUTPUT_FILE_ID: Final = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
 
-    Such an id is not a managed unified id, so it would otherwise skip the
-    owner/team access check and let a caller read another tenant's batch output
-    object by its key. Callers must use the managed unified file id.
-    """
-    from urllib.parse import quote
 
-    s3_file_id = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
-    response = client.get(
-        f"/v1/files/{quote(s3_file_id, safe='')}/content?provider=bedrock",
-        headers={"Authorization": "Bearer test-key"},
+def _ids_a_server_hands_the_route_for(raw_id: str, provider: str) -> tuple[tuple[str, str], ...]:
+    encoded_once: Final = quote(raw_id, safe="")
+    return ((raw_id, provider), (encoded_once, provider), (quote(encoded_once, safe=""), provider))
+
+
+RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM: Final = _ids_a_server_hands_the_route_for(
+    RAW_GCS_OUTPUT_FILE_ID, "vertex_ai"
+) + _ids_a_server_hands_the_route_for(RAW_S3_OUTPUT_FILE_ID, "bedrock")
+
+
+def _testclient_path_segment_delivering(route_file_id: str) -> str:
+    return quote(quote(route_file_id, safe=""), safe="")
+
+
+def _override_auth(
+    monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, llm_router: Router, user_role: LitellmUserRoles
+) -> ProxyLogging:
+    import litellm.proxy.proxy_server as ps
+
+    proxy_logging_obj: Final = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=user_role, user_id="test-user"
     )
+    return proxy_logging_obj
 
-    assert response.status_code == 400
-    assert "managed file id" in response.json()["error"]["message"].lower()
+
+@pytest.mark.parametrize(("route_file_id", "provider"), RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM)
+def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    route_file_id: str,
+    provider: str,
+):
+    import litellm.proxy.proxy_server as ps
+
+    _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.INTERNAL_USER)
+    afile_content: Final = mocker.AsyncMock()
+    monkeypatch.setattr(litellm, "afile_content", afile_content)
+
+    try:
+        response: Final = client.get(
+            f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 403, response.text
+    assert "proxy admin" in response.json()["error"]["message"]
+    afile_content.assert_not_called()
+
+
+@pytest.mark.parametrize(("route_file_id", "provider"), RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM)
+def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    route_file_id: str,
+    provider: str,
+):
+    import litellm.proxy.proxy_server as ps
+
+    _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.PROXY_ADMIN)
+    content: Final = b'{"custom_id": "request-1"}\n'
+
+    async def _stream():
+        yield content
+
+    async def _provider_file_content(**kwargs: object) -> FileContentStreamingResult | HttpxBinaryResponseContent:
+        if kwargs.get("stream"):
+            return FileContentStreamingResult(stream_iterator=_stream(), headers={"content-length": str(len(content))})
+        return HttpxBinaryResponseContent(
+            response=httpx.Response(
+                status_code=200, content=content, headers={"content-type": "application/octet-stream"}
+            )
+        )
+
+    afile_content: Final = mocker.AsyncMock(side_effect=_provider_file_content)
+    monkeypatch.setattr(litellm, "afile_content", afile_content)
+
+    try:
+        response: Final = client.get(
+            f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.content == content
+    afile_content.assert_called_once()
+    assert afile_content.call_args.kwargs["custom_llm_provider"] == provider
+    assert afile_content.call_args.kwargs["file_id"] == route_file_id
 
 
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
@@ -2143,6 +2233,54 @@ def test_get_file_content_streams_openai_direct_path(
     assert captured_kwargs["stream"] is True
     proxy_logging_obj.update_request_status.assert_awaited_once()
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+@respx.mock
+def test_get_file_content_forwards_upstream_download_headers(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    body: Final = b'{"prompt": "Hello", "completion": "Hi"}'
+    upstream_filename: Final = "mydata.jsonl"
+    upstream_request_id: Final = "req_upstream_123"
+    upstream_route: Final = respx.get("https://api.openai.com/v1/files/file-abc123/content").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            content=body,
+            headers={
+                "content-type": "application/octet-stream",
+                "content-length": str(len(body)),
+                "content-disposition": f'attachment; filename="{upstream_filename}"',
+                "x-request-id": upstream_request_id,
+            },
+        )
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+    try:
+        response: Final = client.get(
+            "/v1/files/file-abc123/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert upstream_route.call_count == 1
+    assert response.content == body
+    assert response.headers["content-type"].startswith("application/octet-stream")
+    assert int(response.headers["content-length"]) == len(response.content)
+    assert upstream_filename in response.headers["content-disposition"]
+    assert response.headers["x-request-id"] == upstream_request_id
 
 
 def test_get_file_content_routed_provider_skips_streaming_when_resolved_provider_is_not_supported(

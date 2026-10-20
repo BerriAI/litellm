@@ -29,6 +29,7 @@ _CACHE_LAYER_DIRS: Final = ("litellm/caching", "litellm/_v2/cache")
 # Helpers that act on a cache handed in by the declaring caller, or forward to the response-cache facade.
 _CACHE_PARAMETER_HELPERS: Final = frozenset(
     {
+        "litellm/llms/anthropic/prompt_cache_prediction.py",
         "litellm/proxy/common_utils/cache_coordinator.py",
         "litellm/proxy/common_utils/user_api_key_cache.py",
         "litellm/utils.py",
@@ -45,6 +46,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/integrations/newrelic/newrelic_team_handler.py",
         "litellm/integrations/shadow_eval_logger.py",
         "litellm/litellm_core_utils/litellm_logging.py",
+        "litellm/litellm_core_utils/oauth_token_exchange.py",
         "litellm/litellm_core_utils/prompt_templates/factory.py",
         "litellm/litellm_core_utils/prompt_templates/image_handling.py",
         "litellm/litellm_core_utils/specialty_caches/dynamic_logging_cache.py",
@@ -52,13 +54,16 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/azure/common_utils.py",
         "litellm/llms/bedrock/base_aws_llm.py",
         "litellm/llms/custom_httpx/http_handler.py",
+        "litellm/llms/databricks/agent/transformation.py",
         "litellm/llms/gigachat/authenticator.py",
+        "litellm/llms/github_copilot/per_user_auth.py",
         "litellm/llms/litellm_proxy/skills/handler.py",
         "litellm/llms/openai/common_utils.py",
         "litellm/llms/openai_like/model_info.py",
         "litellm/llms/vertex_ai/vertex_ai_non_gemini.py",
         "litellm/llms/watsonx/common_utils.py",
         "litellm/proxy/_experimental/mcp_server/byok_credential_cache.py",
+        "litellm/proxy/_experimental/mcp_server/catalog.py",
         "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py",
         "litellm/proxy/_experimental/mcp_server/oauth_identity_binding.py",
         "litellm/proxy/_experimental/mcp_server/operations.py",
@@ -82,10 +87,10 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
 )
 
 _CACHE_CALL: Final = re.compile(
-    r"\.(?:async_)?(?:get_cache|set_cache|batch_get_cache|batch_get_cache_shared|increment_cache|increment"
+    r"\.(?:async_)?(?:get_cache|set_cache|batch_get_cache|batch_get_cache_shared|increment_cache|increment_if_present|increment"
     r"|set_cache_pipeline|set_cache_pipeline_with_ttls|set_cache_sadd|delete_cache|batch_set_cache|increment_pipeline"
     r"|rpush|lpop|scan_iter|get_ttl|mget)\("
-    r"|\b(?:reserve_redis_batch_reads|declare_batch_get|_prepare_batch_get)\("
+    r"|\b(?:reserve_redis_batch_reads|_prepare_batch_get)\("
     r"|\bbatch\.(?:set|delete|script|increment)\("
 )
 _DECLARES_TARGET: Final = re.compile(r"\b(?:with_service_target|service_target|response_cache_phase)\(")

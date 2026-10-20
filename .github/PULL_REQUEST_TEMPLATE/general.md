@@ -4,6 +4,15 @@
      Drop every section you have nothing to put in, heading included: a bare "## Relevant issues" or
      "## Affected release" with nothing under it must not appear in the final description -->
 
+## Description
+
+<!-- Two or three plain sentences a teammate can read in 10 seconds, written the way you'd explain it in Slack
+     Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
+     No headings, bullets, tables, or code names here. Everything else goes inside the Details block below -->
+
+<details>
+<summary>Details</summary>
+
 ## TLDR
 
 <!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
@@ -68,7 +77,7 @@ After: the same request comes back with real token counts, so the dashboard show
 - [ ] The handful of test files covering my change pass locally, e.g. `uv run pytest tests/unit/<your_test_file>.py -v`. Leave the suites (`make test-unit-*`, `make test-unit`) to CI: it finishes in ~15 minutes where a laptop takes an hour or more
 - [ ] My PR passes all required CI/CD checks (e.g., lint, schema.d.ts sync check, etc.)
 - [ ] My PR's scope is as isolated as possible; it only solves 1 specific problem
-- [ ] I have received a Greptile **Confidence Score of at least 4/5** before requesting a maintainer review (Greptile reviews automatically once the PR is opened; only comment `@greptileai` to re-request a review after pushing changes)
+- [ ] Every automated review on my PR's latest commit has finished, and I have addressed or replied to each of its findings before requesting a maintainer review
 
 ## Delays in PR merge?
 
@@ -164,3 +173,5 @@ Example checklists:
 ## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
+
+</details>

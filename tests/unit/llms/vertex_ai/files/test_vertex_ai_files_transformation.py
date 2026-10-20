@@ -6,6 +6,7 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 import json
 import urllib.parse
 from collections.abc import Mapping
+from typing import Final
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlparse
 
@@ -1289,6 +1290,33 @@ class TestVertexEmbeddingsBatchInputTranslation:
 
         assert set(row["request"]) == {"content"}
 
+    def test_should_translate_a_file_block_with_video_metadata(self) -> None:
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": [
+                            {
+                                "type": "file",
+                                "file": {
+                                    "file_id": "gs://my-bucket/clip.mp4",
+                                    "video_metadata": {"start_offset": "3s", "end_offset": "6s"},
+                                },
+                            }
+                        ],
+                    }
+                )
+            ]
+        )
+
+        assert row["request"]["content"]["parts"] == [
+            {
+                "file_data": {"mime_type": "video/mp4", "file_uri": "gs://my-bucket/clip.mp4"},
+                "video_metadata": {"startOffset": "3s", "endOffset": "6s"},
+            }
+        ]
+
     def test_should_translate_multimodal_gcs_input(self):
         (row,) = _wrap_entries(
             [
@@ -1609,6 +1637,45 @@ class TestVertexResponsesBatchInputTranslation:
         request = row["request"]
         assert request["system_instruction"] == {"parts": [{"text": "be terse"}]}
         assert request["contents"] == [{"role": "user", "parts": [{"text": "ping"}]}]
+
+
+_PRIORITY_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "level": {"type": "integer", "enum": [1, 2, 5]},
+        "mode": {"type": "string", "enum": ["fast", "slow"]},
+    },
+}
+
+
+class TestVertexBatchIntegerEnums:
+    """
+    Vertex batch reads each row's string enum values back as numbers and then fails the
+    row, so batch rows drop integer enums on every model, as before Gemini 3 sent them.
+    """
+
+    @pytest.mark.parametrize("model", ["gemini-3.8-flash", "vertex-batch-alias"])
+    def test_tool_rows_drop_integer_enums_and_keep_string_enums(self, model: str):
+        (row,) = _wrap_entries(
+            [
+                {
+                    "custom_id": "enum-1",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Set priority 3"}],
+                        "tools": [
+                            {"type": "function", "function": {"name": "set_priority", "parameters": _PRIORITY_SCHEMA}}
+                        ],
+                    },
+                }
+            ]
+        )
+
+        properties: Final = row["request"]["tools"][0]["function_declarations"][0]["parameters"]["properties"]
+        assert "enum" not in properties["level"]
+        assert properties["mode"]["enum"] == ["fast", "slow"]
 
 
 class TestVertexEmbeddingsBatchOutputTranslation:

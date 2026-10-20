@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
 
@@ -376,9 +376,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         if raw_headers_from_request:
             headers_obj: Final = Headers(raw_headers_from_request)
-            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
-            self.mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+            self.mcp_auth_header = MCPRequestHandler.get_mcp_auth_header_from_headers(headers_obj)
+            self.mcp_server_auth_headers = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(headers_obj)
+            self.oauth2_headers = MCPRequestHandler.get_oauth2_headers_from_headers(headers_obj)
 
         # Also check if headers are provided in tools array (from request body)
         tools: Final[Sequence[object] | None] = self.original_request_params.get("tools")
@@ -389,7 +389,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     if tool_headers and isinstance(tool_headers, dict):
                         # Merge tool headers into mcp_server_auth_headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                        tool_mcp_server_auth_headers = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(
                             headers_obj_from_tool
                         )
 
@@ -730,6 +730,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Don't set phase to "finished" here — let __anext__ emit any
             # pre-generated MCP discovery events before ending the iteration.
 
+    async def start_initial_response(self) -> None:
+        await self._create_initial_response_iterator()
+        if self._initial_creation_error is not None:
+            raise self._initial_creation_error
+
     async def _generate_tool_execution_events(self) -> None:
         """Generate tool execution events and execute tools"""
         if not self.collected_response:
@@ -775,7 +780,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                                     "id": item_id,
                                     "type": "mcp_call",
                                     "status": "in_progress",
-                                    "arguments": tool_arguments or "{}",
+                                    "arguments": "",
                                     "name": tool_name,
                                     "server_label": "litellm",
                                 },

@@ -95,7 +95,6 @@ def _open_test_audio():
         os.path.dirname(__file__),
         "../../../..",
         "tests",
-        "llm_translation",
         "gettysburg.wav",
     )
     return open(wav_path, "rb")

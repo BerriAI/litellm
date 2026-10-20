@@ -1,8 +1,8 @@
-import os
-import signal
 import uuid
 from pathlib import Path
 from typing import Final
+
+import pytest
 
 import httpx
 from _azure_storage_support import (
@@ -147,13 +147,14 @@ def test_killing_one_worker_keeps_the_other_serving_and_uploading(gateway: Gatew
             key: Final = scenario.key(models=[openai_model, anthropic_model])
             first: Final = mixed_burst(candidate, openai_model, anthropic_model, key, f"{marker}-first", per_surface=2)
             collect_files(sink, len(first))
-            workers: Final = tuple(
-                process for process in group_members(owned.process.pid) if process.pid != owned.process.pid
-            )
+            workers: Final = owned.worker_pids()
             assert workers, "no uvicorn workers in the owned proxy process group"
-            os.kill(workers[0].pid, signal.SIGKILL)
-            eventually(lambda: _readiness_ok(candidate), lambda ok: ok, seconds=30)
-            rest: Final = mixed_burst(candidate, openai_model, anthropic_model, key, f"{marker}-rest", per_surface=4)
+            with owned.replacing_worker(min(workers)) as kill:
+                kill()
+                eventually(lambda: _readiness_ok(candidate), lambda ok: ok, seconds=30)
+                rest: Final = mixed_burst(
+                    candidate, openai_model, anthropic_model, key, f"{marker}-rest", per_surface=4
+                )
             payloads: Final = eventually(
                 lambda: tuple(sink.payloads().values()),
                 lambda stored: _present_count(stored, rest) == len(rest),
@@ -174,6 +175,7 @@ def test_killing_one_worker_keeps_the_other_serving_and_uploading(gateway: Gatew
             )
 
 
+@pytest.mark.timeout(180)
 def test_restarting_the_proxy_before_the_queue_flushes_bounds_the_loss_to_the_unflushed_queue_and_recovers(
     gateway: Gateway, tmp_path: Path
 ) -> None:

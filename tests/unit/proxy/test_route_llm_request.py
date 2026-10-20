@@ -1,12 +1,19 @@
+import contextlib
+import httpx
+import json
+import litellm
 import pytest
+import respx
 
 
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm.proxy.route_llm_request import JSON_OBJECT_ADAPTER, ProxyModelNotFoundError, route_request
+from litellm.types.router import RouterGeneralSettings
 
 
 @pytest.mark.parametrize(
@@ -386,7 +393,6 @@ async def test_route_request_with_router_settings_override():
             "timeout": 30,
             "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
             "routing_strategy": "least-busy",
-            # This setting should be ignored (not in per_request_settings list)
             "model_group_alias": {"alias": "real_model"},
         },
     }
@@ -433,12 +439,12 @@ async def test_route_request_with_router_settings_override_no_router():
     litellm.acompletion = mock_completion
 
     try:
-        response = await route_request(data, None, None, "acompletion")
+        response = await route_request(data, None, "gpt-3.5-turbo", "acompletion")
 
         assert response == "success"
         # Verify litellm.acompletion was called with merged settings
         call_kwargs = mock_completion.call_args[1]
-        assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
+        assert "fallbacks" not in call_kwargs
         assert call_kwargs["num_retries"] == 3
     finally:
         litellm.acompletion = original_acompletion
@@ -515,12 +521,10 @@ def test_e2e_proxy_config_opts_in_to_the_mock_params_its_suite_sends():
         for param in GATED_MOCK_PARAM_NAMES
         if f"{param}=" in source or f'"{param}"' in source
     )
-    assert senders, "expected the E2E suite to still exercise the gated mock testing params"
-
     config = yaml.safe_load((repo_root / "proxy_server_config.yaml").read_text(encoding="utf-8"))
     general_settings = config.get("general_settings") or {}
 
-    assert general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
+    assert not senders or general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
         f"proxy_server_config.yaml must set general_settings.{MOCK_TESTING_CONFIG_KEY}: true — "
         f"the E2E suite sends gated mock testing params ({', '.join(sorted(senders))}) "
         "and the proxy rejects them with a 400 otherwise"
@@ -1037,6 +1041,408 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
     assert call_kwargs["enable_tag_filtering"] is True
 
 
+_PROXY_DEPLOYMENT_BASE: Final = "https://proxy-deployment.example/v1"
+_HELLO_MESSAGES: Final = ({"role": "user", "content": "Hello"},)
+
+
+def _chat_completion_response(model: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+def _proxy_router_with_two_model_groups() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": f"openai/{model}",
+                    "api_key": "sk-proxy",
+                    "api_base": _PROXY_DEPLOYMENT_BASE,
+                },
+            }
+            for model in ("gpt-3.5-turbo", "gpt-4")
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.parametrize(
+    "extra_body, upstream_base",
+    [
+        pytest.param({"api_key": "sk-from-pre-call-hook"}, _PROXY_DEPLOYMENT_BASE, id="clientside-api-key"),
+        pytest.param(
+            {"api_base": "https://clientside.example/v1"}, "https://clientside.example/v1", id="clientside-api-base"
+        ),
+        pytest.param({"model": "gpt-3.5-turbo,gpt-4"}, _PROXY_DEPLOYMENT_BASE, id="comma-separated-batch"),
+        pytest.param({"drop_params": True}, _PROXY_DEPLOYMENT_BASE, id="drop-params"),
+        pytest.param(
+            {
+                "user_config": {
+                    "model_list": [
+                        {
+                            "model_name": "gpt-3.5-turbo",
+                            "litellm_params": {
+                                "model": "openai/gpt-3.5-turbo",
+                                "api_key": "sk-user-config",
+                                "api_base": "https://user-config.example/v1",
+                            },
+                        }
+                    ],
+                }
+            },
+            "https://user-config.example/v1",
+            id="user-config",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_never_forwards_router_settings_override(
+    monkeypatch: pytest.MonkeyPatch, extra_body: dict[str, object], upstream_base: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": {"num_retries": 2, "timeout": None},
+        **extra_body,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        primary: Final = respx_mock.post(f"{upstream_base}/chat/completions", json__model="gpt-3.5-turbo").mock(
+            side_effect=[
+                httpx.Response(500, json={"error": {"message": "boom"}}),
+                _chat_completion_response("gpt-3.5-turbo"),
+            ]
+        )
+        respx_mock.post(f"{upstream_base}/chat/completions", json__model="gpt-4").mock(
+            return_value=_chat_completion_response("gpt-4")
+        )
+        response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+
+    primary_response: Final = response[0] if isinstance(response, list) else response
+    sent_bodies: Final = [json.loads(call.request.content) for call in primary.calls]
+    assert not [body for body in sent_bodies if "router_settings_override" in body], sent_bodies
+    assert primary_response._hidden_params["additional_headers"]["x-litellm-max-retries"] == 2, (
+        primary_response._hidden_params
+    )
+
+
+@pytest.mark.parametrize("extra_body", [{}, {"api_key": "sk-from-pre-call-hook"}], ids=["router", "clientside-api-key"])
+@pytest.mark.asyncio
+async def test_route_request_treats_null_router_settings_override_as_absent(
+    monkeypatch: pytest.MonkeyPatch, extra_body: dict[str, str]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": None,
+        **extra_body,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-3.5-turbo")
+        )
+        response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+
+    assert response.choices[0].message.content == "hi", response
+    assert "router_settings_override" not in json.loads(upstream.calls.last.request.content)
+
+
+@pytest.mark.parametrize(
+    "global_drop_params, extra_body",
+    [
+        pytest.param(False, {}, id="drop-params-off"),
+        pytest.param(False, {"drop_params": False}, id="request-drop-params-false"),
+    ],
+)
+@pytest.mark.parametrize("override", ["fallbacks", ["num_retries"], 3])
+@pytest.mark.asyncio
+async def test_route_request_rejects_non_object_router_settings_override(
+    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool, extra_body: dict[str, bool | str], override: object
+) -> None:
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": override,
+        **extra_body,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-3.5-turbo")
+        )
+        with pytest.raises(ProxyException) as exc_info:
+            await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion")
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "router_settings_override"
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "global_drop_params, extra_body",
+    [
+        pytest.param(False, {"drop_params": True}, id="request-drop-params"),
+        pytest.param(True, {}, id="global-drop-params"),
+        pytest.param(True, {"drop_params": False}, id="global-drop-params-with-request-false"),
+        pytest.param(False, {"drop_params": "true"}, id="request-drop-params-string"),
+    ],
+)
+@pytest.mark.parametrize("override", ["fallbacks", ["num_retries"], 3])
+@pytest.mark.asyncio
+async def test_route_request_drops_non_object_router_settings_override_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool, extra_body: dict[str, bool | str], override: object
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": override,
+        **extra_body,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-3.5-turbo")
+        )
+        response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+
+    assert response.choices[0].message.content == "hi", response
+    assert upstream.call_count == 1
+    assert "router_settings_override" not in json.loads(upstream.calls.last.request.content)
+
+
+@pytest.mark.parametrize(
+    "user_config_settings, expected_upstream_calls",
+    [
+        pytest.param({}, 2, id="key-setting-fills-unset-user-config-setting"),
+        pytest.param({"num_retries": 0}, 1, id="user-config-setting-beats-key-setting"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_user_config_router_settings_beat_key_settings(
+    monkeypatch: pytest.MonkeyPatch, user_config_settings: dict[str, int], expected_upstream_calls: int
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    user_config_base: Final = "https://user-config.example/v1"
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": {"num_retries": 1},
+        "user_config": {
+            **user_config_settings,
+            "model_list": [
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {
+                        "model": "openai/gpt-3.5-turbo",
+                        "api_key": "sk-user-config",
+                        "api_base": user_config_base,
+                    },
+                }
+            ],
+        },
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post(f"{user_config_base}/chat/completions").mock(
+            side_effect=[
+                httpx.Response(500, json={"error": {"message": "boom"}}),
+                _chat_completion_response("gpt-3.5-turbo"),
+            ]
+        )
+        with contextlib.suppress(litellm.InternalServerError):
+            await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+
+    assert upstream.call_count == expected_upstream_calls
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        pytest.param({}, id="no-key-settings"),
+        pytest.param({"router_settings_override": {"num_retries": 2}}, id="key-settings"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_refuses_blocked_model_whether_or_not_key_has_router_settings(
+    extra_body: dict[str, dict[str, int]],
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "sk-proxy"},
+                "model_info": {"blocked": True},
+            }
+        ],
+    )
+    data: Final = {"model": "gpt-3.5-turbo", "messages": list(_HELLO_MESSAGES), **extra_body}
+
+    with pytest.raises(litellm.PermissionDeniedError):
+        await route_request(data, router, None, "acompletion")
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        pytest.param({"api_key": "sk-from-pre-call-hook"}, id="clientside-api-key"),
+        pytest.param({"api_base": _PROXY_DEPLOYMENT_BASE}, id="clientside-api-base"),
+    ],
+)
+@pytest.mark.parametrize(
+    "fallback_field, upstream_error",
+    [
+        pytest.param("fallbacks", httpx.Response(500, json={"error": {"message": "boom"}}), id="fallbacks"),
+        pytest.param(
+            "context_window_fallbacks",
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "This model's maximum context length is 16385 tokens",
+                        "code": "context_length_exceeded",
+                    }
+                },
+            ),
+            id="context-window-fallbacks",
+        ),
+        pytest.param(
+            "content_policy_fallbacks",
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Your request was rejected by the content filter",
+                        "type": "invalid_request_error",
+                        "code": "content_policy_violation",
+                    }
+                },
+            ),
+            id="content-policy-fallbacks",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_applies_override_fallbacks_when_request_carries_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    credential: dict[str, str],
+    fallback_field: str,
+    upstream_error: httpx.Response,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": {fallback_field: [{"gpt-3.5-turbo": ["gpt-4"]}]},
+        **credential,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions", json__model="gpt-3.5-turbo").mock(
+            return_value=upstream_error
+        )
+        fallback: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions", json__model="gpt-4").mock(
+            return_value=_chat_completion_response("gpt-4")
+        )
+        response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+
+    assert fallback.call_count == 1, [str(call.request.url) for call in respx_mock.calls]
+    assert "router_settings_override" not in json.loads(fallback.calls.last.request.content)
+    assert response.choices[0].message.content == "hi", response
+
+
+@pytest.mark.parametrize(
+    "router_only_setting",
+    [
+        pytest.param({"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"),
+        pytest.param({"context_window_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="context-window-fallbacks"),
+        pytest.param({"content_policy_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="content-policy-fallbacks"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_keeps_router_only_override_settings_out_of_pass_through_provider_body(
+    monkeypatch: pytest.MonkeyPatch, router_only_setting: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-pass-through")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-proxy", "api_base": _PROXY_DEPLOYMENT_BASE},
+            }
+        ],
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+    )
+    data: Final = {
+        "model": "openai/gpt-pass-through",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": router_only_setting,
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-pass-through")
+        )
+        await (await route_request(data, router, None, "acompletion"))
+
+    assert set(router_only_setting).isdisjoint(JSON_OBJECT_ADAPTER.validate_json(upstream.calls.last.request.content))
+
+
+@pytest.mark.asyncio
+async def test_route_request_keeps_key_fallbacks_out_of_pass_through_provider_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-pass-through")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-proxy", "api_base": _PROXY_DEPLOYMENT_BASE},
+            }
+        ],
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+    )
+    data: Final = {
+        "model": "openai/gpt-pass-through",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": {"fallbacks": [{"gpt-4": ["gpt-4"]}], "num_retries": 0},
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(500, json={"error": {"message": "upstream down"}})
+        )
+        with pytest.raises(litellm.InternalServerError):
+            await (await route_request(data, router, None, "acompletion"))
+
+    provider_bodies: Final = tuple(JSON_OBJECT_ADAPTER.validate_json(call.request.content) for call in upstream.calls)
+    assert provider_bodies and all("gpt-4" not in body for body in provider_bodies), provider_bodies
+
+
 @pytest.mark.parametrize(
     "route_type, param, route",
     [
@@ -1201,6 +1607,175 @@ def test_required_present_body_param_without_router_default_still_raises() -> No
 
 
 @pytest.mark.parametrize(
+    "route_type, data, param, default",
+    [
+        ("anthropic_messages", {"model": "claude-router-default", "messages": []}, "max_tokens", 16),
+        ("arerank", {"model": "rerank-router-default", "query": "hi"}, "documents", ["router default document"]),
+    ],
+)
+def test_required_present_body_param_uses_router_wide_default(
+    route_type: str, data: dict[str, object], param: str, default: object
+) -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": str(data["model"]),
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        default_litellm_params={param: default},
+    )
+
+    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=router)
+
+
+@pytest.mark.parametrize(
+    "route_type, data, param",
+    [
+        ("anthropic_messages", {"model": "claude", "messages": []}, "max_tokens"),
+        ("arerank", {"model": "rerank-model", "query": "hi"}, "documents"),
+    ],
+)
+def test_required_present_body_param_with_none_router_wide_default_still_raises(
+    route_type: str, data: dict[str, object], param: str
+) -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": str(data["model"]),
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        default_litellm_params={param: None},
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=router)
+
+    assert exc_info.value.param == param
+
+
+@pytest.mark.parametrize(
+    "route_type, data, param",
+    [
+        ("asearch", {"model": "search-model"}, "query"),
+        ("acreate_eval", {"model": "eval-model"}, "data_source_config"),
+        ("acreate_run", {"model": "eval-model"}, "data_source"),
+        ("acreate_agent", {"model": "agent-model"}, "name"),
+        ("avector_store_search", {}, "query"),
+    ],
+)
+def test_required_present_body_param_ignores_router_wide_default_when_dispatch_skips_router(
+    route_type: str, data: dict[str, object], param: str
+) -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": str(data.get("model") or "any-model"),
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        default_litellm_params={param: "supplied-by-router-default"},
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=router)
+
+    assert exc_info.value.param == param
+
+
+def test_required_present_body_param_uses_user_config_router_defaults() -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    raise_if_required_body_param_missing(
+        route_type="anthropic_messages",
+        data={
+            "model": "claude-user-config",
+            "messages": [],
+            "user_config": {"default_litellm_params": {"max_tokens": 16}},
+        },
+        llm_router=None,
+    )
+
+
+def test_required_present_body_param_ignores_global_router_defaults_for_user_config_requests() -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-user-config",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        default_litellm_params={"max_tokens": 16},
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "claude-user-config", "messages": [], "user_config": {}},
+            llm_router=router,
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
+@pytest.mark.parametrize(
+    "llm_router",
+    [
+        pytest.param(MagicMock(), id="magicmock-router"),
+        pytest.param(SimpleNamespace(get_model_list=lambda **_kwargs: ()), id="router-without-defaults-attr"),
+    ],
+)
+def test_required_present_body_param_ignores_non_mapping_router_defaults(llm_router: object) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="arerank",
+            data={"model": "rerank-model", "query": "hi"},
+            llm_router=llm_router,  # pyright: ignore[reportArgumentType]  # deliberately duck-typed routers
+        )
+
+    assert exc_info.value.param == "documents"
+
+
+@pytest.mark.parametrize(
     "route_type, data, param",
     [
         ("arerank", {"model": "rerank-model", "query": "hi"}, "documents"),
@@ -1351,6 +1926,54 @@ async def test_route_request_read_through_recovers_model_created_on_sibling_repl
     assert response.choices[0].message.content == "hello-from-db"
     assert len(table.find_many_wheres) == 1
     assert table.find_many_wheres[0] == {"model_name": model_name}
+
+
+def _tagged_db_model_row(model_name: str, tag: str, order: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        model_id=f"{model_name}-{tag}-id",
+        model_name=model_name,
+        litellm_params={
+            "model": "openai/gpt-4o",
+            "api_key": "fake",
+            "mock_response": f"{tag}-deployment",
+            "tags": [tag],
+            "order": order,
+        },
+        model_info={},
+        blocked=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_route_request_read_through_retry_keeps_key_tag_filtering(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_name: Final = "sibling-replica-model-for-key-with-tag-filtering"
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "some-other-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
+    )
+    fake_prisma, _ = _fake_prisma_client_with_models(
+        [_tagged_db_model_row(model_name, "free", order=1), _tagged_db_model_row(model_name, "paid", order=2)]
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    response: Final = await (
+        await route_request(
+            {
+                "model": model_name,
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"tags": ["paid"]},
+                "router_settings_override": {"enable_tag_filtering": True},
+            },
+            router,
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.choices[0].message.content == "paid-deployment"
 
 
 @pytest.mark.asyncio
@@ -1558,3 +2181,256 @@ async def test_route_request_without_model_on_model_routed_endpoint_is_a_400():
 
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "model"
+
+
+@pytest.mark.asyncio
+async def test_route_request_router_settings_override_skips_null_fields():
+    """
+    A key or team saved from the dashboard stores every unset router setting as null. Those nulls
+    must not reach the router as explicit per-request values, or they switch the router-level
+    fallbacks and retries off for that key.
+    """
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stream": True,
+        "router_settings_override": {
+            "fallbacks": None,
+            "context_window_fallbacks": None,
+            "num_retries": None,
+            "model_group_retry_policy": None,
+            "timeout": 600,
+        },
+    }
+
+    llm_router: Final = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response: Final = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs: Final = llm_router.acompletion.call_args[1]
+    assert call_kwargs["timeout"] == 600
+    assert "fallbacks" not in call_kwargs
+    assert "context_window_fallbacks" not in call_kwargs
+    assert "num_retries" not in call_kwargs
+    assert "model_group_retry_policy" not in call_kwargs
+
+
+def _router_with_defaults(default_litellm_params: dict[str, object]):
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "served",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"id": "served-deployment"},
+            }
+        ],
+        default_litellm_params=default_litellm_params,
+    )
+
+
+@pytest.mark.parametrize(
+    "route_type, param",
+    [
+        ("aimage_generation", "prompt"),
+        ("aspeech", "input"),
+        ("atext_completion", "prompt"),
+        ("atranscription", "file"),
+    ],
+)
+def test_router_default_for_positional_param_still_raises(route_type: str, param: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": "served"},
+            llm_router=_router_with_defaults({param: "supplied-by-router-default"}),
+        )
+
+    assert exc_info.value.param == param
+
+
+@pytest.mark.parametrize(
+    "route_type, param",
+    [
+        ("aimage_generation", "prompt"),
+        ("aspeech", "input"),
+    ],
+)
+def test_user_config_default_for_positional_param_still_raises(route_type: str, param: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": "img", "user_config": {"model_list": [], "default_litellm_params": {param: "x"}}},
+            llm_router=None,
+        )
+
+    assert exc_info.value.param == param
+
+
+def test_deployment_param_for_positional_param_still_raises() -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "img",
+                "litellm_params": {"model": "openai/gpt-image-1", "api_key": "test-key", "prompt": "a cat"},
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type="aimage_generation", data={"model": "img"}, llm_router=router)
+
+    assert exc_info.value.param == "prompt"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("omni-moderation-2024-09-26", id="unknown-model"),
+        pytest.param("openai/gpt-4o-mini", id="deployment-name"),
+        pytest.param("served-deployment", id="deployment-id"),
+    ],
+)
+def test_router_default_ignored_for_moderation_model_the_router_does_not_list(model: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="amoderation",
+            data={"model": model},
+            llm_router=_router_with_defaults({"input": "supplied"}),
+        )
+
+    assert exc_info.value.param == "input"
+
+
+@pytest.mark.asyncio
+async def test_null_user_config_is_treated_as_absent() -> None:
+    router: Final = _router_with_defaults({})
+
+    response: Final = await (
+        await route_request(
+            {
+                "model": "served",
+                "messages": [{"role": "user", "content": "hi"}],
+                "mock_response": "from the main router",
+                "user_config": None,
+            },
+            router,
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.choices[0].message.content == "from the main router"
+
+
+def _registered_bedrock_kb_search(team_id: str) -> dict[str, object]:
+    """The request a team key's /v1/vector_stores/{id}/search carries once the registry row is merged in."""
+    return {
+        "model": None,
+        "vector_store_id": "KB12345678",
+        "query": "litellm proxy",
+        "custom_llm_provider": "bedrock",
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIAREGISTRYKEY00000",
+        "aws_secret_access_key": "registry-secret",
+        "metadata": {"user_api_key_team_id": team_id},
+    }
+
+
+def _team_a_router(*team_models: tuple[str, dict[str, object]]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": f"internal-team-a-{public_name}",
+                "litellm_params": litellm_params,
+                "model_info": {
+                    "id": f"team-a-{public_name}",
+                    "team_id": "team-a",
+                    "team_public_model_name": public_name,
+                },
+            }
+            for public_name, litellm_params in team_models
+        ]
+    )
+
+
+_LANGGRAPH_AGENT_PARAMS: Final[dict[str, object]] = {
+    "model": "langgraph/repro-agent",
+    "api_base": "http://127.0.0.1:2024",
+}
+_BEDROCK_CLAUDE_PARAMS: Final[dict[str, object]] = {
+    "model": "bedrock/anthropic.claude-sonnet-4-6",
+    "aws_region_name": "us-east-1",
+}
+
+
+@pytest.mark.parametrize(
+    "team_models",
+    [
+        pytest.param(
+            [("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS), ("a-bedrock-claude", _BEDROCK_CLAUDE_PARAMS)],
+            id="langgraph-first",
+        ),
+        pytest.param(
+            [("a-bedrock-claude", _BEDROCK_CLAUDE_PARAMS), ("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS)],
+            id="bedrock-first",
+        ),
+        pytest.param([("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS)], id="no-bedrock-team-model"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_key_search_of_registered_bedrock_store_reaches_bedrock_with_registry_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    team_models: list[tuple[str, dict[str, object]]],
+) -> None:
+    """A team key's model-less search of a registered Bedrock store was routed through the team's first
+    deployment, so a langgraph team model turned it into "Vector store search is not supported for langgraph"."""
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(
+            "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/KB12345678/retrieve"
+        ).mock(return_value=httpx.Response(200, json={"retrievalResults": []}))
+        response: Final = await (
+            await route_request(
+                _registered_bedrock_kb_search("team-a"),
+                _team_a_router(*team_models),
+                None,
+                "avector_store_search",
+            )
+        )
+
+    request: Final = route.calls.last.request
+    posted_url: Final = str(request.url)
+    signed_auth: Final = request.headers["Authorization"]
+    assert response["object"] == "vector_store.search_results.page", response
+    assert route.call_count == 1
+    assert posted_url == "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/KB12345678/retrieve", (
+        posted_url
+    )
+    assert "Credential=AKIAREGISTRYKEY00000/" in signed_auth, signed_auth

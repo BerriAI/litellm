@@ -2,12 +2,14 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
@@ -17,7 +19,7 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     _get_budget_reservation_from_metadata,
-    _ProxyDBLogger,
+    ProxyDBLogger,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
     run_spend_event,
@@ -27,13 +29,13 @@ from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, Usage
+from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook():
     # Setup
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     # Mock user_api_key_dict
     user_api_key_dict = UserAPIKeyAuth(
@@ -94,6 +96,65 @@ async def test_async_post_call_failure_hook():
 
 
 @pytest.mark.asyncio
+async def test_each_earlier_billed_attempt_gets_its_own_spend_row():
+    """A timed-out request that the router retried writes one row per billed attempt: the final
+    attempt under the request id, every earlier Timeout attempt under ``<id>-attempt-<n>`` with its
+    own cost, attempt number and deployment."""
+    from litellm.proxy.utils import BilledFailedAttempt
+
+    logger = ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key", user_id="u1", team_id="t1")
+    usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+    request_data = {
+        "model": "gpt-4.1",
+        "litellm_call_id": "call-1",
+        "standard_logging_object": {"id": "call-1", "model_id": "dep-final"},
+        "metadata": {
+            "attempted_retries": 2,
+            "model_info": {"id": "dep-final", "input_cost_per_token": 0.5},
+            "previous_models": ({"exception_type": "Timeout"}, {"exception_type": "Timeout"}),
+        },
+        "combined_usage_object": usage,
+        "response_cost": 0.5,
+        "billed_failed_attempts": (
+            BilledFailedAttempt(attempted_retries=0, deployment_id="dep-a", usage=usage, response_cost=0.25),
+            BilledFailedAttempt(attempted_retries=0, deployment_id="dep-final", usage=usage, response_cost=0.5),
+        ),
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=litellm.Timeout("Request timed out.", model="gpt-4.1", llm_provider="openai"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    rows = [call.kwargs for call in mock_update_database.call_args_list]
+    assert [row["response_cost"] for row in rows] == [0.5, 0.25, 0.5]
+    final_row, attempt_0, attempt_1 = (row["kwargs"] for row in rows)
+    assert final_row["litellm_call_id"] == "call-1"
+    assert final_row["litellm_params"]["metadata"]["attempted_retries"] == 2
+    assert attempt_0["litellm_call_id"] == "call-1-attempt-0"
+    assert attempt_0["standard_logging_object"]["id"] == "call-1-attempt-0"
+    assert attempt_0["litellm_params"]["metadata"]["attempted_retries"] == 0
+    assert attempt_0["litellm_params"]["metadata"]["model_info"]["id"] == "dep-a"
+    assert "previous_models" not in attempt_0["litellm_params"]["metadata"]
+    assert "billed_failed_attempts" not in attempt_0
+    assert attempt_0["combined_usage_object"] is usage
+    assert attempt_1["litellm_call_id"] == "call-1-attempt-1"
+    assert attempt_1["litellm_params"]["metadata"]["attempted_retries"] == 0
+    assert attempt_1["litellm_params"]["metadata"]["model_info"]["id"] == "dep-final"
+    assert final_row["litellm_params"]["metadata"]["model_info"]["id"] == "dep-final"
+    for row in rows:
+        assert row["token"] == "test_api_key"
+        assert row["user_id"] == "u1"
+        assert row["team_id"] == "t1"
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_metadata():
     """
     LIT-5650 regression: on a pre_call guardrail block the unified guardrail
@@ -103,7 +164,7 @@ async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_
     consume provider usage units, so the info must be carried over or the
     failure row logs guardrail_information: null.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     guardrail_info = [
         {
             "guardrail_name": "bedrock-guard",
@@ -135,8 +196,79 @@ async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_buckets", "expected_model_group"),
+    [
+        ({"metadata": {}, "litellm_metadata": {"model_group": "ws-budget-sock"}}, "ws-budget-sock"),
+        ({"metadata": {"model_group": "caller-group"}, "litellm_metadata": {"model_group": "routed"}}, "caller-group"),
+        ({"metadata": {}, "litellm_metadata": {}}, ""),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_routed_model_group_on_the_failure_row(
+    metadata_buckets: dict[str, dict[str, str]], expected_model_group: str
+):
+    request_data: Final = {
+        "model": "ws-budget-sock",
+        "input": "Reply with exactly the word two",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data=request_data,
+        original_exception=litellm.RateLimitError(message="crossed budget", llm_provider="", model="ws-budget-sock"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=spend_writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert row["model_group"] == expected_model_group
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_buckets", "expected_tags"),
+    [
+        ({"metadata": {}, "litellm_metadata": {"tags": ["ws-tag"]}}, ["ws-tag"]),
+        ({"metadata": {"tags": ["caller-tag"]}, "litellm_metadata": {"tags": ["routed-tag"]}}, ["caller-tag"]),
+        ({"metadata": {}, "litellm_metadata": {"tags": "not-a-list"}}, []),
+        ({"metadata": {}, "litellm_metadata": {"tags": ["ws-tag", 1, {"a": 1}]}}, []),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_routed_tags_on_the_failure_row(
+    metadata_buckets: dict[str, dict[str, object]], expected_tags: list[str]
+):
+    request_data: Final = {
+        "model": "ws-budget-sock",
+        "input": "Reply with exactly the word two",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data=request_data,
+        original_exception=litellm.RateLimitError(message="crossed budget", llm_provider="", model="ws-budget-sock"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=spend_writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert json.loads(row["request_tags"]) == expected_tags
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_metadata():
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     metadata_bucket_info = [{"guardrail_name": "from-metadata-bucket"}]
     request_data = {
         "model": "gpt-4",
@@ -173,7 +305,7 @@ async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from
     and leave request_data["metadata"] to the caller's native metadata, so a failed request on those
     routes wrote a spend row whose used_client_oauth_token was null instead of the stamped value
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     request_data = {
         "model": "claude-sonnet-5",
         "custom_llm_provider": custom_llm_provider,
@@ -217,7 +349,7 @@ async def test_async_post_call_failure_hook_never_lets_caller_metadata_set_used_
     On /v1/messages and /v1/responses the request's own metadata field belongs to the caller, so a
     used_client_oauth_token they put there must never outrank the proxy's stamp or stand in for a missing one
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     request_data = {
         "model": "claude-sonnet-5",
         "custom_llm_provider": "anthropic",
@@ -264,7 +396,7 @@ async def test_async_post_call_failure_hook_never_lets_caller_metadata_set_used_
 async def test_async_post_call_failure_hook_reads_used_client_oauth_token_from_the_routes_stamped_bucket(
     request_route: str, metadata_buckets: dict, expected: bool | None
 ):
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     request_data = {
         "model": "claude-sonnet-5",
         "custom_llm_provider": "anthropic",
@@ -297,7 +429,7 @@ async def test_async_post_call_failure_hook_bills_guardrail_cost_on_blocked_requ
     """LIT-5651: a request blocked by a guardrail never reaches the LLM, but the
     guardrail invocation itself is billed by the provider. The failure row must
     charge that cost against the key instead of recording zero spend."""
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     request_data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello"}],
@@ -329,7 +461,7 @@ async def test_async_post_call_failure_hook_bills_guardrail_cost_on_blocked_requ
 
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_stream_cost():
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     request_data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello"}],
@@ -357,9 +489,82 @@ async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_str
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "snapshot_guardrail_information, expected_guardrail_names",
+    [
+        (None, ["detect-only-scanner"]),
+        ([], ["detect-only-scanner"]),
+        ([{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}], ["logged-before-the-failure"]),
+    ],
+)
+async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_after_the_failure_was_logged(
+    snapshot_guardrail_information: list[dict[str, str]] | None, expected_guardrail_names: list[str]
+):
+    """
+    A provider that drops a live stream mid-flight gets the failure logged at once, and only then does the
+    post_call scan of the chunks the client already received record its verdict, so the failure row showed no
+    guardrail at all while billing the scan's cost
+    """
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    failure_snapshot: Final = {
+        "metadata": {},
+        "hidden_params": {},
+        "model_map_information": {},
+        "guardrail_information": snapshot_guardrail_information,
+    }
+
+    await logger.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-5.6-sol",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {"guardrail_name": "detect-only-scanner", "guardrail_status": "success"}
+                ]
+            },
+            "litellm_logging_obj": SimpleNamespace(
+                model_call_details={"standard_logging_object": failure_snapshot}, litellm_trace_id="trace-1"
+            ),
+        },
+        original_exception=Exception("provider dropped the stream"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    logged_guardrails: Final = json.loads(row["metadata"])["guardrail_information"]
+    assert [entry["guardrail_name"] for entry in logged_guardrails] == expected_guardrail_names
+    assert failure_snapshot["guardrail_information"] == snapshot_guardrail_information
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("tracking_disabled", "expected_end_user_id"), [(True, None), (None, "session-abc123")])
+async def test_async_post_call_failure_hook_records_end_user_only_while_end_user_cost_tracking_is_on(
+    monkeypatch: pytest.MonkeyPatch, tracking_disabled: bool | None, expected_end_user_id: str | None
+):
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", tracking_disabled)
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+
+    await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
+        request_data={"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "Hello"}]},
+        original_exception=Exception("provider rejected the key"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", end_user_id="session-abc123"),
+    )
+
+    assert writer.update_database.call_args.kwargs["end_user_id"] == expected_end_user_id
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_non_llm_route():
     # Setup
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     # Mock user_api_key_dict with a non-LLM route
     user_api_key_dict = UserAPIKeyAuth(
@@ -402,8 +607,37 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "route", "written"),
+    [
+        ("litellm-dashboard", "/key/list", False),
+        ("litellm-dashboard", "/v2/user/info", False),
+        ("litellm-dashboard", "/chat/completions", True),
+        ("team-1", "/key/list", True),
+        (None, "/key/list", True),
+    ],
+)
+async def test_async_post_call_failure_hook_skips_dashboard_session_info_route_failures(  # test-quality-ok: update_database is the DB write boundary, so whether it is awaited is the observable outcome
+    team_id: str | None, route: str, written: bool
+) -> None:
+    """An expired Admin UI session key refetching dashboard info routes must not
+    write a failure SpendLog row, while its LLM calls and other keys' info calls still do."""
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data={},
+            original_exception=Exception("Authentication Error - Expired Key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-session", team_id=team_id, request_route=route),
+        )
+
+    assert mock_update_database.await_count == (1 if written else 0)
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_releases_budget_reservation_before_route_skip():
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
@@ -437,7 +671,7 @@ async def test_async_post_call_failure_hook_releases_budget_reservation_before_r
 
 @pytest.mark.asyncio
 async def test_should_continue_failure_tracking_when_budget_release_fails():
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
@@ -491,7 +725,7 @@ async def test_should_continue_failure_tracking_when_budget_release_fails():
 
 @pytest.mark.asyncio
 async def test_track_cost_callback_releases_budget_reservation_when_spend_tracking_skips():
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
     user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
 
@@ -527,7 +761,7 @@ async def test_track_cost_callback_releases_budget_reservation_when_spend_tracki
 
 @pytest.mark.asyncio
 async def test_track_cost_callback_releases_budget_reservation_when_response_cost_missing():
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
     user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
 
@@ -970,7 +1204,7 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
     File operations have no model and no standard_logging_object.
     The callback should skip gracefully instead of raising.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     kwargs = {
         "call_type": "afile_delete",
@@ -1001,6 +1235,38 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
 
 
+class _FailedTrackingAlerts:
+    def __init__(self) -> None:
+        self.messages: tuple[str, ...] = ()
+
+    async def failed_tracking_alert(self, error_message: str, failing_model: str) -> None:
+        self.messages = (*self.messages, error_message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "alerted"), [("_aresponses_websocket", True), ("_arealtime", False)])
+async def test_track_cost_callback_alerts_on_a_websocket_turn_with_no_logging_object(call_type: str, alerted: bool):
+    kwargs: Final = {
+        "call_type": call_type,
+        "model": "gpt-5-mini",
+        "litellm_call_id": "turn-call-id",
+        "litellm_params": {},
+        "stream": False,
+    }
+    alerts: Final = _FailedTrackingAlerts()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", alerts):
+        await ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        await asyncio.sleep(0)
+
+    assert any(f"call_type: {call_type}" in message for message in alerts.messages) is alerted
+
+
 @pytest.mark.asyncio
 async def test_track_cost_callback_defers_in_progress_background_interaction():  # test-quality-ok: writing no spend row and raising no alert is the whole observable contract of the deferral path
     """
@@ -1011,7 +1277,7 @@ async def test_track_cost_callback_defers_in_progress_background_interaction(): 
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     kwargs = {
         "call_type": "acreate_interaction",
@@ -1105,7 +1371,7 @@ async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # 
     are gated, since creating a batch is its own billable request, and a retrieve that
     charges nothing hands its budget reservation back instead.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     budget_reservation = None if charged else {"reserved_cost": 0.5, "entries": []}
     kwargs = _batch_retrieve_kwargs(call_type, reservation=budget_reservation)
 
@@ -1170,7 +1436,7 @@ async def test_track_cost_callback_keeps_reservation_open_for_in_progress_backgr
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
     in_progress_response = InteractionsAPIResponse(
         id="interactions/bg-abc",
@@ -1210,7 +1476,7 @@ async def test_track_cost_callback_releases_reservation_for_in_progress_interact
 
     monkeypatch.setattr(callback_module, "BACKGROUND_INTERACTION_COST_POLLING_ENABLED", False)
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
     in_progress_response = InteractionsAPIResponse(
         id="interactions/bg-abc",
@@ -1256,7 +1522,7 @@ async def test_track_cost_callback_releases_reservation_for_unpollable_interacti
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
     terminal_response = InteractionsAPIResponse(
         id="interactions/bg-abc",
@@ -1297,7 +1563,7 @@ async def test_track_cost_callback_alerts_when_an_interaction_that_produced_outp
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
     usageless_response = InteractionsAPIResponse(
         id="interactions/bg-abc",
@@ -1333,7 +1599,7 @@ async def test_track_cost_callback_releases_reservation_for_interaction_without_
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
     idless_response = InteractionsAPIResponse(
         id="",
@@ -1379,7 +1645,7 @@ async def test_callback_handles_every_status_the_interactions_api_can_return():
     released = set()
 
     for status in sorted(member.value for member in Status1):
-        logger = _ProxyDBLogger()
+        logger = ProxyDBLogger()
         reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
         response = InteractionsAPIResponse(
             id="interactions/bg-abc",
@@ -1425,7 +1691,7 @@ async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj
     The failure hook should propagate this so the DB spend log's session_id
     matches the Langfuse trace_id.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
@@ -1494,7 +1760,7 @@ async def test_enrich_failure_metadata_with_team_alias():
             "user_api_key_team_id": "test_team_id",
             "user_api_key_team_alias": None,
         }
-        result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
+        result = await ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
         assert result["user_api_key_team_alias"] == "my-team-alias"
 
 
@@ -1536,7 +1802,7 @@ async def test_enrich_failure_metadata_with_full_key_lookup():
             "user_api_key_org_id": None,
             "user_api_key_project_id": None,
         }
-        result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
+        result = await ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
         assert result["user_api_key_alias"] == "fetched-key-alias"
         assert result["user_api_key_user_id"] == "fetched-user-id"
         assert result["user_api_key_team_id"] == "fetched-team-id"
@@ -1567,7 +1833,7 @@ async def test_enrich_failure_metadata_skips_when_team_alias_present():
             "user_api_key_team_id": "test_team_id",
             "user_api_key_team_alias": "already-set",
         }
-        result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
+        result = await ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
         assert result["user_api_key_team_alias"] == "already-set"
         mock_get_key.assert_not_called()
         mock_get_team.assert_not_called()
@@ -1589,7 +1855,7 @@ async def test_enrich_failure_metadata_skips_when_no_api_key():
             "user_api_key_team_id": None,
             "user_api_key_team_alias": None,
         }
-        await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
+        await ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
         mock_get_key.assert_not_called()
 
 
@@ -1629,7 +1895,7 @@ async def test_enrich_failure_metadata_keeps_captured_identity_when_not_resolvin
             "user_api_key_team_alias": None,
             "user_api_key_org_id": None,
         }
-        result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
+        result = await ProxyDBLogger._enrich_failure_metadata_with_key_info(
             metadata, resolve_missing_key_identity=False
         )
 
@@ -1670,7 +1936,7 @@ async def test_enrich_failure_metadata_ignores_flag_when_alias_present():
                 "user_api_key_team_alias": None,
                 "user_api_key_org_id": None,
             }
-            result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
+            result = await ProxyDBLogger._enrich_failure_metadata_with_key_info(
                 metadata, resolve_missing_key_identity=resolve
             )
             mock_get_key.assert_not_called()
@@ -1693,7 +1959,7 @@ async def test_track_cost_callback_reads_key_only_for_in_request_logs(call_type,
     identity persisted at create time. Every other call type still backfills from
     the key.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     mock_key_obj = MagicMock()
     mock_key_obj.key_alias = "alias-assigned-later"
@@ -1760,7 +2026,7 @@ async def test_async_post_call_failure_hook_enriches_auth_error_metadata():
     UserAPIKeyAuth is created with only api_key set. The failure hook should
     look up the key and team from cache/DB to populate all missing fields.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     # This is what auth_exception_handler creates for 401 errors
     user_api_key_dict = UserAPIKeyAuth(
@@ -1817,7 +2083,7 @@ async def test_async_post_call_failure_hook_enriches_auth_error_metadata():
 
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook_skips_the_key_lookup_when_the_failure_is_a_db_stall():
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     user_api_key_dict = UserAPIKeyAuth(api_key="hashed_key")
     request_data = {
         "model": "gpt-5.6",
@@ -1859,7 +2125,7 @@ async def test_async_post_call_failure_hook_skips_the_key_lookup_when_the_failur
 async def test_async_post_call_failure_hook_still_enriches_metadata_for_a_non_stall_failure():
     """Only a DBLookupDeadlineExceeded skips the key lookup; a transport error
     from the provider call must still resolve the key's alias for the failure row."""
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     user_api_key_dict = UserAPIKeyAuth(api_key="hashed_key")
     request_data = {
         "model": "gpt-5.6",
@@ -1908,7 +2174,7 @@ async def test_async_post_call_failure_hook_enriches_missing_team_alias():
     should look up the team from cache and populate user_api_key_team_alias in the
     spend log metadata written to the DB.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
@@ -1959,7 +2225,7 @@ async def test_track_cost_callback_skips_for_falsy_model_and_no_slo(model_value)
     Same bug as above but model can also be empty string (e.g. health check callbacks).
     The guard should catch all falsy model values when sl_object is missing.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     kwargs = {
         "call_type": "acompletion",
@@ -1996,7 +2262,7 @@ async def test_async_post_call_failure_hook_uses_actual_start_time():
     """
     from datetime import timedelta
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
@@ -2055,7 +2321,7 @@ async def _invoke_failure_hook_with_raised_exception():
     Returns the metadata dict that was forwarded to ``update_database`` so the
     caller can assert on its ``error_information`` payload.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
         user_id="u",
@@ -2135,7 +2401,7 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
     """
     from litellm.types.utils import Usage
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key", user_id="u", team_id="t")
 
     request_data = {
@@ -2166,7 +2432,7 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
     """MCP tool calls may only carry user_api_key; user/team rollups still need user_id."""
     from litellm.proxy._types import UserAPIKeyAuth
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     key_obj = UserAPIKeyAuth(
         api_key="hashed-key",
         user_id="mcp-user@example.com",
@@ -2235,7 +2501,7 @@ async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
     guardrail's provider charge must still reach spend logs and budgets. The payload
     already prices the LLM share at 0 on a cache hit, so its response_cost is the
     guardrail cost alone and the callback must pass it through untouched."""
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     kwargs = {
         "call_type": "acompletion",
         "model": "gpt-4o",
@@ -2354,7 +2620,7 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(cal
     aretrieve_batch is included because CheckBatchCost's completed-batch cost
     event reaches this same callback with no attributable key/user/team when
     the batch was created with the master key or a team-less key."""
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     kwargs = {
         "call_type": call_type,
@@ -2425,7 +2691,7 @@ async def _groups_charged_by_the_callback(kwargs, deployments=None):
     The callback resolves ``proxy_logging_obj`` and the router by importing them off
     ``proxy_server`` inside its own body, so there is no seam to inject either through.
     """
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     with (
         patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
             "litellm.proxy.proxy_server.proxy_logging_obj"
@@ -2606,7 +2872,7 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     producer = SpendEventProducer(
         address=address, on_unavailable="fallback", buffer_size=10, connect_timeout=1.0, fallback=_no_fallback
     )
-    logger = _ProxyDBLogger(producer)
+    logger = ProxyDBLogger(producer)
 
     with (
         patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
@@ -2642,7 +2908,7 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
         connect_timeout=1.0,
         fallback=_no_fallback,
     )
-    logger = _ProxyDBLogger(producer)
+    logger = ProxyDBLogger(producer)
     kwargs = {**_offload_kwargs(), "call_type": CallTypes.aretrieve_batch.value}
     completed_batch = LiteLLMBatch(
         id="batch_abc",
@@ -2709,7 +2975,7 @@ async def test_sidecar_writes_the_same_spend_row_and_counters_as_the_in_process_
     end_time = datetime(2026, 1, 1, 0, 0, 2)
 
     async def in_process() -> None:
-        await _ProxyDBLogger().async_log_success_event(_offload_kwargs(), _offload_response(), start_time, end_time)
+        await ProxyDBLogger().async_log_success_event(_offload_kwargs(), _offload_response(), start_time, end_time)
 
     async def via_sidecar() -> None:
         line = build_spend_event(_offload_kwargs(), _offload_response(), start_time, end_time, store_bodies=False)
@@ -2753,7 +3019,7 @@ async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_
     raw_model: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
     writer: Final = MagicMock(spec=DBSpendUpdateWriter)
     writer.update_database = AsyncMock()
-    logger: Final = _ProxyDBLogger(spend_writer=lambda: writer)
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
 
     await logger.async_post_call_failure_hook(
         request_data={"model": raw_model, "messages": [{"role": "user", "content": "hi"}]},
@@ -2800,7 +3066,7 @@ def _spend_write_kwargs_with_metadata_value(metadata_value: object) -> dict:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("log_level", [logging.WARNING, logging.DEBUG])
 async def test_track_cost_callback_failure_alert_never_carries_request_metadata_values(log_level):
-    logger: Final = _ProxyDBLogger()
+    logger: Final = ProxyDBLogger()
     records: list[logging.LogRecord] = []
     handler: Final = logging.Handler()
     handler.emit = records.append
@@ -2862,7 +3128,7 @@ async def test_autonomous_llm_callback_persists_without_human_or_key(identity_fi
         new_callable=AsyncMock,
         return_value=False,
     ) as persist:
-        await _ProxyDBLogger()._PROXY_track_cost_callback(
+        await ProxyDBLogger()._PROXY_track_cost_callback(
             kwargs=kwargs, completion_response=ModelResponse(), start_time=datetime.now(), end_time=datetime.now()
         )
     persist.assert_awaited_once()
@@ -2889,7 +3155,7 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
     emitted; the flush that writes the queue emits its own table-named spans."""
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
     kwargs = {
         "model": "gpt-4",
         "call_type": "acompletion",
@@ -2916,3 +3182,91 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
 
     assert update_database.await_count == 1, "the spend enqueue itself must still run"
     assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
+
+class _SharedCounter:
+    def __init__(self) -> None:
+        self.totals: dict[str, float] = {}
+
+    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
+        self.totals[key] = self.totals.get(key, 0) + value
+        return self.totals[key]
+
+
+def _grounded_gemini_kwargs(response_cost: float) -> dict:
+    return {
+        "model": "vertex_ai/gemini-test",
+        "call_type": "acompletion",
+        "response_cost": response_cost,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "user_api_key_user_id": "user-1"}},
+        "standard_logging_object": {
+            "response_cost": response_cost,
+            "request_tags": None,
+            "cache_hit": None,
+            "cost_breakdown": {
+                "input_cost": 0.0,
+                "output_cost": 0.0,
+                "tool_usage_cost": 0.5,
+                "total_cost": response_cost,
+            },
+            "model_map_information": {
+                "model_map_key": "vertex_ai/gemini-test",
+                "model_map_value": {
+                    "litellm_provider": "vertex_ai",
+                    "mode": "chat",
+                    "web_search_billing_unit": "per_query",
+                    "search_context_cost_per_query": {"search_context_size_medium": 0.1},
+                    "search_free_requests": {"count": 100, "period": "month", "shared_group": "test"},
+                },
+            },
+        },
+        "stream": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opted_in", [True, False])
+async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(monkeypatch, opted_in):
+    monkeypatch.setattr(litellm, "apply_search_free_tier", opted_in, raising=False)
+    counter = _SharedCounter()
+    kwargs = _grounded_gemini_kwargs(response_cost=1.0)
+    response = ModelResponse(
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=5),
+        )
+    )
+
+    with (
+        patch(  # test-quality-ok: increment_spend_counters is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: update_cache is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        mock_proxy_logging.internal_usage_cache.dual_cache.redis_cache = counter
+
+        await ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs, completion_response=response, start_time=datetime.now(), end_time=datetime.now()
+        )
+        await asyncio.sleep(0)
+
+        mock_proxy_logging.failed_tracking_alert.assert_not_called()
+        mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
+
+    breakdown = kwargs["standard_logging_object"]["cost_breakdown"]
+    if opted_in:
+        assert kwargs["response_cost"] == pytest.approx(1.0 - 5 * 0.1)
+        assert breakdown["original_cost"] == 1.0 and breakdown["discount_amount"] == pytest.approx(5 * 0.1)
+        assert sum(counter.totals.values()) == 5
+    else:
+        assert kwargs["response_cost"] == 1.0 and "discount_amount" not in breakdown
+        assert counter.totals == {}

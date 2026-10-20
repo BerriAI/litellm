@@ -88,7 +88,7 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
-        "cache_creation_input_token_cost_above_128k_tokens": {
+        "cache_creation_input_token_cost_above_100k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -113,22 +113,17 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
-        "cache_creation_input_token_cost_above_200k_tokens_batches": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
-        "cache_creation_input_token_cost_above_256k_tokens": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
         "cache_creation_input_token_cost_above_272k_tokens": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "cache_creation_input_token_cost_above_272k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_creation_input_token_cost_above_272k_tokens_decisions": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -148,12 +143,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
-        "cache_creation_input_token_cost_above_32k_tokens": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
         "cache_creation_input_token_cost_batches": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cache_creation_input_token_cost_decisions": {
           "type": "number",
           "minimum": 0
         },
@@ -189,7 +183,7 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
-        "cache_read_input_token_cost_above_128k_tokens": {
+        "cache_read_input_token_cost_above_100k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -209,17 +203,17 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
-        "cache_read_input_token_cost_above_256k_tokens": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
         "cache_read_input_token_cost_above_272k_tokens": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "cache_read_input_token_cost_above_272k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_read_input_token_cost_above_272k_tokens_decisions": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -239,11 +233,6 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
-        "cache_read_input_token_cost_above_32k_tokens": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
         "cache_read_input_token_cost_above_512k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -254,6 +243,10 @@
           "minimum": 0
         },
         "cache_read_input_token_cost_batches": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cache_read_input_token_cost_decisions": {
           "type": "number",
           "minimum": 0
         },
@@ -303,6 +296,10 @@
           "description": "Date the provider deprecates the model, YYYY-MM-DD.",
           "format": "date",
           "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
+        },
+        "explicit_cache_read_input_token_cost": {
+          "type": "number",
+          "minimum": 0
         },
         "gemini_audio_only_live": {
           "type": "boolean"
@@ -387,12 +384,21 @@
           "type": "number",
           "minimum": 0
         },
+        "input_cost_per_text_message": {
+          "type": "number",
+          "minimum": 0
+        },
         "input_cost_per_token": {
           "type": "number",
           "minimum": 0,
           "description": "USD per prompt token."
         },
         "input_cost_per_token_above_100k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "input_cost_per_token_above_100k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -417,17 +423,17 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
-        "input_cost_per_token_above_256k_tokens": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
         "input_cost_per_token_above_272k_tokens": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "input_cost_per_token_above_272k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "input_cost_per_token_above_272k_tokens_decisions": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -447,11 +453,6 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
-        "input_cost_per_token_above_32k_tokens": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
         "input_cost_per_token_above_512k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -467,6 +468,10 @@
           "description": "USD per prompt token via the provider's batch API."
         },
         "input_cost_per_token_cache_hit": {
+          "type": "number",
+          "minimum": 0
+        },
+        "input_cost_per_token_decisions": {
           "type": "number",
           "minimum": 0
         },
@@ -781,6 +786,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "output_cost_per_token_above_100k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "output_cost_per_token_above_128k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -801,17 +811,17 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
-        "output_cost_per_token_above_256k_tokens": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
         "output_cost_per_token_above_272k_tokens": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "output_cost_per_token_above_272k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "output_cost_per_token_above_272k_tokens_decisions": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -831,11 +841,6 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
-        "output_cost_per_token_above_32k_tokens": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
         "output_cost_per_token_above_512k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -849,6 +854,10 @@
           "type": "number",
           "minimum": 0,
           "description": "USD per generated token via the provider's batch API."
+        },
+        "output_cost_per_token_decisions": {
+          "type": "number",
+          "minimum": 0
         },
         "output_cost_per_token_flex": {
           "type": "number",
@@ -1019,10 +1028,22 @@
         "supports_audio_output": {
           "type": "boolean"
         },
+        "supports_bedrock_converse_tool_result_images": {
+          "type": "boolean"
+        },
+        "supports_bedrock_native_structured_output": {
+          "type": "boolean"
+        },
+        "supports_bedrock_runtime_chat_completions_inline_reasoning": {
+          "type": "boolean"
+        },
         "supports_bedrock_runtime_chat_completions_response_format": {
           "type": "boolean"
         },
         "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {
+          "type": "boolean"
+        },
+        "supports_box_questions": {
           "type": "boolean"
         },
         "supports_computer_use": {
@@ -1192,6 +1213,43 @@
             },
             "additionalProperties": false
           }
+        },
+        "token_count_framing": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tokens added once per request to a local count estimate, for the provider's chat framing."
+        },
+        "token_count_model": {
+          "type": "object",
+          "required": [
+            "model"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "region": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "litellm_provider": {
+              "type": "string",
+              "enum": [
+                "bedrock",
+                "bedrock_mantle"
+              ]
+            }
+          },
+          "description": "Model that counts tokens for this one, its counting provider, and the AWS region its count API runs in."
+        },
+        "token_count_tokenizer": {
+          "type": "string",
+          "description": "Tokenizer litellm counts this model's requests with when the provider cannot count them.",
+          "enum": [
+            "kimi_k3"
+          ]
         },
         "tpm": {
           "type": "integer",

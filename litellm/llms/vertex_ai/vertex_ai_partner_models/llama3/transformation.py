@@ -1,5 +1,5 @@
 import types
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -45,7 +45,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         self,
         max_tokens: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key == "max_tokens" and value is None:
                 value = self.max_tokens
@@ -54,9 +54,10 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
     @classmethod
     def get_config(cls):
+        config_attrs: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in config_attrs.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
